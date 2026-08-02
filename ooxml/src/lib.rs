@@ -113,6 +113,8 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
     let mut indent = 0u8;
     let mut line_spacing = 1.0f32;
     let mut page_break_before = false;
+    // 読めなかった要素の原文(画像など)。段落ごとに集めて持ち越す
+    let mut anchors: Vec<String> = Vec::new();
     let mut in_ppr = false;
     let mut in_text = false;
     let mut in_rpr = false;
@@ -120,8 +122,13 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
     const SKIP_KNOWN: &[&str] = &["drawing", "pict", "object", "sdt"];
 
     let mut buf = Vec::new();
+    // 直前のイベントの終わり位置(原文の切り出しに使う)
+    let mut last_pos = r.buffer_position() as usize;
     loop {
-        match r.read_event_into(&mut buf) {
+        let ev = r.read_event_into(&mut buf);
+        let start_pos = last_pos;
+        last_pos = r.buffer_position() as usize;
+        match ev {
             Err(e) => { rep.note(&format!("XML解析エラー: {e}")); break }
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => {
@@ -192,9 +199,21 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                     }
                     b"t" => { in_text = true; cur.clear(); }
                     b"vMerge" | b"gridSpan" => rep.note("セル結合(w:vMerge/w:gridSpan)"),
+                    b"drawing" | b"pict" | b"object" => {
+                        // **理解はしないが、捨てない。** 原文を丸ごと控えて保存で返す。
+                        // 部分木は読み飛ばす — 中の a:t(図形の文字)を本文に
+                        // 混ぜないため(以前はここから本文へ漏れていた)
+                        let name = e.name().to_owned();
+                        if r.read_to_end_into(name, &mut Vec::new()).is_ok() {
+                            let end = r.buffer_position() as usize;
+                            anchors.push(xml[start_pos..end].to_string());
+                            last_pos = end;
+                        }
+                        rep.note("画像・図形(保存では残る。表示は未対応)");
+                    }
+                    b"sdt" => rep.note("w:sdt"),
                     other => {
-                        let name = String::from_utf8_lossy(other).to_string();
-                        if SKIP_KNOWN.contains(&name.as_str()) { rep.note(&format!("w:{name}")); }
+                        let _ = other;
                     }
                 }
             }
@@ -283,7 +302,8 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                         if let Some(runs) = para.take() {
                             rep.runs += runs.len();
                             rep.paragraphs += 1;
-                            let p = Paragraph { align, page_break_before, list, indent, line_spacing, runs: if runs.is_empty() {
+                            let p = Paragraph { align, anchors: std::mem::take(&mut anchors),
+                                page_break_before, list, indent, line_spacing, runs: if runs.is_empty() {
                                 vec![Run { text: String::new(), size_pt: DEFAULT_PT, font: None, fmt: Default::default() }]
                             } else { runs } };
                             // 表のセルの中なら、そのセルへ。外なら本文へ
@@ -380,6 +400,13 @@ pub fn write_document_xml(doc: &Document) -> String {
             }
             w.write_event(Event::End(BytesEnd::new("w:pPr"))).unwrap();
         }
+        // 読めなかった要素(画像など)を原文のまま返す。
+        // 段落の並びの中の位置は失われ、末尾に戻る(正直な限界)
+        for a in &p.anchors {
+            let _ = w.get_mut().write_all(b"<w:r>");
+            let _ = w.get_mut().write_all(a.as_bytes());
+            let _ = w.get_mut().write_all(b"</w:r>");
+        }
         for run in &p.runs {
             if run.text.is_empty() { continue }
             w.write_event(Event::Start(BS::new("w:r"))).unwrap();
@@ -466,7 +493,7 @@ pub fn write_document_xml(doc: &Document) -> String {
                     for cell in row {
                         w.write_event(Event::Start(BS::new("w:tc"))).unwrap();
                         if cell.paragraphs.is_empty() {
-                            para(&mut w, &Paragraph { align: Default::default(), page_break_before: false,
+                            para(&mut w, &Paragraph { align: Default::default(), anchors: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: Vec::new() });
                         } else {
                             for p in &cell.paragraphs { para(&mut w, p) }
@@ -549,7 +576,7 @@ mod tests {
     use kumihan::{Align, CharFormat, ListKind, Block, Cellbox, Document, Paragraph, Run, Table};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph { align: Default::default(), page_break_before: false,
+        Paragraph { align: Default::default(), anchors: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
@@ -583,7 +610,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), page_break_before: false,
+        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
             Run { text: "本文".into(), size_pt: 10.5, font: None, fmt: Default::default() },
@@ -615,7 +642,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), page_break_before: false,
+        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
         let (back, _) = round_trip(&d);
@@ -681,7 +708,7 @@ mod tests {
     #[test]
     fn 読めない要素は黙って落とさず報告する() {
         let xml = r#"<?xml version="1.0"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:body>
 <w:p><w:r><w:t>前</w:t></w:r></w:p>
 <w:p><w:r><w:drawing/></w:r></w:p>
 <w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr>
@@ -707,6 +734,7 @@ mod font_tests {
             font: None,
             blocks: vec![Block::Para(Paragraph {
                 align: Default::default(),
+                anchors: Vec::new(),
                 page_break_before: false,
                     list: Default::default(),
                 indent: 0,
@@ -757,7 +785,7 @@ mod fmt_tests {
         let f = CharFormat { bold: true, italic: true, underline: true, ..Default::default() };
         let d = Document {
             font: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, page_break_before: false,
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("見出し", f.clone())] })],
         };
         let back = roundtrip(&d);
@@ -769,7 +797,7 @@ mod fmt_tests {
         let f = CharFormat { strike: true, color: Some("FF0000".into()), ..Default::default() };
         let d = Document {
             font: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, page_break_before: false,
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("赤", f.clone())] })],
         };
         assert_eq!(roundtrip(&d).paragraphs().next().unwrap().runs[0].fmt, f);
@@ -782,6 +810,7 @@ mod fmt_tests {
                 font: None,
                 blocks: vec![Block::Para(Paragraph {
                     align: a,
+                    anchors: Vec::new(),
                     page_break_before: false,
                     list: Default::default(),
                     indent: 0,
@@ -828,6 +857,7 @@ mod para_tests {
     fn para(list: ListKind, indent: u8, spacing: f32) -> Paragraph {
         Paragraph {
             align: Align::Left,
+            anchors: Vec::new(),
             page_break_before: false,
             list,
             indent,
@@ -1005,5 +1035,50 @@ mod preserve_tests {
         let mut out = Vec::new();
         crate::write_with(&doc, None::<Cursor<Vec<u8>>>, Cursor::new(&mut out)).unwrap();
         assert!(crate::read(Cursor::new(&out)).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    #[test]
+    fn 画像の原文が保存で返る() {
+        // 理解はしないが、捨てない
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p>
+            <w:r><w:t>図は</w:t></w:r>
+            <w:r><w:drawing><wp:inline><a:blip r:embed="rId5"/></wp:inline></w:drawing></w:r>
+            <w:r><w:t>のとおり</w:t></w:r>
+        </w:p></w:body></w:document>"#;
+        let (doc, rep) = crate::parse_document_xml(xml);
+        assert!(rep.unsupported.iter().any(|(n, _)| n.contains("画像")), "報告が無い");
+        let p = doc.paragraphs().next().unwrap();
+        assert_eq!(p.anchors.len(), 1, "原文を控えていない");
+        assert!(p.anchors[0].contains("rId5"), "{}", p.anchors[0]);
+
+        let out = crate::write_document_xml(&doc);
+        assert!(out.contains("r:embed=\"rId5\""), "保存で画像の参照が消えた");
+        assert!(out.contains("のとおり"), "本文が消えた");
+    }
+
+    #[test]
+    fn 図形の中の文字が本文に漏れない() {
+        // a:t の「飾り文字」が本文へ混ざっていた(t を接頭辞に関係なく拾っていた)
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p>
+            <w:r><w:t>本文</w:t></w:r>
+            <w:r><w:drawing><a:t>飾り文字</a:t></w:drawing></w:r>
+        </w:p></w:body></w:document>"#;
+        let (doc, _) = crate::parse_document_xml(xml);
+        assert_eq!(doc.body_text(), "本文", "図形の中の文字が本文へ漏れた: {:?}", doc.body_text());
+    }
+
+    #[test]
+    fn 一文字打っても画像は消えない() {
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p>
+            <w:r><w:t>図</w:t></w:r>
+            <w:r><w:drawing><a:blip r:embed="rId7"/></w:drawing></w:r>
+        </w:p></w:body></w:document>"#;
+        let (mut doc, _) = crate::parse_document_xml(xml);
+        doc.set_body_text("図を直した", 10.5);
+        let out = crate::write_document_xml(&doc);
+        assert!(out.contains("rId7"), "編集しただけで画像が消えた");
     }
 }

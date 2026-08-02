@@ -92,6 +92,10 @@ pub enum ListKind {
 #[derive(Debug, Clone, Default)]
 pub struct Paragraph {
     pub runs: Vec<Run>,
+    /// 読めなかった要素(画像など)の原文。**理解はしないが、捨てない。**
+    /// 保存でそのまま返す。表示はまだしない(段落の並びの中の位置は失われ、
+    /// 段落の末尾に戻る)
+    pub anchors: Vec<String>,
     pub align: Align,
     /// この段落の前で改ページする(docx の w:pageBreakBefore)
     pub page_break_before: bool,
@@ -186,7 +190,9 @@ impl Document {
         let tables: Vec<Block> = self.blocks.iter()
             .filter(|b| matches!(b, Block::Table(_))).cloned().collect();
         // 引き継ぐ元(段落だけを順に)
-        let old: Vec<(Align, Option<String>, CharFormat, Option<f32>, ListKind, u8, f32)> = self
+        #[allow(clippy::type_complexity)]
+        let old: Vec<(Align, Option<String>, CharFormat, Option<f32>, ListKind, u8, f32,
+                      Vec<String>, bool)> = self
             .paragraphs()
             .map(|p| {
                 let r = p.runs.first();
@@ -194,19 +200,24 @@ impl Document {
                  r.and_then(|r| r.font.clone()),
                  r.map(|r| r.fmt.clone()).unwrap_or_default(),
                  r.map(|r| r.size_pt),
-                 p.list, p.indent, p.line_spacing)
+                 p.list, p.indent, p.line_spacing, p.anchors.clone(),
+                 p.page_break_before)
             })
             .collect();
         self.blocks = text
             .split('\n')
             .enumerate()
             .map(|(i, s)| {
-                let (align, font, fmt, old_pt, list, indent, ls) =
+                // 段落の性質は同じ位置から引き継ぐ。**改ページも画像(anchors)も**
+                // ここで持ち越さないと、1文字打つだけで消える
+                let (align, font, fmt, old_pt, list, indent, ls, anchors, pbb) =
                     old.get(i).cloned().unwrap_or((Align::default(), None,
-                        CharFormat::default(), None, ListKind::default(), 0, 1.0));
+                        CharFormat::default(), None, ListKind::default(), 0, 1.0,
+                        Vec::new(), false));
                 Block::Para(Paragraph {
                     align,
-                    page_break_before: false,
+                    anchors,
+                    page_break_before: pbb,
                     list,
                     indent,
                     line_spacing: ls,
@@ -357,6 +368,7 @@ impl Document {
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
                     align: Default::default(),
+                    anchors: Vec::new(),
                     page_break_before: false,
                     list: Default::default(),
                     indent: 0,
