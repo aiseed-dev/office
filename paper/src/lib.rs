@@ -103,6 +103,46 @@ pub fn to_pdf<W: Write>(
         rule(&l, &line.cells[0].fmt, x, y, width_mm(line), pt);
     }
 
+    // 画像。行と同じ頁割りで置く
+    {
+        let usable = bottom - paper.margin_mm;
+        let page_of = |y: f32| -> usize {
+            let mut off = 0.0f32;
+            let mut k = 0usize;
+            while y - off > bottom {
+                off = if k == 0 { bottom - paper.margin_mm } else { off + usable };
+                k += 1;
+            }
+            k
+        };
+        for (bytes, [x, top, w_mm, h_mm]) in &sheet.images {
+            let k = page_of(*top);
+            if k >= layers.len() {
+                continue;
+            }
+            let off = if k == 0 { 0.0 } else { (bottom - paper.margin_mm) + (k - 1) as f32 * usable };
+            // 復号できない画像は飛ばして続ける(1枚のために紙全体を失敗させない)
+            let Ok(im) = ::image::load_from_memory(bytes) else { continue };
+            // 透過つき(RGBA)は printpdf 0.7 が正しく埋め込めないので RGB に落とす
+            let im = ::image::DynamicImage::ImageRgb8(im.to_rgb8());
+            let xobj = printpdf::ImageXObject::from_dynamic_image(&im);
+            let pdf_im = printpdf::Image::from(xobj);
+            // 目標の mm に合わせて拡縮(printpdf は px と dpi から実寸を出す)
+            let (pw, ph) = (im.width() as f32, im.height() as f32);
+            let dpi = 300.0;
+            let natural_w = pw / dpi * 25.4;
+            let natural_h = ph / dpi * 25.4;
+            pdf_im.add_to_layer(layers[k].clone(), printpdf::ImageTransform {
+                translate_x: Some(Mm(paper.margin_mm + x)),
+                translate_y: Some(Mm(paper.height_mm - (top - off) - h_mm)),
+                scale_x: Some(w_mm / natural_w),
+                scale_y: Some(h_mm / natural_h),
+                dpi: Some(dpi),
+                ..Default::default()
+            });
+        }
+    }
+
     // 表の罫線。行と同じ頁割りで引く(頁をまたぐ縦線は窓で切る)
     {
         let usable = bottom - paper.margin_mm;
@@ -300,5 +340,64 @@ mod break_tests {
         }
         let s = layout(&d, &m, &Frame { measure_mm: 170.0, line_height_mm: 6.4, y0_mm: 24.0 });
         assert!(s.breaks.is_empty(), "先頭で頁を割った");
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use kumihan::{font, layout, Document, Frame, InlineImage, Metrics};
+
+    use super::*;
+
+    /// 本物の PNG をその場で作る(手打ちのバイト列は CRC を壊しやすい)
+    fn png() -> Vec<u8> {
+        let img = ::image::RgbImage::from_pixel(4, 4, ::image::Rgb([200, 30, 30]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        ::image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, ::image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn 画像が紙に埋まる() {
+        let (fam, _) = font::for_document(None).unwrap();
+        let data = font::load(fam).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("写真の前\n写真の後", 10.5);
+        if let kumihan::Block::Para(p) = &mut d.blocks[0] {
+            p.images.push(InlineImage {
+                bytes: std::sync::Arc::new(png()),
+                w_mm: 40.0,
+                h_mm: 30.0,
+            });
+        }
+        let s = layout(&d, &m, &Frame { measure_mm: 170.0, line_height_mm: 6.4, y0_mm: 24.0 });
+        assert_eq!(s.images.len(), 1, "紙面に画像が無い");
+        let mut buf = Vec::new();
+        to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        let hay = String::from_utf8_lossy(&buf);
+        // 画像は XObject として埋まる
+        assert!(hay.contains("/XObject"), "PDF に画像が埋まっていない");
+    }
+
+    #[test]
+    fn 壊れた画像は飛ばして紙は出来る() {
+        // 1枚のために紙全体を失敗させない
+        let (fam, _) = font::for_document(None).unwrap();
+        let data = font::load(fam).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("本文", 10.5);
+        if let kumihan::Block::Para(p) = &mut d.blocks[0] {
+            p.images.push(InlineImage {
+                bytes: std::sync::Arc::new(b"not an image".to_vec()),
+                w_mm: 40.0,
+                h_mm: 30.0,
+            });
+        }
+        let s = layout(&d, &m, &Frame { measure_mm: 170.0, line_height_mm: 6.4, y0_mm: 24.0 });
+        let mut buf = Vec::new();
+        to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        assert_eq!(&buf[..5], b"%PDF-");
     }
 }
