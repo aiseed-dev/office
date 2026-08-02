@@ -564,7 +564,9 @@ impl Render for Calc {
             for c in 0..COLS {
                 let p = Pos::new(r, c);
                 let cell = self.sheet().get(p);
-                let v = cell.map(|x| x.value.clone()).unwrap_or(Value::Empty);
+                // 結合に呑まれた位置は空で描く(値は左上のセルにだけある)
+                let v = if self.sheet().covered_by_merge(p) { Value::Empty }
+                        else { cell.map(|x| x.value.clone()).unwrap_or(Value::Empty) };
                 // 付けた表示形式は画面に出す。出ないなら飾りでしかない
                 let shown = sheet::model::format_value(&v, cell.and_then(|x| x.fmt.number_format.as_deref()));
                 let is_num = matches!(v, Value::Number(_));

@@ -93,6 +93,8 @@ pub enum ListKind {
 pub struct Paragraph {
     pub runs: Vec<Run>,
     pub align: Align,
+    /// この段落の前で改ページする(docx の w:pageBreakBefore)
+    pub page_break_before: bool,
     pub list: ListKind,
     /// 左のインデント段数。1段 = 全角2文字ぶん(日本の書類の慣習)
     pub indent: u8,
@@ -202,6 +204,7 @@ impl Document {
                         CharFormat::default(), None, ListKind::default(), 0, 1.0));
                 Block::Para(Paragraph {
                     align,
+                    page_break_before: false,
                     list,
                     indent,
                     line_spacing: ls,
@@ -352,6 +355,7 @@ impl Document {
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
                     align: Default::default(),
+                    page_break_before: false,
                     list: Default::default(),
                     indent: 0,
                     line_spacing: 1.0,
@@ -393,6 +397,9 @@ impl Line {
 #[derive(Debug, Clone, Default)]
 pub struct Sheet {
     pub lines: Vec<Line>,
+    /// ここで新しいページを始める、という y(巻物の座標)。
+    /// 紙に写す側([`paper`]相当)がこれを見て強制的に頁を割る
+    pub breaks: Vec<f32>,
 }
 
 // ---------- フォント(字幅の出どころ) ----------
@@ -502,6 +509,10 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
     // 段落番号は「何番目の箇条書きか」で決まる。段落の位置ではない
     let mut nth = 0usize;
     for para in doc.paragraphs() {
+        // 改ページ。紙に写すときにここで頁が割れる
+        if para.page_break_before && !sheet.lines.is_empty() {
+            sheet.breaks.push(y);
+        }
         // インデント1段 = 全角2文字ぶん(日本の書類の慣習)
         let em = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5) * 25.4 / 72.0;
         let indent_mm = para.indent as f32 * em * 2.0;

@@ -105,6 +105,7 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
     let mut list = ListKind::default();
     let mut indent = 0u8;
     let mut line_spacing = 1.0f32;
+    let mut page_break_before = false;
     let mut in_ppr = false;
     let mut in_text = false;
     let mut in_rpr = false;
@@ -124,7 +125,8 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                     b"tc" => if let Some(b) = stack.last_mut() { b.cell.clear() },
                     b"p" => { para = Some(Vec::new()); size_pt = DEFAULT_PT; font = None;
                               fmt = CharFormat::default(); align = Align::default();
-                              list = ListKind::default(); indent = 0; line_spacing = 1.0; }
+                              list = ListKind::default(); indent = 0; line_spacing = 1.0;
+                              page_break_before = false; }
                     b"rPr" => { in_rpr = true; fmt = CharFormat::default(); }
                     b"pPr" => in_ppr = true,
                     b"sz" if in_rpr => {
@@ -155,6 +157,9 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                             Some("0") | None => ListKind::None,
                             _ => ListKind::Bullet,
                         };
+                    }
+                    b"pageBreakBefore" if in_ppr => {
+                        page_break_before = on(&e);
                     }
                     b"ind" if in_ppr => {
                         // twip。1段 = 全角2文字 = 10.5pt×2 ≒ 420twip
@@ -216,6 +221,9 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                             _ => ListKind::Bullet,
                         };
                     }
+                    b"pageBreakBefore" if in_ppr => {
+                        page_break_before = on(&e);
+                    }
                     b"ind" if in_ppr => {
                         // twip。1段 = 全角2文字 = 10.5pt×2 ≒ 420twip
                         indent = attr(&e, "left")
@@ -258,7 +266,7 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                         if let Some(runs) = para.take() {
                             rep.runs += runs.len();
                             rep.paragraphs += 1;
-                            let p = Paragraph { align, list, indent, line_spacing, runs: if runs.is_empty() {
+                            let p = Paragraph { align, page_break_before, list, indent, line_spacing, runs: if runs.is_empty() {
                                 vec![Run { text: String::new(), size_pt: DEFAULT_PT, font: None, fmt: Default::default() }]
                             } else { runs } };
                             // 表のセルの中なら、そのセルへ。外なら本文へ
@@ -318,11 +326,15 @@ pub fn write_document_xml(doc: &Document) -> String {
         w.write_event(Event::Start(BS::new("w:p"))).unwrap();
         // 段落の性質。既定のものは書かない — 余計な指定を増やさない
         let has_ppr = p.align != Align::Left
+            || p.page_break_before
             || p.list != ListKind::None
             || p.indent > 0
             || (p.spacing() - 1.0).abs() > 0.001;
         if has_ppr {
             w.write_event(Event::Start(BS::new("w:pPr"))).unwrap();
+            if p.page_break_before {
+                w.write_event(Event::Empty(BS::new("w:pageBreakBefore"))).unwrap();
+            }
             if p.list != ListKind::None {
                 w.write_event(Event::Start(BS::new("w:numPr"))).unwrap();
                 let mut lv = BS::new("w:ilvl");
@@ -426,7 +438,8 @@ pub fn write_document_xml(doc: &Document) -> String {
                     for cell in row {
                         w.write_event(Event::Start(BS::new("w:tc"))).unwrap();
                         if cell.paragraphs.is_empty() {
-                            para(&mut w, &Paragraph { align: Default::default(), list: Default::default(), indent: 0, line_spacing: 1.0, runs: Vec::new() });
+                            para(&mut w, &Paragraph { align: Default::default(), page_break_before: false,
+                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: Vec::new() });
                         } else {
                             for p in &cell.paragraphs { para(&mut w, p) }
                         }
@@ -470,7 +483,8 @@ mod tests {
     use kumihan::{Align, CharFormat, ListKind, Block, Cellbox, Document, Paragraph, Run, Table};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph { align: Default::default(), list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
+        Paragraph { align: Default::default(), page_break_before: false,
+                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
         Document { font: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
@@ -503,7 +517,8 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
+        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), page_break_before: false,
+                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
             Run { text: "本文".into(), size_pt: 10.5, font: None, fmt: Default::default() },
         ]})]};
@@ -534,7 +549,8 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
+        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), page_break_before: false,
+                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
         let (back, _) = round_trip(&d);
         assert_eq!(texts(&back)[0], "一行目\n二行目");
@@ -625,7 +641,8 @@ mod font_tests {
             font: None,
             blocks: vec![Block::Para(Paragraph {
                 align: Default::default(),
-                list: Default::default(),
+                page_break_before: false,
+                    list: Default::default(),
                 indent: 0,
                 line_spacing: 1.0,
                 runs: vec![Run {
@@ -674,7 +691,8 @@ mod fmt_tests {
         let f = CharFormat { bold: true, italic: true, underline: true, ..Default::default() };
         let d = Document {
             font: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("見出し", f.clone())] })],
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, page_break_before: false,
+                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("見出し", f.clone())] })],
         };
         let back = roundtrip(&d);
         assert_eq!(back.paragraphs().next().unwrap().runs[0].fmt, f, "書式が消えた");
@@ -685,7 +703,8 @@ mod fmt_tests {
         let f = CharFormat { strike: true, color: Some("FF0000".into()), ..Default::default() };
         let d = Document {
             font: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("赤", f.clone())] })],
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, page_break_before: false,
+                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("赤", f.clone())] })],
         };
         assert_eq!(roundtrip(&d).paragraphs().next().unwrap().runs[0].fmt, f);
     }
@@ -697,6 +716,7 @@ mod fmt_tests {
                 font: None,
                 blocks: vec![Block::Para(Paragraph {
                     align: a,
+                    page_break_before: false,
                     list: Default::default(),
                     indent: 0,
                     line_spacing: 1.0,
@@ -742,6 +762,7 @@ mod para_tests {
     fn para(list: ListKind, indent: u8, spacing: f32) -> Paragraph {
         Paragraph {
             align: Align::Left,
+            page_break_before: false,
             list,
             indent,
             line_spacing: spacing,
@@ -807,5 +828,23 @@ mod para_tests {
         assert_eq!(para(ListKind::Number, 0, 1.0).marker(0).as_deref(), Some("1. "));
         assert_eq!(para(ListKind::Number, 0, 1.0).marker(4).as_deref(), Some("5. "));
         assert_eq!(para(ListKind::None, 0, 1.0).marker(0), None);
+    }
+}
+
+#[cfg(test)]
+mod break_round {
+    use kumihan::{Block, Document, Paragraph, Run};
+
+    #[test]
+    fn 改ページ指定が往復する() {
+        let mut para = Paragraph::default();
+        para.page_break_before = true;
+        para.runs.push(Run {
+            text: "二頁目".into(), size_pt: 10.5, font: None, fmt: Default::default() });
+        let d = Document { font: None, blocks: vec![Block::Para(para)] };
+        let mut buf = Vec::new();
+        crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
+        let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
+        assert!(back.paragraphs().next().unwrap().page_break_before, "改ページが消えた");
     }
 }

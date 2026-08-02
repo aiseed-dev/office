@@ -75,6 +75,7 @@ pub const WRITER: &[Tab] = &[
     ]},
     Tab { name: "挿入", cmds: &[
         x("空白ページの挿入"),
+        c("pagebreak", "ページの挿入またはセクション区切り"),
         x("表の挿入"),
         x("図形を挿入"),
         x("SmartArtの挿入"),

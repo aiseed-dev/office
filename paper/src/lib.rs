@@ -53,13 +53,24 @@ pub fn to_pdf<W: Write>(
     let bottom = paper.height_mm - paper.margin_mm;
     let mut page_no = 0u32;
     let mut offset = 0.0f32; // このページの先頭が、巻物のどの高さか
+    // 明示の改ページ(文書側の指定)。高さ超過とは別に、ここでも頁を割る
+    let mut breaks = sheet.breaks.iter().copied().peekable();
 
     for line in &sheet.lines {
         if line.cells.is_empty() {
             continue;
         }
+        let mut forced = false;
+        while let Some(&b) = breaks.peek() {
+            if line.y_mm >= b - 0.01 {
+                breaks.next();
+                forced = true;
+            } else {
+                break;
+            }
+        }
         let mut y_roll = line.y_mm - offset;
-        if y_roll > bottom {
+        if forced || y_roll > bottom {
             // 次のページへ。行の紙面上の高さは(余白ぶんを除いて)そのまま続ける
             page_no += 1;
             offset = line.y_mm - paper.margin_mm;
@@ -209,5 +220,46 @@ mod page_tests {
         let n = pages(100);
         assert!((3..=4).contains(&n), "100行が {n} ページ(40行/頁の見当と合わない)");
         assert!(pages(300) >= 8, "300行が {} ページ", pages(300));
+    }
+}
+
+#[cfg(test)]
+mod break_tests {
+    use kumihan::{font, layout, Block, Document, Frame, Metrics};
+
+    use super::*;
+
+    #[test]
+    fn 改ページで頁が割れる() {
+        let (fam, _) = font::for_document(None).unwrap();
+        let data = font::load(fam).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("一頁目\n二頁目", 10.5);
+        if let Block::Para(p) = &mut d.blocks[1] {
+            p.page_break_before = true;
+        }
+        let s = layout(&d, &m, &Frame { measure_mm: 170.0, line_height_mm: 6.4, y0_mm: 24.0 });
+        assert_eq!(s.breaks.len(), 1, "改ページが紙面に伝わっていない");
+        let mut buf = Vec::new();
+        to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        let hay = String::from_utf8_lossy(&buf).to_string();
+        let i = hay.find("/Count ").unwrap() + 7;
+        let n: usize = hay[i..].chars().take_while(|c| c.is_ascii_digit())
+            .collect::<String>().parse().unwrap();
+        assert_eq!(n, 2, "2行の文書が改ページで2頁にならず {n} 頁");
+    }
+
+    #[test]
+    fn 先頭の改ページは頁を増やさない() {
+        // 1段落目に改ページが付いていても、空の1頁目を作らない
+        let (fam, _) = font::for_document(None).unwrap();
+        let data = font::load(fam).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("本文", 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] {
+            p.page_break_before = true;
+        }
+        let s = layout(&d, &m, &Frame { measure_mm: 170.0, line_height_mm: 6.4, y0_mm: 24.0 });
+        assert!(s.breaks.is_empty(), "先頭で頁を割った");
     }
 }

@@ -41,7 +41,7 @@ READY = {
         "fontcolor": "fontcolor", "align-left": "align-left",
         "align-right": "align-right",
         "markers": "markers", "numbering": "numbering",
-        "wordcount": "wordcount", "spell": "spell",
+        "wordcount": "wordcount", "spell": "spell", "pagebreak": "pagebreak",
         "incoffset": "incoffset", "decoffset": "decoffset",
         "linespace": "linespace",
     },
@@ -148,7 +148,7 @@ FALLBACK = {
     "data-validation": "データの入力規則", "goal-seek": "ゴールシーク",
     "solver": "ソルバー", "group": "グループ化", "ungroup": "グループ解除",
     "show-details": "詳細の表示", "hide-details": "詳細の非表示",
-    "spell": "スペルチェック", "furigana": "ふりがな",
+    "spell": "スペルチェック", "furigana": "ふりがな", "pagebreak": "区切り",
     "open": "開く", "print": "印刷",
 }
 
@@ -238,6 +238,10 @@ def tabs_of(app, prefix):
             continue
         slots = list(dict.fromkeys(
             re.findall(r'id="slot-(?:btn|field|chk|cmb)-([a-z0-9-]+)"', body)))
+        # 「区切り」は class 注入(btn-slot.btn-pagebreak)なので id では拾えない。
+        # Euro-Office の挿入タブでは空白ページの隣にある
+        if tab == "ins" and app == "documenteditor" and "blankpage" in slots:
+            slots.insert(slots.index("blankpage") + 1, "pagebreak")
         alias = {"ins": "insert", "links": "links"}
         name = names.get(alias.get(tab, tab), names.get(tab, tab))
         out.append((name, slots))

@@ -358,6 +358,8 @@ impl Writer {
             "incoffset" => self.para(|p| p.indent = (p.indent + 1).min(20)),
             "decoffset" => self.para(|p| p.indent = p.indent.saturating_sub(1)),
             // 行間。1.0 → 1.5 → 2.0 → 1.0 と回す(小窓がまだ無いので)
+            // この段落の前で改ページ(押すたびに入切)
+            "pagebreak" => self.para(|p| p.page_break_before = !p.page_break_before),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
                     s if s < 1.25 => 1.5,

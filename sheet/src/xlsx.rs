@@ -68,6 +68,17 @@ fn parse_shared(xml: &str) -> (Vec<String>, usize) {
     (out, ruby)
 }
 
+/// `<mergeCell ref="A1:B2"/>` を結合として持つ(読み飛ばすと保存で消える)。
+fn merge(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
+    if let Some(r) = attr(e, "ref") {
+        if let Some((a, b)) = r.split_once(':') {
+            if let (Some(a), Some(b)) = (Pos::parse(a), Pos::parse(b)) {
+                sh.merges.push((a, b));
+            }
+        }
+    }
+}
+
 fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat],
                name: &str, rep: &mut Report) -> Sheet {
     let mut r = Reader::from_str(xml);
@@ -92,7 +103,7 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
                 b"v" => in_v = true,
                 b"f" => in_f = true,
                 b"is" => in_is = true,
-                b"mergeCell" => rep.note("セル結合(mergeCell)"),
+                b"mergeCell" => merge(&e, &mut sh),
                 _ => {}
             },
             Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
@@ -100,7 +111,7 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
                     // 値の無いセル(書式だけ)。持たない
                     pos = None;
                 }
-                b"mergeCell" => rep.note("セル結合(mergeCell)"),
+                b"mergeCell" => merge(&e, &mut sh),
                 _ => {}
             },
             Ok(Event::Text(t)) if in_v || in_f || in_is => {
@@ -346,6 +357,18 @@ pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
             w.write_event(Event::End(BytesEnd::new("row"))).unwrap();
         }
         w.write_event(Event::End(BytesEnd::new("sheetData"))).unwrap();
+        // 結合を返す。読めたのに書かないと、開いて保存しただけで帳票が壊れる
+        if !sh.merges.is_empty() {
+            let mut mc = BytesStart::new("mergeCells");
+            mc.push_attribute(("count", sh.merges.len().to_string().as_str()));
+            w.write_event(Event::Start(mc)).unwrap();
+            for (a, b) in &sh.merges {
+                let mut m = BytesStart::new("mergeCell");
+                m.push_attribute(("ref", format!("{}:{}", a.a1(), b.a1()).as_str()));
+                w.write_event(Event::Empty(m)).unwrap();
+            }
+            w.write_event(Event::End(BytesEnd::new("mergeCells"))).unwrap();
+        }
         w.write_event(Event::End(BytesEnd::new("worksheet"))).unwrap();
         let body = String::from_utf8(w.into_inner().into_inner()).unwrap();
         put(&format!("xl/worksheets/sheet{}.xml", i + 1),
@@ -432,5 +455,60 @@ mod fmt_round {
         let c = back.sheets[0].get(Pos { row: 2, col: 2 });
         assert!(c.is_some(), "値の無い罫線セルが消えた");
         assert_eq!(c.unwrap().fmt.borders, Borders::ALL);
+    }
+}
+
+#[cfg(test)]
+mod merge_round {
+    use crate::model::{Cell, Pos, Value};
+    use crate::{Book, Sheet};
+
+    fn roundtrip(b: &Book) -> Book {
+        let mut buf = Vec::new();
+        crate::xlsx::write(b, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0
+    }
+
+    #[test]
+    fn セル結合が往復する() {
+        // 開いて保存しただけで帳票の枠組みが壊れてはいけない
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.set(Pos::parse("A1").unwrap(), Cell {
+            formula: None, value: Value::Text("見出し".into()), fmt: Default::default() });
+        s.merges.push((Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
+        s.merges.push((Pos::parse("A2").unwrap(), Pos::parse("A4").unwrap()));
+        let back = roundtrip(&Book { sheets: vec![s] });
+        assert_eq!(back.sheets[0].merges.len(), 2, "結合が消えた");
+        assert_eq!(back.sheets[0].merges[0],
+                   (Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
+    }
+
+    #[test]
+    fn 行の出し入れで結合も動く() {
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.merges.push((Pos::parse("A3").unwrap(), Pos::parse("C3").unwrap()));
+        s.insert_row(1);
+        assert_eq!(s.merges[0], (Pos::parse("A4").unwrap(), Pos::parse("C4").unwrap()),
+                   "結合が置き去りになった");
+        s.remove_row(1);
+        assert_eq!(s.merges[0], (Pos::parse("A3").unwrap(), Pos::parse("C3").unwrap()));
+    }
+
+    #[test]
+    fn 潰れた結合は消える() {
+        // A1:A2 の縦結合で2行目を抜くと、1セルになる。1セルの結合は結合ではない
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.merges.push((Pos::parse("A1").unwrap(), Pos::parse("A2").unwrap()));
+        s.remove_row(1);
+        assert!(s.merges.is_empty(), "1セルの結合が残った: {:?}", s.merges);
+    }
+
+    #[test]
+    fn 呑まれた位置が分かる() {
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.merges.push((Pos::parse("A1").unwrap(), Pos::parse("B2").unwrap()));
+        assert!(!s.covered_by_merge(Pos::parse("A1").unwrap()), "左上まで呑んだ");
+        assert!(s.covered_by_merge(Pos::parse("B2").unwrap()));
+        assert!(!s.covered_by_merge(Pos::parse("C1").unwrap()));
     }
 }

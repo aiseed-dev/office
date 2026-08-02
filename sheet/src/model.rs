@@ -212,6 +212,9 @@ impl Cell {
 pub struct Sheet {
     pub name: String,
     pub cells: BTreeMap<Pos, Cell>,
+    /// セル結合(左上, 右下)。**日本の帳票は結合で見出しを作る**ので、
+    /// 読み飛ばして保存すると枠組みが壊れる
+    pub merges: Vec<(Pos, Pos)>,
 }
 
 impl Sheet {
@@ -305,6 +308,7 @@ impl Sheet {
     pub fn insert_row(&mut self, at: u32) {
         self.shift(|p| p.row >= at, 1, 0);
         self.fix_formulas(at, 1, true);
+        self.shift_merges(at, 1, true);
     }
 
     /// 行を1つ抜く。
@@ -312,17 +316,20 @@ impl Sheet {
         self.cells.retain(|p, _| p.row != at);
         self.shift(|p| p.row > at, -1, 0);
         self.fix_formulas(at, -1, true);
+        self.shift_merges(at, -1, true);
     }
 
     pub fn insert_col(&mut self, at: u32) {
         self.shift(|p| p.col >= at, 0, 1);
         self.fix_formulas(at, 1, false);
+        self.shift_merges(at, 1, false);
     }
 
     pub fn remove_col(&mut self, at: u32) {
         self.cells.retain(|p, _| p.col != at);
         self.shift(|p| p.col > at, 0, -1);
         self.fix_formulas(at, -1, false);
+        self.shift_merges(at, -1, false);
     }
 
     /// 出し入れに合わせて、**残ったセルの式の参照も直す**。
@@ -333,6 +340,49 @@ impl Sheet {
                 c.formula = Some(shift_refs(f, at, delta, is_row));
             }
         }
+    }
+
+    /// 行・列の出し入れに合わせて結合の範囲も動かす。
+    ///
+    /// 削除では**上端と下端で動きが違う**: 上端が消えた行なら次の行が
+    /// 滑り込む(据え置き)、下端が消えた行なら1つ縮む。
+    fn shift_merges(&mut self, at: u32, delta: i64, is_row: bool) {
+        let top = |v: u32| -> u32 {
+            if delta > 0 {
+                if v >= at { v + 1 } else { v }
+            } else if v > at {
+                v - 1
+            } else {
+                v
+            }
+        };
+        let bottom = |v: u32| -> u32 {
+            if delta > 0 {
+                if v >= at { v + 1 } else { v }
+            } else if v >= at {
+                v.saturating_sub(1)
+            } else {
+                v
+            }
+        };
+        for (a, b) in self.merges.iter_mut() {
+            if is_row {
+                a.row = top(a.row);
+                b.row = bottom(b.row);
+            } else {
+                a.col = top(a.col);
+                b.col = bottom(b.col);
+            }
+        }
+        // 1セルに潰れた・裏返った結合は結合ではない
+        self.merges.retain(|(a, b)| a <= b && (a.row != b.row || a.col != b.col));
+    }
+
+    /// この位置は結合に呑まれているか(左上を除く)。
+    pub fn covered_by_merge(&self, p: Pos) -> bool {
+        self.merges.iter().any(|(a, b)| {
+            p != *a && (a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col)
+        })
     }
 
     fn shift(&mut self, pick: impl Fn(&Pos) -> bool, dr: i64, dc: i64) {
