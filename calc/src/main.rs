@@ -660,7 +660,23 @@ impl Calc {
         self.extend(1, 0); cx.notify();
     }
     fn a_select_all(&mut self, _: &ui::SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.input.select_all(); cx.notify();
+        if self.editing() {
+            // 打ちかけの間は、バーの文字の全選択
+            self.input.select_all();
+        } else {
+            // 使われている範囲の全選択(表計算の Ctrl+A)
+            let (rows, cols) = self.sheet().extent();
+            if rows == 0 {
+                self.status = "空の表です".into();
+            } else {
+                self.commit();
+                self.anchor = Some(Pos::new(0, 0));
+                self.cursor = Pos::new(rows - 1, cols.saturating_sub(1));
+                self.status = format!("A1:{} を選択しました", self.cursor.a1()).into();
+                self.sync_input();
+            }
+        }
+        cx.notify();
     }
     fn a_undo(&mut self, _: &ui::Undo, _: &mut Window, cx: &mut Context<Self>) {
         if !self.input.undo() {
@@ -1337,7 +1353,7 @@ impl Render for Calc {
                     .w(px(self.col_px(c))).h(px(rh))
                     .border_r_1().border_b_1()
                     .border_color(if self.gridlines { rgb(0xE1E6EA) } else { rgb(0xFFFFFF) })
-                    .bg(if sel { rgb(0xEAF5EE) } else if in_range { rgb(0xF2F8F4) } else { rgb(0xFFFFFF) })
+                    .bg(rgb(0xFFFFFF))
                     .flex().items_center()
                     .px_1p5()
                     .text_size(px(cell.and_then(|x| x.fmt.size_c)
@@ -1368,6 +1384,10 @@ impl Render for Calc {
                             if this.cursor != p {
                                 this.cursor = p;
                                 this.anchor = if p == start { None } else { Some(start) };
+                                if this.anchor.is_some() {
+                                    let (a, b) = this.sel_rect();
+                                    this.status = format!("{}:{}", a.a1(), b.a1()).into();
+                                }
                                 this.sync_input();
                                 cx.notify();
                             }
@@ -1377,6 +1397,16 @@ impl Render for Calc {
                 let f = cell.map(|x| x.fmt.clone()).unwrap_or_default();
                 if let Some(c) = &f.fill {
                     d = d.bg(hex(c));
+                }
+                // **選択は塗りより上。** 塗りのあるセルで選択が見えないと、
+                // 範囲の操作(消す・貼る・罫線)が信用できない。
+                // 色も白と見分けの付く濃さにする(薄すぎて「選択できていない」に
+                // 見えていた — 踏んで直した)
+                if in_range {
+                    d = d.bg(rgb(0xC8E2D3));
+                }
+                if sel {
+                    d = d.bg(rgb(0xE3F1E9));
                 }
                 if f.bold {
                     d = d.font_weight(gpui::FontWeight::BOLD);
