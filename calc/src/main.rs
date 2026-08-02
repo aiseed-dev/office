@@ -1523,7 +1523,20 @@ impl Render for Calc {
                 if f.borders.bottom { d = d.border_b_1().border_color(ink) }
                 if f.borders.left { d = d.border_l_1().border_color(ink) }
                 if f.borders.right { d = d.border_r_1().border_color(ink) }
-                if sel {
+                // 太い枠は**選択の範囲の外周**に出す(Excel の作法)。
+                // カーソルのセルに出すと、ドラッグ中は枠がマウスに付いて回る
+                if self.anchor.is_some() {
+                    if in_range {
+                        let mut edge = false;
+                        if r == ra.row { d = d.border_t_2(); edge = true }
+                        if r == rb.row { d = d.border_b_2(); edge = true }
+                        if c == ra.col { d = d.border_l_2(); edge = true }
+                        if c == rb.col { d = d.border_r_2(); edge = true }
+                        if edge {
+                            d = d.border_color(rgb(0x1B6E3C));
+                        }
+                    }
+                } else if sel {
                     d = d.border_2().border_color(rgb(0x1B6E3C));
                 }
                 // 縦の揃え(既定は下 = xlsx の既定)
