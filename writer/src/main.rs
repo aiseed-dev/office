@@ -1393,7 +1393,9 @@ mod find_tests {
     #[test]
     fn 末尾まで無ければ頭から一周() {
         let t = "誤りを直す。";
-        let hit = next_hit(t, "誤り", 10);
+        // 「直」の後ろ(文字境界)から探す。実物の from はカーソル位置なので常に境界
+        let from = "誤りを直".len();
+        let hit = next_hit(t, "誤り", from);
         assert_eq!(hit, Some(0), "一周していない");
     }
 
