@@ -13,11 +13,31 @@
 pub use lang::ja::{furigana, proof};
 pub use lang::{check, spell, Language, Target};
 pub use lang::model::Endpoint;
+pub mod icons;
 pub mod ribbon;
 
 use std::ops::Range;
 
-use gpui::{actions, KeyBinding};
+use gpui::{actions, AssetSource, KeyBinding, SharedString};
+
+/// リボンのアイコンを gpui に渡す(`svg().path("icons/bold.svg")` で引ける)。
+/// フォントと違い、アイコンは**こちらの成果物の一部**なので埋め込んでよい
+/// (Euro-Office 由来・AGPL。NOTICE.md に明記)。
+pub struct Icons;
+
+impl AssetSource for Icons {
+    fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        Ok(path
+            .strip_prefix("icons/")
+            .and_then(|n| n.strip_suffix(".svg"))
+            .and_then(icons::find)
+            .map(std::borrow::Cow::Borrowed))
+    }
+
+    fn list(&self, _path: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(icons::ICONS.iter().map(|(k, _)| SharedString::from(format!("icons/{k}.svg"))).collect())
+    }
+}
 use kumihan::Editor;
 
 actions!(

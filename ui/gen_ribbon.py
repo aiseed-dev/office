@@ -280,9 +280,9 @@ def emit():
             for s in slots:
                 lab = label_of(loc, prefix, s).replace('"', "'")
                 if s in ready:
-                    print(f'        c("{ready[s]}", "{lab}"),')
+                    print(f'        c("{ready[s]}", "{lab}", "{s}"),')
                 else:
-                    print(f'        x("{lab}"),')
+                    print(f'        x("{lab}", "{s}"),')
             print("    ]},")
         print("];")
         print()
@@ -308,18 +308,20 @@ HEAD = '''//! リボン(タブ+コマンド)。**Euro-Office の現物から生�
 //! 「今どこまで出来ているか」がそのまま画面に出る。
 
 /// 1つのコマンド。`ready=false` は未実装(押せない灰色)。
+/// `icon` は Euro-Office の slot 名で、埋め込んだアイコン(icons.rs)を引く鍵。
 #[derive(Clone, Copy)]
 pub struct Cmd {
     pub id: &'static str,
     pub label: &'static str,
+    pub icon: &'static str,
     pub ready: bool,
 }
 
-const fn c(id: &'static str, label: &'static str) -> Cmd {
-    Cmd { id, label, ready: true }
+const fn c(id: &'static str, label: &'static str, icon: &'static str) -> Cmd {
+    Cmd { id, label, icon, ready: true }
 }
-const fn x(label: &'static str) -> Cmd {
-    Cmd { id: "", label, ready: false }
+const fn x(label: &'static str, icon: &'static str) -> Cmd {
+    Cmd { id: "", label, icon, ready: false }
 }
 
 pub struct Tab {

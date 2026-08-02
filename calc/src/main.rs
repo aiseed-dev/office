@@ -588,6 +588,13 @@ impl Render for Calc {
                 cmds = cmds.child(div().px_3().py_1().rounded_md()
                     .border_1().border_color(rgb(0xEDEFF1))
                     .text_color(rgb(0xB6BDC4)).text_size(px(12.0))
+                    .flex().flex_row().items_center().gap_1()
+                    .children(ui::icons::find(cmd.icon).map(|_| {
+                        gpui::svg()
+                            .path(SharedString::from(format!("icons/{}.svg", cmd.icon)))
+                            .size(px(15.0))
+                            .text_color(rgb(0xB6BDC4))
+                    }))
                     .child(cmd.label));
             }
         }
@@ -749,7 +756,7 @@ impl Render for Calc {
 
 fn main() {
     let arg = std::env::args().nth(1).map(PathBuf::from);
-    application().run(move |cx: &mut App| {
+    application().with_assets(ui::Icons).run(move |cx: &mut App| {
         cx.text_system()
             .add_fonts(vec![std::borrow::Cow::Borrowed(font_data())])
             .expect("フォント登録");
