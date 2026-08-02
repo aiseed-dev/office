@@ -59,6 +59,7 @@ READY = {
         "align-left": "align-left", "align-right": "align-right",
         "custom-sort": "custom-sort", "rem-duplicates": "rem-duplicates",
         "setfilter": "setfilter", "clear-filter": "clear-filter",
+        "fill-num": "fill-num",
         "fillparag": "fillparag", "fontcolor": "fontcolor", "merge": "merge",
         "math": "fn-math", "text": "fn-text", "logical": "fn-logical",
         "recent": "fn-recent",

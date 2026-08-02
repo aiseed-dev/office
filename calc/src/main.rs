@@ -517,6 +517,33 @@ impl Calc {
             "digit-dec" => self.decimals(-1),
             // 書式のクリア。値は消さない
             "clear" => self.fmt(|f| *f = CellFormat::default()),
+            // フィル(下方向へコピー)。式は相対参照がずれ、$ は止まる。
+            // 書式も一緒に写す(帳票の列は書式ごと揃える)
+            "fill-num" => {
+                let (a, b) = self.sel_rect();
+                if a.row == b.row {
+                    self.status = "Shift+↓ で埋める範囲を選んでください(先頭行を下へ写します)".into();
+                } else {
+                    self.commit();
+                    let sh = &mut self.book.sheets[self.active];
+                    let mut n = 0usize;
+                    for c in a.col..=b.col {
+                        let Some(src) = sh.get(Pos::new(a.row, c)).cloned() else { continue };
+                        for r in a.row + 1..=b.row {
+                            let mut cell = src.clone();
+                            if let Some(f) = &src.formula {
+                                cell.formula =
+                                    Some(sheet::model::offset_refs(f, (r - a.row) as i64, 0));
+                            }
+                            sh.set(Pos::new(r, c), cell);
+                            n += 1;
+                        }
+                    }
+                    recalc(&mut self.book.sheets[self.active]);
+                    self.dirty = true;
+                    self.status = format!("{n} セルを埋めました").into();
+                }
+            }
             // 塗りつぶし。黄 → 水色 → 解除(色を選ぶ小窓がまだ無い)
             "merge" => self.merge_selection(),
             // 表示。**値は変えない** — 見え方だけの話

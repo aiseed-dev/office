@@ -167,7 +167,7 @@ pub const CALC: &[Tab] = &[
         c("merge", "結合して、中央に配置する", "merge"),
         x("direction", "direction"),
         x("関数", "formula"),
-        x("フィル", "fill-num"),
+        c("fill-num", "フィル", "fill-num"),
         x("名前の管理", "named-range"),
         c("clear", "消去", "clear"),
         x("数値の書式", "format"),

@@ -1036,3 +1036,108 @@ mod sort_tests {
         assert_eq!(s.remove_duplicate_rows(true), 0);
     }
 }
+
+/// 式の中の相対参照を (dr, dc) だけずらす。**コピーの規則**。
+///
+/// 行の出し入れ(`shift_refs`)とは別物 — コピーでは位置に関係なく
+/// **相対参照が全部ずれ、`$` の付いた側だけ止まる**。
+/// 紙の外(負の位置)を指すことになったら `#REF!`。
+pub fn offset_refs(formula: &str, dr: i64, dc: i64) -> String {
+    let ch: Vec<char> = formula.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < ch.len() {
+        if ch[i] == '"' {
+            out.push('"');
+            i += 1;
+            while i < ch.len() {
+                out.push(ch[i]);
+                if ch[i] == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        let start = i;
+        let mut j = i;
+        let abs_col = j < ch.len() && ch[j] == '$';
+        if abs_col {
+            j += 1;
+        }
+        let letters = j;
+        while j < ch.len() && ch[j].is_ascii_alphabetic() {
+            j += 1;
+        }
+        if j == letters {
+            out.push(ch[i]);
+            i += 1;
+            continue;
+        }
+        let abs_row = j < ch.len() && ch[j] == '$';
+        if abs_row {
+            j += 1;
+        }
+        let digits = j;
+        while j < ch.len() && ch[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digits {
+            out.extend(&ch[start..j]);
+            i = j;
+            continue;
+        }
+        let raw: String = ch[start..j].iter().collect();
+        match Pos::parse(&raw) {
+            Some(p) => {
+                let nr = if abs_row { p.row as i64 } else { p.row as i64 + dr };
+                let nc = if abs_col { p.col as i64 } else { p.col as i64 + dc };
+                if nr < 0 || nc < 0 {
+                    out.push_str("#REF!");
+                } else {
+                    let a1 = Pos { row: nr as u32, col: nc as u32 }.a1();
+                    let split = a1.find(|c: char| c.is_ascii_digit()).unwrap_or(a1.len());
+                    let (c, r) = a1.split_at(split);
+                    out.push_str(&format!(
+                        "{}{c}{}{r}",
+                        if abs_col { "$" } else { "" },
+                        if abs_row { "$" } else { "" }
+                    ));
+                }
+            }
+            None => out.push_str(&raw),
+        }
+        i = j;
+    }
+    out
+}
+
+#[cfg(test)]
+mod offset_tests {
+    use super::*;
+
+    #[test]
+    fn 相対参照は全部ずれる() {
+        assert_eq!(offset_refs("=A1+B2", 1, 0), "=A2+B3");
+        assert_eq!(offset_refs("=SUM(A1:A3)", 2, 0), "=SUM(A3:A5)");
+    }
+
+    #[test]
+    fn 固定した側は止まる() {
+        assert_eq!(offset_refs("=$A$1+A1", 1, 1), "=$A$1+B2");
+        assert_eq!(offset_refs("=A$1", 3, 0), "=A$1", "行を固定したのに動いた");
+        assert_eq!(offset_refs("=$A1", 0, 3), "=$A1", "列を固定したのに動いた");
+    }
+
+    #[test]
+    fn 紙の外はrefになる() {
+        assert_eq!(offset_refs("=A1", -1, 0), "=#REF!");
+    }
+
+    #[test]
+    fn 文字列と関数名は触らない() {
+        assert_eq!(offset_refs(r#"="A1"&A1"#, 1, 0), r#"="A1"&A2"#);
+        assert_eq!(offset_refs("=SUM(A1)", 1, 0), "=SUM(A2)");
+    }
+}
