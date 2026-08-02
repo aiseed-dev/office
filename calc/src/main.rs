@@ -61,6 +61,29 @@ fn hex(s: &str) -> gpui::Rgba {
 const COL_W: f32 = 108.0;
 /// xlsx の列幅1(=「0」1個ぶん)を何画素にするか。既定幅 8.43 ≒ 108px の比
 const PX_PER_CHW: f32 = 108.0 / 8.43;
+/// 描く行の並び。固定行は常に頭に、残りは窓から。
+fn grid_rows(frozen: Option<Pos>, view: Pos, n: u32) -> Vec<u32> {
+    let f = frozen.map(|p| p.row).unwrap_or(0);
+    let mut out: Vec<u32> = (0..f.min(n)).collect();
+    let start = view.row.max(f);
+    while (out.len() as u32) < n {
+        let next = start + out.len() as u32 - f.min(n);
+        out.push(next);
+    }
+    out
+}
+
+fn grid_cols(frozen: Option<Pos>, view: Pos, n: u32) -> Vec<u32> {
+    let f = frozen.map(|p| p.col).unwrap_or(0);
+    let mut out: Vec<u32> = (0..f.min(n)).collect();
+    let start = view.col.max(f);
+    while (out.len() as u32) < n {
+        let next = start + out.len() as u32 - f.min(n);
+        out.push(next);
+    }
+    out
+}
+
 const HEAD_W: f32 = 46.0;
 const ROWS: u32 = 30;
 const COLS: u32 = 9;
@@ -76,6 +99,8 @@ struct Calc {
     show_formulas: bool,
     /// 画面の窓の左上(スクロール)。**表は画面より大きい**
     view: Pos,
+    /// 固定する行数・列数(見出しを置き去りにしないため)。カーソル位置で決める
+    frozen: Option<Pos>,
     /// グリッド線(表の薄い線)を出す
     gridlines: bool,
     /// 数式バーの中身。IMEもここに来る(セルの入力は1本のテキスト編集)
@@ -104,6 +129,7 @@ impl Calc {
             anchor: None,
             show_formulas: false,
             view: Pos::new(0, 0),
+            frozen: None,
             gridlines: true,
             input: Editor::new(""),
             path: None,
@@ -477,6 +503,23 @@ impl Calc {
             // 帳票を PDF に。画面に見えているもの(値・書式・罫線)を写す
             "pdf" => self.save_pdf(),
             "show-gridlines" => self.gridlines = !self.gridlines,
+            // ウィンドウ枠の固定。カーソルの上と左を留める。もう一度で解く
+            "freeze" => {
+                self.frozen = match self.frozen {
+                    Some(_) => None,
+                    None if self.cursor.row == 0 && self.cursor.col == 0 => {
+                        self.status = "固定する位置にカーソルを置いてください(その上と左が留まります)".into();
+                        None
+                    }
+                    None => {
+                        self.status = format!(
+                            "{}行 {}列を固定しました",
+                            self.cursor.row, self.cursor.col
+                        ).into();
+                        Some(self.cursor)
+                    }
+                };
+            }
             "fillparag" => self.fmt(|f| {
                 f.fill = match f.fill.as_deref() {
                     None => Some("FFF2CC".into()),
@@ -721,7 +764,7 @@ impl Render for Calc {
         let mut head = div().flex().flex_row()
             .child(div().w(px(HEAD_W)).h(px(ROW_H)).bg(rgb(0xEFF2F4))
                    .border_r_1().border_b_1().border_color(rgb(0xD5DBE0)));
-        for c in self.view.col..self.view.col + COLS {
+        for c in grid_cols(self.frozen, self.view, COLS) {
             head = head.child(div().w(px(self.col_px(c))).h(px(ROW_H))
                 .bg(rgb(0xEFF2F4)).border_r_1().border_b_1()
                 .border_color(rgb(0xD5DBE0))
@@ -731,7 +774,7 @@ impl Render for Calc {
         }
         grid = grid.child(head);
 
-        for r in self.view.row..self.view.row + ROWS {
+        for r in grid_rows(self.frozen, self.view, ROWS) {
             let rh = self.row_px(r);
             let mut row = div().flex().flex_row()
                 .child(div().w(px(HEAD_W)).h(px(rh))
@@ -740,7 +783,7 @@ impl Render for Calc {
                     .flex().items_center().justify_center()
                     .text_size(px(11.5)).text_color(rgb(0x66707A))
                     .child(SharedString::from((r + 1).to_string())));
-            for c in self.view.col..self.view.col + COLS {
+            for c in grid_cols(self.frozen, self.view, COLS) {
                 let p = Pos::new(r, c);
                 let cell = self.sheet().get(p);
                 // 結合に呑まれた位置は空で描く(値は左上のセルにだけある)
@@ -884,4 +927,33 @@ fn main() {
         .unwrap();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod freeze_tests {
+    use super::*;
+
+    #[test]
+    fn 固定した行は窓が動いても頭に残る() {
+        // 見出し行(0)を固定して、窓が10行目に居ても 0 行目が出る
+        let rows = grid_rows(Some(Pos::new(1, 1)), Pos::new(10, 5), 5);
+        assert_eq!(rows[0], 0, "固定した見出しが消えた: {rows:?}");
+        assert_eq!(rows[1], 10, "続きが窓から始まっていない: {rows:?}");
+        let cols = grid_cols(Some(Pos::new(1, 1)), Pos::new(10, 5), 4);
+        assert_eq!(cols, vec![0, 5, 6, 7], "{cols:?}");
+    }
+
+    #[test]
+    fn 固定なしなら窓のまま() {
+        assert_eq!(grid_rows(None, Pos::new(3, 0), 4), vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn 窓が固定の中に居ても重複しない() {
+        // 窓が先頭にあるとき、固定行と窓の行が二重に出ない
+        let rows = grid_rows(Some(Pos::new(2, 0)), Pos::new(0, 0), 5);
+        let mut sorted = rows.clone();
+        sorted.dedup();
+        assert_eq!(rows.len(), sorted.len(), "行が二重に出た: {rows:?}");
+    }
 }

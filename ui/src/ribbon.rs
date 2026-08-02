@@ -78,7 +78,7 @@ pub const WRITER: &[Tab] = &[
     Tab { name: "挿入", cmds: &[
         x("空白ページの挿入", "blankpage"),
         c("pagebreak", "ページの挿入またはセクション区切り", "pagebreak"),
-        x("表の挿入", "instable"),
+        c("instable", "表の挿入", "instable"),
         x("図形を挿入", "insshape"),
         x("SmartArtの挿入", "inssmartart"),
         x("グラフを挿入", "inschart"),
@@ -88,7 +88,7 @@ pub const WRITER: &[Tab] = &[
         x("ドロップキャップの挿入", "dropcap"),
         x("ファイルからのテキスト", "text-from-file"),
         x("方程式を挿入", "insequation"),
-        x("記号を挿入", "inssymbol"),
+        c("inssymbol", "記号を挿入", "inssymbol"),
         x("コンテンツコントロールの挿入", "controls"),
     ]},
     Tab { name: "描画", cmds: &[
@@ -254,7 +254,7 @@ pub const CALC: &[Tab] = &[
         x("詳細の非表示", "hide-details"),
     ]},
     Tab { name: "表示", cmds: &[
-        x("ウィンドウ枠の固定", "freeze"),
+        c("freeze", "ウィンドウ枠の固定", "freeze"),
         x("シートの表示", "sheet-view"),
         c("show-gridlines", "グリッド線", "show-gridlines"),
         x("見出し", "show-headings"),

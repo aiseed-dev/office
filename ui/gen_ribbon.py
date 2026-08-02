@@ -43,6 +43,7 @@ READY = {
         "markers": "markers", "numbering": "numbering",
         "wordcount": "wordcount", "spell": "spell", "pagebreak": "pagebreak",
         "zoom-in": "zoom-in", "zoom-out": "zoom-out",
+        "instable": "instable", "inssymbol": "inssymbol",
         "incoffset": "incoffset", "decoffset": "decoffset",
         "linespace": "linespace",
     },
@@ -61,6 +62,7 @@ READY = {
         "math": "fn-math", "text": "fn-text", "logical": "fn-logical",
         "recent": "fn-recent",
         "show-formulas": "show-formulas", "show-gridlines": "show-gridlines",
+        "freeze": "freeze",
         "print": "pdf",
     },
 }

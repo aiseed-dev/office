@@ -114,6 +114,8 @@ struct Writer {
     zoom: f32,
     /// いま編集しているもの。**Editor は常にこの対象の文章を持つ**
     target: Target,
+    /// 記号の一覧を出しているか
+    symbols: bool,
     /// 校正の指摘(レビュー > 校正)。英語は辞書、日本語はモデル
     proof: Vec<ui::check::Finding>,
     proof_msg: SharedString,
@@ -148,6 +150,7 @@ impl Writer {
             tab: 0,
             zoom: 1.0,
             target: Target::Body,
+            symbols: false,
             font_name: kumihan::font::for_document(None)
                 .map(|(f, _)| SharedString::from(f.name.clone()))
                 .unwrap_or_else(|_| "sans-serif".into()),
@@ -586,6 +589,31 @@ impl Writer {
             // 行間。1.0 → 1.5 → 2.0 → 1.0 と回す(小窓がまだ無いので)
             // この段落の前で改ページ(押すたびに入切)
             "pagebreak" => self.para(|p| p.page_break_before = !p.page_break_before),
+            // 表の挿入。3×3 を末尾に(大きさを選ぶ小窓はまだ無い)。
+            // セル編集が入っているので、挿した表はそのまま書ける
+            "instable" => {
+                let empty = || kumihan::Cellbox {
+                    paragraphs: vec![kumihan::Paragraph {
+                        runs: vec![kumihan::Run {
+                            text: String::new(),
+                            size_pt: SIZE_PT,
+                            font: None,
+                            fmt: Default::default(),
+                        }],
+                        ..Default::default()
+                    }],
+                };
+                self.flush_target();
+                self.doc.blocks.push(kumihan::Block::Table(kumihan::Table {
+                    col_mm: vec![],
+                    rows: (0..3).map(|_| (0..3).map(|_| empty()).collect()).collect(),
+                }));
+                self.dirty = true;
+                self.relayout_keep();
+                self.status = "3×3 の表を末尾に入れました(セルをクリックで編集)".into();
+            }
+            // 記号の一覧(押すと出る/消える)
+            "inssymbol" => self.symbols = !self.symbols,
             // 画面の倍率。50〜200%。紙は変わらない
             "zoom-in" => self.zoom = (self.zoom + 0.1).min(2.0),
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
@@ -938,6 +966,37 @@ impl Render for Writer {
             .w(px(1.5)).h(px(SIZE_PT * 96.0 / 72.0 * self.zoom * 1.15))
             .bg(rgb(0x165E83)));
 
+        // 記号の一覧。事務の書類で使うものだけ(飾りの絵文字は入れない)
+        let symbol_panel = if !self.symbols {
+            None
+        } else {
+            const SYMS: &[&str] = &[
+                "〒", "※", "→", "←", "↑", "↓", "℃", "±", "×", "÷",
+                "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
+                "㈱", "㈲", "№", "〆", "〜", "…", "・", "「", "」", "『",
+                "』", "【", "】", "○", "●", "◎", "△", "▲", "□", "■",
+            ];
+            let mut d = div().absolute().right(px(16.0)).top(px(8.0)).w(px(340.0))
+                .p_2().rounded_md().bg(gpui::white())
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_row().flex_wrap().gap_1();
+            for s in SYMS {
+                d = d.child(div()
+                    .id(SharedString::from(format!("sym-{s}")))
+                    .w(px(28.0)).h(px(28.0)).rounded_sm()
+                    .flex().items_center().justify_center()
+                    .text_size(px(15.0)).cursor_pointer()
+                    .hover(|st| st.bg(rgb(0xEAF2F7)))
+                    .child(SharedString::from(*s))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.ed.insert(s);
+                        this.on_edited();
+                        cx.notify();
+                    })));
+            }
+            Some(d)
+        };
+
         // 校正の指摘
         let proof_panel = if self.proof.is_empty() && self.proof_msg.is_empty() {
             None
@@ -1001,6 +1060,7 @@ impl Render for Writer {
                 div().flex_1().relative()
                     .child(paper)
                     .children(notes)
+                    .children(symbol_panel)
                     .children(proof_panel)
                     .child(InputSink { view: me }),
             )
