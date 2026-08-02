@@ -220,6 +220,31 @@ b.save("out.xlsx")               # 原本から図形・印刷設定を持ち越
   実物の様式7に差し込み、保存しても結合・元の中身は無傷。test.py の polars の節は
   polars がある環境でだけ回る(無ければ飛ばしたと言う)
 
+### writer(docx)には橋を作らない(2026-08-03 確定)
+
+**全部 Rust で書く必要はない**(ユーザー判断)。xlsx に pysheet が要ったのは
+openpyxl が帳票の枠(罫線・結合・列幅)を壊すからで、docx は事情が違う —
+**python-docx は XML の木をその場で書き換える**作りなので、
+理解しない部品(画像・スタイル・ヘッダー・フッター)を最初から壊さない。
+公共財が既にあるところには作らない(hunspell と同じ論理)。
+
+実物の様式1(参加表明)で確認済み:
+- python-docx 1.2.0 で記入して保存 → 本当に変わったのは word/document.xml
+  (編集した本文)だけ。styles・footer・settings は再直列化で字面が変わるが
+  **中身は同一**(C14N で比較)。[Content_Types].xml も宣言の集合は同一
+- **相互運用**: python-docx で埋めた様式を、こちらの ooxml(writer)が
+  そのまま読める(unsupported 空)
+- 記入の作法: **先頭ランに書き、残りのランを空にする**(段落の書式・書体が残る)
+
+```python
+import docx
+d = docx.Document("様式1.docx")
+p = d.paragraphs[12]
+p.runs[0].text = "商号または名称　日本フネン株式会社"
+for r in p.runs[1:]: r.text = ""
+d.save("記入済.docx")
+```
+
 ## 里程標
 
 - **K0 済** 組版の核(`engine`/crate kumihan): 禁則・欧文語の不分割を実フォント字幅で。
