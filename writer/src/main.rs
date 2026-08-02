@@ -55,12 +55,47 @@ fn hex(s: &str, i: usize) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// セルの文章(段落を \n で繋いだもの)。
+fn cell_text(c: &kumihan::Cellbox) -> String {
+    c.paragraphs
+        .iter()
+        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// セルへ文章を戻す。段落ごとの書式は同じ位置から引き継ぐ(本文と同じ規則)。
+fn set_cell_text(c: &mut kumihan::Cellbox, text: &str) {
+    let old: Vec<kumihan::Paragraph> = c.paragraphs.clone();
+    c.paragraphs = text
+        .split('\n')
+        .enumerate()
+        .map(|(i, s)| {
+            let mut p = old.get(i).cloned().unwrap_or_default();
+            let (size, font, fmt) = p
+                .runs
+                .first()
+                .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
+                .unwrap_or((SIZE_PT, None, Default::default()));
+            p.runs = vec![kumihan::Run { text: s.to_string(), size_pt: size, font, fmt }];
+            p
+        })
+        .collect();
+}
+
 const PX_PER_MM: f32 = 96.0 / 25.4;
 const MARGIN_MM: f32 = 20.0;
 const MEASURE_MM: f32 = 210.0 - 2.0 * MARGIN_MM;
 const SIZE_PT: f32 = 10.5;
 const LINE_MM: f32 = 6.4;
 const Y0_MM: f32 = 24.0;
+
+/// いま編集しているもの。本文か、表のセルか。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Target {
+    Body,
+    Cell { table: usize, row: usize, col: usize },
+}
 
 struct Writer {
     focus: FocusHandle,
@@ -77,6 +112,8 @@ struct Writer {
     font_name: SharedString,
     /// 画面の倍率。**紙は変わらない** — 見る大きさだけの話
     zoom: f32,
+    /// いま編集しているもの。**Editor は常にこの対象の文章を持つ**
+    target: Target,
     /// 校正の指摘(レビュー > 校正)。英語は辞書、日本語はモデル
     proof: Vec<ui::check::Finding>,
     proof_msg: SharedString,
@@ -110,6 +147,7 @@ impl Writer {
             dirty: false,
             tab: 0,
             zoom: 1.0,
+            target: Target::Body,
             font_name: kumihan::font::for_document(None)
                 .map(|(f, _)| SharedString::from(f.name.clone()))
                 .unwrap_or_else(|_| "sans-serif".into()),
@@ -138,8 +176,56 @@ impl Writer {
     }
 
     /// 編集中のテキストを文書に反映してから組み直す。
+    /// いまの編集内容を、編集先(本文かセル)へ書き戻す。
+    fn flush_target(&mut self) {
+        match self.target {
+            Target::Body => self.doc.set_body_text(self.ed.text(), SIZE_PT),
+            Target::Cell { table, row, col } => {
+                let text = self.ed.text().to_string();
+                if let Some(kumihan::Block::Table(tb)) = self
+                    .doc
+                    .blocks
+                    .iter_mut()
+                    .filter(|b| matches!(b, kumihan::Block::Table(_)))
+                    .nth(table)
+                {
+                    if let Some(cell) = tb.rows.get_mut(row).and_then(|r| r.get_mut(col)) {
+                        set_cell_text(cell, &text);
+                    }
+                }
+            }
+        }
+    }
+
+    /// 編集先を切り替える。いまの内容を書き戻してから、次の文章を持つ。
+    fn switch_target(&mut self, next: Target) {
+        if self.target == next {
+            return;
+        }
+        self.flush_target();
+        self.target = next;
+        let text = match next {
+            Target::Body => self.doc.body_text(),
+            Target::Cell { table, row, col } => self
+                .doc
+                .tables()
+                .nth(table)
+                .and_then(|t| t.rows.get(row))
+                .and_then(|r| r.get(col))
+                .map(cell_text)
+                .unwrap_or_default(),
+        };
+        self.ed = Editor::new(&text);
+        self.status = match next {
+            Target::Body => "本文".into(),
+            Target::Cell { row, col, .. } => {
+                format!("表のセル({}行 {}列)を編集中", row + 1, col + 1).into()
+            }
+        };
+    }
+
     fn relayout(&mut self) {
-        self.doc.set_body_text(self.ed.text(), SIZE_PT);
+        self.flush_target();
         let m = Metrics::new(font_data()).expect("フォント");
         self.page = layout(
             &self.doc,
@@ -149,6 +235,7 @@ impl Writer {
     }
 
     fn open(&mut self, p: PathBuf) {
+        self.target = Target::Body;
         match std::fs::File::open(&p)
             .map_err(|e| e.to_string())
             .and_then(ooxml::read)
@@ -182,7 +269,7 @@ impl Writer {
                 .save_file(),
         };
         let Some(p) = p else { return };
-        self.doc.set_body_text(self.ed.text(), SIZE_PT);
+        self.flush_target();
         match std::fs::File::create(&p)
             .map_err(|e| e.to_string())
             .and_then(|f| ooxml::write(&self.doc, std::io::BufWriter::new(f)))
@@ -206,8 +293,15 @@ impl Writer {
         // 行の頭のバイト位置(byte0)は組版が持っている。
         // 行の文字数で数え直すと、折り返しで落ちた空白や空行でずれる。
         // 折り返し・段落の境目では**後ろの行**に立てる(Enter の直後は次の行)
+        let want = match self.target {
+            Target::Body => None,
+            Target::Cell { table, row, col } => Some((table, row, col)),
+        };
         let mut hit: Option<(f32, f32)> = None;
-        for line in self.page.lines.iter().filter(|l| l.from_body) {
+        for line in self.page.lines.iter().filter(|l| match want {
+            None => l.from_body,
+            Some(id) => l.cell == Some(id),
+        }) {
             if cur < line.byte0 {
                 continue;
             }
@@ -322,6 +416,41 @@ impl Writer {
         // 紙は編集領域の (28,14)px に置いてある
         let x_mm = (rel_x - 28.0) / pxmm - MARGIN_MM;
         let y_mm = (rel_y - 14.0) / pxmm;
+
+        // 表のセルの中なら、そのセルの編集に切り替える
+        let hit_box = self.page.cell_boxes.iter().find(|b| {
+            x_mm >= b.x_mm && x_mm <= b.x_mm + b.w_mm
+                && y_mm >= b.top_mm && y_mm <= b.top_mm + b.h_mm
+        }).copied();
+        if let Some(b) = hit_box {
+            let id = Target::Cell { table: b.table, row: b.row, col: b.col };
+            self.switch_target(id);
+            // セルの中の行で位置を決める
+            let mut hit = 0usize;
+            for line in &self.page.lines {
+                if line.cell != Some((b.table, b.row, b.col)) {
+                    continue;
+                }
+                if line.y_mm - LINE_MM * 0.8 > y_mm {
+                    continue;
+                }
+                hit = line.byte0;
+                let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
+                let mut x = line.cells.first().map(|c| c.x_mm - MARGIN_MM).unwrap_or(0.0);
+                for c in &line.cells {
+                    if x_mm < x + c.w_mm / 2.0 {
+                        break;
+                    }
+                    x += c.w_mm;
+                    hit = line.byte0 + (c.off + c.ch.len_utf8()) - base;
+                }
+            }
+            let hit = hit.min(self.ed.text().len());
+            self.ed.move_to(hit, extend);
+            return;
+        }
+        // 本文をクリックした。セルを編集していたら本文へ戻る
+        self.switch_target(Target::Body);
 
         // 一番近いベースラインの本文行を選ぶ(クリックは字の少し上に落ちる)
         let target = y_mm + LINE_MM * 0.3;
@@ -692,8 +821,12 @@ impl Render for Writer {
             let top = line.y_mm * pxmm - sz * 0.88;
 
             if let Some(m) = &marked {
-                if !line.from_body {
-                    // 表の行は本文の並びに入っていない
+                let mine = match self.target {
+                    Target::Body => line.from_body,
+                    Target::Cell { table, row, col } => line.cell == Some((table, row, col)),
+                };
+                if !mine {
+                    // 編集していない行に変換下線は出さない
                 } else {
                 let (ls, le) = (line.byte0, line.byte_end());
                 if m.start < le && m.end > ls {
@@ -922,4 +1055,47 @@ fn main() {
         .unwrap();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod cell_edit_tests {
+    use super::*;
+
+    fn doc_with_table() -> Document {
+        let cell = |s: &str| kumihan::Cellbox {
+            paragraphs: vec![kumihan::Paragraph {
+                runs: vec![kumihan::Run {
+                    text: s.into(), size_pt: SIZE_PT, font: None, fmt: Default::default() }],
+                ..Default::default()
+            }],
+        };
+        let mut d = Document::plain("本文", SIZE_PT);
+        d.blocks.push(kumihan::Block::Table(kumihan::Table {
+            col_mm: vec![],
+            rows: vec![vec![cell("品名"), cell("金額")]],
+        }));
+        d
+    }
+
+    #[test]
+    fn セルの文章を読み書きできる() {
+        let d = doc_with_table();
+        let t = d.tables().next().unwrap();
+        assert_eq!(cell_text(&t.rows[0][0]), "品名");
+        let mut c = t.rows[0][0].clone();
+        set_cell_text(&mut c, "型式\n数量");
+        assert_eq!(c.paragraphs.len(), 2, "段落に割れていない");
+        assert_eq!(cell_text(&c), "型式\n数量");
+    }
+
+    #[test]
+    fn セルの書式は書き戻しで残る() {
+        let d = doc_with_table();
+        let mut c = d.tables().next().unwrap().rows[0][0].clone();
+        c.paragraphs[0].align = kumihan::Align::Center;
+        c.paragraphs[0].runs[0].fmt.bold = true;
+        set_cell_text(&mut c, "直した");
+        assert_eq!(c.paragraphs[0].align, kumihan::Align::Center, "揃えが消えた");
+        assert!(c.paragraphs[0].runs[0].fmt.bold, "太字が消えた");
+    }
 }

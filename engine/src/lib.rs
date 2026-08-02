@@ -392,8 +392,10 @@ pub struct Line {
     /// カーソルや変換下線の位置合わせは本文の行だけを数える
     pub from_body: bool,
     /// この行の頭が、本文(段落を \n で繋いだもの)の何バイト目か。
-    /// 表の行では意味を持たない
+    /// 表の行では**セルの文章**の中の位置
     pub byte0: usize,
+    /// 表のセル由来なら (表の番号, 行, 列)
+    pub cell: Option<(usize, usize, usize)>,
 }
 
 impl Line {
@@ -428,6 +430,20 @@ pub struct Sheet {
     /// 引く線(表の罫線)。[x1, y1, x2, y2] mm。
     /// 画面も紙も、これをそのまま引く
     pub rules: Vec<[f32; 4]>,
+    /// 表のセルの当たり判定(クリックでセルを選ぶため)
+    pub cell_boxes: Vec<CellBox>,
+}
+
+/// 表のセル1つぶんの場所。
+#[derive(Debug, Clone, Copy)]
+pub struct CellBox {
+    pub table: usize,
+    pub row: usize,
+    pub col: usize,
+    pub x_mm: f32,
+    pub top_mm: f32,
+    pub w_mm: f32,
+    pub h_mm: f32,
 }
 
 // ---------- フォント(字幅の出どころ) ----------
@@ -623,6 +639,7 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
     let mut nth = 0usize;
     // 本文(段落を \n で繋いだもの)における、いまの段落の頭のバイト位置
     let mut para_byte0 = 0usize;
+    let mut table_no = 0usize;
     for block in &doc.blocks {
         match block {
             Block::Para(para) => {
@@ -644,7 +661,8 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                         // 空の段落も**行として持つ**。持たないと、後ろの行の
                         // バイト勘定が1つずつずれて、カーソルが本文とずれる
                         sheet.lines.push(Line {
-                            cells: Vec::new(), y_mm: y, from_body: true, byte0: para_byte0 });
+                            cells: Vec::new(), y_mm: y, from_body: true,
+                            byte0: para_byte0, cell: None });
                         y += frame.line_height_mm * para.spacing();
                         continue;
                     }
@@ -665,7 +683,7 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                     // 1行目(印+本文頭)も続きの行も正しく出る
                     let byte0 = para_byte0
                         + cells.iter().map(|c| c.off).min().unwrap_or(0);
-                    sheet.lines.push(Line { cells, y_mm: y, from_body: true, byte0 });
+                    sheet.lines.push(Line { cells, y_mm: y, from_body: true, byte0, cell: None });
                     y += frame.line_height_mm * para.spacing();
                 }
                 // 次の段落の頭 = この段落のバイト数 + 改行1つ
@@ -673,7 +691,8 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                 para_byte0 += plen + 1;
             }
             Block::Table(table) => {
-                y = layout_table(table, m, frame, y, &mut sheet);
+                y = layout_table(table, m, frame, y, &mut sheet, table_no);
+                table_no += 1;
             }
         }
     }
@@ -684,7 +703,8 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
 ///
 /// 列幅は等分(docx の gridCol はまだ読まない — 読めるようになったら差す)。
 /// セルの中はそれぞれの幅で普通に折り返す。
-fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mut Sheet) -> f32 {
+fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mut Sheet,
+                table_no: usize) -> f32 {
     let ncols = table.rows.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
     // 列幅。指定があればそれを使い、行長に収まらなければ**比例で縮める**
     // (右へ黙ってはみ出すより、比率を守って縮む方が様式の見た目が保たれる)
@@ -713,38 +733,52 @@ fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mu
     let table_top = y_in - lh * 0.55;
     let mut row_top = table_top;
 
-    for row in &table.rows {
-        // 各セルを折って、行の高さを決める
-        let mut cells_lines: Vec<Vec<Vec<Cell>>> = Vec::new();
+    for (ri, row) in table.rows.iter().enumerate() {
+        // 各セルを折って、行の高さを決める。
+        // 行はセルの文章(段落を \n で繋いだもの)の中のバイト位置を持つ
+        let mut cells_lines: Vec<Vec<(Vec<Cell>, usize)>> = Vec::new();
         let mut nlines = 1usize;
         for (ci, cell) in row.iter().enumerate() {
             let inner = (widths.get(ci).copied().unwrap_or(10.0) - 2.0 * CELL_PAD).max(2.0);
-            let mut ls: Vec<Vec<Cell>> = Vec::new();
+            let mut ls: Vec<(Vec<Cell>, usize)> = Vec::new();
+            let mut para0 = 0usize;
             for para in &cell.paragraphs {
-                ls.extend(break_para(para, m, inner, None));
+                for cs in break_para(para, m, inner, None) {
+                    let b0 = para0 + cs.iter().map(|c| c.off).min().unwrap_or(0);
+                    ls.push((cs, b0));
+                }
+                let plen: usize = para.runs.iter().map(|r| r.text.len()).sum();
+                para0 += plen + 1;
             }
             nlines = nlines.max(ls.len());
             cells_lines.push(ls);
         }
         let row_h = nlines as f32 * lh + 2.0 * CELL_PAD;
 
-        // 中身を置く(from_body=false。カーソルの位置合わせに入れない)
+        // 中身を置く(from_body=false。本文の位置合わせに入れない)
         for (ci, ls) in cells_lines.into_iter().enumerate() {
             let x0 = xs[ci] + CELL_PAD;
             let mut yy = row_top + CELL_PAD + lh * 0.8;
-            for cells in ls {
-                if cells.is_empty() {
-                    yy += lh;
-                    continue;
-                }
+            let id = Some((table_no, ri, ci));
+            for (cells, b0) in ls {
                 let mut x = x0;
                 let cells: Vec<Cell> = cells
                     .into_iter()
                     .map(|mut c| { c.x_mm = x; x += c.w_mm; c })
                     .collect();
-                sheet.lines.push(Line { cells, y_mm: yy, from_body: false, byte0: 0 });
+                sheet.lines.push(Line { cells, y_mm: yy, from_body: false, byte0: b0, cell: id });
                 yy += lh;
             }
+            // クリックの当たり判定
+            sheet.cell_boxes.push(CellBox {
+                table: table_no,
+                row: ri,
+                col: ci,
+                x_mm: xs[ci],
+                top_mm: row_top,
+                w_mm: widths.get(ci).copied().unwrap_or(10.0),
+                h_mm: row_h,
+            });
         }
 
         // 罫線: この行の上辺
