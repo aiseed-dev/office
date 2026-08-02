@@ -1506,9 +1506,10 @@ impl Render for Calc {
                 });
                 d = d.bg(base);
                 // 範囲は下地に緑を**混ぜて**見せる(塗りは透けて残る)。
-                // カーソルのセルは下地のまま — 外周の太枠と、範囲の中で
-                // 一つだけ色が抜けていることで居場所が分かる(Excel の作法)
-                if in_range && !sel {
+                // 色を抜くのは**起点のセル**(最初に選んだ方)— ドラッグで
+                // 動くのは反対側の角なので、抜けが動き回らない(Excel の作法)
+                let origin = self.anchor.unwrap_or(self.cursor);
+                if in_range && p != origin {
                     d = d.bg(tint(base, 0.20));
                 }
                 if f.bold {
