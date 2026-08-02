@@ -128,6 +128,8 @@ pub struct Cellbox {
 #[derive(Debug, Clone, Default)]
 pub struct Table {
     pub rows: Vec<Vec<Cellbox>>,
+    /// 列の幅(mm)。docx の `w:gridCol`。空なら等分
+    pub col_mm: Vec<f32>,
 }
 
 /// 文書の中身は、段落か表。順序を保つ。
@@ -645,8 +647,27 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
 /// セルの中はそれぞれの幅で普通に折り返す。
 fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mut Sheet) -> f32 {
     let ncols = table.rows.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
-    let col_w = frame.measure_mm / ncols as f32;
-    let inner = (col_w - 2.0 * CELL_PAD).max(2.0);
+    // 列幅。指定があればそれを使い、行長に収まらなければ**比例で縮める**
+    // (右へ黙ってはみ出すより、比率を守って縮む方が様式の見た目が保たれる)
+    let widths: Vec<f32> = if table.col_mm.len() == ncols
+        && table.col_mm.iter().all(|w| *w > 0.5)
+    {
+        let total: f32 = table.col_mm.iter().sum();
+        if total > frame.measure_mm {
+            let k = frame.measure_mm / total;
+            table.col_mm.iter().map(|w| w * k).collect()
+        } else {
+            table.col_mm.clone()
+        }
+    } else {
+        vec![frame.measure_mm / ncols as f32; ncols]
+    };
+    // 列の左端(累積)
+    let mut xs = vec![0.0f32];
+    for w in &widths {
+        xs.push(xs.last().unwrap() + w);
+    }
+    let table_w = *xs.last().unwrap();
     let lh = frame.line_height_mm;
 
     // 表の上端。直前のベースラインから少し空ける
@@ -657,7 +678,8 @@ fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mu
         // 各セルを折って、行の高さを決める
         let mut cells_lines: Vec<Vec<Vec<Cell>>> = Vec::new();
         let mut nlines = 1usize;
-        for cell in row {
+        for (ci, cell) in row.iter().enumerate() {
+            let inner = (widths.get(ci).copied().unwrap_or(10.0) - 2.0 * CELL_PAD).max(2.0);
             let mut ls: Vec<Vec<Cell>> = Vec::new();
             for para in &cell.paragraphs {
                 ls.extend(break_para(para, m, inner, None));
@@ -669,7 +691,7 @@ fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mu
 
         // 中身を置く(from_body=false。カーソルの位置合わせに入れない)
         for (ci, ls) in cells_lines.into_iter().enumerate() {
-            let x0 = ci as f32 * col_w + CELL_PAD;
+            let x0 = xs[ci] + CELL_PAD;
             let mut yy = row_top + CELL_PAD + lh * 0.8;
             for cells in ls {
                 if cells.is_empty() {
@@ -687,16 +709,15 @@ fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mu
         }
 
         // 罫線: この行の上辺
-        sheet.rules.push([0.0, row_top, frame.measure_mm, row_top]);
+        sheet.rules.push([0.0, row_top, table_w, row_top]);
         // 縦線(行ごとに引く。ページ割れで途切れても破綻しない)
-        for ci in 0..=ncols {
-            let x = ci as f32 * col_w;
-            sheet.rules.push([x, row_top, x, row_top + row_h]);
+        for x in &xs {
+            sheet.rules.push([*x, row_top, *x, row_top + row_h]);
         }
         row_top += row_h;
     }
     // 一番下の線
-    sheet.rules.push([0.0, row_top, frame.measure_mm, row_top]);
+    sheet.rules.push([0.0, row_top, table_w, row_top]);
 
     // 次のベースライン
     row_top + lh
@@ -859,7 +880,7 @@ mod format_tests {
     #[test]
     fn 表は消えない() {
         let mut d = doc("本文");
-        d.blocks.push(Block::Table(Table { rows: vec![vec![Cellbox::default()]] }));
+        d.blocks.push(Block::Table(Table { col_mm: vec![], rows: vec![vec![Cellbox::default()]] }));
         d.set_body_text("本文を直した", 10.5);
         assert_eq!(d.tables().count(), 1, "表が消えた");
     }
@@ -1045,6 +1066,7 @@ mod table_layout_tests {
         };
         let mut d = Document::plain("前の本文", 10.5);
         d.blocks.push(Block::Table(Table {
+            col_mm: vec![],
             rows: vec![
                 vec![cell("品名"), cell("金額")],
                 vec![cell("防火戸"), cell("120,000")],
@@ -1100,6 +1122,7 @@ mod table_layout_tests {
         };
         let mut d = Document { font: None, blocks: vec![] };
         d.blocks.push(Block::Table(Table {
+            col_mm: vec![],
             rows: vec![vec![cell(&"あ".repeat(30)), cell("短い")]],
         }));
         let data = font::load(font::for_document(None).unwrap().0).unwrap();
@@ -1115,5 +1138,55 @@ mod table_layout_tests {
                 assert!(right <= 50.0 + 0.5, "隣のセルへはみ出した: {right}mm");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod gridcol_tests {
+    use super::*;
+
+    fn cell(s: &str) -> Cellbox {
+        Cellbox {
+            paragraphs: vec![Paragraph {
+                runs: vec![Run {
+                    text: s.into(), size_pt: 10.5, font: None, fmt: Default::default() }],
+                ..Default::default()
+            }],
+        }
+    }
+
+    fn rules_of(col_mm: Vec<f32>) -> Vec<[f32; 4]> {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let d = Document {
+            font: None,
+            blocks: vec![Block::Table(Table {
+                col_mm,
+                rows: vec![vec![cell("項目"), cell("値")]],
+            })],
+        };
+        layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 }).rules
+    }
+
+    #[test]
+    fn 列幅の指定が効く() {
+        // 30mm + 70mm の2列。縦線が 0, 30, 100 に立つ
+        let rules = rules_of(vec![30.0, 70.0]);
+        let mut vx: Vec<f32> = rules.iter().filter(|r| r[0] == r[2]).map(|r| r[0]).collect();
+        vx.sort_by(f32::total_cmp);
+        vx.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+        assert_eq!(vx.len(), 3, "{vx:?}");
+        assert!((vx[1] - 30.0).abs() < 0.01, "指定した列幅で立っていない: {vx:?}");
+    }
+
+    #[test]
+    fn 行長を超える指定は比例で縮む() {
+        // 120+80=200mm を 100mm に。比率 3:2 のまま 60/40 になる
+        let rules = rules_of(vec![120.0, 80.0]);
+        let mut vx: Vec<f32> = rules.iter().filter(|r| r[0] == r[2]).map(|r| r[0]).collect();
+        vx.sort_by(f32::total_cmp);
+        vx.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+        assert!((vx[1] - 60.0).abs() < 0.1, "比率が守られていない: {vx:?}");
+        assert!((vx[2] - 100.0).abs() < 0.1, "右へはみ出した: {vx:?}");
     }
 }

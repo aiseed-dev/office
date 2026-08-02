@@ -84,6 +84,13 @@ struct TblBuild {
     rows: Vec<Vec<Cellbox>>,
     row: Vec<Cellbox>,
     cell: Vec<Paragraph>,
+    /// 列幅(mm)。w:gridCol から
+    col_mm: Vec<f32>,
+}
+
+/// twip → mm(1twip = 1/20pt)
+fn twip_mm(v: f32) -> f32 {
+    v * 25.4 / (20.0 * 72.0)
 }
 
 pub fn parse_document_xml(xml: &str) -> (Document, Report) {
@@ -121,6 +128,11 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                 let n = local(e.name().as_ref()).to_vec();
                 match n.as_slice() {
                     b"tbl" => stack.push(TblBuild::default()),
+                    b"gridCol" => if let Some(b) = stack.last_mut() {
+                        if let Some(w) = attr(&e, "w").and_then(|v| v.parse::<f32>().ok()) {
+                            b.col_mm.push(twip_mm(w));
+                        }
+                    },
                     b"tr" => if let Some(b) = stack.last_mut() { b.row.clear() },
                     b"tc" => if let Some(b) = stack.last_mut() { b.cell.clear() },
                     b"p" => { para = Some(Vec::new()); size_pt = DEFAULT_PT; font = None;
@@ -189,6 +201,12 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
             Ok(Event::Empty(e)) => {
                 let n = local(e.name().as_ref()).to_vec();
                 match n.as_slice() {
+                    // gridCol は空要素で来る
+                    b"gridCol" => if let Some(b) = stack.last_mut() {
+                        if let Some(w) = attr(&e, "w").and_then(|v| v.parse::<f32>().ok()) {
+                            b.col_mm.push(twip_mm(w));
+                        }
+                    },
                     b"br" => if let Some(p) = para.as_mut() {
                         p.push(Run { text: "\n".into(), size_pt, font: font.clone(), fmt: fmt.clone() }) },
                     b"tab" => if let Some(p) = para.as_mut() {
@@ -261,7 +279,6 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                     }
                     b"rPr" => in_rpr = false,
                     b"pPr" => in_ppr = false,
-                    b"pPr" => in_ppr = false,
                     b"p" => {
                         if let Some(runs) = para.take() {
                             rep.runs += runs.len();
@@ -286,7 +303,7 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                     },
                     b"tbl" => {
                         if let Some(b) = stack.pop() {
-                            let tb = Table { rows: b.rows };
+                            let tb = Table { rows: b.rows, col_mm: b.col_mm };
                             if stack.is_empty() {
                                 doc.blocks.push(Block::Table(tb));
                             } else {
@@ -433,6 +450,17 @@ pub fn write_document_xml(doc: &Document) -> String {
                 }
                 w.write_event(Event::End(BytesEnd::new("w:tblBorders"))).unwrap();
                 w.write_event(Event::End(BytesEnd::new("w:tblPr"))).unwrap();
+                // 列幅を返す(読んだものを捨てると、保存で表の形が変わる)
+                if !t.col_mm.is_empty() {
+                    w.write_event(Event::Start(BS::new("w:tblGrid"))).unwrap();
+                    for mm in &t.col_mm {
+                        let mut g = BS::new("w:gridCol");
+                        let tw = (mm * 20.0 * 72.0 / 25.4).round() as i64;
+                        g.push_attribute(("w:w", tw.to_string().as_str()));
+                        w.write_event(Event::Empty(g)).unwrap();
+                    }
+                    w.write_event(Event::End(BytesEnd::new("w:tblGrid"))).unwrap();
+                }
                 for row in &t.rows {
                     w.write_event(Event::Start(BS::new("w:tr"))).unwrap();
                     for cell in row {
@@ -564,7 +592,7 @@ mod tests {
     fn 表が往復する() {
         let d = Document { font: None, blocks: vec![
             Block::Para(para("(様式3) 会社概要")),
-            Block::Table(Table { rows: vec![
+            Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![cell("会　社　名"), cell("日本フネン株式会社")],
                 vec![cell("所　在　地"), cell("徳島県吉野川市川島町三ツ島新田179-1")],
                 vec![cell("資　本　金"), cell("3億1,400万円")],
@@ -587,9 +615,9 @@ mod tests {
     fn 表と本文の順序が保たれる() {
         let d = Document { font: None, blocks: vec![
             Block::Para(para("前")),
-            Block::Table(Table { rows: vec![vec![cell("表1")]] }),
+            Block::Table(Table { col_mm: vec![], rows: vec![vec![cell("表1")]] }),
             Block::Para(para("中")),
-            Block::Table(Table { rows: vec![vec![cell("表2")]] }),
+            Block::Table(Table { col_mm: vec![], rows: vec![vec![cell("表2")]] }),
             Block::Para(para("後")),
         ]};
         let (back, _) = round_trip(&d);
@@ -601,7 +629,7 @@ mod tests {
     #[test]
     fn 空セルも列として残る() {
         // 事務様式は「記入欄が空の表」が本体。空セルが消えると様式が壊れる
-        let d = Document { font: None, blocks: vec![Block::Table(Table { rows: vec![
+        let d = Document { font: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
             vec![cell("氏名"), Cellbox::default()],
             vec![cell("所属"), Cellbox::default()],
         ]})]};
@@ -846,5 +874,30 @@ mod break_round {
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
         assert!(back.paragraphs().next().unwrap().page_break_before, "改ページが消えた");
+    }
+}
+
+#[cfg(test)]
+mod gridcol_round {
+    #[test]
+    fn 列幅が往復する() {
+        // 読んだ幅を捨てると、保存で表の形が変わる
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:tbl>
+            <w:tblGrid><w:gridCol w:w="2268"/><w:gridCol w:w="4536"/></w:tblGrid>
+            <w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc>
+                  <w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr>
+        </w:tbl></w:body></w:document>"#;
+        let doc = crate::parse_document_xml(xml).0;
+        let t = doc.tables().next().expect("表が無い");
+        assert_eq!(t.col_mm.len(), 2, "gridCol を読めていない");
+        // 2268 twip = 40mm
+        assert!((t.col_mm[0] - 40.0).abs() < 0.1, "{}", t.col_mm[0]);
+        assert!((t.col_mm[1] - 80.0).abs() < 0.1);
+
+        let mut buf = Vec::new();
+        crate::write(&doc, std::io::Cursor::new(&mut buf)).unwrap();
+        let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
+        let bt = back.tables().next().unwrap();
+        assert!((bt.col_mm[0] - 40.0).abs() < 0.2, "列幅が保存で変わった");
     }
 }
