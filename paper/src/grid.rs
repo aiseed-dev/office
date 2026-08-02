@@ -42,7 +42,8 @@ pub fn sheet_to_pdf<W: Write>(
 
     // 列の幅と左端(文書の指定に従う)
     let col_mm: Vec<f32> = (0..cols.max(1))
-        .map(|c| grid.col_width.get(&c).map(|w| w * MM_PER_CHW).unwrap_or(COL_MM))
+        .map(|c| grid.col_width.get(&c).copied().or(grid.default_col_width)
+            .map(|w| w * MM_PER_CHW).unwrap_or(COL_MM))
         .collect();
     let mut col_x = vec![0.0f32];
     for w in &col_mm {

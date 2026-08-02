@@ -96,9 +96,16 @@ fn row_height(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
 }
 
 /// `<col min="1" max="3" width="12.5"/>` — min..=max は1始まり。
+///
+/// 全列に近い指定(既定幅)は展開しない。1列ずつに割ると
+/// 16,384 個の col になって保存が肥大する。
 fn col_width(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
     let g = |k: &str| attr(e, k).and_then(|v| v.parse::<f32>().ok());
     if let (Some(min), Some(max), Some(w)) = (g("min"), g("max"), g("width")) {
+        if max - min > 1000.0 {
+            sh.default_col_width = Some(w);
+            return;
+        }
         for c in (min as u32)..=(max as u32) {
             if c >= 1 {
                 sh.col_width.insert(c - 1, w);
@@ -418,13 +425,31 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         ws.push_attribute(("xmlns", NS));
         ws.push_attribute(("xmlns:r", RNS));
         w.write_event(Event::Start(ws)).unwrap();
-        // 列幅。読んだものを返す(捨てると帳票の形が変わる)
-        if !sh.col_width.is_empty() {
+        // 列幅。読んだものを返す(捨てると帳票の形が変わる)。
+        // 同じ幅が並ぶ区間は1つの col にまとめる
+        if !sh.col_width.is_empty() || sh.default_col_width.is_some() {
             w.write_event(Event::Start(BytesStart::new("cols"))).unwrap();
-            for (c, wd) in &sh.col_width {
+            if let Some(dw) = sh.default_col_width {
                 let mut e = BytesStart::new("col");
-                e.push_attribute(("min", (c + 1).to_string().as_str()));
-                e.push_attribute(("max", (c + 1).to_string().as_str()));
+                e.push_attribute(("min", "1"));
+                e.push_attribute(("max", "16384"));
+                e.push_attribute(("width", dw.to_string().as_str()));
+                w.write_event(Event::Empty(e)).unwrap();
+            }
+            let mut it = sh.col_width.iter().peekable();
+            while let Some((c0, wd)) = it.next() {
+                let mut c1 = *c0;
+                while let Some((cn, wn)) = it.peek() {
+                    if **cn == c1 + 1 && (**wn - *wd).abs() < 1e-6 {
+                        c1 = **cn;
+                        it.next();
+                    } else {
+                        break;
+                    }
+                }
+                let mut e = BytesStart::new("col");
+                e.push_attribute(("min", (c0 + 1).to_string().as_str()));
+                e.push_attribute(("max", (c1 + 1).to_string().as_str()));
                 e.push_attribute(("width", wd.to_string().as_str()));
                 e.push_attribute(("customWidth", "1"));
                 w.write_event(Event::Empty(e)).unwrap();

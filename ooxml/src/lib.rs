@@ -93,6 +93,78 @@ fn twip_mm(v: f32) -> f32 {
     v * 25.4 / (20.0 * 72.0)
 }
 
+/// 原文が使う接頭辞(`wp14:` など)の宣言を付けた `<w:r>` に包む。
+/// 解決できない接頭辞があれば None(壊れた XML を書かないため)。
+fn wrap_with_ns(raw: &str, decls: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    // 既定で分かっているもの(原本に宣言が無くても標準の URI)
+    const KNOWN: &[(&str, &str)] = &[
+        ("w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        ("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
+        ("wp", "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"),
+        ("a", "http://schemas.openxmlformats.org/drawingml/2006/main"),
+        ("pic", "http://schemas.openxmlformats.org/drawingml/2006/picture"),
+        ("v", "urn:schemas-microsoft-com:vml"),
+        ("o", "urn:schemas-microsoft-com:office:office"),
+        ("w10", "urn:schemas-microsoft-com:office:word"),
+        ("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
+        ("wp14", "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"),
+        ("w14", "http://schemas.microsoft.com/office/word/2010/wordml"),
+        ("w15", "http://schemas.microsoft.com/office/word/2012/wordml"),
+        ("wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),
+        ("wpg", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"),
+        ("a14", "http://schemas.microsoft.com/office/drawing/2010/main"),
+    ];
+    // 原文に出てくる接頭辞を拾う(要素名と属性名)
+    let mut prefixes: std::collections::BTreeSet<String> = Default::default();
+    let bytes = raw.as_bytes();
+    let is_name = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-';
+    let mut i = 0;
+    while i < bytes.len() {
+        let at_elem = bytes[i] == b'<';
+        let at_attr = bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n';
+        if at_elem || at_attr {
+            let mut j = i + 1;
+            if at_elem && j < bytes.len() && bytes[j] == b'/' {
+                j += 1;
+            }
+            let s = j;
+            while j < bytes.len() && is_name(bytes[j]) {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b':' && j > s {
+                // 属性なら後ろに = が要る(値の中の URL を接頭辞と間違えない)
+                let mut k = j + 1;
+                while k < bytes.len() && is_name(bytes[k]) {
+                    k += 1;
+                }
+                let ok = at_elem || (k < bytes.len() && bytes[k] == b'=');
+                if ok {
+                    prefixes.insert(raw[s..j].to_string());
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    prefixes.remove("xmlns");
+    let mut out = String::from("<w:r");
+    for p in &prefixes {
+        if p == "w" {
+            continue; // root で宣言済み
+        }
+        let uri = decls
+            .get(p)
+            .map(|s| s.as_str())
+            .or_else(|| KNOWN.iter().find(|(k, _)| k == p).map(|(_, v)| *v))?;
+        out.push_str(&format!(" xmlns:{p}=\"{uri}\""));
+    }
+    out.push('>');
+    out.push_str(raw);
+    out.push_str("</w:r>");
+    Some(out)
+}
+
 pub fn parse_document_xml(xml: &str) -> (Document, Report) {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
@@ -115,6 +187,8 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
     let mut page_break_before = false;
     // 読めなかった要素の原文(画像など)。段落ごとに集めて持ち越す
     let mut anchors: Vec<String> = Vec::new();
+    // 原本の root が宣言している名前空間。持ち越す原文の接頭辞をこれで包む
+    let mut ns_decls: std::collections::BTreeMap<String, String> = Default::default();
     let mut in_ppr = false;
     let mut in_text = false;
     let mut in_rpr = false;
@@ -134,6 +208,17 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
             Ok(Event::Start(e)) => {
                 let n = local(e.name().as_ref()).to_vec();
                 match n.as_slice() {
+                    b"document" => {
+                        // root の xmlns:* を控える(画像の原文の接頭辞に要る)
+                        for a in e.attributes().flatten() {
+                            let k = String::from_utf8_lossy(a.key.as_ref()).to_string();
+                            if let Some(pfx) = k.strip_prefix("xmlns:") {
+                                if let Ok(v) = a.unescape_value() {
+                                    ns_decls.insert(pfx.to_string(), v.to_string());
+                                }
+                            }
+                        }
+                    }
                     b"tbl" => stack.push(TblBuild::default()),
                     b"gridCol" => if let Some(b) = stack.last_mut() {
                         if let Some(w) = attr(&e, "w").and_then(|v| v.parse::<f32>().ok()) {
@@ -206,10 +291,22 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                         let name = e.name().to_owned();
                         if r.read_to_end_into(name, &mut Vec::new()).is_ok() {
                             let end = r.buffer_position() as usize;
-                            anchors.push(xml[start_pos..end].to_string());
+                            let raw = &xml[start_pos..end];
+                            // 原文が使う接頭辞の宣言を、包む run に付ける。
+                            // 付けないと保存した XML が「未宣言の接頭辞」で壊れる
+                            match wrap_with_ns(raw, &ns_decls) {
+                                Some(wrapped) => {
+                                    anchors.push(wrapped);
+                                    rep.note("画像・図形(保存では残る。表示は未対応)");
+                                }
+                                None => {
+                                    // 出どころの分からない接頭辞。壊れたXMLを書くより
+                                    // 落として報告する方がまし
+                                    rep.note("画像・図形(接頭辞が解決できず、保存で失われる)");
+                                }
+                            }
                             last_pos = end;
                         }
-                        rep.note("画像・図形(保存では残る。表示は未対応)");
                     }
                     b"sdt" => rep.note("w:sdt"),
                     other => {
@@ -403,9 +500,8 @@ pub fn write_document_xml(doc: &Document) -> String {
         // 読めなかった要素(画像など)を原文のまま返す。
         // 段落の並びの中の位置は失われ、末尾に戻る(正直な限界)
         for a in &p.anchors {
-            let _ = w.get_mut().write_all(b"<w:r>");
+            // anchors は宣言付きの <w:r>…</w:r> を丸ごと持っている
             let _ = w.get_mut().write_all(a.as_bytes());
-            let _ = w.get_mut().write_all(b"</w:r>");
         }
         for run in &p.runs {
             if run.text.is_empty() { continue }

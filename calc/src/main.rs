@@ -201,7 +201,13 @@ impl Calc {
 
     /// 列の画面幅。文書の指定(xlsx の width)に従う
     fn col_px(&self, c: u32) -> f32 {
-        self.sheet().col_width.get(&c).map(|w| w * PX_PER_CHW).unwrap_or(COL_W)
+        self.sheet()
+            .col_width
+            .get(&c)
+            .copied()
+            .or(self.sheet().default_col_width)
+            .map(|w| w * PX_PER_CHW)
+            .unwrap_or(COL_W)
     }
 
     /// 列の左端(見出しの右から)

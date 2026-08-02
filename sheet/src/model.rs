@@ -218,6 +218,9 @@ pub struct Sheet {
     /// 列幅(xlsx の単位 = 標準フォントの「0」何個ぶん)。無い列は既定幅。
     /// これも読み飛ばして保存すると帳票の形が変わる
     pub col_width: BTreeMap<u32, f32>,
+    /// 全列の既定幅。`<col min="1" max="16384">` を1列ずつ展開しない
+    /// (展開すると保存が 16,384 個の col で肥大する)
+    pub default_col_width: Option<f32>,
     /// 行の高さ(pt)。無い行は既定。列幅と同じ構図
     pub row_height: BTreeMap<u32, f32>,
 }
