@@ -619,9 +619,15 @@ impl Calc {
                 .save_file(),
         };
         let Some(p) = p else { return };
+        // 原本の部品(図形・テーマ・印刷設定)を持ち越す。読み終えてから書く
+        let original: Option<std::io::Cursor<Vec<u8>>> = self
+            .path
+            .as_ref()
+            .and_then(|old| std::fs::read(old).ok())
+            .map(std::io::Cursor::new);
         match std::fs::File::create(&p)
             .map_err(|e| e.to_string())
-            .and_then(|f| sheet::xlsx::write(&self.book, std::io::BufWriter::new(f)))
+            .and_then(|f| sheet::xlsx::write_with(&self.book, original, std::io::BufWriter::new(f)))
         {
             Ok(_) => {
                 self.status = format!(

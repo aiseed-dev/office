@@ -278,6 +278,65 @@ fn esc(s: &str) -> String {
 }
 
 pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
+    write_with(book, None::<std::io::Cursor<Vec<u8>>>, dst)
+}
+
+/// 保存する。`original` に開いた元のファイルを渡すと、こちらが作り直す部品
+/// (シート・共有文字列・書式)以外 — **図形・テーマ・印刷設定・文書情報** —
+/// を原本から持ち越す。渡さないと消える。
+///
+/// calcChain.xml だけは意図して捨てる(位置が古いままだと Excel が
+/// 誤った計算順で開くことがある。無ければ Excel が作り直す)。
+pub fn write_with<R: Read + Seek, W: Write + Seek>(
+    book: &Book,
+    original: Option<R>,
+    dst: W,
+) -> Result<(), String> {
+    // 原本の部品と、各シートの引き継ぎ要素(印刷まわり・図形)を先に読む
+    let mut carried: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut sheet_extras: Vec<String> = Vec::new();
+    if let Some(src) = original {
+        if let Ok(mut z) = zip::ZipArchive::new(src) {
+            for i in 0..z.len() {
+                let Ok(mut f) = z.by_index(i) else { continue };
+                let name = f.name().to_string();
+                let regenerated = name.starts_with("xl/worksheets/sheet")
+                    && name.ends_with(".xml")
+                    || name == "xl/sharedStrings.xml"
+                    || name == "xl/styles.xml"
+                    || name == "xl/calcChain.xml";
+                let mut buf = Vec::new();
+                if f.read_to_end(&mut buf).is_err() {
+                    continue;
+                }
+                if name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml") {
+                    // シート本体は作り直すが、印刷まわりと図形の参照は引き継ぐ
+                    let s = String::from_utf8_lossy(&buf);
+                    let mut extra = String::new();
+                    for pat in ["<pageMargins", "<pageSetup", "<drawing"] {
+                        if let Some(i) = s.find(pat) {
+                            if let Some(j) = s[i..].find("/>") {
+                                extra.push_str(&s[i..i + j + 2]);
+                            }
+                        }
+                    }
+                    let n: usize = name["xl/worksheets/sheet".len()..name.len() - 4]
+                        .parse()
+                        .unwrap_or(0);
+                    while sheet_extras.len() < n {
+                        sheet_extras.push(String::new());
+                    }
+                    if n >= 1 {
+                        sheet_extras[n - 1] = extra;
+                    }
+                }
+                if !regenerated {
+                    carried.push((name, buf));
+                }
+            }
+        }
+    }
+
     let mut zip = zip::ZipWriter::new(dst);
     let o: zip::write::FileOptions<'_, ()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -313,17 +372,25 @@ pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
     let overrides: String = (1..=book.sheets.len())
         .map(|i| format!(r#"<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#))
         .collect();
+    let carry = !carried.is_empty();
+    for (name, buf) in &carried {
+        zip.start_file(name.as_str(), o).map_err(|e| e.to_string())?;
+        zip.write_all(buf).map_err(|e| e.to_string())?;
+    }
     let mut put = |name: &str, data: &str| -> Result<(), String> {
         zip.start_file(name, o).map_err(|e| e.to_string())?;
         zip.write_all(data.as_bytes()).map_err(|e| e.to_string())
     };
-    put("[Content_Types].xml", &CT.replace("__SHEETS__", &overrides))?;
-    put("_rels/.rels", RELS)?;
+    if !carry {
+        put("[Content_Types].xml", &CT.replace("__SHEETS__", &overrides))?;
+        put("_rels/.rels", RELS)?;
+    }
 
     let sheets_xml: String = book.sheets.iter().enumerate()
         .map(|(i, s)| format!(r#"<sheet name="{}" sheetId="{}" r:id="rId{}"/>"#,
                               esc(&s.name), i + 1, i + 1))
         .collect();
+    if !carry {
     put("xl/workbook.xml", &format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="{NS}" xmlns:r="{RNS}"><sheets>{sheets_xml}</sheets></workbook>"#))?;
@@ -334,6 +401,7 @@ pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
     put("xl/_rels/workbook.xml.rels", &format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{wrels}<Relationship Id="rIdSS" Type="{RNS}/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rIdST" Type="{RNS}/styles" Target="styles.xml"/></Relationships>"#))?;
+    }
 
     put("xl/styles.xml", &styles_xml)?;
 
@@ -348,6 +416,7 @@ pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
         let mut w = Writer::new(Cursor::new(Vec::new()));
         let mut ws = BytesStart::new("worksheet");
         ws.push_attribute(("xmlns", NS));
+        ws.push_attribute(("xmlns:r", RNS));
         w.write_event(Event::Start(ws)).unwrap();
         // 列幅。読んだものを返す(捨てると帳票の形が変わる)
         if !sh.col_width.is_empty() {
@@ -418,7 +487,13 @@ pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
             w.write_event(Event::End(BytesEnd::new("mergeCells"))).unwrap();
         }
         w.write_event(Event::End(BytesEnd::new("worksheet"))).unwrap();
-        let body = String::from_utf8(w.into_inner().into_inner()).unwrap();
+        let mut body = String::from_utf8(w.into_inner().into_inner()).unwrap();
+        // 原本の印刷まわり・図形の参照を、schema の位置(mergeCells の後)へ戻す
+        if let Some(extra) = sheet_extras.get(i).filter(|s| !s.is_empty()) {
+            if let Some(pos) = body.rfind("</worksheet>") {
+                body.insert_str(pos, extra);
+            }
+        }
         put(&format!("xl/worksheets/sheet{}.xml", i + 1),
             &format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{body}"))?;
     }
@@ -628,5 +703,100 @@ mod rowheight_round {
         assert_eq!(s.row_height.get(&4), Some(&30.0), "{:?}", s.row_height);
         s.remove_row(0);
         assert_eq!(s.row_height.get(&3), Some(&30.0));
+    }
+}
+
+#[cfg(test)]
+mod carry_tests {
+    use crate::model::{Cell, Pos, Value};
+    use crate::{Book, Sheet};
+    use std::io::{Cursor, Read, Write};
+
+    fn xlsx_with_parts() -> Vec<u8> {
+        let mut book = Book::default();
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.set(Pos::parse("A1").unwrap(), Cell::input("品名"));
+        book.sheets.push(s);
+        let mut base = Vec::new();
+        crate::xlsx::write(&book, Cursor::new(&mut base)).unwrap();
+        // 原本に「こちらが知らない部品」を足し、シートに印刷設定と図形を差す
+        let mut z = zip::ZipArchive::new(Cursor::new(&base)).unwrap();
+        let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o: zip::write::FileOptions<'_, ()> = Default::default();
+        for i in 0..z.len() {
+            let mut f = z.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf).unwrap();
+            if name == "xl/worksheets/sheet1.xml" {
+                let s = String::from_utf8(buf).unwrap().replace(
+                    "</worksheet>",
+                    r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape"/><drawing r:id="rId9"/></worksheet>"#,
+                );
+                buf = s.into_bytes();
+            }
+            out.start_file(name, o).unwrap();
+            out.write_all(&buf).unwrap();
+        }
+        out.start_file("xl/theme/theme1.xml", o).unwrap();
+        out.write_all(b"<theme/>").unwrap();
+        out.start_file("xl/drawings/drawing1.xml", o).unwrap();
+        out.write_all(b"<wsDr/>").unwrap();
+        out.start_file("xl/printerSettings/printerSettings1.bin", o).unwrap();
+        out.write_all(b"\x01\x02printer").unwrap();
+        out.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn 開いて保存しても部品が残る() {
+        let src = xlsx_with_parts();
+        let (book, _) = crate::xlsx::read(Cursor::new(&src)).unwrap();
+        let mut out = Vec::new();
+        crate::xlsx::write_with(&book, Some(Cursor::new(&src)), Cursor::new(&mut out)).unwrap();
+        let mut z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+        let names: Vec<String> =
+            (0..z.len()).map(|i| z.by_index(i).unwrap().name().into()).collect();
+        for want in ["xl/theme/theme1.xml", "xl/drawings/drawing1.xml",
+                     "xl/printerSettings/printerSettings1.bin"] {
+            assert!(names.iter().any(|n| n == want), "{want} が消えた: {names:?}");
+        }
+        // 印刷の向きと図形の参照がシートに戻っている
+        let mut s = String::new();
+        z.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut s).unwrap();
+        assert!(s.contains("landscape"), "印刷の向きが消えた");
+        assert!(s.contains("<drawing"), "図形の参照が消えた");
+        // 値も生きている
+        let (back, _) = crate::xlsx::read(Cursor::new(&out)).unwrap();
+        assert_eq!(back.sheets[0].get(Pos::parse("A1").unwrap()).map(|c| c.value.display()),
+                   Some("品名".into()));
+    }
+
+    #[test]
+    fn 古い計算順は持ち越さない() {
+        // calcChain が古いままだと Excel が誤った順で開くことがある
+        let src = xlsx_with_parts();
+        let mut with_chain = Vec::new();
+        {
+            let mut z = zip::ZipArchive::new(Cursor::new(&src)).unwrap();
+            let mut out = zip::ZipWriter::new(Cursor::new(&mut with_chain));
+            let o: zip::write::FileOptions<'_, ()> = Default::default();
+            for i in 0..z.len() {
+                let mut f = z.by_index(i).unwrap();
+                let name = f.name().to_string();
+                let mut buf = Vec::new();
+                f.read_to_end(&mut buf).unwrap();
+                out.start_file(name, o).unwrap();
+                out.write_all(&buf).unwrap();
+            }
+            out.start_file("xl/calcChain.xml", o).unwrap();
+            out.write_all(b"<calcChain/>").unwrap();
+            out.finish().unwrap();
+        }
+        let (book, _) = crate::xlsx::read(Cursor::new(&with_chain)).unwrap();
+        let mut out = Vec::new();
+        crate::xlsx::write_with(&book, Some(Cursor::new(&with_chain)), Cursor::new(&mut out)).unwrap();
+        let z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+        let names: Vec<String> = z.file_names().map(String::from).collect();
+        assert!(!names.iter().any(|n| n == "xl/calcChain.xml"), "古い計算順を持ち越した");
     }
 }
