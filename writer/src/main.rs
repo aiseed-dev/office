@@ -839,6 +839,7 @@ impl Writer {
                         }],
                         ..Default::default()
                     }],
+                    ..Default::default()
                 };
                 self.flush_target();
                 self.doc.blocks.push(kumihan::Block::Table(kumihan::Table {
@@ -1681,6 +1682,7 @@ mod cell_edit_tests {
                     text: s.into(), size_pt: SIZE_PT, font: None, fmt: Default::default() }],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let mut d = Document::plain("本文", SIZE_PT);
         d.blocks.push(kumihan::Block::Table(kumihan::Table {

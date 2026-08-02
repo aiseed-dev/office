@@ -138,10 +138,34 @@ impl Paragraph {
     }
 }
 
+/// 縦のセル結合(docx の w:vMerge)。
+/// **日本の様式は結合で見出しを作る**ので、読めないと枠がずれて出る。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VMerge {
+    #[default]
+    None,
+    /// 結合の始まり(w:vMerge w:val="restart")。下の Continue を呑み込む
+    Start,
+    /// 結合の続き。上のセルに呑まれており、中身は描かれない
+    Continue,
+}
+
 /// 表の1セル。中は段落の列(セルの中にも段落がある)
 #[derive(Debug, Clone, Default)]
 pub struct Cellbox {
     pub paragraphs: Vec<Paragraph>,
+    /// 横の結合(docx の w:gridSpan)。このセルが占める格子の列数。
+    /// 0 と 1 はどちらも「結合なし」(既定の 0 を特別扱いしない)
+    pub col_span: u8,
+    /// 縦の結合
+    pub v_merge: VMerge,
+}
+
+impl Cellbox {
+    /// 占める格子の列数(最低1)。
+    pub fn span(&self) -> usize {
+        (self.col_span as usize).max(1)
+    }
 }
 
 /// 罫線の表。日本の事務様式の本体。
@@ -778,11 +802,22 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
 
 /// 表を組む。戻り値は表の下の、次のベースライン。
 ///
-/// 列幅は等分(docx の gridCol はまだ読まない — 読めるようになったら差す)。
-/// セルの中はそれぞれの幅で普通に折り返す。
+/// セル結合を含めて組む:
+/// - 横(gridSpan): セルが複数の格子を占め、幅はその合計
+/// - 縦(vMerge): Continue のセルは描かず、Start のセルが行をまたいで延びる
+///
+/// 罫線は「格子」ではなく**結合後のセルの縁**に引く — 結合の中を
+/// 線が横切ると、様式の枠が壊れて見える。
 fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mut Sheet,
                 table_no: usize) -> f32 {
-    let ncols = table.rows.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
+    // 列数は「セルの数」ではなく「セルが占める格子の数」
+    let ncols = table
+        .rows
+        .iter()
+        .map(|r| r.iter().map(|c| c.span()).sum::<usize>())
+        .max()
+        .unwrap_or(1)
+        .max(1);
     // 列幅。指定があればそれを使い、行長に収まらなければ**比例で縮める**
     // (右へ黙ってはみ出すより、比率を守って縮む方が様式の見た目が保たれる)
     let widths: Vec<f32> = if table.col_mm.len() == ncols
@@ -803,41 +838,94 @@ fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mu
     for w in &widths {
         xs.push(xs.last().unwrap() + w);
     }
-    let table_w = *xs.last().unwrap();
     let lh = frame.line_height_mm;
 
     // 表の上端。直前のベースラインから少し空ける
     let table_top = y_in - lh * 0.55;
-    let mut row_top = table_top;
 
-    for (ri, row) in table.rows.iter().enumerate() {
-        // 各セルを折って、行の高さを決める。
-        // 行はセルの文章(段落を \n で繋いだもの)の中のバイト位置を持つ
-        let mut cells_lines: Vec<Vec<(Vec<Cell>, usize)>> = Vec::new();
+    // 第1走: 各セルを折り、格子の位置と行の高さを決める。
+    // 行はセルの文章(段落を \n で繋いだもの)の中のバイト位置を持つ
+    struct Laid {
+        ci: usize,     // 行の中の何番目のセルか(編集はこの番号で結ぶ)
+        gc: usize,     // 占める格子の左端
+        span: usize,
+        v: VMerge,
+        lines: Vec<(Vec<Cell>, usize)>,
+        x: f32,
+        w: f32,
+    }
+    let mut rows_laid: Vec<Vec<Laid>> = Vec::new();
+    let mut row_hs: Vec<f32> = Vec::new();
+    for row in &table.rows {
+        let mut gc = 0usize;
         let mut nlines = 1usize;
+        let mut laid: Vec<Laid> = Vec::new();
         for (ci, cell) in row.iter().enumerate() {
-            let inner = (widths.get(ci).copied().unwrap_or(10.0) - 2.0 * CELL_PAD).max(2.0);
+            let span = cell.span().min(ncols.saturating_sub(gc)).max(1);
+            let x = xs[gc.min(ncols)];
+            let w = xs[(gc + span).min(ncols)] - x;
             let mut ls: Vec<(Vec<Cell>, usize)> = Vec::new();
-            let mut para0 = 0usize;
-            for para in &cell.paragraphs {
-                for cs in break_para(para, m, inner, None) {
-                    let b0 = para0 + cs.iter().map(|c| c.off).min().unwrap_or(0);
-                    ls.push((cs, b0));
+            // 縦結合の続きは上のセルに呑まれている。中身は組まない
+            if cell.v_merge != VMerge::Continue {
+                let inner = (w - 2.0 * CELL_PAD).max(2.0);
+                let mut para0 = 0usize;
+                for para in &cell.paragraphs {
+                    for cs in break_para(para, m, inner, None) {
+                        let b0 = para0 + cs.iter().map(|c| c.off).min().unwrap_or(0);
+                        ls.push((cs, b0));
+                    }
+                    let plen: usize = para.runs.iter().map(|r| r.text.len()).sum();
+                    para0 += plen + 1;
                 }
-                let plen: usize = para.runs.iter().map(|r| r.text.len()).sum();
-                para0 += plen + 1;
+                nlines = nlines.max(ls.len());
             }
-            nlines = nlines.max(ls.len());
-            cells_lines.push(ls);
+            laid.push(Laid { ci, gc, span, v: cell.v_merge, lines: ls, x, w });
+            gc += span;
         }
-        let row_h = nlines as f32 * lh + 2.0 * CELL_PAD;
+        rows_laid.push(laid);
+        row_hs.push(nlines as f32 * lh + 2.0 * CELL_PAD);
+    }
 
-        // 中身を置く(from_body=false。本文の位置合わせに入れない)
-        for (ci, ls) in cells_lines.into_iter().enumerate() {
-            let x0 = xs[ci] + CELL_PAD;
+    // 行の上端(累積)
+    let mut tops = vec![table_top];
+    for h in &row_hs {
+        tops.push(tops.last().unwrap() + h);
+    }
+    let table_bottom = *tops.last().unwrap();
+
+    // 格子の地図(第2走が中身を消費した後も結合の形を見られるように)
+    let grid: Vec<Vec<(usize, usize, VMerge)>> = rows_laid
+        .iter()
+        .map(|r| r.iter().map(|l| (l.gc, l.span, l.v)).collect())
+        .collect();
+    // row 行で格子 g を覆うセル
+    let cover = |row: usize, g: usize| -> Option<(usize, usize, VMerge)> {
+        grid.get(row)?.iter().find(|(gc, span, _)| *gc <= g && g < gc + span).copied()
+    };
+    // (ri, gc) から始まる縦結合の高さ: 同じ格子位置で Continue が続く間
+    let merged_h = |ri: usize, gc: usize| -> f32 {
+        let mut h = row_hs[ri];
+        for r in ri + 1..grid.len() {
+            match cover(r, gc) {
+                Some((g0, _, VMerge::Continue)) if g0 == gc => h += row_hs[r],
+                _ => break,
+            }
+        }
+        h
+    };
+
+    // 第2走: 中身と当たり判定(from_body=false。本文の位置合わせに入れない)
+    for (ri, laid) in rows_laid.into_iter().enumerate() {
+        let row_top = tops[ri];
+        for l in laid {
+            if l.v == VMerge::Continue {
+                continue;
+            }
+            let h = if l.v == VMerge::Start { merged_h(ri, l.gc) } else { row_hs[ri] };
+            let x0 = l.x + CELL_PAD;
             let mut yy = row_top + CELL_PAD + lh * 0.8;
-            let id = Some((table_no, ri, ci));
-            for (cells, b0) in ls {
+            let id = Some((table_no, ri, l.ci));
+            for (cells, b0) in l.lines {
                 let mut x = x0;
                 let cells: Vec<Cell> = cells
                     .into_iter()
@@ -846,31 +934,66 @@ fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mu
                 sheet.lines.push(Line { cells, y_mm: yy, from_body: false, byte0: b0, cell: id });
                 yy += lh;
             }
-            // クリックの当たり判定
+            // クリックの当たり判定(結合したセルは結合後の大きさで当てる)
             sheet.cell_boxes.push(CellBox {
                 table: table_no,
                 row: ri,
-                col: ci,
-                x_mm: xs[ci],
+                col: l.ci,
+                x_mm: l.x,
                 top_mm: row_top,
-                w_mm: widths.get(ci).copied().unwrap_or(10.0),
-                h_mm: row_h,
+                w_mm: l.w,
+                h_mm: h,
             });
         }
-
-        // 罫線: この行の上辺
-        sheet.rules.push([0.0, row_top, table_w, row_top]);
-        // 縦線(行ごとに引く。ページ割れで途切れても破綻しない)
-        for x in &xs {
-            sheet.rules.push([*x, row_top, *x, row_top + row_h]);
-        }
-        row_top += row_h;
     }
-    // 一番下の線
-    sheet.rules.push([0.0, row_top, table_w, row_top]);
 
+    // 罫線・横: 行の境ごとに、格子を歩いて「引ける区間」を繋いで引く。
+    // 縦結合の中を横切る線は引かない
+    for b in 0..=grid.len() {
+        let y = tops[b];
+        let mut g = 0usize;
+        while g < ncols {
+            // 境の下の行が Continue なら、この格子の上に線は引かない
+            let blocked = b > 0
+                && b < grid.len()
+                && matches!(cover(b, g), Some((_, _, VMerge::Continue)));
+            if blocked {
+                g += 1;
+                continue;
+            }
+            let start = g;
+            while g < ncols {
+                let blk = b > 0
+                    && b < grid.len()
+                    && matches!(cover(b, g), Some((_, _, VMerge::Continue)));
+                if blk {
+                    break;
+                }
+                g += 1;
+            }
+            sheet.rules.push([xs[start], y, xs[g], y]);
+        }
+    }
+    // 罫線・縦: 行ごとに、結合後のセルの縁に引く(結合の中には引かない)
+    for (ri, row) in grid.iter().enumerate() {
+        let (top, bottom) = (tops[ri], tops[ri + 1]);
+        let mut edges: Vec<f32> = Vec::new();
+        for (gc, span, _) in row {
+            edges.push(xs[*gc]);
+            edges.push(xs[(gc + span).min(ncols)]);
+        }
+        if row.is_empty() {
+            edges.push(xs[0]);
+            edges.push(xs[ncols]);
+        }
+        edges.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        edges.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+        for x in edges {
+            sheet.rules.push([x, top, x, bottom]);
+        }
+    }
     // 次のベースライン
-    row_top + lh
+    table_bottom + lh
 }
 
 // ---------- 検査 ----------
@@ -1213,6 +1336,7 @@ mod table_layout_tests {
                     text: s.into(), size_pt: 10.5, font: None, fmt: Default::default() }],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let mut d = Document::plain("前の本文", 10.5);
         d.blocks.push(Block::Table(Table {
@@ -1269,6 +1393,7 @@ mod table_layout_tests {
                     text: s.into(), size_pt: 10.5, font: None, fmt: Default::default() }],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let mut d = Document { font: None, page: None, sect_raw: None, blocks: vec![] };
         d.blocks.push(Block::Table(Table {
@@ -1292,6 +1417,81 @@ mod table_layout_tests {
 }
 
 #[cfg(test)]
+mod merge_layout_tests {
+    use super::*;
+
+    fn cell(s: &str) -> Cellbox {
+        Cellbox {
+            paragraphs: vec![Paragraph {
+                runs: vec![Run {
+                    text: s.into(), size_pt: 10.5, font: None, fmt: Default::default() }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn sheet_of(rows: Vec<Vec<Cellbox>>) -> Sheet {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let d = Document {
+            font: None, page: None, sect_raw: None,
+            blocks: vec![Block::Table(Table { col_mm: vec![], rows })],
+        };
+        layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 })
+    }
+
+    #[test]
+    fn 横の結合は列をまたぐ() {
+        // 1行目: 見出しが2列ぶん。2行目: 普通の2列
+        let mut head = cell("見出し");
+        head.col_span = 2;
+        let s = sheet_of(vec![
+            vec![head],
+            vec![cell("左"), cell("右")],
+        ]);
+        let b0 = s.cell_boxes.iter().find(|b| b.row == 0 && b.col == 0).unwrap();
+        assert!((b0.w_mm - 100.0).abs() < 0.01, "結合したのに幅が広がらない: {}", b0.w_mm);
+        // 結合の中(x=50)を縦線が横切らない(1行目の帯だけを見る)
+        let mid_crosses = s.rules.iter().any(|r| {
+            r[0] == r[2] && (r[0] - 50.0).abs() < 0.01 && r[1] < b0.top_mm + b0.h_mm - 0.1
+                && r[3] > b0.top_mm + 0.1
+        });
+        assert!(!mid_crosses, "結合の中を縦線が横切った");
+        // 2行目には x=50 の縦線がある
+        let b1 = s.cell_boxes.iter().find(|b| b.row == 1 && b.col == 1).unwrap();
+        assert!((b1.x_mm - 50.0).abs() < 0.01, "2行目の右セルの位置が違う: {}", b1.x_mm);
+    }
+
+    #[test]
+    fn 縦の結合は行をまたぐ() {
+        let mut start = cell("項目");
+        start.v_merge = VMerge::Start;
+        let mut cont = cell("");
+        cont.v_merge = VMerge::Continue;
+        let s = sheet_of(vec![
+            vec![start, cell("1行目")],
+            vec![cont, cell("2行目")],
+        ]);
+        // 呑まれたセルには当たり判定が無く、始まりのセルが2行ぶんに延びる
+        assert!(s.cell_boxes.iter().all(|b| !(b.row == 1 && b.col == 0)),
+            "呑まれたセルに当たり判定が残っている");
+        let b0 = s.cell_boxes.iter().find(|b| b.row == 0 && b.col == 0).unwrap();
+        let b1 = s.cell_boxes.iter().find(|b| b.row == 1 && b.col == 1).unwrap();
+        let merged_bottom = b0.top_mm + b0.h_mm;
+        let row1_bottom = b1.top_mm + b1.h_mm;
+        assert!((merged_bottom - row1_bottom).abs() < 0.01,
+            "結合が2行目の下端まで延びていない: {merged_bottom} vs {row1_bottom}");
+        // 行の境の横線が、結合の中(左半分)を横切らない
+        let boundary = b1.top_mm;
+        for r in s.rules.iter().filter(|r| r[1] == r[3] && (r[1] - boundary).abs() < 0.01) {
+            assert!(r[0] >= 50.0 - 0.01,
+                "結合の中を横線が横切った: x {}..{}", r[0], r[2]);
+        }
+    }
+}
+
+#[cfg(test)]
 mod gridcol_tests {
     use super::*;
 
@@ -1302,6 +1502,7 @@ mod gridcol_tests {
                     text: s.into(), size_pt: 10.5, font: None, fmt: Default::default() }],
                 ..Default::default()
             }],
+            ..Default::default()
         }
     }
 

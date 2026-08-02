@@ -6,13 +6,15 @@
 //!     解釈できなかった要素は捨てずに `Report` に積んで返す。
 //!     黙って落とすのが一番悪い(利用者は失われたことに気づけない)
 //!
-//! v0 の範囲: 本文の段落・ラン・文字サイズ・改行、そして**表**(w:tbl)。
+//! v0 の範囲: 本文の段落・ラン・文字サイズ・改行、そして**表**(w:tbl、
+//! セル結合 gridSpan/vMerge を含む)。
 //! 表は日本の事務様式の本体なので、v0 から入れる(実物8件すべてに表があった)。
-//! 画像・ヘッダ/フッタ・スタイル定義・セル結合は**未対応として報告する**。
+//! 画像・ヘッダ/フッタ・スタイル定義は**未対応として報告する**。
 
 use std::io::{Cursor, Read, Seek, Write};
 
-use kumihan::{Align, CharFormat, ListKind, Block, Cellbox, Document, Paragraph, Run, Table};
+use kumihan::{Align, Block, Cellbox, CharFormat, Document, ListKind, Paragraph, Run, Table,
+              VMerge};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
@@ -273,6 +275,9 @@ pub fn parse_document_with(
     let mut stack: Vec<TblBuild> = Vec::new();
 
     let mut para: Option<Vec<Run>> = None;
+    // いま読んでいるセルの結合(w:tcPr の gridSpan / vMerge)
+    let mut cell_span = 0u8;
+    let mut cell_vmerge = VMerge::None;
     let mut size_pt = DEFAULT_PT;
     // **書体は文書の設定**。docx が w:rFonts で持っているものを捨てない
     let mut font: Option<String> = None;
@@ -327,7 +332,11 @@ pub fn parse_document_with(
                         }
                     },
                     b"tr" => if let Some(b) = stack.last_mut() { b.row.clear() },
-                    b"tc" => if let Some(b) = stack.last_mut() { b.cell.clear() },
+                    b"tc" => if let Some(b) = stack.last_mut() {
+                        b.cell.clear();
+                        cell_span = 0;
+                        cell_vmerge = VMerge::None;
+                    },
                     b"p" => { para = Some(Vec::new()); size_pt = DEFAULT_PT; font = None;
                               fmt = CharFormat::default(); align = Align::default();
                               list = ListKind::default(); indent = 0; line_spacing = 1.0;
@@ -395,7 +404,17 @@ pub fn parse_document_with(
                         if let Some(v) = attr(&e, "val") { align = Align::from_docx(&v); }
                     }
                     b"t" => { in_text = true; cur.clear(); }
-                    b"vMerge" | b"gridSpan" => rep.note("セル結合(w:vMerge/w:gridSpan)"),
+                    // セル結合。横は列数、縦は restart/continue の区別で持つ
+                    b"gridSpan" => if stack.last().is_some() {
+                        cell_span = attr(&e, "val").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    },
+                    b"vMerge" => if stack.last().is_some() {
+                        cell_vmerge = match attr(&e, "val").as_deref() {
+                            Some("restart") => VMerge::Start,
+                            // val 無しは「続き」(docx の既定)
+                            _ => VMerge::Continue,
+                        };
+                    },
                     b"sectPr" => {
                         // 節の設定。用紙・余白のほか、ヘッダーの参照も入っている。
                         // **理解はしないが捨てない**(捨てると保存で用紙設定と
@@ -515,7 +534,16 @@ pub fn parse_document_with(
                     b"jc" if in_ppr => {
                         if let Some(v) = attr(&e, "val") { align = Align::from_docx(&v); }
                     }
-                    b"vMerge" | b"gridSpan" => rep.note("セル結合(w:vMerge/w:gridSpan)"),
+                    // セル結合(空要素で来るのが普通の形)
+                    b"gridSpan" => if stack.last().is_some() {
+                        cell_span = attr(&e, "val").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    },
+                    b"vMerge" => if stack.last().is_some() {
+                        cell_vmerge = match attr(&e, "val").as_deref() {
+                            Some("restart") => VMerge::Start,
+                            _ => VMerge::Continue,
+                        };
+                    },
                     b"drawing" | b"pict" | b"object" =>
                         rep.note(&format!("w:{}", String::from_utf8_lossy(&n))),
                     _ => {}
@@ -553,7 +581,13 @@ pub fn parse_document_with(
                     }
                     b"tc" => if let Some(b) = stack.last_mut() {
                         let paras = std::mem::take(&mut b.cell);
-                        b.row.push(Cellbox { paragraphs: paras });
+                        b.row.push(Cellbox {
+                            paragraphs: paras,
+                            col_span: cell_span,
+                            v_merge: cell_vmerge,
+                        });
+                        cell_span = 0;
+                        cell_vmerge = VMerge::None;
                     },
                     b"tr" => if let Some(b) = stack.last_mut() {
                         let row = std::mem::take(&mut b.row);
@@ -740,6 +774,29 @@ pub fn write_document_xml(doc: &Document) -> String {
                     w.write_event(Event::Start(BS::new("w:tr"))).unwrap();
                     for cell in row {
                         w.write_event(Event::Start(BS::new("w:tc"))).unwrap();
+                        // セル結合を返す(読んだものを捨てると様式の枠が壊れる)
+                        if cell.col_span > 1 || cell.v_merge != VMerge::None {
+                            w.write_event(Event::Start(BS::new("w:tcPr"))).unwrap();
+                            if cell.col_span > 1 {
+                                let mut g = BS::new("w:gridSpan");
+                                let v = cell.col_span.to_string();
+                                g.push_attribute(("w:val", v.as_str()));
+                                w.write_event(Event::Empty(g)).unwrap();
+                            }
+                            match cell.v_merge {
+                                VMerge::Start => {
+                                    let mut m = BS::new("w:vMerge");
+                                    m.push_attribute(("w:val", "restart"));
+                                    w.write_event(Event::Empty(m)).unwrap();
+                                }
+                                VMerge::Continue => {
+                                    // val 無しが「続き」(docx の既定)
+                                    w.write_event(Event::Empty(BS::new("w:vMerge"))).unwrap();
+                                }
+                                VMerge::None => {}
+                            }
+                            w.write_event(Event::End(BytesEnd::new("w:tcPr"))).unwrap();
+                        }
                         if cell.paragraphs.is_empty() {
                             para(&mut w, &Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
@@ -907,7 +964,9 @@ mod tests {
 
     // ---- 表: 日本の事務様式の本体(実物8件すべてに w:tbl があった) ----
 
-    fn cell(s: &str) -> Cellbox { Cellbox { paragraphs: vec![para(s)] } }
+    fn cell(s: &str) -> Cellbox {
+        Cellbox { paragraphs: vec![para(s)], ..Default::default() }
+    }
 
     #[test]
     fn 表が往復する() {
@@ -970,12 +1029,70 @@ mod tests {
 <w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr>
 <w:p><w:r><w:t>結合セル</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
 </w:body></w:document>"#;
-        let (_, rep) = parse_document_xml(xml);
+        let (doc, rep) = parse_document_xml(xml);
         assert!(!rep.is_lossless());
         assert!(rep.unsupported.iter().any(|(n, _)| n.contains("drawing")),
             "画像の未対応が報告されていない: {:?}", rep.unsupported);
-        assert!(rep.unsupported.iter().any(|(n, _)| n.contains("セル結合")),
-            "セル結合の未対応が報告されていない: {:?}", rep.unsupported);
+        // セル結合は読めるようになった。報告ではなくモデルに入る
+        assert!(!rep.unsupported.iter().any(|(n, _)| n.contains("セル結合")),
+            "読めるのに未対応と報告した: {:?}", rep.unsupported);
+        let t: Vec<&Table> = doc.tables().collect();
+        assert_eq!(t[0].rows[0][0].col_span, 2, "gridSpan が読めていない");
+    }
+
+    #[test]
+    fn セル結合が往復する() {
+        // 様式の見出しは結合で出来ている。往復で消えると枠がずれる
+        let mut head = cell("会社概要");
+        head.col_span = 2;
+        let mut vstart = cell("所在地");
+        vstart.v_merge = kumihan::VMerge::Start;
+        let mut vcont = Cellbox::default();
+        vcont.v_merge = kumihan::VMerge::Continue;
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![
+            Block::Table(Table { col_mm: vec![], rows: vec![
+                vec![head],
+                vec![vstart, cell("本社")],
+                vec![vcont, cell("工場")],
+            ]}),
+        ]};
+        let (back, rep) = round_trip(&d);
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        let t: Vec<&Table> = back.tables().collect();
+        assert_eq!(t[0].rows[0][0].col_span, 2, "gridSpan が往復しない");
+        assert_eq!(t[0].rows[1][0].v_merge, kumihan::VMerge::Start,
+            "vMerge の始まりが往復しない");
+        assert_eq!(t[0].rows[2][0].v_merge, kumihan::VMerge::Continue,
+            "vMerge の続きが往復しない");
+        assert_eq!(t[0].rows[1][1].v_merge, kumihan::VMerge::None,
+            "結合していないセルに結合が付いた");
+    }
+
+    #[test]
+    fn 実物の結合入りの様式が欠落なく読める() {
+        // 様式3(会社概要)は gridSpan 15 + vMerge 3 の結合入り
+        let src = "/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/実施要領様式3_会社概要.docx";
+        let Ok(bytes) = std::fs::read(src) else { return };
+        let (doc, rep) = crate::read(Cursor::new(bytes)).expect("読めない");
+        assert!(!rep.unsupported.iter().any(|(n, _)| n.contains("セル結合")),
+            "実物のセル結合が未対応のまま: {:?}", rep.unsupported);
+        let spans: usize = doc.tables()
+            .flat_map(|t| t.rows.iter())
+            .flat_map(|r| r.iter())
+            .filter(|c| c.col_span > 1)
+            .count();
+        assert!(spans > 0, "実物の gridSpan がモデルに入っていない");
+        // 往復しても結合が残る
+        let mut buf = Cursor::new(Vec::new());
+        crate::write(&doc, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = crate::read(buf).expect("読み直せない");
+        let spans2: usize = back.tables()
+            .flat_map(|t| t.rows.iter())
+            .flat_map(|r| r.iter())
+            .filter(|c| c.col_span > 1)
+            .count();
+        assert_eq!(spans, spans2, "保存で結合が消えた");
     }
 }
 
