@@ -276,6 +276,8 @@ struct Calc {
     clip: Option<(Pos, String)>,
     /// コピーの控え(セルそのもの)。形式を選択して貼り付け(値だけ・書式だけ)に使う
     clip_cells: Option<Vec<Vec<Option<Cell>>>>,
+    /// コピーした範囲(シート, 左上, 右下)。破線の枠で見せる。Esc で消える
+    clip_range: Option<(usize, Pos, Pos)>,
     /// グリッド線(表の薄い線)を出す
     gridlines: bool,
     /// 数式バーの中身。IMEもここに来る(セルの入力は1本のテキスト編集)
@@ -334,6 +336,7 @@ impl Calc {
             sheet_ui: Vec::new(),
             clip: None,
             clip_cells: None,
+            clip_range: None,
             gridlines: true,
             input: Editor::new(""),
             path: None,
@@ -561,6 +564,35 @@ impl Calc {
         }
         self.menu_at = Some((x, y));
         self.menu_sub = None;
+    }
+
+    /// 範囲の見えている部分の px 矩形 (x0, y0, x1, y1)。全部画面の外なら None。
+    fn range_px(&self, a: Pos, b: Pos) -> Option<(f32, f32, f32, f32)> {
+        let (mut x0, mut x1) = (None, None);
+        let mut x = HEAD_W;
+        for c in grid_cols(self.frozen, self.view, COLS) {
+            let w = self.col_px(c);
+            if c >= a.col && c <= b.col {
+                if x0.is_none() {
+                    x0 = Some(x);
+                }
+                x1 = Some(x + w);
+            }
+            x += w;
+        }
+        let (mut y0, mut y1) = (None, None);
+        let mut y = ROW_H;
+        for r in self.visible_rows() {
+            let h = self.row_px(r);
+            if r >= a.row && r <= b.row {
+                if y0.is_none() {
+                    y0 = Some(y);
+                }
+                y1 = Some(y + h);
+            }
+            y += h;
+        }
+        Some((x0?, y0?, x1?, y1?))
     }
 
     /// いま表示されているセルの左上(格子領域の px)。画面の外なら None。
@@ -921,12 +953,14 @@ impl Calc {
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        // 入力の板 → 一覧 → 子メニュー → 親メニュー → 書式の小窓、の順で閉じる
+        // 入力の板 → 一覧 → 子メニュー → 親メニュー → 書式の小窓 → コピーの破線、
+        // の順で閉じる
         if self.prompt.take().is_some()
             || self.pick.take().is_some()
             || self.menu_sub.take().is_some()
             || self.menu_at.take().is_some()
             || self.fmt_panel.take().is_some()
+            || self.clip_range.take().is_some()
         {
             cx.notify();
         }
@@ -1140,10 +1174,16 @@ impl Calc {
             return;
         }
         self.checkpoint();
-        self.sheet_mut().set(cur, Cell::input(&text));
+        // **書式は据え置く。** 打ち直しただけで罫線や塗りが消えるのは帳票の事故
+        let fmt = self.sheet().get(cur).map(|c| c.fmt.clone()).unwrap_or_default();
+        let mut cell = Cell::input(&text);
+        cell.fmt = fmt;
+        self.sheet_mut().set(cur, cell);
         let s = self.sheet_mut();
         recalc(s);
         self.dirty = true;
+        // 中身を変えたらコピーの破線は消す(Excel と同じ)
+        self.clip_range = None;
     }
 
     /// カーソルを動かす(動かす前に編集中の内容を確定する)。
@@ -1249,6 +1289,7 @@ impl Calc {
                 self.sheet_ui.clear();
                 self.undo_stack.clear();
                 self.redo_stack.clear();
+                self.clip_range = None;
                 self.path = Some(p);
                 self.sync_input();
             }
@@ -1330,6 +1371,7 @@ impl Calc {
                 })
                 .collect(),
         );
+        self.clip_range = Some((self.active, a, b));
         self.status = format!("{}:{} をコピーしました", a.a1(), b.a1()).into();
         cx.notify();
     }
@@ -1354,6 +1396,7 @@ impl Calc {
         // 形式を選択して貼り付けも切り取りでは使えない(Excel と同じ)
         self.clip = None;
         self.clip_cells = None;
+        self.clip_range = None;
         self.checkpoint();
         let n = self.clear_range();
         self.status = format!("{n} セルを切り取りました").into();
@@ -2521,6 +2564,20 @@ impl Render for Calc {
                 .children(sub_panel)
         });
 
+        // ---- コピーした範囲の破線(蟻の行進の静止版) ----
+        // セルの罫線と混ざらないよう、重ね描きの1枚で囲む。マウスは受けない
+        let ants = self.clip_range.and_then(|(si, a, b)| {
+            if si != self.active {
+                return None;
+            }
+            self.range_px(a, b).map(|(x0, y0, x1, y1)| {
+                div().absolute()
+                    .left(px(x0)).top(px(y0))
+                    .w(px((x1 - x0).max(2.0))).h(px((y1 - y0).max(2.0)))
+                    .border_2().border_dashed().border_color(rgb(0x1B6E3C))
+            })
+        });
+
         // ---- カーソルのセルの付記(コメント・リンク) ----
         let mut tip_lines: Vec<String> = Vec::new();
         if let Some(t) = self.sheet().comments.get(&self.cursor) {
@@ -2775,6 +2832,7 @@ impl Render for Calc {
                    }))
                    .child(grid)
                    .child(InputSink { view: me })
+                   .children(ants)
                    .children(tip)
                    .children(fmt_panel)
                    .children(menu)
