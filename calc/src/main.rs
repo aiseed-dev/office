@@ -341,6 +341,86 @@ impl Calc {
         self.frozen = f;
     }
 
+    /// 画面に出ている行の並び(絞り込み中はその行だけ)。描画と当たり判定で共有する。
+    fn visible_rows(&self) -> Vec<u32> {
+        match &self.filter {
+            Some((col, v)) => {
+                self.matching_rows(*col, v).into_iter().take(ROWS as usize).collect()
+            }
+            None => grid_rows(self.frozen, self.view, ROWS),
+        }
+    }
+
+    /// 格子の中の位置(px、格子領域の左上原点)からセルを逆算する。
+    /// 見出しの帯の上なら None。
+    fn cell_at(&self, x: f32, y: f32) -> Option<Pos> {
+        if x < HEAD_W || y < ROW_H {
+            return None;
+        }
+        let mut x0 = HEAD_W;
+        let mut col = None;
+        for c in grid_cols(self.frozen, self.view, COLS) {
+            let w = self.col_px(c);
+            if x < x0 + w {
+                col = Some(c);
+                break;
+            }
+            x0 += w;
+        }
+        let mut y0 = ROW_H;
+        let mut row = None;
+        for r in self.visible_rows() {
+            let h = self.row_px(r);
+            if y < y0 + h {
+                row = Some(r);
+                break;
+            }
+            y0 += h;
+        }
+        Some(Pos { row: row?, col: col? })
+    }
+
+    /// マウスの左を押した(格子領域の座標)。押したセルが選択の始まり。
+    fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool) {
+        let Some(p) = self.cell_at(x, y) else { return };
+        self.commit();
+        if shift {
+            // いまのセルから伸ばす
+            if self.anchor.is_none() {
+                self.anchor = Some(self.cursor);
+            }
+        } else {
+            self.anchor = None;
+            self.drag = Some(p);
+        }
+        self.cursor = p;
+        self.sync_input();
+    }
+
+    /// 押したまま動いた。通り過ぎたセルまで選択を広げる。
+    fn mouse_drag_at(&mut self, x: f32, y: f32) {
+        let Some(start) = self.drag else { return };
+        let Some(p) = self.cell_at(x, y) else { return };
+        if self.cursor == p {
+            return;
+        }
+        self.cursor = p;
+        self.anchor = if p == start { None } else { Some(start) };
+        if self.anchor.is_some() {
+            let (a, b) = self.sel_rect();
+            self.status = format!("{}:{}", a.a1(), b.a1()).into();
+        }
+        self.sync_input();
+    }
+
+    /// 離した。ドラッグ選択はここで確定する。
+    fn mouse_up(&mut self) {
+        if self.drag.take().is_some() && self.anchor.is_some() {
+            let (a, b) = self.sel_rect();
+            self.status = format!("{}:{}", a.a1(), b.a1()).into();
+        }
+    }
+
     /// シートを切り替える。いまの編集を確定し、場所はシートごとに覚えている。
     /// 絞り込みは解く(別のシートの列で絞ったままは意味を持たない)。
     fn switch_sheet(&mut self, i: usize) {
@@ -1184,6 +1264,49 @@ impl gpui::Element for InputSink {
         _: &mut (), _: &mut (), window: &mut Window, cx: &mut App) {
         let focus = self.view.read(cx).focus.clone();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.view.clone()), cx);
+        // マウスは窓のレベルで受けて、座標からセルを逆算する(writer と同じ方式)。
+        // セルごとのホバー判定に頼ると、ドラッグ中の移動を取り逃すことがある
+        let view = self.view.clone();
+        window.on_mouse_event(move |e: &gpui::MouseDownEvent, phase, _w, cx| {
+            if phase != gpui::DispatchPhase::Bubble
+                || e.button != gpui::MouseButton::Left
+                || !bounds.contains(&e.position)
+            {
+                return;
+            }
+            let rel = e.position - bounds.origin;
+            view.update(cx, |c, cx| {
+                c.mouse_down_at(f32::from(rel.x), f32::from(rel.y), e.modifiers.shift);
+                cx.notify();
+            });
+        });
+        let view = self.view.clone();
+        window.on_mouse_event(move |e: &gpui::MouseMoveEvent, phase, _w, cx| {
+            // ドラッグ中は格子の外でも受ける(端で選択が止まらないように、
+            // 位置は格子の中のセルに丸められる)
+            if phase != gpui::DispatchPhase::Bubble
+                || e.pressed_button != Some(gpui::MouseButton::Left)
+            {
+                return;
+            }
+            let rel = e.position - bounds.origin;
+            view.update(cx, |c, cx| {
+                if c.drag.is_some() {
+                    c.mouse_drag_at(f32::from(rel.x), f32::from(rel.y));
+                    cx.notify();
+                }
+            });
+        });
+        let view = self.view.clone();
+        window.on_mouse_event(move |e: &gpui::MouseUpEvent, phase, _w, cx| {
+            if phase != gpui::DispatchPhase::Bubble || e.button != gpui::MouseButton::Left {
+                return;
+            }
+            view.update(cx, |c, cx| {
+                c.mouse_up();
+                cx.notify();
+            });
+        });
     }
 }
 
@@ -1310,13 +1433,8 @@ impl Render for Calc {
         }
         grid = grid.child(head);
 
-        let visible: Vec<u32> = match &self.filter {
-            Some((col, v)) => {
-                let m = self.matching_rows(*col, v);
-                m.into_iter().take(ROWS as usize).collect()
-            }
-            None => grid_rows(self.frozen, self.view, ROWS),
-        };
+        // 当たり判定(cell_at)と同じ並びを使う — ずれるとクリックが別のセルに入る
+        let visible: Vec<u32> = self.visible_rows();
         for r in visible {
             let rh = self.row_px(r);
             let mut row = div().flex().flex_row()
@@ -1361,47 +1479,9 @@ impl Render for Calc {
                         .unwrap_or(12.5)))
                     .font_family("Noto Sans JP")
                     .overflow_hidden().whitespace_nowrap()
-                    .cursor_pointer()
-                    // 押した位置が選択の始まり。Shift+クリックはいまの位置から伸ばす
-                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
-                        move |this, e: &gpui::MouseDownEvent, _, cx| {
-                            this.commit();      // 移る前に、いま打っていた内容を入れる
-                            if e.modifiers.shift {
-                                if this.anchor.is_none() {
-                                    this.anchor = Some(this.cursor);
-                                }
-                            } else {
-                                this.anchor = None;
-                                this.drag = Some(p);
-                            }
-                            this.cursor = p;
-                            this.sync_input();
-                            cx.notify();
-                        }))
-                    // 押したまま通り過ぎたセルまで選択を広げる。
-                    // **左ボタンが押されているかを必ず見る** — 離した事象は
-                    // 窓の外などで取り逃すことがあり(on_mouse_up はポインタが
-                    // 乗っている要素にしか来ない)、見ないと離した後も
-                    // 最初のセルを起点に選択が広がり続ける(踏んで直した)
-                    .on_mouse_move(cx.listener(move |this, e: &gpui::MouseMoveEvent, _, cx| {
-                        let Some(start) = this.drag else { return };
-                        if e.pressed_button != Some(gpui::MouseButton::Left) {
-                            // 離した事象を取り逃していた。ここで拾って終える
-                            this.drag = None;
-                            cx.notify();
-                            return;
-                        }
-                        if this.cursor != p {
-                            this.cursor = p;
-                            this.anchor = if p == start { None } else { Some(start) };
-                            if this.anchor.is_some() {
-                                let (a, b) = this.sel_rect();
-                                this.status = format!("{}:{}", a.a1(), b.a1()).into();
-                            }
-                            this.sync_input();
-                            cx.notify();
-                        }
-                    }));
+                    .cursor_pointer();
+                // マウスの結線はセルではなく InputSink(窓レベル)にある。
+                // セルの id は当たり判定ではなく描画の区別のためだけに残す
                 // 罫線・塗り・文字書式。**帳票の見た目はここで決まる**
                 let f = cell.map(|x| x.fmt.clone()).unwrap_or_default();
                 if let Some(c) = &f.fill {
@@ -1516,16 +1596,6 @@ impl Render for Calc {
         div().size_full().flex().flex_col().bg(rgb(0xF3F5F7))
             .key_context("jo_edit")
             .track_focus(&self.focus)
-            // どこで離してもドラッグ選択は終わる(セルの外で離しても引きずらない)
-            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                if this.drag.take().is_some() {
-                    if this.anchor.is_some() {
-                        let (a, b) = this.sel_rect();
-                        this.status = format!("{}:{}", a.a1(), b.a1()).into();
-                    }
-                    cx.notify();
-                }
-            }))
             .on_action(cx.listener(Calc::a_backspace))
             .on_action(cx.listener(Calc::a_delete))
             .on_action(cx.listener(Calc::a_copy))
