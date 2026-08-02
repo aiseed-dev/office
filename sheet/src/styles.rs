@@ -28,7 +28,7 @@ fn attr(e: &quick_xml::events::BytesStart, k: &str) -> Option<String> {
 
 /// `styles.xml` を読んで、索引 → 書式 の表にする。
 pub fn parse(xml: &str) -> Vec<CellFormat> {
-    let mut fonts: Vec<(bool, bool, bool, Option<String>)> = Vec::new();
+    let mut fonts: Vec<(bool, bool, bool, Option<String>, Option<String>)> = Vec::new();
     let mut fills: Vec<Option<String>> = Vec::new();
     let mut borders: Vec<Borders> = Vec::new();
     let mut numfmts: BTreeMap<u32, String> = BTreeMap::new();
@@ -36,7 +36,7 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
 
     // いま何の中にいるか。同じ名前の要素が section ごとに意味を変えるため
     let (mut in_fonts, mut in_fills, mut in_borders, mut in_cellxfs) = (false, false, false, false);
-    let mut font = (false, false, false, None::<String>);
+    let mut font = (false, false, false, None::<String>, None::<String>);
     let mut fill: Option<String> = None;
     let mut bd = Borders::default();
     let mut side: Option<Vec<u8>> = None;
@@ -89,7 +89,7 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
                 }
             }
             b"font" if in_fonts => {
-                font = (false, false, false, None);
+                font = (false, false, false, None, None);
                 if empty {
                     fonts.push(std::mem::take(&mut font));
                 }
@@ -98,6 +98,8 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
             b"i" if in_fonts => font.1 = on(&e),
             b"u" if in_fonts => font.2 = true,
             b"color" if in_fonts => font.3 = rgb(&e),
+            // 書体は文書の設定。読み捨てない
+            b"name" if in_fonts => font.4 = attr(&e, "val"),
             b"fill" if in_fills => {
                 fill = None;
                 if empty {
@@ -159,7 +161,7 @@ fn rgb(e: &quick_xml::events::BytesStart) -> Option<String> {
 
 fn resolve(
     (fid, fillid, bid, nfid): (usize, usize, usize, u32),
-    fonts: &[(bool, bool, bool, Option<String>)],
+    fonts: &[(bool, bool, bool, Option<String>, Option<String>)],
     fills: &[Option<String>],
     borders: &[Borders],
     numfmts: &BTreeMap<u32, String>,
@@ -171,6 +173,7 @@ fn resolve(
         italic: f.1,
         underline: f.2,
         color: f.3,
+        font: f.4,
         fill: fills.get(fillid).cloned().flatten(),
         borders: borders.get(bid).copied().unwrap_or_default(),
         align: align.unwrap_or_default(),
@@ -280,14 +283,15 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
             order.push(f.clone());
         }
     }
-    let mut fonts: Vec<(bool, bool, bool, Option<String>)> = vec![(false, false, false, None)];
+    let mut fonts: Vec<(bool, bool, bool, Option<String>, Option<String>)> =
+        vec![(false, false, false, None, None)];
     let mut fills: Vec<Option<String>> = vec![None, None]; // 0=none 1=gray125 は予約席
     let mut borders: Vec<Borders> = vec![Borders::NONE];
     let mut numfmts: Vec<String> = Vec::new();
     let mut xfs: Vec<(usize, usize, usize, usize, HAlign)> = Vec::new();
 
     for f in &order {
-        let font = (f.bold, f.italic, f.underline, f.color.clone());
+        let font = (f.bold, f.italic, f.underline, f.color.clone(), f.font.clone());
         let fi = idx(&mut fonts, font);
         let fl = match &f.fill {
             Some(c) => idx(&mut fills, Some(c.clone())),
@@ -320,12 +324,13 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
         s.push_str("</numFmts>");
     }
     s.push_str(&format!("<fonts count=\"{}\">", fonts.len()));
-    for (b, i, u, c) in &fonts {
+    for (b, i, u, c, name) in &fonts {
         s.push_str("<font><sz val=\"11\"/>");
         if *b { s.push_str("<b/>") }
         if *i { s.push_str("<i/>") }
         if *u { s.push_str("<u/>") }
         if let Some(c) = c { s.push_str(&format!("<color rgb=\"FF{c}\"/>")) }
+        if let Some(n) = name { s.push_str(&format!("<name val=\"{}\"/>", esc(n))) }
         s.push_str("</font>");
     }
     s.push_str("</fonts>");
@@ -449,5 +454,20 @@ mod build_tests {
         let back = &parse(&xml)[map[&f]];
         assert!(back.borders.bottom, "下線が消えた");
         assert!(!back.borders.top, "無い罫線が増えた");
+    }
+}
+
+#[cfg(test)]
+mod font_name_tests {
+    use super::*;
+
+    #[test]
+    fn 書体名が往復する() {
+        // ＭＳ 明朝の帳票を保存して書体が消えると、開き直したとき別の字になる
+        let f = CellFormat { font: Some("ＭＳ 明朝".into()), bold: true, ..Default::default() };
+        let (xml, map) = build(&[f.clone()]);
+        let back = &parse(&xml)[map[&f]];
+        assert_eq!(back.font.as_deref(), Some("ＭＳ 明朝"), "書体名が消えた");
+        assert!(back.bold);
     }
 }

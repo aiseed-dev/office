@@ -151,6 +151,8 @@ pub struct CellFormat {
     pub fill: Option<String>,
     /// 文字色 `RRGGBB`
     pub color: Option<String>,
+    /// 書体の名前(xlsx の `<font><name>`)。文書の設定
+    pub font: Option<String>,
     /// 表示形式(`#,##0` `0.00%` など)。xlsx の numFmt
     pub number_format: Option<String>,
 }

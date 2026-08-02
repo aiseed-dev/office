@@ -1016,6 +1016,12 @@ impl Render for Calc {
                 if let Some(c) = &f.color {
                     d = d.text_color(hex(c));
                 }
+                // セルの書体。無い書体は系統を保って代替(明朝→明朝)
+                if let Some(name) = &f.font {
+                    if let Ok((fam, _)) = kumihan::font::for_document(Some(name)) {
+                        d = d.font_family(SharedString::from(fam.name.clone()));
+                    }
+                }
                 // 引いてある辺だけ濃くする(引いていない辺は表の薄い線のまま)
                 let ink = rgb(0x1B1B1B);
                 if f.borders.top { d = d.border_t_1().border_color(ink) }
