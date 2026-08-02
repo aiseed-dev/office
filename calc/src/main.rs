@@ -677,6 +677,36 @@ impl Calc {
         cx.notify();
     }
 
+    /// 終了してよいか。書きかけがあれば保存するかを確かめる。
+    /// 「はい」でも保存できなかった(ダイアログを閉じた等)なら終了しない —
+    /// 書きかけを黙って捨てない。
+    fn may_close(&mut self) -> bool {
+        self.commit();
+        if !self.dirty {
+            return true;
+        }
+        match rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("calc")
+            .set_description("保存していない変更があります。保存して終了しますか?")
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .show()
+        {
+            rfd::MessageDialogResult::Yes => {
+                self.save();
+                !self.dirty
+            }
+            rfd::MessageDialogResult::No => true,
+            _ => false,
+        }
+    }
+
+    fn a_quit(&mut self, _: &ui::Quit, _: &mut Window, cx: &mut Context<Self>) {
+        if self.may_close() {
+            cx.quit();
+        }
+    }
+
     /// リボンのコマンド。数式タブは選択セルに関数を入れる。
     /// 選んでいるセルの見た目を変える。
     ///
@@ -1158,9 +1188,40 @@ impl Render for Calc {
                 .child(tb.name)
                 .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
         }
-        tabs = tabs.child(div().flex_1())
-            .child(div().pb_1p5().pr_1().text_size(px(10.5)).text_color(rgb(0x9CC9AF))
+        // 空いた帯は窓の取っ手(掴んで動かす・二度押しで最大化)。
+        // GNOME の Wayland はサーバ側の飾りを付けてくれないので、自前で持つ
+        tabs = tabs
+            .child(div().flex_1().h(px(28.0)).id("drag")
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                    |_, e: &gpui::MouseDownEvent, window, _| {
+                        if e.click_count >= 2 {
+                            window.zoom_window();
+                        } else {
+                            window.start_window_move();
+                        }
+                    })))
+            .child(div().pb_1p5().pr_2().text_size(px(10.5)).text_color(rgb(0x9CC9AF))
                    .child(SharedString::from(format!("calc — 実装済み {ready}/{all}"))));
+        let winbtn = |id: &'static str, label: &'static str| {
+            div().id(id).px_2p5().py_1().rounded_sm()
+                .text_size(px(12.0)).text_color(rgb(0xCFE6D8))
+                .cursor_pointer()
+                .hover(move |s| if id == "close" { s.bg(rgb(0xC0392B)).text_color(rgb(0xFFFFFF)) }
+                                else { s.bg(rgb(0x2E8B57)).text_color(rgb(0xFFFFFF)) })
+                .child(label)
+        };
+        tabs = tabs
+            .child(winbtn("min", "─").on_click(cx.listener(|_, _, window, _| {
+                window.minimize_window();
+            })))
+            .child(winbtn("max", "▢").on_click(cx.listener(|_, _, window, _| {
+                window.zoom_window();
+            })))
+            .child(winbtn("close", "✕").on_click(cx.listener(|this, _, _, cx| {
+                if this.may_close() {
+                    cx.quit();
+                }
+            })));
 
         let mut cmds = div().flex().flex_row().flex_wrap().gap_1().items_center()
             .px_3().py_2().bg(gpui::white())
@@ -1440,6 +1501,7 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_undo))
             .on_action(cx.listener(Calc::a_save))
             .on_action(cx.listener(Calc::a_open))
+            .on_action(cx.listener(Calc::a_quit))
             .child(bar)
             .child(formula_bar)
             .child(div().flex_1().overflow_hidden().relative()
@@ -1486,6 +1548,16 @@ fn main() {
             move |window, cx| {
                 let view = cx.new(|cx| Calc::new(arg2.clone(), cx));
                 window.focus(&view.focus_handle(cx), cx);
+                // WM からの「閉じる」(Alt+F4 等)も同じ確認を通す。
+                // 書きかけを黙って捨てない
+                let v = view.clone();
+                window.on_window_should_close(cx, move |_, cx| {
+                    let ok = v.update(cx, |this, _| this.may_close());
+                    if ok {
+                        cx.quit();
+                    }
+                    ok
+                });
                 view
             },
         )

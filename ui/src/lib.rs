@@ -46,7 +46,7 @@ actions!(
         Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll,
         SelectUp, SelectDown,
         Home, End, Enter, Undo, Redo, Save, Open, Up, Down, Tab,
-        Copy, Cut, Paste,
+        Copy, Cut, Paste, Quit,
     ]
 );
 
@@ -76,6 +76,7 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-c", Copy, Some(context)),
         KeyBinding::new("ctrl-x", Cut, Some(context)),
         KeyBinding::new("ctrl-v", Paste, Some(context)),
+        KeyBinding::new("ctrl-q", Quit, Some(context)),
     ]
 }
 

@@ -1057,6 +1057,34 @@ impl Writer {
         self.save();
         cx.notify();
     }
+    /// 終了してよいか。書きかけがあれば保存するかを確かめる。
+    /// 「はい」でも保存できなかった(ダイアログを閉じた等)なら終了しない。
+    fn may_close(&mut self) -> bool {
+        if !self.dirty {
+            return true;
+        }
+        match rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("writer")
+            .set_description("保存していない変更があります。保存して終了しますか?")
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .show()
+        {
+            rfd::MessageDialogResult::Yes => {
+                self.save();
+                !self.dirty
+            }
+            rfd::MessageDialogResult::No => true,
+            _ => false,
+        }
+    }
+
+    fn do_quit(&mut self, _: &ui::Quit, _: &mut Window, cx: &mut Context<Self>) {
+        if self.may_close() {
+            cx.quit();
+        }
+    }
+
     fn do_open(&mut self, _: &ui::Open, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(p) = rfd::FileDialog::new()
             .add_filter("Word文書", &["docx"])
@@ -1180,9 +1208,40 @@ impl Render for Writer {
                 .child(tb.name)
                 .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
         }
-        tabs = tabs.child(div().flex_1())
-            .child(div().pb_1p5().pr_1().text_size(px(10.5)).text_color(rgb(0x8FB8CC))
+        // 空いた帯は窓の取っ手(掴んで動かす・二度押しで最大化)。
+        // GNOME の Wayland はサーバ側の飾りを付けてくれないので、自前で持つ
+        tabs = tabs
+            .child(div().flex_1().h(px(28.0)).id("drag")
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                    |_, e: &gpui::MouseDownEvent, window, _| {
+                        if e.click_count >= 2 {
+                            window.zoom_window();
+                        } else {
+                            window.start_window_move();
+                        }
+                    })))
+            .child(div().pb_1p5().pr_2().text_size(px(10.5)).text_color(rgb(0x8FB8CC))
                    .child(SharedString::from(format!("writer — 実装済み {ready}/{all}"))));
+        let winbtn = |id: &'static str, label: &'static str| {
+            div().id(id).px_2p5().py_1().rounded_sm()
+                .text_size(px(12.0)).text_color(rgb(0xCFE0EA))
+                .cursor_pointer()
+                .hover(move |s| if id == "close" { s.bg(rgb(0xC0392B)).text_color(rgb(0xFFFFFF)) }
+                                else { s.bg(rgb(0x2C7DA6)).text_color(rgb(0xFFFFFF)) })
+                .child(label)
+        };
+        tabs = tabs
+            .child(winbtn("min", "─").on_click(cx.listener(|_, _, window, _| {
+                window.minimize_window();
+            })))
+            .child(winbtn("max", "▢").on_click(cx.listener(|_, _, window, _| {
+                window.zoom_window();
+            })))
+            .child(winbtn("close", "✕").on_click(cx.listener(|this, _, _, cx| {
+                if this.may_close() {
+                    cx.quit();
+                }
+            })));
 
         let mut cmds = div().flex().flex_row().flex_wrap().gap_1().items_center()
             .px_3().py_2().bg(gpui::white())
@@ -1631,6 +1690,7 @@ impl Render for Writer {
             .on_action(cx.listener(Writer::redo))
             .on_action(cx.listener(Writer::do_save))
             .on_action(cx.listener(Writer::do_open))
+            .on_action(cx.listener(Writer::do_quit))
             .child(bar)
             .child(
                 div().flex_1().relative().overflow_hidden()
@@ -1747,6 +1807,16 @@ fn main() {
             move |window, cx| {
                 let view = cx.new(|cx| Writer::new(arg2.clone(), cx));
                 window.focus(&view.focus_handle(cx), cx);
+                // WM からの「閉じる」(Alt+F4 等)も同じ確認を通す。
+                // 書きかけを黙って捨てない
+                let v = view.clone();
+                window.on_window_should_close(cx, move |_, cx| {
+                    let ok = v.update(cx, |this, _| this.may_close());
+                    if ok {
+                        cx.quit();
+                    }
+                    ok
+                });
                 view
             },
         )
