@@ -185,6 +185,8 @@ struct Calc {
     menu_sub: Option<&'static str>,
     /// 「ドロップダウンリストから選択」の一覧(候補, 出す場所)
     pick: Option<(Vec<String>, (f32, f32))>,
+    /// 書式の小窓(セルをフォーマットする)。範囲を選び直しながら使える
+    fmt_panel: Option<(f32, f32)>,
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
     /// 画面の窓の左上(スクロール)。**表は画面より大きい**
@@ -235,6 +237,7 @@ impl Calc {
             menu_at: None,
             menu_sub: None,
             pick: None,
+            fmt_panel: None,
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
@@ -503,7 +506,7 @@ impl Calc {
 
     /// メニューの項目を実行する。
     fn menu_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.menu_at = None;
+        let menu_was_at = self.menu_at.take();
         self.menu_sub = None;
         match id {
             "cut" => self.a_cut(&ui::Cut, window, cx),
@@ -606,6 +609,10 @@ impl Calc {
                 }
             }
             "picklist" => self.open_pick_list(),
+            "fmtcells" => {
+                // メニューの出ていた場所の近くに小窓を開く
+                self.fmt_panel = Some(menu_was_at.unwrap_or((HEAD_W + 24.0, ROW_H + 24.0)));
+            }
             "freeze" => self.run_cmd("freeze"),
             // 数値の書式・関数はリボンと同じ配線を通す
             "comma" | "currency" | "percents" | "digit-inc" | "digit-dec"
@@ -674,12 +681,70 @@ impl Calc {
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        // 一覧 → 子メニュー → 親メニュー、の順で閉じる
+        // 一覧 → 子メニュー → 親メニュー → 書式の小窓、の順で閉じる
         if self.pick.take().is_some()
             || self.menu_sub.take().is_some()
             || self.menu_at.take().is_some()
+            || self.fmt_panel.take().is_some()
         {
             cx.notify();
+        }
+    }
+
+    /// 選んだ範囲の**外周だけ**に罫線(帳票の枠)。
+    fn border_outline(&mut self) {
+        self.commit();
+        self.checkpoint();
+        let (a, b) = self.sel_rect();
+        for r in a.row..=b.row {
+            for c in a.col..=b.col {
+                let p = Pos::new(r, c);
+                let mut cell = self.sheet().get(p).cloned().unwrap_or_default();
+                if r == a.row { cell.fmt.borders.top = true }
+                if r == b.row { cell.fmt.borders.bottom = true }
+                if c == a.col { cell.fmt.borders.left = true }
+                if c == b.col { cell.fmt.borders.right = true }
+                self.book.sheets[self.active].set(p, cell);
+            }
+        }
+        self.dirty = true;
+        self.status = "外枠を引きました".into();
+    }
+
+    /// 書式の小窓の釦。
+    fn fmt_panel_action(&mut self, id: &str) {
+        match id {
+            "close" => self.fmt_panel = None,
+            "b-all" => {
+                self.fmt(|f| f.borders = Borders::ALL);
+                self.status = "格子の罫線を引きました".into();
+            }
+            "b-out" => self.border_outline(),
+            "b-none" => {
+                self.fmt(|f| f.borders = Borders::NONE);
+                self.status = "罫線を消しました".into();
+            }
+            "numfmt-none" => {
+                self.fmt(|f| f.number_format = None);
+                self.status = "表示形式を戻しました".into();
+            }
+            id if id.starts_with("fill-") => {
+                let v = id.trim_start_matches("fill-").to_string();
+                if v == "none" {
+                    self.fmt(|f| f.fill = None);
+                } else {
+                    self.fmt(move |f| f.fill = Some(v.clone()));
+                }
+            }
+            id if id.starts_with("color-") => {
+                let v = id.trim_start_matches("color-").to_string();
+                if v == "none" {
+                    self.fmt(|f| f.color = None);
+                } else {
+                    self.fmt(move |f| f.color = Some(v.clone()));
+                }
+            }
+            other => self.run_cmd(other),
         }
     }
 
@@ -1930,7 +1995,7 @@ impl Render for Calc {
                 ("", "", "", false, false),
                 ("", "コメントを追加", "", false, false),
                 ("", "", "", false, false),
-                ("", "セルをフォーマットする", "", false, false),
+                ("fmtcells", "セルをフォーマットする", "", true, false),
                 ("numfmt", "数値の書式", "", true, true),
                 ("", "条件付き書式", "", false, false),
                 ("picklist", "ドロップダウンリストから選択する", "", true, false),
@@ -2068,6 +2133,111 @@ impl Render for Calc {
                 .children(sub_panel)
         });
 
+        // ---- 書式の小窓(セルをフォーマットする) ----
+        // モーダルにしない: 範囲を選び直しながら続けて使える道具箱。
+        // どの釦も既存の書式の道(fmt / run_cmd)を通り、1手ずつ戻せる
+        let fmt_panel = self.fmt_panel.map(|(fx, fy)| {
+            let fx = fx.min(560.0);
+            let fy = fy.min(320.0);
+            let btn = |id: &'static str, label: &'static str| {
+                div().id(id).px_2().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0xC6CDD3))
+                    .text_size(px(11.5)).text_color(rgb(0x1B1B1B))
+                    .cursor_pointer().hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .child(label)
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                        move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.fmt_panel_action(id);
+                            cx.notify();
+                        }))
+            };
+            let swatch = |id: &'static str, color: Option<&'static str>| {
+                let mut s = div().id(id).w(px(20.0)).h(px(20.0)).rounded_sm()
+                    .border_1().border_color(rgb(0xC6CDD3))
+                    .cursor_pointer();
+                s = match color {
+                    Some(c) => s.bg(hex(c)),
+                    // 「なし」は斜線の代わりに白+薄字の×
+                    None => s.bg(rgb(0xFFFFFF)).flex().items_center().justify_center()
+                        .text_size(px(10.0)).text_color(rgb(0x9AA5AE)).child("×"),
+                };
+                s.on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                    move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.fmt_panel_action(id);
+                        cx.notify();
+                    }))
+            };
+            let title = |t: &'static str| div().text_size(px(10.5))
+                .text_color(rgb(0x66707A)).mt_1p5().child(t);
+            let row = || div().flex().flex_row().flex_wrap().gap_1().items_center();
+
+            div().absolute().left(px(fx)).top(px(fy)).w(px(300.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().flex().flex_row().items_center().justify_between()
+                    .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(0x1B6E3C))
+                        .child("セルの書式(選んでいる範囲に効く)"))
+                    .child(div().id("fmtclose").px_2().rounded_sm().cursor_pointer()
+                        .text_size(px(12.0)).text_color(rgb(0x66707A))
+                        .hover(|s| s.bg(rgb(0xE1E6EA)))
+                        .child("✕")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                            move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.fmt_panel = None;
+                                cx.notify();
+                            }))))
+                .child(title("罫線"))
+                .child(row()
+                    .child(btn("b-all", "格子"))
+                    .child(btn("b-out", "外枠"))
+                    .child(btn("b-none", "なし")))
+                .child(title("塗り"))
+                .child(row()
+                    .child(swatch("fill-none", None))
+                    .child(swatch("fill-FFF2CC", Some("FFF2CC")))
+                    .child(swatch("fill-DEEAF6", Some("DEEAF6")))
+                    .child(swatch("fill-E2EFDA", Some("E2EFDA")))
+                    .child(swatch("fill-FCE4D6", Some("FCE4D6")))
+                    .child(swatch("fill-D9D9D9", Some("D9D9D9"))))
+                .child(title("文字の色"))
+                .child(row()
+                    .child(swatch("color-none", None))
+                    .child(swatch("color-C00000", Some("C00000")))
+                    .child(swatch("color-1F4E79", Some("1F4E79")))
+                    .child(swatch("color-1B6E3C", Some("1B6E3C")))
+                    .child(swatch("color-7F7F7F", Some("7F7F7F"))))
+                .child(title("文字"))
+                .child(row()
+                    .child(btn("bold", "太字"))
+                    .child(btn("italic", "斜体"))
+                    .child(btn("underline", "下線"))
+                    .child(btn("strikeout", "取り消し"))
+                    .child(btn("incfont", "大きく"))
+                    .child(btn("decfont", "小さく")))
+                .child(title("揃え"))
+                .child(row()
+                    .child(btn("align-left", "左"))
+                    .child(btn("align-center", "中央"))
+                    .child(btn("align-right", "右"))
+                    .child(btn("top", "上"))
+                    .child(btn("middle", "中"))
+                    .child(btn("bottom", "下"))
+                    .child(btn("wrap", "折り返し")))
+                .child(title("表示形式"))
+                .child(row()
+                    .child(btn("comma", "1,000"))
+                    .child(btn("currency", "¥"))
+                    .child(btn("percents", "%"))
+                    .child(btn("digit-inc", ".0+"))
+                    .child(btn("digit-dec", ".0−"))
+                    .child(btn("numfmt-none", "なし")))
+        });
+
         // ---- ドロップダウンリスト(同じ列の値の一覧) ----
         let pick_panel = self.pick.clone().map(|(vals, (vx, vy))| {
             let mut p = div().absolute().left(px(vx)).top(px(vy))
@@ -2157,6 +2327,7 @@ impl Render for Calc {
                    }))
                    .child(grid)
                    .child(InputSink { view: me })
+                   .children(fmt_panel)
                    .children(menu)
                    .children(pick_panel))
             .child(sheets_bar)
