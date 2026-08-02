@@ -2109,9 +2109,20 @@ fn col_name(c: u32) -> String {
 impl Render for Calc {
     fn render(&mut self, _w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // ---- リボン(Euro-Office に名前と並びを合わせる) ----
+        // **タブの行そのものが窓の取っ手**(掴んで移動・二度押しで最大化)。
+        // 空きの帯だけだとタブが多い窓で幅がゼロになり掴めない(writer で踏んだ)。
+        // 釦の類いは stop_propagation で取っ手より先に効く
         let (ready, all) = ribbon::progress(ribbon::CALC);
-        let mut tabs = div().flex().flex_row().items_end().gap_1()
-            .px_3().pt_1p5().bg(rgb(0x1B6E3C));
+        let mut tabs = div().id("titlebar").flex().flex_row().items_end().gap_1()
+            .px_3().pt_1p5().bg(rgb(0x1B6E3C))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                |_, e: &gpui::MouseDownEvent, window, _| {
+                    if e.click_count >= 2 {
+                        window.zoom_window();
+                    } else {
+                        window.start_window_move();
+                    }
+                }));
         for (i, tb) in ribbon::CALC.iter().enumerate() {
             let on = i == self.tab;
             tabs = tabs.child(div()
@@ -2123,20 +2134,11 @@ impl Render for Calc {
                 .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                 .cursor_pointer().hover(|s| s.text_color(rgb(0xFFFFFF)))
                 .child(tb.name)
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
         }
-        // 空いた帯は窓の取っ手(掴んで動かす・二度押しで最大化)。
-        // GNOME の Wayland はサーバ側の飾りを付けてくれないので、自前で持つ
         tabs = tabs
-            .child(div().flex_1().h(px(28.0)).id("drag")
-                .on_mouse_down(gpui::MouseButton::Left, cx.listener(
-                    |_, e: &gpui::MouseDownEvent, window, _| {
-                        if e.click_count >= 2 {
-                            window.zoom_window();
-                        } else {
-                            window.start_window_move();
-                        }
-                    })))
+            .child(div().flex_1().h(px(28.0)))
             .child(div().pb_1p5().pr_2().text_size(px(10.5)).text_color(rgb(0x9CC9AF))
                    .child(SharedString::from(format!("calc — 実装済み {ready}/{all}"))));
         let winbtn = |id: &'static str, label: &'static str| {
@@ -2146,6 +2148,7 @@ impl Render for Calc {
                 .hover(move |s| if id == "close" { s.bg(rgb(0xC0392B)).text_color(rgb(0xFFFFFF)) }
                                 else { s.bg(rgb(0x2E8B57)).text_color(rgb(0xFFFFFF)) })
                 .child(label)
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
         tabs = tabs
             .child(winbtn("min", "─").on_click(cx.listener(|_, _, window, _| {

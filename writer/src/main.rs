@@ -111,6 +111,8 @@ struct Writer {
     status: SharedString,
     notes: Vec<SharedString>,
     dirty: bool,
+    /// マウスでドラッグ選択の途中か(押した位置から離すまで選択を伸ばす)
+    drag_select: bool,
     /// 選んでいるリボンのタブ
     tab: usize,
     /// 画面に使う書体名(文書の指定に従う)
@@ -191,6 +193,7 @@ impl Writer {
             status: "".into(),
             notes: Vec::new(),
             dirty: false,
+            drag_select: false,
             tab: 0,
             zoom: 1.0,
             scroll_mm: 0.0,
@@ -1206,9 +1209,21 @@ impl Render for Writer {
         let (cx_mm, cy_mm) = self.caret_xy();
 
         // ---- リボン(Euro-Office に名前と並びを合わせる) ----
+        // **タブの行そのものが窓の取っ手**(掴んで移動・二度押しで最大化)。
+        // 空きの帯だけを取っ手にすると、タブが多い窓では幅がゼロになり
+        // 掴む場所が無くなる(踏んで直した)。釦の類いは stop_propagation で
+        // 取っ手より先に効く
         let (ready, all) = ribbon::progress(ribbon::WRITER);
-        let mut tabs = div().flex().flex_row().items_end().gap_1()
-            .px_3().pt_1p5().bg(rgb(0x165E83));
+        let mut tabs = div().id("titlebar").flex().flex_row().items_end().gap_1()
+            .px_3().pt_1p5().bg(rgb(0x165E83))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                |_, e: &gpui::MouseDownEvent, window, _| {
+                    if e.click_count >= 2 {
+                        window.zoom_window();
+                    } else {
+                        window.start_window_move();
+                    }
+                }));
         for (i, tb) in ribbon::WRITER.iter().enumerate() {
             let on = i == self.tab;
             tabs = tabs.child(div()
@@ -1222,20 +1237,12 @@ impl Render for Writer {
                 .cursor_pointer()
                 .hover(|s| s.text_color(rgb(0xFFFFFF)))
                 .child(tb.name)
+                // 押した瞬間に取っ手へ抜けない(窓の移動が始まるとクリックが死ぬ)
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
         }
-        // 空いた帯は窓の取っ手(掴んで動かす・二度押しで最大化)。
-        // GNOME の Wayland はサーバ側の飾りを付けてくれないので、自前で持つ
         tabs = tabs
-            .child(div().flex_1().h(px(28.0)).id("drag")
-                .on_mouse_down(gpui::MouseButton::Left, cx.listener(
-                    |_, e: &gpui::MouseDownEvent, window, _| {
-                        if e.click_count >= 2 {
-                            window.zoom_window();
-                        } else {
-                            window.start_window_move();
-                        }
-                    })))
+            .child(div().flex_1().h(px(28.0)))
             .child(div().pb_1p5().pr_2().text_size(px(10.5)).text_color(rgb(0x8FB8CC))
                    .child(SharedString::from(format!("writer — 実装済み {ready}/{all}"))));
         let winbtn = |id: &'static str, label: &'static str| {
@@ -1245,6 +1252,7 @@ impl Render for Writer {
                 .hover(move |s| if id == "close" { s.bg(rgb(0xC0392B)).text_color(rgb(0xFFFFFF)) }
                                 else { s.bg(rgb(0x2C7DA6)).text_color(rgb(0xFFFFFF)) })
                 .child(label)
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
         tabs = tabs
             .child(winbtn("min", "─").on_click(cx.listener(|_, _, window, _| {
@@ -1801,7 +1809,33 @@ impl gpui::Element for InputSink {
             let rel = e.position - bounds.origin;
             view.update(cx, |w, cx| {
                 w.click_at(f32::from(rel.x), f32::from(rel.y), e.modifiers.shift);
+                w.drag_select = true;
                 cx.notify();
+            });
+        });
+        // 押したまま動かすと選択が伸びる(文字の選択の通り相場)
+        let view = self.view.clone();
+        window.on_mouse_event(move |e: &gpui::MouseMoveEvent, phase, _w, cx| {
+            if phase != gpui::DispatchPhase::Bubble
+                || e.pressed_button != Some(gpui::MouseButton::Left)
+            {
+                return;
+            }
+            let rel = e.position - bounds.origin;
+            view.update(cx, |w, cx| {
+                if w.drag_select {
+                    w.click_at(f32::from(rel.x), f32::from(rel.y), true);
+                    cx.notify();
+                }
+            });
+        });
+        let view = self.view.clone();
+        window.on_mouse_event(move |e: &gpui::MouseUpEvent, phase, _w, cx| {
+            if phase != gpui::DispatchPhase::Bubble || e.button != gpui::MouseButton::Left {
+                return;
+            }
+            view.update(cx, |w, _| {
+                w.drag_select = false;
             });
         });
     }
