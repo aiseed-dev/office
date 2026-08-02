@@ -213,6 +213,10 @@ b.save("out.xlsx")               # 原本から図形・印刷設定を持ち越
   extension-module を既定にしないのは cargo test がリンクできなくなるため(pyo3 の FAQ)
 - 検査は `pysheet/test.py` を Rust の試験(`tests/python_smoke.rs`)が回す。
   実物の様式7で「差し込んでも結合が崩れない」ことまで見る
+- pandas 連携は実地で確認済み(2026-08-03): miniforge の `.venv`(Python 3.14 +
+  pandas 3.0)で、**3.12 で組んだ abi3 の .so がそのまま動く** — groupby の集計を
+  実物の様式7に差し込み、保存しても結合・元の中身は無傷。test.py の pandas の節は
+  pandas がある環境でだけ回る(無ければ飛ばしたと言う)
 
 ## 里程標
 

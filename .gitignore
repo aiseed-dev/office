@@ -4,6 +4,8 @@ vendor/
 # 機械ごとの設定。絶対パスや symlink が入るので追跡しない
 .cargo/
 .linklibs/
+# miniforge の仮想環境(pandas 連携の検証用)
+.venv/
 
 # 手元に残すが、公開するものではない
 core/
