@@ -48,6 +48,8 @@ pub fn to_pdf<W: Write>(
         .add_external_font(std::io::Cursor::new(font_data))
         .map_err(|e| e.to_string())?;
     let mut l = doc.get_page(page).get_layer(layer);
+    // ページごとの描き先を控えておく(罫線を後から同じ頁割りで引くため)
+    let mut layers: Vec<PdfLayerReference> = vec![l.clone()];
 
     // **改ページはここでやる。** 紙面は1枚の長い巻物として来るので、
     // 紙の高さを超えたら次のページに移し、y を巻き戻す。
@@ -83,6 +85,7 @@ pub fn to_pdf<W: Write>(
                 format!("本文 {}", page_no + 1),
             );
             l = doc.get_page(np).get_layer(nl);
+            layers.push(l.clone());
         }
         // 太字は同じ書体を少しずらして二度打つ(合成太字)。
         // 太字の実体を別に持っていないので、**持っていないものを持っている顔をしない**
@@ -100,6 +103,40 @@ pub fn to_pdf<W: Write>(
         rule(&l, &line.cells[0].fmt, x, y, width_mm(line), pt);
     }
 
+    // 表の罫線。行と同じ頁割りで引く(頁をまたぐ縦線は窓で切る)
+    {
+        let usable = bottom - paper.margin_mm;
+        let page_of = |y: f32| -> usize {
+            let mut off = 0.0f32;
+            let mut k = 0usize;
+            // 行の頁割りと同じ計算: 1頁目は y0 から、以降は margin から
+            while y - off > bottom {
+                off = if k == 0 { bottom - paper.margin_mm } else { off + usable };
+                k += 1;
+            }
+            k
+        };
+        for r in &sheet.rules {
+            let [x1, y1, x2, y2] = *r;
+            let k = page_of(y1.min(y2));
+            if k >= layers.len() {
+                continue;
+            }
+            let off = if k == 0 { 0.0 } else { (bottom - paper.margin_mm) + (k - 1) as f32 * usable };
+            let l = &layers[k];
+            let (ry1, ry2) = (
+                paper.height_mm - (y1 - off).clamp(paper.margin_mm, bottom),
+                paper.height_mm - (y2 - off).clamp(paper.margin_mm, bottom),
+            );
+            l.add_line(Line {
+                points: vec![
+                    (Point::new(Mm(paper.margin_mm + x1), Mm(ry1)), false),
+                    (Point::new(Mm(paper.margin_mm + x2), Mm(ry2)), false),
+                ],
+                is_closed: false,
+            });
+        }
+    }
     doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())
 }
 

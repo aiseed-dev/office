@@ -383,6 +383,9 @@ pub struct Cell {
 pub struct Line {
     pub cells: Vec<Cell>,
     pub y_mm: f32, // ベースライン
+    /// 本文由来か。**表のセルの行は false** —
+    /// カーソルや変換下線の位置合わせは本文の行だけを数える
+    pub from_body: bool,
 }
 
 impl Line {
@@ -400,6 +403,9 @@ pub struct Sheet {
     /// ここで新しいページを始める、という y(巻物の座標)。
     /// 紙に写す側([`paper`]相当)がこれを見て強制的に頁を割る
     pub breaks: Vec<f32>,
+    /// 引く線(表の罫線)。[x1, y1, x2, y2] mm。
+    /// 画面も紙も、これをそのまま引く
+    pub rules: Vec<[f32; 4]>,
 }
 
 // ---------- フォント(字幅の出どころ) ----------
@@ -502,122 +508,198 @@ pub struct Frame {
 ///      前の行の末尾から字を引き取る(追い出し)
 ///   2. 前の行の末尾に行末禁則(開き括弧)が残っていれば、それも引き取る
 /// 引き取った分だけ前の行は短くなる — 行長を超える方向には決して動かない。
+/// 段落を行長で折る。x はまだ置かない(呼ぶ側が揃え・字下げを決める)。
+fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>) -> Vec<Vec<Cell>> {
+    let mut done: Vec<Vec<Cell>> = Vec::new();
+    let mut cur: Vec<Cell> = Vec::new();
+    let mut w_cur = 0.0f32;
+
+    // 行を閉じ、禁則ぶんを引き取って次の行の頭(carry)を返す
+    fn close(done: &mut Vec<Vec<Cell>>, cur: &mut Vec<Cell>, w_cur: &mut f32,
+             incoming_head: Option<char>) -> Vec<Cell> {
+        let mut carry: Vec<Cell> = Vec::new();
+        // 1) 折る原因の字が行頭禁則 → 頭が禁則でなくなるまで引き取る
+        if incoming_head.map_or(false, is_gyoto_kinsoku) {
+            while cur.len() > 1 {
+                let c = cur.pop().unwrap();
+                let head_ok = !is_gyoto_kinsoku(c.ch);
+                carry.insert(0, c);
+                if head_ok {
+                    break;
+                }
+            }
+        }
+        // 2) 行末に開き括弧を残さない
+        while cur.len() > 1 && cur.last().map_or(false, |c| is_gyomatsu_kinsoku(c.ch)) {
+            let c = cur.pop().unwrap();
+            carry.insert(0, c);
+        }
+        done.push(std::mem::take(cur));
+        *w_cur = carry.iter().map(|c| c.w_mm).sum();
+        carry
+    }
+
+    // 箇条書きの印は本文の前に置く。**本文の一部にはしない**ので、
+    // 編集中の文字位置とずれない(印は組版のときだけ現れる)
+    if let Some(mk) = marker {
+        let size = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5);
+        let fmt = para.runs.first().map(|r| r.fmt.clone()).unwrap_or_default();
+        for ch in mk.chars() {
+            let w = m.advance_mm(ch, size);
+            cur.push(Cell { ch, x_mm: 0.0, w_mm: w, size_pt: size, fmt: fmt.clone() });
+            w_cur += w;
+        }
+    }
+    for tok in tokenize(para, m) {
+        let (cells, w): (Vec<Cell>, f32) = match &tok {
+            Tok::One(ch, w, s, f) =>
+                (vec![Cell { ch: *ch, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() }], *w),
+            Tok::Word(cs, s, f) => (
+                cs.iter().map(|(c, w)| Cell { ch: *c, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() })
+                    .collect(),
+                cs.iter().map(|(_, w)| *w).sum()),
+            Tok::Space(w, s, f) =>
+                (vec![Cell { ch: ' ', x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() }], *w),
+        };
+
+        if w_cur + w > measure && !cur.is_empty() {
+            if let Tok::Space(..) = tok {
+                // 行末に空白は要らない。行を折るだけ
+                cur = close(&mut done, &mut cur, &mut w_cur, None);
+                continue;
+            }
+            let head = cells.first().map(|c| c.ch);
+            cur = close(&mut done, &mut cur, &mut w_cur, head);
+        }
+        if cur.is_empty() {
+            if let Tok::Space(..) = tok {
+                continue; // 行頭の空白は組まない
+            }
+        }
+        w_cur += w;
+        cur.extend(cells);
+    }
+    if !cur.is_empty() || done.is_empty() {
+        done.push(cur);
+    }
+    done
+}
+
+/// セルの中の余白(mm)
+const CELL_PAD: f32 = 1.4;
+
 pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
     let mut sheet = Sheet::default();
     let mut y = frame.y0_mm;
 
     // 段落番号は「何番目の箇条書きか」で決まる。段落の位置ではない
     let mut nth = 0usize;
-    for para in doc.paragraphs() {
-        // 改ページ。紙に写すときにここで頁が割れる
-        if para.page_break_before && !sheet.lines.is_empty() {
-            sheet.breaks.push(y);
-        }
-        // インデント1段 = 全角2文字ぶん(日本の書類の慣習)
-        let em = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5) * 25.4 / 72.0;
-        let indent_mm = para.indent as f32 * em * 2.0;
-        let measure = (frame.measure_mm - indent_mm).max(em);
-        let marker = para.marker(nth);
-        match para.list {
-            ListKind::None => nth = 0,
-            _ => nth += 1,
-        }
-        let mut done: Vec<Vec<Cell>> = Vec::new();
-        let mut cur: Vec<Cell> = Vec::new();
-        let mut w_cur = 0.0f32;
-
-        // 行を閉じ、禁則ぶんを引き取って次の行の頭(carry)を返す
-        fn close(done: &mut Vec<Vec<Cell>>, cur: &mut Vec<Cell>, w_cur: &mut f32,
-                 incoming_head: Option<char>) -> Vec<Cell> {
-            let mut carry: Vec<Cell> = Vec::new();
-            // 1) 折る原因の字が行頭禁則 → 頭が禁則でなくなるまで引き取る
-            if incoming_head.map_or(false, is_gyoto_kinsoku) {
-                while cur.len() > 1 {
-                    let c = cur.pop().unwrap();
-                    let head_ok = !is_gyoto_kinsoku(c.ch);
-                    carry.insert(0, c);
-                    if head_ok {
-                        break;
+    for block in &doc.blocks {
+        match block {
+            Block::Para(para) => {
+                // 改ページ。紙に写すときにここで頁が割れる
+                if para.page_break_before && !sheet.lines.is_empty() {
+                    sheet.breaks.push(y);
+                }
+                // インデント1段 = 全角2文字ぶん(日本の書類の慣習)
+                let em = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5) * 25.4 / 72.0;
+                let indent_mm = para.indent as f32 * em * 2.0;
+                let measure = (frame.measure_mm - indent_mm).max(em);
+                let marker = para.marker(nth);
+                match para.list {
+                    ListKind::None => nth = 0,
+                    _ => nth += 1,
+                }
+                for cells in break_para(para, m, measure, marker.as_deref()) {
+                    if cells.is_empty() {
+                        y += frame.line_height_mm * para.spacing();
+                        continue;
                     }
+                    // 揃え。**行の幅と行長の差を、どこに置くか**の話でしかない
+                    let w: f32 = cells.iter().map(|c| c.w_mm).sum();
+                    let slack = (measure - w).max(0.0);
+                    let mut x = indent_mm + match para.align {
+                        Align::Left | Align::Justify => 0.0,
+                        Align::Center => slack / 2.0,
+                        Align::Right => slack,
+                    };
+                    let cells: Vec<Cell> = cells
+                        .into_iter()
+                        .map(|mut c| { c.x_mm = x; x += c.w_mm; c })
+                        .collect();
+                    sheet.lines.push(Line { cells, y_mm: y, from_body: true });
+                    y += frame.line_height_mm * para.spacing();
                 }
             }
-            // 2) 行末に開き括弧を残さない
-            while cur.len() > 1 && cur.last().map_or(false, |c| is_gyomatsu_kinsoku(c.ch)) {
-                let c = cur.pop().unwrap();
-                carry.insert(0, c);
+            Block::Table(table) => {
+                y = layout_table(table, m, frame, y, &mut sheet);
             }
-            done.push(std::mem::take(cur));
-            *w_cur = carry.iter().map(|c| c.w_mm).sum();
-            carry
-        }
-
-        // 箇条書きの印は本文の前に置く。**本文の一部にはしない**ので、
-        // 編集中の文字位置とずれない(印は組版のときだけ現れる)
-        if let Some(mk) = &marker {
-            let size = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5);
-            let fmt = para.runs.first().map(|r| r.fmt.clone()).unwrap_or_default();
-            for ch in mk.chars() {
-                let w = m.advance_mm(ch, size);
-                cur.push(Cell { ch, x_mm: 0.0, w_mm: w, size_pt: size, fmt: fmt.clone() });
-                w_cur += w;
-            }
-        }
-        for tok in tokenize(para, m) {
-            let (cells, w): (Vec<Cell>, f32) = match &tok {
-                Tok::One(ch, w, s, f) =>
-                    (vec![Cell { ch: *ch, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() }], *w),
-                Tok::Word(cs, s, f) => (
-                    cs.iter().map(|(c, w)| Cell { ch: *c, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() })
-                        .collect(),
-                    cs.iter().map(|(_, w)| *w).sum()),
-                Tok::Space(w, s, f) =>
-                    (vec![Cell { ch: ' ', x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() }], *w),
-            };
-
-            if w_cur + w > measure && !cur.is_empty() {
-                if let Tok::Space(..) = tok {
-                    // 行末に空白は要らない。行を折るだけ
-                    cur = close(&mut done, &mut cur, &mut w_cur, None);
-                    continue;
-                }
-                let head = cells.first().map(|c| c.ch);
-                cur = close(&mut done, &mut cur, &mut w_cur, head);
-            }
-            if cur.is_empty() {
-                if let Tok::Space(..) = tok {
-                    continue; // 行頭の空白は組まない
-                }
-            }
-            w_cur += w;
-            cur.extend(cells);
-        }
-        if !cur.is_empty() || done.is_empty() {
-            done.push(cur);
-        }
-
-        // x座標を確定して紙面へ
-        for cells in done {
-            if cells.is_empty() {
-                y += frame.line_height_mm * para.spacing();
-                continue;
-            }
-            // 揃え。**行の幅と行長の差を、どこに置くか**の話でしかない
-            let w: f32 = cells.iter().map(|c| c.w_mm).sum();
-            let slack = (measure - w).max(0.0);
-            let mut x = indent_mm + match para.align {
-                Align::Left | Align::Justify => 0.0,
-                Align::Center => slack / 2.0,
-                Align::Right => slack,
-            };
-            let cells: Vec<Cell> = cells
-                .into_iter()
-                .map(|mut c| { c.x_mm = x; x += c.w_mm; c })
-                .collect();
-            sheet.lines.push(Line { cells, y_mm: y });
-            y += frame.line_height_mm * para.spacing();
         }
     }
     sheet
+}
+
+/// 表を組む。戻り値は表の下の、次のベースライン。
+///
+/// 列幅は等分(docx の gridCol はまだ読まない — 読めるようになったら差す)。
+/// セルの中はそれぞれの幅で普通に折り返す。
+fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mut Sheet) -> f32 {
+    let ncols = table.rows.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
+    let col_w = frame.measure_mm / ncols as f32;
+    let inner = (col_w - 2.0 * CELL_PAD).max(2.0);
+    let lh = frame.line_height_mm;
+
+    // 表の上端。直前のベースラインから少し空ける
+    let table_top = y_in - lh * 0.55;
+    let mut row_top = table_top;
+
+    for row in &table.rows {
+        // 各セルを折って、行の高さを決める
+        let mut cells_lines: Vec<Vec<Vec<Cell>>> = Vec::new();
+        let mut nlines = 1usize;
+        for cell in row {
+            let mut ls: Vec<Vec<Cell>> = Vec::new();
+            for para in &cell.paragraphs {
+                ls.extend(break_para(para, m, inner, None));
+            }
+            nlines = nlines.max(ls.len());
+            cells_lines.push(ls);
+        }
+        let row_h = nlines as f32 * lh + 2.0 * CELL_PAD;
+
+        // 中身を置く(from_body=false。カーソルの位置合わせに入れない)
+        for (ci, ls) in cells_lines.into_iter().enumerate() {
+            let x0 = ci as f32 * col_w + CELL_PAD;
+            let mut yy = row_top + CELL_PAD + lh * 0.8;
+            for cells in ls {
+                if cells.is_empty() {
+                    yy += lh;
+                    continue;
+                }
+                let mut x = x0;
+                let cells: Vec<Cell> = cells
+                    .into_iter()
+                    .map(|mut c| { c.x_mm = x; x += c.w_mm; c })
+                    .collect();
+                sheet.lines.push(Line { cells, y_mm: yy, from_body: false });
+                yy += lh;
+            }
+        }
+
+        // 罫線: この行の上辺
+        sheet.rules.push([0.0, row_top, frame.measure_mm, row_top]);
+        // 縦線(行ごとに引く。ページ割れで途切れても破綻しない)
+        for ci in 0..=ncols {
+            let x = ci as f32 * col_w;
+            sheet.rules.push([x, row_top, x, row_top + row_h]);
+        }
+        row_top += row_h;
+    }
+    // 一番下の線
+    sheet.rules.push([0.0, row_top, frame.measure_mm, row_top]);
+
+    // 次のベースライン
+    row_top + lh
 }
 
 // ---------- 検査 ----------
@@ -945,6 +1027,93 @@ mod list_tests {
         for l in &s.lines {
             let right = l.cells.last().map(|c| c.x_mm + c.w_mm).unwrap_or(0.0);
             assert!(right <= 100.5, "行長を超えた: {right}mm");
+        }
+    }
+}
+
+#[cfg(test)]
+mod table_layout_tests {
+    use super::*;
+
+    fn doc_with_table() -> Document {
+        let cell = |s: &str| Cellbox {
+            paragraphs: vec![Paragraph {
+                runs: vec![Run {
+                    text: s.into(), size_pt: 10.5, font: None, fmt: Default::default() }],
+                ..Default::default()
+            }],
+        };
+        let mut d = Document::plain("前の本文", 10.5);
+        d.blocks.push(Block::Table(Table {
+            rows: vec![
+                vec![cell("品名"), cell("金額")],
+                vec![cell("防火戸"), cell("120,000")],
+            ],
+        }));
+        d
+    }
+
+    fn sheet() -> Sheet {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        layout(&doc_with_table(), &m,
+               &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 })
+    }
+
+    #[test]
+    fn 表の中身が紙面に出る() {
+        let s = sheet();
+        let all: String = s.lines.iter().map(|l| l.text()).collect();
+        assert!(all.contains("品名"), "表のセルが描かれていない");
+        assert!(all.contains("防火戸"));
+    }
+
+    #[test]
+    fn 表の行は本文由来ではない() {
+        // カーソルの位置合わせを壊さないための区別
+        let s = sheet();
+        let body: Vec<&Line> = s.lines.iter().filter(|l| l.from_body).collect();
+        assert_eq!(body.len(), 1, "本文の行数が違う: {}", body.len());
+        assert!(body[0].text().contains("前の本文"));
+        assert!(s.lines.iter().any(|l| !l.from_body), "表の行が無い");
+    }
+
+    #[test]
+    fn 罫線が引かれる() {
+        let s = sheet();
+        // 2行の表: 横線3本 + 縦線(3本×2行) = 9本
+        assert_eq!(s.rules.len(), 9, "罫線の数が違う: {}", s.rules.len());
+        // 横線は行長いっぱい
+        let h: Vec<_> = s.rules.iter().filter(|r| r[1] == r[3]).collect();
+        assert_eq!(h.len(), 3);
+        assert!(h.iter().all(|r| (r[2] - r[0] - 100.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn セルの中で折り返す() {
+        let cell = |s: &str| Cellbox {
+            paragraphs: vec![Paragraph {
+                runs: vec![Run {
+                    text: s.into(), size_pt: 10.5, font: None, fmt: Default::default() }],
+                ..Default::default()
+            }],
+        };
+        let mut d = Document { font: None, blocks: vec![] };
+        d.blocks.push(Block::Table(Table {
+            rows: vec![vec![cell(&"あ".repeat(30)), cell("短い")]],
+        }));
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let s = layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        // 50mm の列に 30文字(約110mm)は3行になる
+        let cell_lines = s.lines.iter().filter(|l| !l.from_body).count();
+        assert!(cell_lines >= 3, "セルの中で折り返していない: {cell_lines} 行");
+        // 右のセルにはみ出さない
+        for l in s.lines.iter().filter(|l| !l.from_body) {
+            if l.text().starts_with('あ') {
+                let right = l.cells.last().map(|c| c.x_mm + c.w_mm).unwrap_or(0.0);
+                assert!(right <= 50.0 + 0.5, "隣のセルへはみ出した: {right}mm");
+            }
         }
     }
 }

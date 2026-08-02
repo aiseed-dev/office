@@ -10,3 +10,6 @@ license.workspace = true
 kumihan = { path = "../engine" }
 sheet = { path = "../sheet" }
 printpdf = "0.7"
+
+[dev-dependencies]
+ooxml = { path = "../ooxml" }

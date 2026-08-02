@@ -204,7 +204,8 @@ impl Writer {
     fn caret_xy(&self) -> (f32, f32) {
         let cur = self.ed.cursor();
         let mut seen = 0usize;
-        for line in &self.page.lines {
+        // 表の行はカーソルの位置合わせに入れない(本文由来の行だけ)
+        for line in self.page.lines.iter().filter(|l| l.from_body) {
             let text = line.text();
             let len = text.len();
             // 行末の改行1つぶんを含めて数える(段落区切り)
@@ -625,6 +626,17 @@ impl Render for Writer {
             .w(px(210.0 * pxmm)).h(px(297.0 * pxmm))
             .bg(gpui::white()).shadow_lg();
 
+        // 表の罫線。紙面の座標をそのまま引く
+        for r in &self.page.rules {
+            let [x1, y1, x2, y2] = *r;
+            let (x1, y1) = ((MARGIN_MM + x1) * pxmm, y1 * pxmm);
+            let (x2, y2) = ((MARGIN_MM + x2) * pxmm, y2 * pxmm);
+            paper = paper.child(div().absolute()
+                .left(px(x1.min(x2))).top(px(y1.min(y2)))
+                .w(px((x2 - x1).abs().max(1.0))).h(px((y2 - y1).abs().max(1.0)))
+                .bg(rgb(0x444B52)));
+        }
+
         // 未確定(変換中)の下線を出すため、行ごとのバイト範囲を数えながら描く
         let mut seen = 0usize;
         for line in &self.page.lines {
@@ -635,6 +647,9 @@ impl Render for Writer {
             let top = line.y_mm * pxmm - sz * 0.88;
 
             if let Some(m) = &marked {
+                if !line.from_body {
+                    // 表の行は本文の並びに入っていない
+                } else {
                 let (ls, le) = (seen, seen + text.len());
                 if m.start < le && m.end > ls {
                     let a = m.start.max(ls) - ls;
@@ -649,6 +664,7 @@ impl Render for Writer {
                         .top(px(top + sz * 1.05))
                         .w(px((w(b) - w(a)).max(1.0) * pxmm))
                         .h(px(2.0)).bg(rgb(0x165E83)));
+                }
                 }
             }
             // 書式は字が持っている。行の頭の字のものを行に掛ける
@@ -683,7 +699,9 @@ impl Render for Writer {
                         .bg(rgb(0x1B1B1B)));
                 }
             }
-            seen += line.text().len() + 1;
+            if line.from_body {
+                seen += line.text().len() + 1;
+            }
         }
         // キャレット
         paper = paper.child(div().absolute()
