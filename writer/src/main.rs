@@ -116,6 +116,10 @@ struct Writer {
     target: Target,
     /// 記号の一覧を出しているか
     symbols: bool,
+    /// 編集記号(段落記号・空白)を見せるか
+    show_marks: bool,
+    /// ルーラー(mm の目盛り)を見せるか
+    ruler: bool,
     /// 画像の実体 → gpui の画像(作り直すと毎フレーム復号されるため控える)
     image_cache: std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>,
     /// 組版に使うフォントの実体。**文書の書体に従う**(開くたびに引き直す)
@@ -177,6 +181,8 @@ impl Writer {
             zoom: 1.0,
             target: Target::Body,
             symbols: false,
+            show_marks: false,
+            ruler: false,
             image_cache: Default::default(),
             font_bytes: std::sync::Arc::new(font_data().to_vec()),
             pg: kumihan::PageSetup::default(),
@@ -695,7 +701,7 @@ impl Writer {
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
         "instable", "inssymbol", "replace",
-        "spell", "wordcount", "zoom-in", "zoom-out",
+        "spell", "wordcount", "zoom-in", "zoom-out", "hidenchars", "ruler",
     ];
 
     fn run_cmd(&mut self, id: &str) {
@@ -795,6 +801,9 @@ impl Writer {
             }
             // 画面の倍率。50〜200%。紙は変わらない
             "zoom-in" => self.zoom = (self.zoom + 0.1).min(2.0),
+            // 見え方だけの切り替え(文書は変わらない)
+            "hidenchars" => self.show_marks = !self.show_marks,
+            "ruler" => self.ruler = !self.ruler,
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -1062,6 +1071,35 @@ impl Render for Writer {
             .w(px(self.pg.w_mm * pxmm)).h(px(self.pg.h_mm * pxmm))
             .bg(gpui::white()).shadow_lg();
 
+        // ルーラー(10mm ごとの目盛り。余白の位置が分かる)
+        if self.ruler {
+            let mut n = 0;
+            loop {
+                let mm = n as f32 * 10.0;
+                if mm > self.pg.w_mm {
+                    break;
+                }
+                let major = n % 5 == 0;
+                paper = paper.child(div().absolute()
+                    .left(px(mm * pxmm)).top(px(0.0))
+                    .w(px(1.0)).h(px(if major { 10.0 } else { 5.0 }))
+                    .bg(rgb(0xAABBC6)));
+                if major && n > 0 {
+                    paper = paper.child(div().absolute()
+                        .left(px(mm * pxmm + 2.0)).top(px(0.0))
+                        .text_size(px(8.5)).text_color(rgb(0x8899A6))
+                        .child(SharedString::from(format!("{}", mm as u32))));
+                }
+                n += 1;
+            }
+            // 余白の線(本文の左右端)
+            for x in [self.pg.left_mm, self.pg.w_mm - self.pg.right_mm] {
+                paper = paper.child(div().absolute()
+                    .left(px(x * pxmm)).top(px(0.0))
+                    .w(px(1.0)).h(px(14.0)).bg(rgb(0x1B6E3C)));
+            }
+        }
+
         // 画像。組版が置いた位置に、そのまま出す
         for (i, (bytes, [x, top, w_mm, h_mm])) in self.page.images.iter().enumerate() {
             let src = self.image_cache.entry(std::sync::Arc::as_ptr(bytes) as usize)
@@ -1177,6 +1215,23 @@ impl Render for Writer {
                 None => d.text_color(rgb(0x1B1B1B)),
             };
             paper = paper.child(d);
+            // 編集記号。空白は・、段落の終わりは ↵(見え方だけ。文書は変わらない)
+            if self.show_marks && line.from_body {
+                for c in &line.cells {
+                    if c.ch == ' ' || c.ch == '\u{3000}' {
+                        paper = paper.child(div().absolute()
+                            .left(px((self.pg.left_mm + c.x_mm + c.w_mm * 0.3) * pxmm))
+                            .top(px(top + sz * 0.35))
+                            .text_size(px(sz * 0.6)).text_color(rgb(0x9DB8C8))
+                            .child(SharedString::from(if c.ch == ' ' { "·" } else { "□" })));
+                    }
+                }
+                let end_x = line.cells.last().map(|c| c.x_mm + c.w_mm).unwrap_or(0.0);
+                paper = paper.child(div().absolute()
+                    .left(px((self.pg.left_mm + end_x) * pxmm)).top(px(top))
+                    .text_size(px(sz * 0.8)).text_color(rgb(0x9DB8C8))
+                    .child("↵"));
+            }
             // 下線・取り消し線は自分で引く(gpui の text に無い)
             let w_mm: f32 = line.cells.iter().map(|c| c.w_mm).sum();
             for (on, dy) in [(f.underline, sz * 1.05), (f.strike, sz * 0.35)] {

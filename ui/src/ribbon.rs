@@ -68,7 +68,7 @@ pub const WRITER: &[Tab] = &[
         x("テキスト方向", "direction"),
         c("align-center", "中央揃え", "align-center"),
         c("align-just", "両端揃え", "align-just"),
-        x("非表示文字", "hidenchars"),
+        c("hidenchars", "非表示文字", "hidenchars"),
         x("段落の背景色", "paracolor"),
         x("罫線", "borders"),
         x("段落のスタイル", "styles"),
@@ -132,7 +132,7 @@ pub const WRITER: &[Tab] = &[
     Tab { name: "表示", cmds: &[
         c("zoom-in", "拡大", "zoom-in"),
         c("zoom-out", "縮小", "zoom-out"),
-        x("ルーラー", "ruler"),
+        c("ruler", "ルーラー", "ruler"),
         x("ダークモード", "darkmode"),
     ]},
 ];

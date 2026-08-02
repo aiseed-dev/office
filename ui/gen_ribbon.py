@@ -44,6 +44,7 @@ READY = {
         "markers": "markers", "numbering": "numbering",
         "wordcount": "wordcount", "spell": "spell", "pagebreak": "pagebreak",
         "zoom-in": "zoom-in", "zoom-out": "zoom-out",
+        "hidenchars": "hidenchars", "ruler": "ruler",
         "instable": "instable", "inssymbol": "inssymbol", "replace": "replace",
         "incoffset": "incoffset", "decoffset": "decoffset",
         "linespace": "linespace",
