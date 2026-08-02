@@ -130,8 +130,8 @@ pub const WRITER: &[Tab] = &[
         x("コメント", "comment"),
     ]},
     Tab { name: "表示", cmds: &[
-        x("拡大", "zoom-in"),
-        x("縮小", "zoom-out"),
+        c("zoom-in", "拡大", "zoom-in"),
+        c("zoom-out", "縮小", "zoom-out"),
         x("ルーラー", "ruler"),
         x("ダークモード", "darkmode"),
     ]},
@@ -235,7 +235,7 @@ pub const CALC: &[Tab] = &[
         x("参照元のトレース", "trace-prec"),
         x("参照先のトレース", "trace-dep"),
         x("トレース矢印の削除", "remove-arrows"),
-        x("数式の表示", "show-formulas"),
+        c("show-formulas", "数式の表示", "show-formulas"),
         x("ウォッチウィンドウ", "watch-window"),
         x("計算方法", "calculate"),
     ]},
@@ -256,7 +256,7 @@ pub const CALC: &[Tab] = &[
     Tab { name: "表示", cmds: &[
         x("ウィンドウ枠の固定", "freeze"),
         x("シートの表示", "sheet-view"),
-        x("グリッド線", "show-gridlines"),
+        c("show-gridlines", "グリッド線", "show-gridlines"),
         x("見出し", "show-headings"),
     ]},
 ];

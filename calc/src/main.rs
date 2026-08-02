@@ -70,6 +70,10 @@ struct Calc {
     cursor: Pos,
     /// 範囲選択の起点(Shift+矢印/クリックで伸ばす)。無ければ1セル
     anchor: Option<Pos>,
+    /// 数式を値の代わりに出す(数式の表示)
+    show_formulas: bool,
+    /// グリッド線(表の薄い線)を出す
+    gridlines: bool,
     /// 数式バーの中身。IMEもここに来る(セルの入力は1本のテキスト編集)
     input: Editor,
     path: Option<PathBuf>,
@@ -94,6 +98,8 @@ impl Calc {
             active: 0,
             cursor: Pos::new(0, 0),
             anchor: None,
+            show_formulas: false,
+            gridlines: true,
             input: Editor::new(""),
             path: None,
             status: "".into(),
@@ -385,6 +391,9 @@ impl Calc {
             "clear" => self.fmt(|f| *f = CellFormat::default()),
             // 塗りつぶし。黄 → 水色 → 解除(色を選ぶ小窓がまだ無い)
             "merge" => self.merge_selection(),
+            // 表示。**値は変えない** — 見え方だけの話
+            "show-formulas" => self.show_formulas = !self.show_formulas,
+            "show-gridlines" => self.gridlines = !self.gridlines,
             "fillparag" => self.fmt(|f| {
                 f.fill = match f.fill.as_deref() {
                     None => Some("FFF2CC".into()),
@@ -649,7 +658,15 @@ impl Render for Calc {
                 let v = if self.sheet().covered_by_merge(p) { Value::Empty }
                         else { cell.map(|x| x.value.clone()).unwrap_or(Value::Empty) };
                 // 付けた表示形式は画面に出す。出ないなら飾りでしかない
-                let shown = sheet::model::format_value(&v, cell.and_then(|x| x.fmt.number_format.as_deref()));
+                let shown = if self.show_formulas {
+                    // 数式の表示。式が無いセルは値のまま
+                    cell.and_then(|x| x.formula.clone())
+                        .map(|f| format!("={f}"))
+                        .unwrap_or_else(|| sheet::model::format_value(&v,
+                            cell.and_then(|x| x.fmt.number_format.as_deref())))
+                } else {
+                    sheet::model::format_value(&v, cell.and_then(|x| x.fmt.number_format.as_deref()))
+                };
                 let is_num = matches!(v, Value::Number(_));
                 let is_err = matches!(v, Value::Error(_));
                 let sel = p == self.cursor;
@@ -659,7 +676,8 @@ impl Render for Calc {
                 let mut d = div()
                     .id(SharedString::from(p.a1()))
                     .w(px(COL_W)).h(px(ROW_H))
-                    .border_r_1().border_b_1().border_color(rgb(0xE1E6EA))
+                    .border_r_1().border_b_1()
+                    .border_color(if self.gridlines { rgb(0xE1E6EA) } else { rgb(0xFFFFFF) })
                     .bg(if sel { rgb(0xEAF5EE) } else if in_range { rgb(0xF2F8F4) } else { rgb(0xFFFFFF) })
                     .flex().items_center()
                     .px_1p5()

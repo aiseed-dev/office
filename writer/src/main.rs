@@ -75,6 +75,8 @@ struct Writer {
     tab: usize,
     /// 画面に使う書体名(文書の指定に従う)
     font_name: SharedString,
+    /// 画面の倍率。**紙は変わらない** — 見る大きさだけの話
+    zoom: f32,
     /// 校正の指摘(レビュー > 校正)。英語は辞書、日本語はモデル
     proof: Vec<ui::check::Finding>,
     proof_msg: SharedString,
@@ -107,6 +109,7 @@ impl Writer {
             notes: Vec::new(),
             dirty: false,
             tab: 0,
+            zoom: 1.0,
             font_name: kumihan::font::for_document(None)
                 .map(|(f, _)| SharedString::from(f.name.clone()))
                 .unwrap_or_else(|_| "sans-serif".into()),
@@ -360,6 +363,9 @@ impl Writer {
             // 行間。1.0 → 1.5 → 2.0 → 1.0 と回す(小窓がまだ無いので)
             // この段落の前で改ページ(押すたびに入切)
             "pagebreak" => self.para(|p| p.page_break_before = !p.page_break_before),
+            // 画面の倍率。50〜200%。紙は変わらない
+            "zoom-in" => self.zoom = (self.zoom + 0.1).min(2.0),
+            "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
                     s if s < 1.25 => 1.5,
@@ -543,6 +549,8 @@ impl EntityInputHandler for Writer {
 impl Render for Writer {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let me: Entity<Writer> = cx.entity();
+        // 画面の倍率(紙のミリは変えず、画素への写像だけ変える)
+        let pxmm = PX_PER_MM * self.zoom;
         let marked = self.ed.marked_range();
         let (cx_mm, cy_mm) = self.caret_xy();
 
@@ -614,7 +622,7 @@ impl Render for Writer {
         let bar = div().flex().flex_col().child(tabs).child(cmds);
 
         let mut paper = div().absolute().left(px(28.0)).top(px(14.0))
-            .w(px(210.0 * PX_PER_MM)).h(px(297.0 * PX_PER_MM))
+            .w(px(210.0 * pxmm)).h(px(297.0 * pxmm))
             .bg(gpui::white()).shadow_lg();
 
         // 未確定(変換中)の下線を出すため、行ごとのバイト範囲を数えながら描く
@@ -622,9 +630,9 @@ impl Render for Writer {
         for line in &self.page.lines {
             let text = line.text();
             let pt = line.cells[0].size_pt;
-            let sz = pt * 96.0 / 72.0;
+            let sz = pt * 96.0 / 72.0 * self.zoom;
             let x0 = MARGIN_MM + line.cells[0].x_mm;
-            let top = line.y_mm * PX_PER_MM - sz * 0.88;
+            let top = line.y_mm * pxmm - sz * 0.88;
 
             if let Some(m) = &marked {
                 let (ls, le) = (seen, seen + text.len());
@@ -637,9 +645,9 @@ impl Render for Writer {
                         }).take_while(|(bpos, _)| *bpos < upto).map(|(_, w)| w).sum()
                     };
                     paper = paper.child(div().absolute()
-                        .left(px((x0 + w(a)) * PX_PER_MM))
+                        .left(px((x0 + w(a)) * pxmm))
                         .top(px(top + sz * 1.05))
-                        .w(px((w(b) - w(a)).max(1.0) * PX_PER_MM))
+                        .w(px((w(b) - w(a)).max(1.0) * pxmm))
                         .h(px(2.0)).bg(rgb(0x165E83)));
                 }
             }
@@ -647,7 +655,7 @@ impl Render for Writer {
             // (段落まるごとに掛ける粒度なので、行の中で混ざらない)
             let f = &line.cells[0].fmt;
             let mut d = div().absolute()
-                .left(px(x0 * PX_PER_MM)).top(px(top))
+                .left(px(x0 * pxmm)).top(px(top))
                 .text_size(px(sz))
                 .font_family(self.font_name.clone())
                 .whitespace_nowrap()
@@ -670,8 +678,8 @@ impl Render for Writer {
             for (on, dy) in [(f.underline, sz * 1.05), (f.strike, sz * 0.35)] {
                 if on {
                     paper = paper.child(div().absolute()
-                        .left(px(x0 * PX_PER_MM)).top(px(top + dy))
-                        .w(px(w_mm * PX_PER_MM)).h(px(1.0))
+                        .left(px(x0 * pxmm)).top(px(top + dy))
+                        .w(px(w_mm * pxmm)).h(px(1.0))
                         .bg(rgb(0x1B1B1B)));
                 }
             }
@@ -679,9 +687,9 @@ impl Render for Writer {
         }
         // キャレット
         paper = paper.child(div().absolute()
-            .left(px(cx_mm * PX_PER_MM))
-            .top(px(cy_mm * PX_PER_MM - SIZE_PT * 96.0 / 72.0 * 0.88))
-            .w(px(1.5)).h(px(SIZE_PT * 96.0 / 72.0 * 1.15))
+            .left(px(cx_mm * pxmm))
+            .top(px(cy_mm * pxmm - SIZE_PT * 96.0 / 72.0 * self.zoom * 0.88))
+            .w(px(1.5)).h(px(SIZE_PT * 96.0 / 72.0 * self.zoom * 1.15))
             .bg(rgb(0x165E83)));
 
         // 校正の指摘

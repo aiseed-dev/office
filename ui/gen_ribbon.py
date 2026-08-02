@@ -42,6 +42,7 @@ READY = {
         "align-right": "align-right",
         "markers": "markers", "numbering": "numbering",
         "wordcount": "wordcount", "spell": "spell", "pagebreak": "pagebreak",
+        "zoom-in": "zoom-in", "zoom-out": "zoom-out",
         "incoffset": "incoffset", "decoffset": "decoffset",
         "linespace": "linespace",
     },
@@ -59,6 +60,7 @@ READY = {
         "fillparag": "fillparag", "fontcolor": "fontcolor", "merge": "merge",
         "math": "fn-math", "text": "fn-text", "logical": "fn-logical",
         "recent": "fn-recent",
+        "show-formulas": "show-formulas", "show-gridlines": "show-gridlines",
     },
 }
 
