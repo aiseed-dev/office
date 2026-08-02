@@ -235,6 +235,27 @@ fn image_of(
     Some(kumihan::InlineImage { bytes, w_mm: cx / 36000.0, h_mm: cy / 36000.0 })
 }
 
+/// sectPr から用紙の寸法を読む(twip → mm)。
+fn parse_sect(raw: &str) -> kumihan::PageSetup {
+    let g = |el: &str, at: &str| -> Option<f32> {
+        let i = raw.find(el)?;
+        let head = &raw[i..(i + 200).min(raw.len())];
+        let k = format!("{at}=\"");
+        let s = head.find(&k)? + k.len();
+        let e = head[s..].find('"')? + s;
+        head[s..e].parse::<f32>().ok().map(twip_mm)
+    };
+    let d = kumihan::PageSetup::default();
+    kumihan::PageSetup {
+        w_mm: g("<w:pgSz", "w:w").unwrap_or(d.w_mm),
+        h_mm: g("<w:pgSz", "w:h").unwrap_or(d.h_mm),
+        left_mm: g("<w:pgMar", "w:left").unwrap_or(d.left_mm),
+        right_mm: g("<w:pgMar", "w:right").unwrap_or(d.right_mm),
+        top_mm: g("<w:pgMar", "w:top").unwrap_or(d.top_mm),
+        bottom_mm: g("<w:pgMar", "w:bottom").unwrap_or(d.bottom_mm),
+    }
+}
+
 pub fn parse_document_xml(xml: &str) -> (Document, Report) {
     parse_document_with(xml, &Default::default())
 }
@@ -375,6 +396,19 @@ pub fn parse_document_with(
                     }
                     b"t" => { in_text = true; cur.clear(); }
                     b"vMerge" | b"gridSpan" => rep.note("セル結合(w:vMerge/w:gridSpan)"),
+                    b"sectPr" => {
+                        // 節の設定。用紙・余白のほか、ヘッダーの参照も入っている。
+                        // **理解はしないが捨てない**(捨てると保存で用紙設定と
+                        // ヘッダーが消える)。寸法だけは読んで組版に使う
+                        let name = e.name().to_owned();
+                        if r.read_to_end_into(name, &mut Vec::new()).is_ok() {
+                            let end = r.buffer_position() as usize;
+                            let raw = &xml[start_pos..end];
+                            doc.page = Some(parse_sect(raw));
+                            doc.sect_raw = Some(raw.to_string());
+                            last_pos = end;
+                        }
+                    }
                     b"drawing" | b"pict" | b"object" => {
                         // **理解はしないが、捨てない。** 原文を丸ごと控えて保存で返す。
                         // 部分木は読み飛ばす — 中の a:t(図形の文字)を本文に
@@ -722,6 +756,10 @@ pub fn write_document_xml(doc: &Document) -> String {
         }
     }
 
+    if let Some(sect) = &doc.sect_raw {
+        // 節の設定を原文のまま返す(用紙・余白・ヘッダーの参照)
+        let _ = w.get_mut().write_all(sect.as_bytes());
+    }
     w.write_event(Event::End(BytesEnd::new("w:body"))).unwrap();
     w.write_event(Event::End(BytesEnd::new("w:document"))).unwrap();
     let body = String::from_utf8(w.into_inner().into_inner()).unwrap();
@@ -796,7 +834,7 @@ mod tests {
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
-        Document { font: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
+        Document { font: None, page: None, sect_raw: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
     }
     fn round_trip(d: &Document) -> (Document, Report) {
         let mut buf = Cursor::new(Vec::new());
@@ -826,7 +864,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -859,7 +897,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -873,7 +911,7 @@ mod tests {
 
     #[test]
     fn 表が往復する() {
-        let d = Document { font: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![
             Block::Para(para("(様式3) 会社概要")),
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![cell("会　社　名"), cell("日本フネン株式会社")],
@@ -896,7 +934,7 @@ mod tests {
 
     #[test]
     fn 表と本文の順序が保たれる() {
-        let d = Document { font: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![
             Block::Para(para("前")),
             Block::Table(Table { col_mm: vec![], rows: vec![vec![cell("表1")]] }),
             Block::Para(para("中")),
@@ -912,7 +950,7 @@ mod tests {
     #[test]
     fn 空セルも列として残る() {
         // 事務様式は「記入欄が空の表」が本体。空セルが消えると様式が壊れる
-        let d = Document { font: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
             vec![cell("氏名"), Cellbox::default()],
             vec![cell("所属"), Cellbox::default()],
         ]})]};
@@ -950,6 +988,8 @@ mod font_tests {
         // **フォントは文書の設定。** 読んで捨てると、開き直したとき別の字になる
         let doc = Document {
             font: None,
+            page: None,
+            sect_raw: None,
             blocks: vec![Block::Para(Paragraph {
                 align: Default::default(),
                 anchors: Vec::new(),
@@ -1004,6 +1044,8 @@ mod fmt_tests {
         let f = CharFormat { bold: true, italic: true, underline: true, ..Default::default() };
         let d = Document {
             font: None,
+            page: None,
+            sect_raw: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("見出し", f.clone())] })],
@@ -1017,6 +1059,8 @@ mod fmt_tests {
         let f = CharFormat { strike: true, color: Some("FF0000".into()), ..Default::default() };
         let d = Document {
             font: None,
+            page: None,
+            sect_raw: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("赤", f.clone())] })],
@@ -1029,6 +1073,8 @@ mod fmt_tests {
         for a in [Align::Center, Align::Right, Align::Justify, Align::Left] {
             let d = Document {
                 font: None,
+                page: None,
+                sect_raw: None,
                 blocks: vec![Block::Para(Paragraph {
                     align: a,
                     anchors: Vec::new(),
@@ -1092,7 +1138,7 @@ mod para_tests {
     }
 
     fn roundtrip(p: Paragraph) -> Paragraph {
-        let d = Document { font: None, blocks: vec![Block::Para(p)] };
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(p)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         crate::read(std::io::Cursor::new(&buf)).unwrap().0.paragraphs().next().unwrap().clone()
@@ -1122,7 +1168,7 @@ mod para_tests {
 
     #[test]
     fn 既定の段落には余計な指定を書かない() {
-        let d = Document { font: None, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(&buf)).unwrap();
@@ -1160,7 +1206,7 @@ mod break_round {
         para.page_break_before = true;
         para.runs.push(Run {
             text: "二頁目".into(), size_pt: 10.5, font: None, fmt: Default::default() });
-        let d = Document { font: None, blocks: vec![Block::Para(para)] };
+        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(para)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
@@ -1313,6 +1359,8 @@ mod vertalign_tests {
     fn doc_with(fmt: CharFormat) -> Document {
         Document {
             font: None,
+            page: None,
+            sect_raw: None,
             blocks: vec![Block::Para(Paragraph {
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
@@ -1343,5 +1391,38 @@ mod vertalign_tests {
         crate::write(&doc_with(f.clone()), std::io::Cursor::new(&mut buf)).unwrap();
         let (back, _) = crate::read(std::io::Cursor::new(&buf)).unwrap();
         assert!(back.paragraphs().next().unwrap().runs[0].fmt.subscript);
+    }
+}
+
+#[cfg(test)]
+mod sect_tests {
+    #[test]
+    fn 用紙と余白を読み保存で返す() {
+        // sectPr を捨てると、保存で用紙設定とヘッダーの参照が消える
+        let xml = r#"<w:document xmlns:w="x"><w:body>
+            <w:p><w:r><w:t>本文</w:t></w:r></w:p>
+            <w:sectPr><w:headerReference r:id="rId8"/>
+              <w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>
+              <w:pgMar w:top="1134" w:right="851" w:bottom="1134" w:left="851"/>
+            </w:sectPr></w:body></w:document>"#;
+        let (doc, _) = crate::parse_document_xml(xml);
+        let pg = doc.page.expect("用紙を読めていない");
+        // 16838 twip = 297mm(A4 横)
+        assert!((pg.w_mm - 297.0).abs() < 0.5, "幅: {}", pg.w_mm);
+        assert!((pg.h_mm - 210.0).abs() < 0.5, "高さ: {}", pg.h_mm);
+        assert!((pg.left_mm - 15.0).abs() < 0.5, "左余白: {}", pg.left_mm);
+        assert!((pg.top_mm - 20.0).abs() < 0.5, "上余白: {}", pg.top_mm);
+
+        let out = crate::write_document_xml(&doc);
+        assert!(out.contains("headerReference"), "ヘッダーの参照が消えた");
+        assert!(out.contains("w:pgSz"), "用紙が消えた");
+    }
+
+    #[test]
+    fn 用紙の無い文書は既定のまま() {
+        let (doc, _) = crate::parse_document_xml(
+            r#"<w:document xmlns:w="x"><w:body><w:p/></w:body></w:document>"#);
+        assert!(doc.page.is_none());
+        assert!(doc.sect_raw.is_none());
     }
 }

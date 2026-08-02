@@ -120,6 +120,8 @@ struct Writer {
     image_cache: std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>,
     /// 組版に使うフォントの実体。**文書の書体に従う**(開くたびに引き直す)
     font_bytes: std::sync::Arc<Vec<u8>>,
+    /// 用紙。**文書の設定に従う**(既定 A4・余白20mm)
+    pg: kumihan::PageSetup,
     /// 置換の板。開いている間、打鍵は検索欄に入る
     find_open: bool,
     /// 0=検索語 1=置換後
@@ -177,6 +179,7 @@ impl Writer {
             symbols: false,
             image_cache: Default::default(),
             font_bytes: std::sync::Arc::new(font_data().to_vec()),
+            pg: kumihan::PageSetup::default(),
             find_open: false,
             find_field: 0,
             find_ed: Editor::new(""),
@@ -263,7 +266,7 @@ impl Writer {
         self.page = layout(
             &self.doc,
             &m,
-            &Frame { measure_mm: MEASURE_MM, line_height_mm: LINE_MM, y0_mm: Y0_MM },
+            &Frame { measure_mm: self.pg.measure_mm(), line_height_mm: LINE_MM, y0_mm: self.pg.top_mm + 4.0 },
         );
     }
 
@@ -307,6 +310,7 @@ impl Writer {
                     p.file_name().unwrap_or_default().to_string_lossy()
                 )
                 .into();
+                self.pg = doc.page.unwrap_or_default();
                 self.set_doc(doc);
                 self.adopt_font();
                 self.relayout_keep();
@@ -386,11 +390,11 @@ impl Writer {
                 .map(|c| c.x_mm)
                 .or_else(|| line.cells.last().map(|c| c.x_mm + c.w_mm))
                 .unwrap_or(0.0);
-            hit = Some((MARGIN_MM + x, line.y_mm));
+            hit = Some((self.pg.left_mm + x, line.y_mm));
         }
         hit.unwrap_or((
-            MARGIN_MM,
-            self.page.lines.last().map(|l| l.y_mm).unwrap_or(Y0_MM),
+            self.pg.left_mm,
+            self.page.lines.last().map(|l| l.y_mm).unwrap_or(self.pg.top_mm),
         ))
     }
 
@@ -494,7 +498,11 @@ impl Writer {
                 paper::to_pdf(
                     &self.page,
                     &self.font_bytes,
-                    paper::Paper { margin_mm: MARGIN_MM, ..Default::default() },
+                    paper::Paper {
+                        width_mm: self.pg.w_mm,
+                        height_mm: self.pg.h_mm,
+                        margin_mm: self.pg.left_mm,
+                    },
                     std::io::BufWriter::new(f),
                 )
             });
@@ -524,7 +532,7 @@ impl Writer {
         self.page = layout(
             &self.doc,
             &m,
-            &Frame { measure_mm: MEASURE_MM, line_height_mm: LINE_MM, y0_mm: Y0_MM },
+            &Frame { measure_mm: self.pg.measure_mm(), line_height_mm: LINE_MM, y0_mm: self.pg.top_mm + 4.0 },
         );
     }
 
@@ -532,7 +540,7 @@ impl Writer {
     fn click_at(&mut self, rel_x: f32, rel_y: f32, extend: bool) {
         let pxmm = PX_PER_MM * self.zoom;
         // 紙は編集領域の (28,14)px に置いてある
-        let x_mm = (rel_x - 28.0) / pxmm - MARGIN_MM;
+        let x_mm = (rel_x - 28.0) / pxmm - self.pg.left_mm;
         let y_mm = (rel_y - 14.0) / pxmm;
 
         // 表のセルの中なら、そのセルの編集に切り替える
@@ -554,7 +562,7 @@ impl Writer {
                 }
                 hit = line.byte0;
                 let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
-                let mut x = line.cells.first().map(|c| c.x_mm - MARGIN_MM).unwrap_or(0.0);
+                let mut x = line.cells.first().map(|c| c.x_mm - self.pg.left_mm).unwrap_or(0.0);
                 for c in &line.cells {
                     if x_mm < x + c.w_mm / 2.0 {
                         break;
@@ -1051,7 +1059,7 @@ impl Render for Writer {
         let bar = div().flex().flex_col().child(tabs).child(cmds);
 
         let mut paper = div().absolute().left(px(28.0)).top(px(14.0))
-            .w(px(210.0 * pxmm)).h(px(297.0 * pxmm))
+            .w(px(self.pg.w_mm * pxmm)).h(px(self.pg.h_mm * pxmm))
             .bg(gpui::white()).shadow_lg();
 
         // 画像。組版が置いた位置に、そのまま出す
@@ -1070,7 +1078,7 @@ impl Render for Writer {
             paper = paper.child(
                 gpui::img(src)
                     .absolute()
-                    .left(px((MARGIN_MM + x) * pxmm))
+                    .left(px((self.pg.left_mm + x) * pxmm))
                     .top(px(top * pxmm))
                     .w(px(w_mm * pxmm))
                     .h(px(h_mm * pxmm)),
@@ -1080,8 +1088,8 @@ impl Render for Writer {
         // 表の罫線。紙面の座標をそのまま引く
         for r in &self.page.rules {
             let [x1, y1, x2, y2] = *r;
-            let (x1, y1) = ((MARGIN_MM + x1) * pxmm, y1 * pxmm);
-            let (x2, y2) = ((MARGIN_MM + x2) * pxmm, y2 * pxmm);
+            let (x1, y1) = ((self.pg.left_mm + x1) * pxmm, y1 * pxmm);
+            let (x2, y2) = ((self.pg.left_mm + x2) * pxmm, y2 * pxmm);
             paper = paper.child(div().absolute()
                 .left(px(x1.min(x2))).top(px(y1.min(y2)))
                 .w(px((x2 - x1).abs().max(1.0))).h(px((y2 - y1).abs().max(1.0)))
@@ -1096,7 +1104,7 @@ impl Render for Writer {
             let text = line.text();
             let pt = line.cells[0].size_pt;
             let sz = pt * 96.0 / 72.0 * self.zoom;
-            let x0 = MARGIN_MM + line.cells[0].x_mm;
+            let x0 = self.pg.left_mm + line.cells[0].x_mm;
             let top = line.y_mm * pxmm - sz * 0.88;
 
             if let Some(m) = &marked {

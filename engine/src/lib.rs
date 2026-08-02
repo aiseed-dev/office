@@ -159,6 +159,32 @@ pub enum Block {
     Table(Table),
 }
 
+/// 用紙の設定(mm)。docx の `w:pgSz` / `w:pgMar`。
+#[derive(Debug, Clone, Copy)]
+pub struct PageSetup {
+    pub w_mm: f32,
+    pub h_mm: f32,
+    pub left_mm: f32,
+    pub right_mm: f32,
+    pub top_mm: f32,
+    pub bottom_mm: f32,
+}
+
+impl Default for PageSetup {
+    fn default() -> Self {
+        // A4 縦・余白 20mm(日本の事務の慣行に近い値)
+        PageSetup { w_mm: 210.0, h_mm: 297.0, left_mm: 20.0, right_mm: 20.0,
+                    top_mm: 20.0, bottom_mm: 20.0 }
+    }
+}
+
+impl PageSetup {
+    /// 行長(本文の幅)
+    pub fn measure_mm(&self) -> f32 {
+        (self.w_mm - self.left_mm - self.right_mm).max(10.0)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Document {
     /// 本文の流れ(段落と表が混ざる)
@@ -166,6 +192,11 @@ pub struct Document {
     /// 文書の既定の書体(docx の `w:docDefaults`)。
     /// 段落側が指定していなければこれを使う
     pub font: Option<String>,
+    /// 用紙の設定。無ければ既定(A4)
+    pub page: Option<PageSetup>,
+    /// 節の設定の原文(w:sectPr)。ヘッダーの参照などが入っているので、
+    /// **理解はしないが捨てない**。保存でそのまま返す
+    pub sect_raw: Option<String>,
 }
 
 impl Document {
@@ -381,6 +412,8 @@ impl Document {
     pub fn plain(text: &str, size_pt: f32) -> Document {
         Document {
             font: None,
+            page: None,
+            sect_raw: None,
             blocks: text
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
@@ -1236,7 +1269,7 @@ mod table_layout_tests {
                 ..Default::default()
             }],
         };
-        let mut d = Document { font: None, blocks: vec![] };
+        let mut d = Document { font: None, page: None, sect_raw: None, blocks: vec![] };
         d.blocks.push(Block::Table(Table {
             col_mm: vec![],
             rows: vec![vec![cell(&"あ".repeat(30)), cell("短い")]],
@@ -1276,6 +1309,8 @@ mod gridcol_tests {
         let m = Metrics::new(&data).unwrap();
         let d = Document {
             font: None,
+            page: None,
+            sect_raw: None,
             blocks: vec![Block::Table(Table {
                 col_mm,
                 rows: vec![vec![cell("項目"), cell("値")]],
