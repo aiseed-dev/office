@@ -425,10 +425,18 @@ impl Calc {
 
     /// マウスの左を押した(格子領域の座標)。押したセルが選択の始まり。
     /// メニューが出ていたら閉じる(項目の上の押下は stop_propagation でここに来ない)。
-    fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool) {
+    fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool, ctrl: bool) {
         self.menu_at = None;
         self.pick = None;
         let Some(p) = self.cell_at(x, y) else { return };
+        // Ctrl+クリックはリンクを開く(基幹網の外は既定のブラウザに任せる)
+        if ctrl && !shift {
+            if let Some(url) = self.sheet().links.get(&p).cloned() {
+                let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+                self.status = format!("開きます: {url}").into();
+                return;
+            }
+        }
         self.commit();
         if shift {
             // いまのセルから伸ばす
@@ -632,6 +640,16 @@ impl Calc {
                 self.commit();
                 self.prompt = Some(("name", Editor::new("")));
             }
+            "addcomment" => {
+                self.commit();
+                let cur = self.sheet().comments.get(&self.cursor).cloned().unwrap_or_default();
+                self.prompt = Some(("comment", Editor::new(&cur)));
+            }
+            "hyperlink" => {
+                self.commit();
+                let cur = self.sheet().links.get(&self.cursor).cloned().unwrap_or_default();
+                self.prompt = Some(("link", Editor::new(&cur)));
+            }
             "fmtcells" => {
                 // メニューの出ていた場所の近くに小窓を開く
                 self.fmt_panel = Some(menu_was_at.unwrap_or((HEAD_W + 24.0, ROW_H + 24.0)));
@@ -747,6 +765,33 @@ impl Calc {
                 recalc(&mut self.book.sheets[self.active]);
                 self.dirty = true;
                 self.status = format!("名前「{text}」= {range}(式の中で使えます)").into();
+            }
+            "comment" => {
+                let p = self.cursor;
+                if text.is_empty() {
+                    if self.book.sheets[self.active].comments.remove(&p).is_some() {
+                        self.dirty = true;
+                        self.status = format!("{} のコメントを消しました", p.a1()).into();
+                    }
+                } else {
+                    self.book.sheets[self.active].comments.insert(p, text);
+                    self.dirty = true;
+                    self.status = format!("{} にコメントを付けました(保存で残ります)", p.a1()).into();
+                }
+            }
+            "link" => {
+                let p = self.cursor;
+                if text.is_empty() {
+                    if self.book.sheets[self.active].links.remove(&p).is_some() {
+                        self.dirty = true;
+                        self.status = format!("{} のリンクを外しました", p.a1()).into();
+                    }
+                } else {
+                    self.book.sheets[self.active].links.insert(p, text);
+                    self.dirty = true;
+                    self.status =
+                        format!("{} にリンクを付けました(Ctrl+クリックで開く)", p.a1()).into();
+                }
             }
             _ => {}
         }
@@ -1715,7 +1760,12 @@ impl gpui::Element for InputSink {
             }
             let rel = e.position - bounds.origin;
             view.update(cx, |c, cx| {
-                c.mouse_down_at(f32::from(rel.x), f32::from(rel.y), e.modifiers.shift);
+                c.mouse_down_at(
+                    f32::from(rel.x),
+                    f32::from(rel.y),
+                    e.modifiers.shift,
+                    e.modifiers.control,
+                );
                 cx.notify();
             });
         });
@@ -2006,6 +2056,16 @@ impl Render for Calc {
                     d = d.justify_end();
                 }
                 d = d.text_color(if is_err { rgb(0xB3261E) } else { rgb(0x1B1B1B) });
+                // リンクのあるセルは青(Ctrl+クリックで開く)
+                if self.sheet().links.contains_key(&p) {
+                    d = d.text_color(rgb(0x1F4E79));
+                }
+                // コメントのあるセルは右上に赤い角印
+                if self.sheet().comments.contains_key(&p) {
+                    d = d.relative().child(div().absolute()
+                        .top(px(1.0)).right(px(1.0))
+                        .w(px(6.0)).h(px(6.0)).rounded_sm().bg(rgb(0xC00000)));
+                }
                 // 選択中のセルは、確定前の入力をその場に見せる
                 let shown = if sel { self.input.text().to_string() } else { shown };
                 row = row.child(d.child(SharedString::from(shown)));
@@ -2067,7 +2127,7 @@ impl Render for Calc {
                 ("filter", "フィルター", "", true, true),
                 ("reapply", "再適用", "", self.filter.is_some(), false),
                 ("", "", "", false, false),
-                ("", "コメントを追加", "", false, false),
+                ("addcomment", "コメントを追加", "", true, false),
                 ("", "", "", false, false),
                 ("fmtcells", "セルをフォーマットする", "", true, false),
                 ("numfmt", "数値の書式", "", true, true),
@@ -2076,7 +2136,7 @@ impl Render for Calc {
                 ("defname", "名前の定義", "", true, false),
                 ("", "", "", false, false),
                 ("func", "関数を挿入", "", true, true),
-                ("", "ハイパーリンク", "", false, false),
+                ("hyperlink", "ハイパーリンク", "", true, false),
                 ("", "", "", false, false),
                 ("freeze", "枠の固定", "", true, false),
             ];
@@ -2207,6 +2267,31 @@ impl Render for Calc {
                 .children(sub_panel)
         });
 
+        // ---- カーソルのセルの付記(コメント・リンク) ----
+        let mut tip_lines: Vec<String> = Vec::new();
+        if let Some(t) = self.sheet().comments.get(&self.cursor) {
+            tip_lines.push(t.clone());
+        }
+        if let Some(u) = self.sheet().links.get(&self.cursor) {
+            tip_lines.push(format!("リンク: {u}(Ctrl+クリックで開く)"));
+        }
+        let tip = if tip_lines.is_empty() {
+            None
+        } else {
+            self.cell_origin_px(self.cursor).map(|(x, y)| {
+                let mut t = div().absolute()
+                    .left(px(x + self.col_px(self.cursor.col) + 6.0))
+                    .top(px(y))
+                    .max_w(px(280.0)).p_2().rounded_md()
+                    .bg(rgb(0xFFF9DB)).border_1().border_color(rgb(0xE0C97F)).shadow_lg();
+                for line in tip_lines {
+                    t = t.child(div().text_size(px(11.5)).text_color(rgb(0x5C4A00))
+                        .child(SharedString::from(line)));
+                }
+                t
+            })
+        };
+
         // ---- 入力の板(名前の定義など) ----
         let prompt_panel = self.prompt.as_ref().map(|(kind, ed)| {
             let (a, b) = self.sel_rect();
@@ -2217,6 +2302,8 @@ impl Render for Calc {
             };
             let title = match *kind {
                 "name" => format!("名前の定義 — {range} に名前を付ける"),
+                "comment" => format!("コメント — {}(空にして Enter で消す)", self.cursor.a1()),
+                "link" => format!("ハイパーリンク — {}(空にして Enter で外す)", self.cursor.a1()),
                 _ => String::new(),
             };
             // キャレットは | で見せる(writer の検索欄と同じ割り切り)
@@ -2431,6 +2518,7 @@ impl Render for Calc {
                    }))
                    .child(grid)
                    .child(InputSink { view: me })
+                   .children(tip)
                    .children(fmt_panel)
                    .children(menu)
                    .children(pick_panel)

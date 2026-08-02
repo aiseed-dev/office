@@ -114,6 +114,79 @@ fn col_width(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
     }
 }
 
+/// _rels/*.rels → (Id, Type, Target, 外部か)
+fn parse_rels(xml: &str) -> Vec<(String, String, String, bool)> {
+    let mut r = Reader::from_str(xml);
+    let mut out = Vec::new();
+    let mut buf = Vec::new();
+    loop {
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                if local(e.name().as_ref()) == b"Relationship" =>
+            {
+                out.push((
+                    attr(&e, "Id").unwrap_or_default(),
+                    attr(&e, "Type").unwrap_or_default(),
+                    attr(&e, "Target").unwrap_or_default(),
+                    attr(&e, "TargetMode").as_deref() == Some("External"),
+                ));
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// xl/worksheets/ からの相対の的を zip の中の道に直す("../comments1.xml" → "xl/comments1.xml")。
+fn resolve_target(t: &str) -> String {
+    if let Some(rest) = t.strip_prefix("../") {
+        format!("xl/{rest}")
+    } else if let Some(rest) = t.strip_prefix('/') {
+        rest.to_string()
+    } else {
+        format!("xl/worksheets/{t}")
+    }
+}
+
+/// commentsN.xml → (セル参照, 本文) の列
+fn parse_comments(xml: &str) -> Vec<(Pos, String)> {
+    let mut r = Reader::from_str(xml);
+    r.config_mut().trim_text(false);
+    let mut out = Vec::new();
+    let mut buf = Vec::new();
+    let mut cur: Option<Pos> = None;
+    let mut text = String::new();
+    let mut in_t = false;
+    loop {
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Start(e)) => match local(e.name().as_ref()) {
+                b"comment" => {
+                    cur = attr(&e, "ref").and_then(|s| Pos::parse(&s));
+                    text.clear();
+                }
+                b"t" if cur.is_some() => in_t = true,
+                _ => {}
+            },
+            Ok(Event::Text(t)) if in_t => text.push_str(&t.unescape().unwrap_or_default()),
+            Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                b"t" => in_t = false,
+                b"comment" => {
+                    if let Some(p) = cur.take() {
+                        out.push((p, std::mem::take(&mut text)));
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
 fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat],
                name: &str, rep: &mut Report) -> Sheet {
     let mut r = Reader::from_str(xml);
@@ -291,7 +364,62 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
         let mut s = String::new();
         if let Ok(mut f) = zip.by_name(path) { let _ = f.read_to_string(&mut s); }
         let name = names.get(i).cloned().unwrap_or_else(|| format!("Sheet{}", i + 1));
-        book.sheets.push(parse_sheet(&s, &shared, &styles, &name, &mut rep));
+        let mut sh = parse_sheet(&s, &shared, &styles, &name, &mut rep);
+        // このシートの rels(ハイパーリンクの先・コメントの部品への道)
+        let rels_path = {
+            let base = path.rsplit_once('/').map(|(_, b)| b).unwrap_or(path);
+            format!("xl/worksheets/_rels/{base}.rels")
+        };
+        let mut rels = Vec::new();
+        if let Ok(mut f) = zip.by_name(&rels_path) {
+            let mut rs = String::new();
+            let _ = f.read_to_string(&mut rs);
+            rels = parse_rels(&rs);
+        }
+        // ハイパーリンク。r:id の付いた外部URLだけ理解し、文書内の場所は報告
+        {
+            let mut r = Reader::from_str(&s);
+            let mut buf = Vec::new();
+            loop {
+                match r.read_event_into(&mut buf) {
+                    Ok(Event::Eof) | Err(_) => break,
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if local(e.name().as_ref()) == b"hyperlink" =>
+                    {
+                        let p = attr(&e, "ref").and_then(|v| Pos::parse(&v));
+                        let rid = attr(&e, "id");
+                        match (p, rid) {
+                            (Some(p), Some(rid)) => {
+                                if let Some((_, _, target, _)) = rels
+                                    .iter()
+                                    .find(|(id, ty, _, ext)| {
+                                        *id == rid && ty.ends_with("/hyperlink") && *ext
+                                    })
+                                {
+                                    sh.links.insert(p, target.clone());
+                                }
+                            }
+                            _ => rep.note("ハイパーリンク(文書内の場所。保存で失われる)"),
+                        }
+                    }
+                    _ => {}
+                }
+                buf.clear();
+            }
+        }
+        // コメント(commentsN.xml)。rels の type で結ばれている
+        if let Some((_, _, target, _)) =
+            rels.iter().find(|(_, ty, _, _)| ty.ends_with("/comments"))
+        {
+            if let Ok(mut f) = zip.by_name(&resolve_target(target)) {
+                let mut cs = String::new();
+                let _ = f.read_to_string(&mut cs);
+                for (p, t) in parse_comments(&cs) {
+                    sh.comments.insert(p, t);
+                }
+            }
+        }
+        book.sheets.push(sh);
         rep.sheets += 1;
     }
     if book.sheets.is_empty() {
@@ -434,6 +562,10 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     // 原本の部品と、各シートの引き継ぎ要素(印刷まわり・図形)を先に読む
     let mut carried: Vec<(String, Vec<u8>)> = Vec::new();
     let mut sheet_extras: Vec<String> = Vec::new();
+    // [Content_Types] とシートの rels は「そのまま」ではなく、
+    // リンク・コメントのぶんを織り込んで作り直す
+    let mut orig_ct: Option<String> = None;
+    let mut orig_sheet_rels: Vec<Option<String>> = Vec::new();
     if let Some(src) = original {
         if let Ok(mut z) = zip::ZipArchive::new(src) {
             for i in 0..z.len() {
@@ -443,7 +575,10 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     && name.ends_with(".xml")
                     || name == "xl/sharedStrings.xml"
                     || name == "xl/styles.xml"
-                    || name == "xl/calcChain.xml";
+                    || name == "xl/calcChain.xml"
+                    // コメントの部品はこちらが作り直す
+                    || name.starts_with("xl/comments")
+                    || name.starts_with("xl/drawings/vmlDrawing");
                 let mut buf = Vec::new();
                 if f.read_to_end(&mut buf).is_err() {
                     continue;
@@ -475,6 +610,21 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     let s = String::from_utf8_lossy(&buf).to_string();
                     let patched = patch_defined_names(&s, &defined_names_xml(book));
                     carried.push((name, patched.into_bytes()));
+                    continue;
+                }
+                if name == "[Content_Types].xml" {
+                    orig_ct = Some(String::from_utf8_lossy(&buf).to_string());
+                    continue;
+                }
+                if let Some(n) = name
+                    .strip_prefix("xl/worksheets/_rels/sheet")
+                    .and_then(|r| r.strip_suffix(".xml.rels"))
+                    .and_then(|n| n.parse::<usize>().ok())
+                {
+                    while orig_sheet_rels.len() < n {
+                        orig_sheet_rels.push(None);
+                    }
+                    orig_sheet_rels[n - 1] = Some(String::from_utf8_lossy(&buf).to_string());
                     continue;
                 }
                 if !regenerated {
@@ -528,8 +678,31 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         zip.start_file(name, o).map_err(|e| e.to_string())?;
         zip.write_all(data.as_bytes()).map_err(|e| e.to_string())
     };
+    // [Content_Types]。コメントの部品を持つときは、その宣言も要る
+    {
+        let mut ct = match &orig_ct {
+            Some(s) => s.clone(),
+            None => CT.replace("__SHEETS__", &overrides),
+        };
+        let has_comments = book.sheets.iter().any(|s| !s.comments.is_empty());
+        let mut add = String::new();
+        if has_comments && !ct.contains("Extension=\"vml\"") {
+            add.push_str(r#"<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>"#);
+        }
+        for (i, sh) in book.sheets.iter().enumerate() {
+            let part = format!("/xl/comments{}.xml", i + 1);
+            if !sh.comments.is_empty() && !ct.contains(&part) {
+                add.push_str(&format!(r#"<Override PartName="{part}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>"#));
+            }
+        }
+        if !add.is_empty() {
+            if let Some(p) = ct.rfind("</Types>") {
+                ct.insert_str(p, &add);
+            }
+        }
+        put("[Content_Types].xml", &ct)?;
+    }
     if !carry {
-        put("[Content_Types].xml", &CT.replace("__SHEETS__", &overrides))?;
         put("_rels/.rels", RELS)?;
     }
 
@@ -654,14 +827,93 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         w.write_event(Event::End(BytesEnd::new("worksheet"))).unwrap();
         let mut body = String::from_utf8(w.into_inner().into_inner()).unwrap();
+        // ハイパーリンク(schema では mergeCells の後・印刷まわりの前)
+        if !sh.links.is_empty() {
+            let mut hl = String::from("<hyperlinks>");
+            for (n, (p, _)) in sh.links.iter().enumerate() {
+                hl.push_str(&format!(r#"<hyperlink ref="{}" r:id="rIdHL{}"/>"#, p.a1(), n + 1));
+            }
+            hl.push_str("</hyperlinks>");
+            if let Some(pos) = body.rfind("</worksheet>") {
+                body.insert_str(pos, &hl);
+            }
+        }
         // 原本の印刷まわり・図形の参照を、schema の位置(mergeCells の後)へ戻す
         if let Some(extra) = sheet_extras.get(i).filter(|s| !s.is_empty()) {
             if let Some(pos) = body.rfind("</worksheet>") {
                 body.insert_str(pos, extra);
             }
         }
+        // コメントの図形(VML)への参照は一番後ろ
+        if !sh.comments.is_empty() {
+            if let Some(pos) = body.rfind("</worksheet>") {
+                body.insert_str(pos, r#"<legacyDrawing r:id="rIdVML"/>"#);
+            }
+        }
         put(&format!("xl/worksheets/sheet{}.xml", i + 1),
             &format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{body}"))?;
+
+        // このシートの rels。原本のもの(図形など)は残し、
+        // リンク・コメントのぶんはこちらが作り直す
+        let orig = orig_sheet_rels.get(i).cloned().flatten();
+        if !sh.links.is_empty() || !sh.comments.is_empty() || orig.is_some() {
+            let mut inner = String::new();
+            if let Some(o) = &orig {
+                for (id, ty, target, ext) in parse_rels(o) {
+                    if ty.ends_with("/hyperlink")
+                        || ty.ends_with("/comments")
+                        || ty.ends_with("/vmlDrawing")
+                    {
+                        continue;
+                    }
+                    inner.push_str(&format!(
+                        r#"<Relationship Id="{}" Type="{}" Target="{}"{}/>"#,
+                        esc(&id), esc(&ty), esc(&target),
+                        if ext { r#" TargetMode="External""# } else { "" }
+                    ));
+                }
+            }
+            for (n, (_, url)) in sh.links.iter().enumerate() {
+                inner.push_str(&format!(
+                    r#"<Relationship Id="rIdHL{}" Type="{RNS}/hyperlink" Target="{}" TargetMode="External"/>"#,
+                    n + 1, esc(url)
+                ));
+            }
+            if !sh.comments.is_empty() {
+                inner.push_str(&format!(
+                    r#"<Relationship Id="rIdCM" Type="{RNS}/comments" Target="../comments{}.xml"/>"#,
+                    i + 1
+                ));
+                inner.push_str(&format!(
+                    r#"<Relationship Id="rIdVML" Type="{RNS}/vmlDrawing" Target="../drawings/vmlDrawing{}.vml"/>"#,
+                    i + 1
+                ));
+            }
+            put(&format!("xl/worksheets/_rels/sheet{}.xml.rels", i + 1), &format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{inner}</Relationships>"))?;
+        }
+        // コメントの本体と、Excel がコメントに使う最小の VML 図形
+        if !sh.comments.is_empty() {
+            let mut cl = String::new();
+            for (p, t) in &sh.comments {
+                cl.push_str(&format!(
+                    r#"<comment ref="{}" authorId="0"><text><r><t xml:space="preserve">{}</t></r></text></comment>"#,
+                    p.a1(), esc(t)
+                ));
+            }
+            put(&format!("xl/comments{}.xml", i + 1), &format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<comments xmlns="{NS}"><authors><author></author></authors><commentList>{cl}</commentList></comments>"#))?;
+            let mut shapes = String::new();
+            for (n, (p, _)) in sh.comments.iter().enumerate() {
+                shapes.push_str(&format!(
+                    r##"<v:shape id="_x0000_s{}" type="#_x0000_t202" style="position:absolute;margin-left:80pt;margin-top:2pt;width:120pt;height:60pt;z-index:{};visibility:hidden" fillcolor="#ffffe1" o:insetmode="auto"><v:fill color2="#ffffe1"/><x:ClientData ObjectType="Note"><x:MoveWithCells/><x:SizeWithCells/><x:AutoFill>False</x:AutoFill><x:Row>{}</x:Row><x:Column>{}</x:Column></x:ClientData></v:shape>"##,
+                    1025 + n, n + 1, p.row, p.col
+                ));
+            }
+            put(&format!("xl/drawings/vmlDrawing{}.vml", i + 1), &format!(
+                r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe"><v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>{shapes}</xml>"#))?;
+        }
     }
     zip.finish().map_err(|e| e.to_string())?;
     Ok(())
@@ -1004,5 +1256,65 @@ mod name_roundtrip_tests {
             .read_to_string(&mut s).unwrap();
         assert!(s.contains("_xlnm.Print_Area"),
             "印刷範囲(Print_Area)が保存で消えた");
+    }
+}
+
+#[cfg(test)]
+mod link_comment_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn roundtrip(b: &Book) -> Book {
+        let mut buf = Cursor::new(Vec::new());
+        write(b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        read(buf).expect("読めない").0
+    }
+
+    #[test]
+    fn ハイパーリンクが往復する() {
+        let mut b = Book::new();
+        let p = Pos::parse("B2").unwrap();
+        b.sheets[0].set(p, Cell::input("会社サイト"));
+        b.sheets[0].links.insert(p, "https://example.co.jp/".into());
+        let back = roundtrip(&b);
+        assert_eq!(back.sheets[0].links.get(&p).map(|s| s.as_str()),
+            Some("https://example.co.jp/"), "リンクが往復しない");
+    }
+
+    #[test]
+    fn コメントが往復する() {
+        let mut b = Book::new();
+        let p = Pos::parse("C3").unwrap();
+        b.sheets[0].set(p, Cell::input("単価"));
+        b.sheets[0].comments.insert(p, "去年の実績から仮置き。要確認".into());
+        let back = roundtrip(&b);
+        assert_eq!(back.sheets[0].comments.get(&p).map(|s| s.as_str()),
+            Some("去年の実績から仮置き。要確認"), "コメントが往復しない");
+    }
+
+    #[test]
+    fn 実物にコメントを足しても部品が揃う() {
+        let src = "/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/実施要領様式7_提案見積書.xlsx";
+        let Ok(bytes) = std::fs::read(src) else { return };
+        let (mut book, _) = read(Cursor::new(&bytes)).expect("読めない");
+        let p = Pos::parse("A30").unwrap();
+        book.sheets[0].comments.insert(p, "ここに社名を書く".into());
+        book.sheets[0].links.insert(p, "https://example.co.jp/".into());
+        let mut out = Cursor::new(Vec::new());
+        write_with(&book, Some(Cursor::new(&bytes)), &mut out).expect("書けない");
+        out.set_position(0);
+        // 読み直せて中身が残る
+        let (back, _) = read(Cursor::new(out.get_ref().clone())).expect("読み直せない");
+        assert_eq!(back.sheets[0].comments.get(&p).map(|s| s.as_str()),
+            Some("ここに社名を書く"));
+        assert!(back.sheets[0].links.contains_key(&p), "実物でリンクが消えた");
+        // 部品の宣言も揃っている
+        let mut z = zip::ZipArchive::new(out).unwrap();
+        let mut ct = String::new();
+        use std::io::Read as _;
+        z.by_name("[Content_Types].xml").unwrap().read_to_string(&mut ct).unwrap();
+        assert!(ct.contains("/xl/comments1.xml"), "コメントの宣言が無い");
+        assert!(ct.contains("Extension=\"vml\""), "VML の宣言が無い");
     }
 }

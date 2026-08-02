@@ -261,6 +261,10 @@ pub struct Sheet {
     /// 名前の定義(名前, 参照 "A1" か "A1:B2")。式の中で名前が使える。
     /// workbook.xml の definedNames と往復する
     pub names: Vec<(String, String)>,
+    /// セルのハイパーリンク(外部URL)。sheet.xml の hyperlinks と往復する
+    pub links: BTreeMap<Pos, String>,
+    /// セルのコメント。commentsN.xml と往復する
+    pub comments: BTreeMap<Pos, String>,
 }
 
 impl Sheet {
