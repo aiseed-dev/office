@@ -653,6 +653,17 @@ impl Writer {
         self.status = format!("{n} 件を置き換えました").into();
     }
 
+    /// run_cmd が処理できる id。**リボンの ready はこの表の中に限る**
+    const HANDLED: &'static [&'static str] = &[
+        "open", "save", "undo", "redo", "selectall", "pdf",
+        "bold", "italic", "underline", "strikeout", "fontcolor",
+        "align-left", "align-center", "align-right", "align-just",
+        "incfont", "decfont", "markers", "numbering",
+        "incoffset", "decoffset", "linespace", "pagebreak",
+        "instable", "inssymbol", "replace",
+        "spell", "wordcount", "zoom-in", "zoom-out",
+    ];
+
     fn run_cmd(&mut self, id: &str) {
         match id {
             "open" => {
@@ -755,7 +766,10 @@ impl Writer {
                     _ => None,
                 }
             }),
-            _ => {}
+            other => {
+                // ここに来たら結線漏れ。黙らず画面に出す
+                self.status = format!("未配線のコマンド: {other}(不具合です)").into();
+            }
         }
     }
 
@@ -1442,5 +1456,24 @@ mod find_tests {
     fn 無ければ無いと言える() {
         assert_eq!(next_hit("本文", "存在しない", 0), None);
         let _ = w("x");
+    }
+}
+
+#[cfg(test)]
+mod wiring_tests {
+    #[test]
+    fn リボンのreadyは全部配線されている() {
+        // 「押せるのに何も起きない」を仕組みで止める
+        for tab in ui::ribbon::WRITER {
+            for cmd in tab.cmds {
+                if cmd.ready {
+                    assert!(
+                        super::Writer::HANDLED.contains(&cmd.id),
+                        "「{}」({}) は ready なのに run_cmd が知らない",
+                        cmd.label, cmd.id
+                    );
+                }
+            }
+        }
     }
 }

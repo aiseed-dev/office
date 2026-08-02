@@ -545,6 +545,20 @@ impl Calc {
         out
     }
 
+    /// run_cmd が処理できる id。**リボンの ready はこの表の中に限る**
+    /// (試験で突き合わせる。合っていない釦は「押せるのに何もしない」嘘になる)
+    const HANDLED: &'static [&'static str] = &[
+        "open", "save", "undo", "redo", "selectall", "pdf",
+        "bold", "italic", "underline", "borders", "fillparag", "fontcolor",
+        "align-left", "align-center", "align-right",
+        "comma", "currency", "percents", "digit-inc", "digit-dec", "clear",
+        "cell-ins", "cell-del", "insrow", "inscol",
+        "merge", "custom-sort", "rem-duplicates", "setfilter", "clear-filter",
+        "fill-num", "freeze", "show-formulas", "show-gridlines",
+        "fn-math", "fn-text", "fn-logical", "fn-recent",
+        "sum", "average", "count", "max", "min",
+    ];
+
     fn run_cmd(&mut self, id: &str) {
         match id {
             "open" => {
@@ -694,6 +708,16 @@ impl Calc {
             }
             "currency" => self.fmt(|f| f.number_format = Some("¥#,##0".into())),
             "percents" => self.fmt(|f| f.number_format = Some("0%".into())),
+            // 関数の一覧。**使える名前だけを出す** — 無いものを並べない
+            f @ ("fn-math" | "fn-text" | "fn-logical" | "fn-recent") => {
+                let names: &str = match f {
+                    "fn-math" => "SUM AVERAGE ROUND ROUNDUP ROUNDDOWN INT ABS MOD POWER SQRT PRODUCT",
+                    "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE",
+                    "fn-logical" => "IF AND OR NOT TRUE FALSE ISBLANK ISERROR",
+                    _ => "SUM AVERAGE COUNT MAX MIN IF SUMIF COUNTIF",
+                };
+                self.status = format!("使える関数: {names}").into();
+            }
             f @ ("sum" | "average" | "count" | "max" | "min") => {
                 // 上の連続した数値をまとめる(表計算の当たり前の動き)
                 let name = f.to_uppercase();
@@ -711,7 +735,10 @@ impl Calc {
                 self.commit();
                 self.sync_input();
             }
-            _ => {}
+            other => {
+                // ここに来たら結線漏れ。黙らず画面に出す
+                self.status = format!("未配線のコマンド: {other}(不具合です)").into();
+            }
         }
     }
 
@@ -1138,5 +1165,23 @@ mod filter_tests {
         assert_eq!(matching(0, "甲"), vec![0, 1, 3], "見出し+一致行でない");
         assert_eq!(matching(0, "乙"), vec![0, 2]);
         assert_eq!(matching(0, "丙"), vec![0], "無い値は見出しだけ");
+    }
+}
+
+#[cfg(test)]
+mod wiring_tests {
+    #[test]
+    fn リボンのreadyは全部配線されている() {
+        for tab in ui::ribbon::CALC {
+            for cmd in tab.cmds {
+                if cmd.ready {
+                    assert!(
+                        super::Calc::HANDLED.contains(&cmd.id),
+                        "「{}」({}) は ready なのに run_cmd が知らない",
+                        cmd.label, cmd.id
+                    );
+                }
+            }
+        }
     }
 }
