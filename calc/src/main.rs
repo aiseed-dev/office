@@ -1378,19 +1378,28 @@ impl Render for Calc {
                             this.sync_input();
                             cx.notify();
                         }))
-                    // 押したまま通り過ぎたセルまで選択を広げる
-                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                        if let Some(start) = this.drag {
-                            if this.cursor != p {
-                                this.cursor = p;
-                                this.anchor = if p == start { None } else { Some(start) };
-                                if this.anchor.is_some() {
-                                    let (a, b) = this.sel_rect();
-                                    this.status = format!("{}:{}", a.a1(), b.a1()).into();
-                                }
-                                this.sync_input();
-                                cx.notify();
+                    // 押したまま通り過ぎたセルまで選択を広げる。
+                    // **左ボタンが押されているかを必ず見る** — 離した事象は
+                    // 窓の外などで取り逃すことがあり(on_mouse_up はポインタが
+                    // 乗っている要素にしか来ない)、見ないと離した後も
+                    // 最初のセルを起点に選択が広がり続ける(踏んで直した)
+                    .on_mouse_move(cx.listener(move |this, e: &gpui::MouseMoveEvent, _, cx| {
+                        let Some(start) = this.drag else { return };
+                        if e.pressed_button != Some(gpui::MouseButton::Left) {
+                            // 離した事象を取り逃していた。ここで拾って終える
+                            this.drag = None;
+                            cx.notify();
+                            return;
+                        }
+                        if this.cursor != p {
+                            this.cursor = p;
+                            this.anchor = if p == start { None } else { Some(start) };
+                            if this.anchor.is_some() {
+                                let (a, b) = this.sel_rect();
+                                this.status = format!("{}:{}", a.a1(), b.a1()).into();
                             }
+                            this.sync_input();
+                            cx.notify();
                         }
                     }));
                 // 罫線・塗り・文字書式。**帳票の見た目はここで決まる**
