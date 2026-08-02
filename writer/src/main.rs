@@ -1057,32 +1057,43 @@ impl Writer {
         self.save();
         cx.notify();
     }
-    /// 終了してよいか。書きかけがあれば保存するかを確かめる。
-    /// 「はい」でも保存できなかった(ダイアログを閉じた等)なら終了しない。
-    fn may_close(&mut self) -> bool {
+    /// 終了の要求。書きかけが無ければ即終了、あれば確認を**別の糸**で出す。
+    /// 確認のダイアログで主の糸を塞がない — 塞ぐと画面ごと固まり、
+    /// GNOME に「応答なし」と判定される(calc で踏んで直したのと同じ)。
+    fn request_quit(&mut self, cx: &mut Context<Self>) {
         if !self.dirty {
-            return true;
+            cx.quit();
+            return;
         }
-        match rfd::MessageDialog::new()
-            .set_level(rfd::MessageLevel::Warning)
-            .set_title("writer")
-            .set_description("保存していない変更があります。保存して終了しますか?")
-            .set_buttons(rfd::MessageButtons::YesNoCancel)
-            .show()
-        {
-            rfd::MessageDialogResult::Yes => {
-                self.save();
-                !self.dirty
-            }
-            rfd::MessageDialogResult::No => true,
-            _ => false,
-        }
+        let ask = cx.background_executor().spawn(async move {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title("writer")
+                .set_description("保存していない変更があります。保存して終了しますか?")
+                .set_buttons(rfd::MessageButtons::YesNoCancel)
+                .show()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    rfd::MessageDialogResult::Yes => {
+                        this.save();
+                        if !this.dirty {
+                            cx.quit();
+                        }
+                    }
+                    rfd::MessageDialogResult::No => cx.quit(),
+                    _ => this.status = "終了をやめました".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn do_quit(&mut self, _: &ui::Quit, _: &mut Window, cx: &mut Context<Self>) {
-        if self.may_close() {
-            cx.quit();
-        }
+        self.request_quit(cx);
     }
 
     fn do_open(&mut self, _: &ui::Open, _: &mut Window, cx: &mut Context<Self>) {
@@ -1238,9 +1249,7 @@ impl Render for Writer {
                 window.zoom_window();
             })))
             .child(winbtn("close", "✕").on_click(cx.listener(|this, _, _, cx| {
-                if this.may_close() {
-                    cx.quit();
-                }
+                this.request_quit(cx);
             })));
 
         let mut cmds = div().flex().flex_row().flex_wrap().gap_1().items_center()
@@ -1808,14 +1817,21 @@ fn main() {
                 let view = cx.new(|cx| Writer::new(arg2.clone(), cx));
                 window.focus(&view.focus_handle(cx), cx);
                 // WM からの「閉じる」(Alt+F4 等)も同じ確認を通す。
-                // 書きかけを黙って捨てない
+                // 書きかけがあれば「まだ閉じない」と答え、確認は別の糸で出す
                 let v = view.clone();
                 window.on_window_should_close(cx, move |_, cx| {
-                    let ok = v.update(cx, |this, _| this.may_close());
-                    if ok {
+                    let quit_now = v.update(cx, |this, cx| {
+                        if this.dirty {
+                            this.request_quit(cx);
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    if quit_now {
                         cx.quit();
                     }
-                    ok
+                    quit_now
                 });
                 view
             },
