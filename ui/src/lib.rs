@@ -46,7 +46,7 @@ actions!(
         Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll,
         SelectUp, SelectDown,
         Home, End, Enter, Undo, Redo, Save, Open, Up, Down, Tab,
-        Copy, Cut, Paste, Quit,
+        Copy, Cut, Paste, Quit, ContextMenu, Cancel,
     ]
 );
 
@@ -77,6 +77,10 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-x", Cut, Some(context)),
         KeyBinding::new("ctrl-v", Paste, Some(context)),
         KeyBinding::new("ctrl-q", Quit, Some(context)),
+        // メニューキー(アプリケーションキー)と Shift+F10 は右クリックと同じ
+        KeyBinding::new("menu", ContextMenu, Some(context)),
+        KeyBinding::new("shift-f10", ContextMenu, Some(context)),
+        KeyBinding::new("escape", Cancel, Some(context)),
     ]
 }
 

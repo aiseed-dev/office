@@ -179,6 +179,8 @@ struct Calc {
     drag: Option<Pos>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
+    /// 右クリックのメニュー(出ている場所。格子領域の px)
+    menu_at: Option<(f32, f32)>,
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
     /// 画面の窓の左上(スクロール)。**表は画面より大きい**
@@ -226,6 +228,7 @@ impl Calc {
             anchor: None,
             drag: None,
             wheel: (0.0, 0.0),
+            menu_at: None,
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
@@ -393,7 +396,9 @@ impl Calc {
     }
 
     /// マウスの左を押した(格子領域の座標)。押したセルが選択の始まり。
+    /// メニューが出ていたら閉じる(項目の上の押下は stop_propagation でここに来ない)。
     fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool) {
+        self.menu_at = None;
         let Some(p) = self.cell_at(x, y) else { return };
         self.commit();
         if shift {
@@ -430,6 +435,105 @@ impl Calc {
         if self.drag.take().is_some() && self.anchor.is_some() {
             let (a, b) = self.sel_rect();
             self.status = format!("{}:{}", a.a1(), b.a1()).into();
+        }
+    }
+
+    /// 右クリック。選択の中ならその選択への操作、外ならそのセルへ移ってから
+    /// メニューを出す(Excel の作法)。
+    fn right_click_at(&mut self, x: f32, y: f32) {
+        if let Some(p) = self.cell_at(x, y) {
+            let (a, b) = self.sel_rect();
+            let inside = self.anchor.is_some()
+                && (a.row..=b.row).contains(&p.row)
+                && (a.col..=b.col).contains(&p.col);
+            if !inside && p != self.cursor {
+                self.commit();
+                self.anchor = None;
+                self.cursor = p;
+                self.sync_input();
+            }
+        }
+        self.menu_at = Some((x, y));
+    }
+
+    /// いま表示されているセルの左上(格子領域の px)。画面の外なら None。
+    fn cell_origin_px(&self, p: Pos) -> Option<(f32, f32)> {
+        let mut x = HEAD_W;
+        let mut cfound = false;
+        for c in grid_cols(self.frozen, self.view, COLS) {
+            if c == p.col {
+                cfound = true;
+                break;
+            }
+            x += self.col_px(c);
+        }
+        let mut y = ROW_H;
+        let mut rfound = false;
+        for r in self.visible_rows() {
+            if r == p.row {
+                rfound = true;
+                break;
+            }
+            y += self.row_px(r);
+        }
+        (cfound && rfound).then_some((x, y))
+    }
+
+    /// メニューの項目を実行する。
+    fn menu_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_at = None;
+        match id {
+            "cut" => self.a_cut(&ui::Cut, window, cx),
+            "copy" => self.a_copy(&ui::Copy, window, cx),
+            "paste" => self.a_paste(&ui::Paste, window, cx),
+            "clearcells" => {
+                self.checkpoint();
+                let n = self.clear_range();
+                self.status = format!("{n} セルの中身を消しました(書式は残る)").into();
+            }
+            "insrow" => {
+                self.rowcol(|s, p| s.insert_row(p.row));
+                self.status = "行を挿しました(下の式の参照も直っています)".into();
+            }
+            "delrow" => {
+                self.rowcol(|s, p| s.remove_row(p.row));
+                self.status = "行を削除しました".into();
+            }
+            "inscol" => {
+                self.rowcol(|s, p| s.insert_col(p.col));
+                self.status = "列を挿しました".into();
+            }
+            "delcol" => {
+                self.rowcol(|s, p| s.remove_col(p.col));
+                self.status = "列を削除しました".into();
+            }
+            "merge" => self.run_cmd("merge"),
+            "sort" => self.run_cmd("custom-sort"),
+            "filter" => {
+                if self.filter.is_some() {
+                    self.run_cmd("clear-filter");
+                } else {
+                    self.run_cmd("setfilter");
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn a_context_menu(&mut self, _: &ui::ContextMenu, _: &mut Window, cx: &mut Context<Self>) {
+        // キーボードから: カーソルのセルのそば(セルが画面の外なら左上)に出す
+        let (x, y) = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x + 16.0, y + 16.0))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        self.menu_at = Some((x, y));
+        cx.notify();
+    }
+
+    fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
+        if self.menu_at.take().is_some() {
+            cx.notify();
         }
     }
 
@@ -1324,6 +1428,21 @@ impl gpui::Element for InputSink {
                 cx.notify();
             });
         });
+        // 右クリックでメニュー
+        let view = self.view.clone();
+        window.on_mouse_event(move |e: &gpui::MouseDownEvent, phase, _w, cx| {
+            if phase != gpui::DispatchPhase::Bubble
+                || e.button != gpui::MouseButton::Right
+                || !bounds.contains(&e.position)
+            {
+                return;
+            }
+            let rel = e.position - bounds.origin;
+            view.update(cx, |c, cx| {
+                c.right_click_at(f32::from(rel.x), f32::from(rel.y));
+                cx.notify();
+            });
+        });
     }
 }
 
@@ -1608,6 +1727,70 @@ impl Render for Calc {
                 cx.notify()
             })));
 
+        // ---- 右クリックのメニュー ----
+        // InputSink より**後**に描く(bubble は後に登録した方が先に走るので、
+        // 項目の stop_propagation が InputSink のセル選択より先に効く)
+        let menu = self.menu_at.map(|(mx, my)| {
+            let sel_txt = if self.anchor.is_some() {
+                let (a, b) = self.sel_rect();
+                format!("{}:{}", a.a1(), b.a1())
+            } else {
+                self.cursor.a1()
+            };
+            let filter_label =
+                if self.filter.is_some() { "絞り込みを解く" } else { "この値で絞り込む" };
+            let entries: Vec<(&'static str, String, &'static str)> = vec![
+                ("cut", format!("{sel_txt} を切り取り"), "Ctrl+X"),
+                ("copy", format!("{sel_txt} をコピー"), "Ctrl+C"),
+                ("paste", "貼り付け".into(), "Ctrl+V"),
+                ("", String::new(), ""),
+                ("clearcells", "中身を消す(書式は残す)".into(), "Delete"),
+                ("", String::new(), ""),
+                ("insrow", "行を挿入".into(), ""),
+                ("delrow", "行を削除".into(), ""),
+                ("inscol", "列を挿入".into(), ""),
+                ("delcol", "列を削除".into(), ""),
+                ("", String::new(), ""),
+                ("merge", "セルを結合 / 解除".into(), ""),
+                ("sort", "この列で並べ替え".into(), ""),
+                ("filter", filter_label.into(), ""),
+            ];
+            // 画面の右・下で切れないように少し戻す
+            let h_est = entries.len() as f32 * 26.0 + 10.0;
+            let grid_w = HEAD_W
+                + grid_cols(self.frozen, self.view, COLS)
+                    .iter()
+                    .map(|c| self.col_px(*c))
+                    .sum::<f32>();
+            let mx = mx.min((grid_w - 240.0).max(0.0));
+            let my = my.min((ROW_H + ROWS as f32 * ROW_H - h_est).max(0.0));
+            let mut m = div().absolute().left(px(mx)).top(px(my)).w(px(232.0))
+                .p_1().rounded_md().bg(rgb(0xFFFFFF))
+                .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
+                // メニューの余白を押してもセルに抜けない
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            for (id, label, hint) in entries {
+                if id.is_empty() {
+                    m = m.child(div().h(px(1.0)).my_1().bg(rgb(0xE1E6EA)));
+                    continue;
+                }
+                m = m.child(div()
+                    .id(id)
+                    .flex().flex_row().items_center().justify_between().gap_4()
+                    .px_3().py_1().rounded_sm().cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .child(div().text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                        .child(SharedString::from(label)))
+                    .child(div().text_size(px(10.5)).text_color(rgb(0x9AA5AE)).child(hint))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                        move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.menu_action(id, window, cx);
+                        })));
+            }
+            m
+        });
+
         let notes = if self.notes.is_empty() { None } else {
             let mut n = div().px_4().py_2().bg(rgb(0xFFF6E6))
                 .border_t_1().border_color(rgb(0xE8D5A8))
@@ -1645,6 +1828,8 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_save))
             .on_action(cx.listener(Calc::a_open))
             .on_action(cx.listener(Calc::a_quit))
+            .on_action(cx.listener(Calc::a_context_menu))
+            .on_action(cx.listener(Calc::a_cancel))
             .child(bar)
             .child(formula_bar)
             .child(div().flex_1().overflow_hidden().relative()
@@ -1668,7 +1853,8 @@ impl Render for Calc {
                        }
                    }))
                    .child(grid)
-                   .child(InputSink { view: me }))
+                   .child(InputSink { view: me })
+                   .children(menu))
             .child(sheets_bar)
             .children(notes)
     }
