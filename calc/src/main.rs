@@ -74,6 +74,8 @@ struct Calc {
     anchor: Option<Pos>,
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
+    /// 画面の窓の左上(スクロール)。**表は画面より大きい**
+    view: Pos,
     /// グリッド線(表の薄い線)を出す
     gridlines: bool,
     /// 数式バーの中身。IMEもここに来る(セルの入力は1本のテキスト編集)
@@ -101,6 +103,7 @@ impl Calc {
             cursor: Pos::new(0, 0),
             anchor: None,
             show_formulas: false,
+            view: Pos::new(0, 0),
             gridlines: true,
             input: Editor::new(""),
             path: None,
@@ -187,10 +190,27 @@ impl Calc {
         self.commit();
         let r = (self.cursor.row as i32 + dr).max(0) as u32;
         let c = (self.cursor.col as i32 + dc).max(0) as u32;
-        self.cursor = Pos::new(r.min(ROWS - 1), c.min(COLS - 1));
+        self.cursor = Pos::new(r.min(9999), c.min(255));
+        self.follow();
         let (a, b) = self.sel_rect();
         self.status = format!("{}:{}", a.a1(), b.a1()).into();
         self.sync_input();
+    }
+
+    /// カーソルが見える位置まで窓を動かす。
+    fn follow(&mut self) {
+        if self.cursor.row < self.view.row {
+            self.view.row = self.cursor.row;
+        }
+        if self.cursor.row >= self.view.row + ROWS {
+            self.view.row = self.cursor.row + 1 - ROWS;
+        }
+        if self.cursor.col < self.view.col {
+            self.view.col = self.cursor.col;
+        }
+        if self.cursor.col >= self.view.col + COLS {
+            self.view.col = self.cursor.col + 1 - COLS;
+        }
     }
 
     fn move_cursor(&mut self, dr: i32, dc: i32) {
@@ -199,7 +219,8 @@ impl Calc {
         self.commit();
         let r = (self.cursor.row as i32 + dr).max(0) as u32;
         let c = (self.cursor.col as i32 + dc).max(0) as u32;
-        self.cursor = Pos::new(r.min(ROWS - 1), c.min(COLS - 1));
+        self.cursor = Pos::new(r.min(9999), c.min(255));
+        self.follow();
         self.sync_input();
     }
 
@@ -566,8 +587,10 @@ impl EntityInputHandler for Calc {
         // IME の候補窓は選択中のセルの下に出す
         Some(Bounds::new(
             gpui::point(
-                bounds.origin.x + px(HEAD_W + self.col_x(self.cursor.col)),
-                bounds.origin.y + px((self.cursor.row + 2) as f32 * ROW_H),
+                bounds.origin.x
+                    + px(HEAD_W + self.col_x(self.cursor.col) - self.col_x(self.view.col)),
+                bounds.origin.y
+                    + px((self.cursor.row - self.view.row + 2) as f32 * ROW_H),
             ),
             size(px(self.col_px(self.cursor.col)), px(ROW_H)),
         ))
@@ -690,7 +713,7 @@ impl Render for Calc {
         let mut head = div().flex().flex_row()
             .child(div().w(px(HEAD_W)).h(px(ROW_H)).bg(rgb(0xEFF2F4))
                    .border_r_1().border_b_1().border_color(rgb(0xD5DBE0)));
-        for c in 0..COLS {
+        for c in self.view.col..self.view.col + COLS {
             head = head.child(div().w(px(self.col_px(c))).h(px(ROW_H))
                 .bg(rgb(0xEFF2F4)).border_r_1().border_b_1()
                 .border_color(rgb(0xD5DBE0))
@@ -700,7 +723,7 @@ impl Render for Calc {
         }
         grid = grid.child(head);
 
-        for r in 0..ROWS {
+        for r in self.view.row..self.view.row + ROWS {
             let mut row = div().flex().flex_row()
                 .child(div().w(px(HEAD_W)).h(px(ROW_H))
                     .bg(rgb(0xEFF2F4)).border_r_1().border_b_1()
@@ -708,7 +731,7 @@ impl Render for Calc {
                     .flex().items_center().justify_center()
                     .text_size(px(11.5)).text_color(rgb(0x66707A))
                     .child(SharedString::from((r + 1).to_string())));
-            for c in 0..COLS {
+            for c in self.view.col..self.view.col + COLS {
                 let p = Pos::new(r, c);
                 let cell = self.sheet().get(p);
                 // 結合に呑まれた位置は空で描く(値は左上のセルにだけある)
