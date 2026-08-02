@@ -59,6 +59,8 @@ fn hex(s: &str) -> gpui::Rgba {
 }
 
 const COL_W: f32 = 108.0;
+/// xlsx の列幅1(=「0」1個ぶん)を何画素にするか。既定幅 8.43 ≒ 108px の比
+const PX_PER_CHW: f32 = 108.0 / 8.43;
 const HEAD_W: f32 = 46.0;
 const ROWS: u32 = 30;
 const COLS: u32 = 9;
@@ -160,6 +162,16 @@ impl Calc {
 
     /// カーソルを動かす(動かす前に編集中の内容を確定する)。
     /// いま選んでいる長方形(左上, 右下)。
+    /// 列の画面幅。文書の指定(xlsx の width)に従う
+    fn col_px(&self, c: u32) -> f32 {
+        self.sheet().col_width.get(&c).map(|w| w * PX_PER_CHW).unwrap_or(COL_W)
+    }
+
+    /// 列の左端(見出しの右から)
+    fn col_x(&self, c: u32) -> f32 {
+        (0..c).map(|i| self.col_px(i)).sum()
+    }
+
     fn sel_rect(&self) -> (Pos, Pos) {
         let a = self.anchor.unwrap_or(self.cursor);
         let c = self.cursor;
@@ -554,10 +566,10 @@ impl EntityInputHandler for Calc {
         // IME の候補窓は選択中のセルの下に出す
         Some(Bounds::new(
             gpui::point(
-                bounds.origin.x + px(HEAD_W + self.cursor.col as f32 * COL_W),
+                bounds.origin.x + px(HEAD_W + self.col_x(self.cursor.col)),
                 bounds.origin.y + px((self.cursor.row + 2) as f32 * ROW_H),
             ),
-            size(px(COL_W), px(ROW_H)),
+            size(px(self.col_px(self.cursor.col)), px(ROW_H)),
         ))
     }
     fn character_index_for_point(&mut self, _p: gpui::Point<gpui::Pixels>,
@@ -679,7 +691,7 @@ impl Render for Calc {
             .child(div().w(px(HEAD_W)).h(px(ROW_H)).bg(rgb(0xEFF2F4))
                    .border_r_1().border_b_1().border_color(rgb(0xD5DBE0)));
         for c in 0..COLS {
-            head = head.child(div().w(px(COL_W)).h(px(ROW_H))
+            head = head.child(div().w(px(self.col_px(c))).h(px(ROW_H))
                 .bg(rgb(0xEFF2F4)).border_r_1().border_b_1()
                 .border_color(rgb(0xD5DBE0))
                 .flex().items_center().justify_center()
@@ -720,7 +732,7 @@ impl Render for Calc {
                     && (ra.row..=rb.row).contains(&r) && (ra.col..=rb.col).contains(&c);
                 let mut d = div()
                     .id(SharedString::from(p.a1()))
-                    .w(px(COL_W)).h(px(ROW_H))
+                    .w(px(self.col_px(c))).h(px(ROW_H))
                     .border_r_1().border_b_1()
                     .border_color(if self.gridlines { rgb(0xE1E6EA) } else { rgb(0xFFFFFF) })
                     .bg(if sel { rgb(0xEAF5EE) } else if in_range { rgb(0xF2F8F4) } else { rgb(0xFFFFFF) })

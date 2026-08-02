@@ -79,6 +79,18 @@ fn merge(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
     }
 }
 
+/// `<col min="1" max="3" width="12.5"/>` — min..=max は1始まり。
+fn col_width(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
+    let g = |k: &str| attr(e, k).and_then(|v| v.parse::<f32>().ok());
+    if let (Some(min), Some(max), Some(w)) = (g("min"), g("max"), g("width")) {
+        for c in (min as u32)..=(max as u32) {
+            if c >= 1 {
+                sh.col_width.insert(c - 1, w);
+            }
+        }
+    }
+}
+
 fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat],
                name: &str, rep: &mut Report) -> Sheet {
     let mut r = Reader::from_str(xml);
@@ -104,9 +116,11 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
                 b"f" => in_f = true,
                 b"is" => in_is = true,
                 b"mergeCell" => merge(&e, &mut sh),
+                b"col" => col_width(&e, &mut sh),
                 _ => {}
             },
             Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
+                b"col" => col_width(&e, &mut sh),
                 b"c" => {
                     // 値の無いセル(書式だけ)。持たない
                     pos = None;
@@ -318,6 +332,19 @@ pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
         let mut ws = BytesStart::new("worksheet");
         ws.push_attribute(("xmlns", NS));
         w.write_event(Event::Start(ws)).unwrap();
+        // 列幅。読んだものを返す(捨てると帳票の形が変わる)
+        if !sh.col_width.is_empty() {
+            w.write_event(Event::Start(BytesStart::new("cols"))).unwrap();
+            for (c, wd) in &sh.col_width {
+                let mut e = BytesStart::new("col");
+                e.push_attribute(("min", (c + 1).to_string().as_str()));
+                e.push_attribute(("max", (c + 1).to_string().as_str()));
+                e.push_attribute(("width", wd.to_string().as_str()));
+                e.push_attribute(("customWidth", "1"));
+                w.write_event(Event::Empty(e)).unwrap();
+            }
+            w.write_event(Event::End(BytesEnd::new("cols"))).unwrap();
+        }
         w.write_event(Event::Start(BytesStart::new("sheetData"))).unwrap();
 
         let mut rows: std::collections::BTreeMap<u32, Vec<(&Pos, &Cell)>> = Default::default();
@@ -510,5 +537,47 @@ mod merge_round {
         assert!(!s.covered_by_merge(Pos::parse("A1").unwrap()), "左上まで呑んだ");
         assert!(s.covered_by_merge(Pos::parse("B2").unwrap()));
         assert!(!s.covered_by_merge(Pos::parse("C1").unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod colwidth_round {
+    use crate::model::{Cell, Pos, Value};
+    use crate::{Book, Sheet};
+
+    #[test]
+    fn 列幅が往復する() {
+        // 読み飛ばして保存すると帳票の形が変わる
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.set(Pos::parse("A1").unwrap(), Cell {
+            formula: None, value: Value::Text("品".into()), fmt: Default::default() });
+        s.col_width.insert(0, 3.5);
+        s.col_width.insert(2, 24.0);
+        let mut buf = Vec::new();
+        crate::xlsx::write(&Book { sheets: vec![s] }, std::io::Cursor::new(&mut buf)).unwrap();
+        let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
+        let cw = &back.sheets[0].col_width;
+        assert_eq!(cw.get(&0), Some(&3.5), "列幅が消えた: {cw:?}");
+        assert_eq!(cw.get(&2), Some(&24.0));
+        assert_eq!(cw.get(&1), None, "指定していない列に幅が付いた");
+    }
+
+    #[test]
+    fn 列の出し入れで幅も動く() {
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.col_width.insert(1, 20.0);
+        s.insert_col(0);
+        assert_eq!(s.col_width.get(&2), Some(&20.0), "幅が置き去り: {:?}", s.col_width);
+        s.remove_col(0);
+        assert_eq!(s.col_width.get(&1), Some(&20.0));
+    }
+
+    #[test]
+    fn 実物の様式の列幅を読める() {
+        let p = "/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/実施要領様式7_提案見積書.xlsx";
+        let Ok(f) = std::fs::File::open(p) else { return }; // 無い機械では飛ばす
+        let (book, _) = crate::xlsx::read(f).unwrap();
+        let n: usize = book.sheets.iter().map(|s| s.col_width.len()).sum();
+        assert!(n > 0, "実物の列幅を1つも読めていない");
     }
 }

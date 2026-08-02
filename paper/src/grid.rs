@@ -18,6 +18,8 @@ use crate::Paper;
 
 const COL_MM: f32 = 26.0;
 const ROW_MM: f32 = 7.0;
+/// xlsx の列幅1 ≒ 2.0mm(標準フォントの「0」1個ぶん)
+const MM_PER_CHW: f32 = 2.0;
 
 /// 1つの表を PDF にする。行が紙に収まらなければ次のページへ。
 pub fn sheet_to_pdf<W: Write>(
@@ -38,6 +40,15 @@ pub fn sheet_to_pdf<W: Write>(
         .map_err(|e| e.to_string())?;
     let mut l = doc.get_page(page).get_layer(layer);
 
+    // 列の幅と左端(文書の指定に従う)
+    let col_mm: Vec<f32> = (0..cols.max(1))
+        .map(|c| grid.col_width.get(&c).map(|w| w * MM_PER_CHW).unwrap_or(COL_MM))
+        .collect();
+    let mut col_x = vec![0.0f32];
+    for w in &col_mm {
+        col_x.push(col_x.last().unwrap() + w);
+    }
+
     let rows_per_page =
         (((paper.height_mm - 2.0 * paper.margin_mm) / ROW_MM).floor() as u32).max(1);
 
@@ -53,16 +64,17 @@ pub fn sheet_to_pdf<W: Write>(
         let y_top = paper.height_mm - paper.margin_mm - (r % rows_per_page) as f32 * ROW_MM;
         for c in 0..cols.max(1) {
             let p = sheet::Pos::new(r, c);
-            let x = paper.margin_mm + c as f32 * COL_MM;
+            let x = paper.margin_mm + col_x[c as usize];
+            let cw = col_mm[c as usize];
             let Some(cell) = grid.cells.get(&p) else { continue };
 
             // 罫線。引いてある辺だけ
             let b = cell.fmt.borders;
             for (on, (x1, y1, x2, y2)) in [
-                (b.top, (x, y_top, x + COL_MM, y_top)),
-                (b.bottom, (x, y_top - ROW_MM, x + COL_MM, y_top - ROW_MM)),
+                (b.top, (x, y_top, x + cw, y_top)),
+                (b.bottom, (x, y_top - ROW_MM, x + cw, y_top - ROW_MM)),
                 (b.left, (x, y_top, x, y_top - ROW_MM)),
-                (b.right, (x + COL_MM, y_top, x + COL_MM, y_top - ROW_MM)),
+                (b.right, (x + cw, y_top, x + cw, y_top - ROW_MM)),
             ] {
                 if on {
                     l.add_line(Line {
@@ -99,7 +111,7 @@ pub fn sheet_to_pdf<W: Write>(
                     * pt
                     * 25.4
                     / 72.0;
-                x + COL_MM - 1.5 - w
+                x + cw - 1.5 - w
             } else {
                 x + 1.5
             };

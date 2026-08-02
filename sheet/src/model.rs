@@ -215,6 +215,9 @@ pub struct Sheet {
     /// セル結合(左上, 右下)。**日本の帳票は結合で見出しを作る**ので、
     /// 読み飛ばして保存すると枠組みが壊れる
     pub merges: Vec<(Pos, Pos)>,
+    /// 列幅(xlsx の単位 = 標準フォントの「0」何個ぶん)。無い列は既定幅。
+    /// これも読み飛ばして保存すると帳票の形が変わる
+    pub col_width: BTreeMap<u32, f32>,
 }
 
 impl Sheet {
@@ -323,6 +326,12 @@ impl Sheet {
         self.shift(|p| p.col >= at, 0, 1);
         self.fix_formulas(at, 1, false);
         self.shift_merges(at, 1, false);
+        // 列幅も一緒に動かす
+        self.col_width = self
+            .col_width
+            .iter()
+            .map(|(c, w)| (if *c >= at { c + 1 } else { *c }, *w))
+            .collect();
     }
 
     pub fn remove_col(&mut self, at: u32) {
@@ -330,6 +339,12 @@ impl Sheet {
         self.shift(|p| p.col > at, 0, -1);
         self.fix_formulas(at, -1, false);
         self.shift_merges(at, -1, false);
+        self.col_width = self
+            .col_width
+            .iter()
+            .filter(|(c, _)| **c != at)
+            .map(|(c, w)| (if *c > at { c - 1 } else { *c }, *w))
+            .collect();
     }
 
     /// 出し入れに合わせて、**残ったセルの式の参照も直す**。
