@@ -101,6 +101,8 @@ struct Calc {
     view: Pos,
     /// 固定する行数・列数(見出しを置き去りにしないため)。カーソル位置で決める
     frozen: Option<Pos>,
+    /// 絞り込み(列, 値)。**見え方だけ** — 保存される中身は変わらない
+    filter: Option<(u32, String)>,
     /// グリッド線(表の薄い線)を出す
     gridlines: bool,
     /// 数式バーの中身。IMEもここに来る(セルの入力は1本のテキスト編集)
@@ -130,6 +132,7 @@ impl Calc {
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
+            filter: None,
             gridlines: true,
             input: Editor::new(""),
             path: None,
@@ -465,6 +468,18 @@ impl Calc {
         };
     }
 
+    /// 絞り込みに一致する行(見出し行 0 は常に入れる)。
+    fn matching_rows(&self, col: u32, v: &str) -> Vec<u32> {
+        let (rows, _) = self.sheet().extent();
+        let mut out = vec![0];
+        for r in 1..rows {
+            if self.sheet().get(Pos::new(r, col)).map(|c| c.value.display()).as_deref() == Some(v) {
+                out.push(r);
+            }
+        }
+        out
+    }
+
     fn run_cmd(&mut self, id: &str) {
         match id {
             "open" => {
@@ -504,6 +519,27 @@ impl Calc {
             "pdf" => self.save_pdf(),
             "show-gridlines" => self.gridlines = !self.gridlines,
             // ウィンドウ枠の固定。カーソルの上と左を留める。もう一度で解く
+            // 選んだセルの値で絞る。もう一度で解く。**中身は変えない**
+            "setfilter" => {
+                let p = self.cursor;
+                let v = self.sheet().get(p)
+                    .map(|c| c.value.display())
+                    .unwrap_or_default();
+                if v.is_empty() {
+                    self.status = "空のセルでは絞れません".into();
+                } else {
+                    let n = self.matching_rows(p.col, &v).len();
+                    self.status = format!(
+                        "{}列を「{v}」で絞り込み中({n}行が一致)。表示だけで中身は変わりません",
+                        Pos::new(0, p.col).a1().trim_end_matches('1')
+                    ).into();
+                    self.filter = Some((p.col, v));
+                }
+            }
+            "clear-filter" => {
+                self.filter = None;
+                self.status = "絞り込みを解きました".into();
+            }
             "freeze" => {
                 self.frozen = match self.frozen {
                     Some(_) => None,
@@ -774,7 +810,14 @@ impl Render for Calc {
         }
         grid = grid.child(head);
 
-        for r in grid_rows(self.frozen, self.view, ROWS) {
+        let visible: Vec<u32> = match &self.filter {
+            Some((col, v)) => {
+                let m = self.matching_rows(*col, v);
+                m.into_iter().take(ROWS as usize).collect()
+            }
+            None => grid_rows(self.frozen, self.view, ROWS),
+        };
+        for r in visible {
             let rh = self.row_px(r);
             let mut row = div().flex().flex_row()
                 .child(div().w(px(HEAD_W)).h(px(rh))
@@ -955,5 +998,34 @@ mod freeze_tests {
         let mut sorted = rows.clone();
         sorted.dedup();
         assert_eq!(rows.len(), sorted.len(), "行が二重に出た: {rows:?}");
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn 一致した行と見出しだけが残る() {
+        let mut b = Book::default();
+        b.sheets.push(sheet::Sheet { name: "表".into(), ..Default::default() });
+        let s = &mut b.sheets[0];
+        for (r, v) in [(0, "区分"), (1, "甲"), (2, "乙"), (3, "甲")] {
+            s.set(Pos::new(r, 0), Cell::input(v));
+        }
+        // Calc を組み立てずに、絞り込みの規則だけ確かめる
+        let matching = |col: u32, v: &str| -> Vec<u32> {
+            let (rows, _) = s.extent();
+            let mut out = vec![0];
+            for r in 1..rows {
+                if s.get(Pos::new(r, col)).map(|c| c.value.display()).as_deref() == Some(v) {
+                    out.push(r);
+                }
+            }
+            out
+        };
+        assert_eq!(matching(0, "甲"), vec![0, 1, 3], "見出し+一致行でない");
+        assert_eq!(matching(0, "乙"), vec![0, 2]);
+        assert_eq!(matching(0, "丙"), vec![0], "無い値は見出しだけ");
     }
 }

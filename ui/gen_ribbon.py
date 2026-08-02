@@ -58,6 +58,7 @@ READY = {
         "digit-inc": "digit-inc", "digit-dec": "digit-dec",
         "align-left": "align-left", "align-right": "align-right",
         "custom-sort": "custom-sort", "rem-duplicates": "rem-duplicates",
+        "setfilter": "setfilter", "clear-filter": "clear-filter",
         "fillparag": "fillparag", "fontcolor": "fontcolor", "merge": "merge",
         "math": "fn-math", "text": "fn-text", "logical": "fn-logical",
         "recent": "fn-recent",
@@ -156,7 +157,7 @@ FALLBACK = {
     "data-validation": "データの入力規則", "goal-seek": "ゴールシーク",
     "solver": "ソルバー", "group": "グループ化", "ungroup": "グループ解除",
     "show-details": "詳細の表示", "hide-details": "詳細の非表示",
-    "spell": "スペルチェック", "furigana": "ふりがな", "pagebreak": "区切り",
+    "spell": "スペルチェック", "furigana": "ふりがな", "pagebreak": "区切り", "setfilter": "フィルター", "clear-filter": "フィルターを解除",
     "open": "開く", "print": "印刷",
 }
 
@@ -250,6 +251,12 @@ def tabs_of(app, prefix):
         # Euro-Office の挿入タブでは空白ページの隣にある
         if tab == "ins" and app == "documenteditor" and "blankpage" in slots:
             slots.insert(slots.index("blankpage") + 1, "pagebreak")
+        # フィルターも class 注入(btn-slot.slot-btn-setfilter)
+        if tab == "home" and app == "spreadsheeteditor" and "custom-sort" not in slots:
+            slots.extend(["setfilter", "clear-filter"])
+        if tab == "data" and app == "spreadsheeteditor":
+            i = slots.index("custom-sort") + 1 if "custom-sort" in slots else len(slots)
+            slots[i:i] = ["setfilter", "clear-filter"]
         alias = {"ins": "insert", "links": "links"}
         name = names.get(alias.get(tab, tab), names.get(tab, tab))
         out.append((name, slots))

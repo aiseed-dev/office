@@ -184,6 +184,8 @@ pub const CALC: &[Tab] = &[
         x("styles", "styles"),
         x("置き換え", "replace"),
         c("selectall", "すべて選択", "select-all"),
+        c("setfilter", "フィルター", "setfilter"),
+        c("clear-filter", "フィルターを解除", "clear-filter"),
     ]},
     Tab { name: "挿入", cmds: &[
         x("表の挿入", "instable"),
@@ -243,6 +245,8 @@ pub const CALC: &[Tab] = &[
         x("テキストからデータ", "data-from-text"),
         x("外部リンク", "data-external-links"),
         c("custom-sort", "並べ替え", "custom-sort"),
+        c("setfilter", "フィルター", "setfilter"),
+        c("clear-filter", "フィルターを解除", "clear-filter"),
         x("区切り位置", "text-column"),
         c("rem-duplicates", "重複の削除", "rem-duplicates"),
         x("データの入力規則", "data-validation"),
