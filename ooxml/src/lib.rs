@@ -488,17 +488,55 @@ pub fn write_document_xml(doc: &Document) -> String {
 
 /// docx として書き出す(最小の OPC パッケージ)。
 pub fn write<W: Write + Seek>(doc: &Document, dst: W) -> Result<(), String> {
+    write_with(doc, None::<std::io::Cursor<Vec<u8>>>, dst)
+}
+
+/// 保存する。`original` に**開いた元のファイル**を渡すと、
+/// こちらが作り直す `word/document.xml` 以外の部品
+/// (画像の実体・スタイル・ヘッダー・フッター・設定)を**そのまま持ち越す**。
+///
+/// 渡さないと部品ごと消える — 「開いて保存したらロゴが消えた」は
+/// 書類の事故として重いので、アプリからは必ず元を渡すこと。
+pub fn write_with<R: Read + Seek, W: Write + Seek>(
+    doc: &Document,
+    original: Option<R>,
+    dst: W,
+) -> Result<(), String> {
     let mut zip = zip::ZipWriter::new(dst);
     let opts: zip::write::FileOptions<'_, ()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    let mut put = |name: &str, data: &str| -> Result<(), String> {
-        zip.start_file(name, opts).map_err(|e| e.to_string())?;
-        zip.write_all(data.as_bytes()).map_err(|e| e.to_string())
-    };
-    put("[Content_Types].xml", CONTENT_TYPES)?;
-    put("_rels/.rels", ROOT_RELS)?;
-    put("word/document.xml", &write_document_xml(doc))?;
+    let mut copied = false;
+    if let Some(src) = original {
+        if let Ok(mut z) = zip::ZipArchive::new(src) {
+            for i in 0..z.len() {
+                let mut f = match z.by_index(i) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                let name = f.name().to_string();
+                // 本文だけがこちらの管轄。他の部品は原本のまま
+                if name == "word/document.xml" {
+                    continue;
+                }
+                let mut buf = Vec::new();
+                if f.read_to_end(&mut buf).is_err() {
+                    continue;
+                }
+                zip.start_file(name, opts).map_err(|e| e.to_string())?;
+                zip.write_all(&buf).map_err(|e| e.to_string())?;
+                copied = true;
+            }
+        }
+    }
+    if !copied {
+        zip.start_file("[Content_Types].xml", opts).map_err(|e| e.to_string())?;
+        zip.write_all(CONTENT_TYPES.as_bytes()).map_err(|e| e.to_string())?;
+        zip.start_file("_rels/.rels", opts).map_err(|e| e.to_string())?;
+        zip.write_all(ROOT_RELS.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    zip.start_file("word/document.xml", opts).map_err(|e| e.to_string())?;
+    zip.write_all(write_document_xml(doc).as_bytes()).map_err(|e| e.to_string())?;
     zip.finish().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -899,5 +937,73 @@ mod gridcol_round {
         let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
         let bt = back.tables().next().unwrap();
         assert!((bt.col_mm[0] - 40.0).abs() < 0.2, "列幅が保存で変わった");
+    }
+}
+
+#[cfg(test)]
+mod preserve_tests {
+    use kumihan::Document;
+    use std::io::{Cursor, Read, Write};
+
+    /// スタイルと画像もどきの部品を持つ docx を作る
+    fn docx_with_parts() -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o: zip::write::FileOptions<'_, ()> = Default::default();
+        let mut put = |n: &str, d: &[u8]| {
+            zip.start_file(n, o).unwrap();
+            zip.write_all(d).unwrap();
+        };
+        put("[Content_Types].xml", br#"<Types xmlns="ct"><Default Extension="xml" ContentType="application/xml"/></Types>"#);
+        put("_rels/.rels", br#"<Relationships xmlns="r"/>"#);
+        put("word/document.xml",
+            br#"<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>Logo included</w:t></w:r></w:p></w:body></w:document>"#);
+        put("word/styles.xml", br#"<w:styles xmlns:w="x"/>"#);
+        put("word/media/logo.png", b"\x89PNG-fake-bytes");
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn 開いて保存しても部品が残る() {
+        // 「保存したらロゴが消えた」を防ぐ
+        let src = docx_with_parts();
+        let (doc, _) = crate::read(Cursor::new(&src)).unwrap();
+        let mut out = Vec::new();
+        crate::write_with(&doc, Some(Cursor::new(&src)), Cursor::new(&mut out)).unwrap();
+        let mut z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+        let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().into()).collect();
+        assert!(names.iter().any(|n| n == "word/media/logo.png"), "画像の実体が消えた: {names:?}");
+        assert!(names.iter().any(|n| n == "word/styles.xml"), "スタイルが消えた: {names:?}");
+        // 画像の中身も同じ
+        let mut buf = Vec::new();
+        z.by_name("word/media/logo.png").unwrap().read_to_end(&mut buf).unwrap();
+        assert_eq!(buf, b"\x89PNG-fake-bytes");
+        // 本文はこちらが書いたもの
+        let mut s = String::new();
+        z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
+        assert!(s.contains("Logo included"), "本文が消えた");
+    }
+
+    #[test]
+    fn 本文は二重に入らない() {
+        let src = docx_with_parts();
+        let (doc, _) = crate::read(Cursor::new(&src)).unwrap();
+        let mut out = Vec::new();
+        crate::write_with(&doc, Some(Cursor::new(&src)), Cursor::new(&mut out)).unwrap();
+        let z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+        let n = (0..z.len())
+            .filter(|i| {
+                let mut z2 = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+                z2.by_index(*i).map(|f| f.name() == "word/document.xml").unwrap_or(false)
+            })
+            .count();
+        assert_eq!(n, 1, "document.xml が {n} 個ある");
+    }
+
+    #[test]
+    fn 元が無ければ最小の形で書ける() {
+        let doc = Document::plain("新規", 10.5);
+        let mut out = Vec::new();
+        crate::write_with(&doc, None::<Cursor<Vec<u8>>>, Cursor::new(&mut out)).unwrap();
+        assert!(crate::read(Cursor::new(&out)).is_ok());
     }
 }

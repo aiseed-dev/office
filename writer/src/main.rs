@@ -297,13 +297,26 @@ impl Writer {
         };
         let Some(p) = p else { return };
         self.flush_target();
+        // 元のファイルの部品(画像・スタイル・ヘッダー等)を持ち越す。
+        // 上書き保存では読み終えてから書く(同じファイルを同時に開かない)
+        let original: Option<std::io::Cursor<Vec<u8>>> = self
+            .path
+            .as_ref()
+            .and_then(|old| std::fs::read(old).ok())
+            .map(std::io::Cursor::new);
         match std::fs::File::create(&p)
             .map_err(|e| e.to_string())
-            .and_then(|f| ooxml::write(&self.doc, std::io::BufWriter::new(f)))
+            .and_then(|f| ooxml::write_with(&self.doc, original, std::io::BufWriter::new(f)))
         {
             Ok(_) => {
+                let caveat = if self.notes.is_empty() {
+                    ""
+                } else {
+                    // 読めなかった要素は本文から消えている。黙って保存しない
+                    "(読めなかった要素は本文に戻りません)"
+                };
                 self.status = format!(
-                    "保存しました — {}",
+                    "保存しました — {}{caveat}",
                     p.file_name().unwrap_or_default().to_string_lossy()
                 )
                 .into();
