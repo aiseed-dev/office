@@ -203,38 +203,32 @@ impl Writer {
     /// 文字位置 → 紙の上の座標(キャレットを出すため)
     fn caret_xy(&self) -> (f32, f32) {
         let cur = self.ed.cursor();
-        let mut seen = 0usize;
-        // 表の行はカーソルの位置合わせに入れない(本文由来の行だけ)
+        // 行の頭のバイト位置(byte0)は組版が持っている。
+        // 行の文字数で数え直すと、折り返しで落ちた空白や空行でずれる。
+        // 折り返し・段落の境目では**後ろの行**に立てる(Enter の直後は次の行)
+        let mut hit: Option<(f32, f32)> = None;
         for line in self.page.lines.iter().filter(|l| l.from_body) {
-            let text = line.text();
-            let len = text.len();
-            // 行末の改行1つぶんを含めて数える(段落区切り)
-            if cur <= seen + len {
-                let within = cur - seen;
-                let x = line
-                    .cells
-                    .iter()
-                    .scan((0usize, 0.0f32), |(b, x), c| {
-                        let cur_x = *x;
-                        let cur_b = *b;
-                        *b += c.ch.len_utf8();
-                        *x += c.w_mm;
-                        Some((cur_b, cur_x))
-                    })
-                    .find(|(b, _)| *b >= within)
-                    .map(|(_, x)| x)
-                    .unwrap_or_else(|| line.width_mm());
-                return (MARGIN_MM + x, line.y_mm);
+            if cur < line.byte0 {
+                continue;
             }
-            seen += len + 1;
+            if cur > line.byte_end() + 1 {
+                continue;
+            }
+            let within = cur.saturating_sub(line.byte0);
+            let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
+            let x = line
+                .cells
+                .iter()
+                .find(|c| c.off - base >= within)
+                .map(|c| c.x_mm)
+                .or_else(|| line.cells.last().map(|c| c.x_mm + c.w_mm))
+                .unwrap_or(0.0);
+            hit = Some((MARGIN_MM + x, line.y_mm));
         }
-        let y = self
-            .page
-            .lines
-            .last()
-            .map(|l| l.y_mm)
-            .unwrap_or(Y0_MM);
-        (MARGIN_MM, y)
+        hit.unwrap_or((
+            MARGIN_MM,
+            self.page.lines.last().map(|l| l.y_mm).unwrap_or(Y0_MM),
+        ))
     }
 
     /// レビュー > 校正。**英語は辞書、日本語はモデル。**
@@ -345,7 +339,7 @@ impl Writer {
         }
         let Some((_, want)) = best else { return };
 
-        // 行の頭までのバイト数 + 行の中の位置
+        // 行が持つバイト位置から出す(文字数で数え直さない)
         let mut byte = 0usize;
         let mut nth = 0usize;
         for line in &self.page.lines {
@@ -353,18 +347,18 @@ impl Writer {
                 continue;
             }
             if nth == want {
+                byte = line.byte0;
+                let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
                 let mut x = line.cells.first().map(|c| c.x_mm).unwrap_or(0.0);
                 for c in &line.cells {
-                    // 字の真ん中より左なら、その字の前
                     if x_mm < x + c.w_mm / 2.0 {
                         break;
                     }
                     x += c.w_mm;
-                    byte += c.ch.len_utf8();
+                    byte = line.byte0 + (c.off + c.ch.len_utf8()) - base;
                 }
                 break;
             }
-            byte += line.text().len() + 1;
             nth += 1;
         }
         let byte = byte.min(self.ed.text().len());
@@ -686,14 +680,9 @@ impl Render for Writer {
                 .bg(rgb(0x444B52)));
         }
 
-        // 未確定(変換中)の下線を出すため、行ごとのバイト範囲を数えながら描く
-        let mut seen = 0usize;
+        // 未確定(変換中)の下線は、行が持つバイト位置(byte0)で結ぶ
         for line in &self.page.lines {
             if line.cells.is_empty() {
-                // 空行。描くものは無いが、バイト勘定には入っている
-                if line.from_body {
-                    seen += 1;
-                }
                 continue;
             }
             let text = line.text();
@@ -706,14 +695,16 @@ impl Render for Writer {
                 if !line.from_body {
                     // 表の行は本文の並びに入っていない
                 } else {
-                let (ls, le) = (seen, seen + text.len());
+                let (ls, le) = (line.byte0, line.byte_end());
                 if m.start < le && m.end > ls {
                     let a = m.start.max(ls) - ls;
                     let b = m.end.min(le) - ls;
+                    let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
                     let w = |upto: usize| -> f32 {
-                        line.cells.iter().scan(0usize, |acc, c| {
-                            let cur = *acc; *acc += c.ch.len_utf8(); Some((cur, c.w_mm))
-                        }).take_while(|(bpos, _)| *bpos < upto).map(|(_, w)| w).sum()
+                        line.cells.iter()
+                            .take_while(|c| c.off - base < upto)
+                            .map(|c| c.w_mm)
+                            .sum()
                     };
                     paper = paper.child(div().absolute()
                         .left(px((x0 + w(a)) * pxmm))
@@ -755,9 +746,7 @@ impl Render for Writer {
                         .bg(rgb(0x1B1B1B)));
                 }
             }
-            if line.from_body {
-                seen += line.text().len() + 1;
-            }
+
         }
         // キャレット
         paper = paper.child(div().absolute()

@@ -376,6 +376,9 @@ pub struct Cell {
     pub x_mm: f32,
     pub w_mm: f32,
     pub size_pt: f32,
+    /// 段落の頭からのバイト位置。**カーソルはこの値で本文と結ぶ**
+    /// (行の文字数で数えると、折り返しや落とした空白でずれる)
+    pub off: usize,
     /// この字の書式。**画面も紙も同じものを見る**ので、
     /// 太字や色が片方だけ出ることが起きない
     pub fmt: CharFormat,
@@ -388,6 +391,23 @@ pub struct Line {
     /// 本文由来か。**表のセルの行は false** —
     /// カーソルや変換下線の位置合わせは本文の行だけを数える
     pub from_body: bool,
+    /// この行の頭が、本文(段落を \n で繋いだもの)の何バイト目か。
+    /// 表の行では意味を持たない
+    pub byte0: usize,
+}
+
+impl Line {
+    /// この行が本文の何バイト目までを含むか(行末の改行は含まない)。
+    ///
+    /// 行の中の字は連続しているとは限らない(折り返しで空白が落ちる)ので、
+    /// 最後の字の段落内位置から出す。
+    pub fn byte_end(&self) -> usize {
+        let base = self.cells.iter().map(|c| c.off).min().unwrap_or(0);
+        self.cells
+            .last()
+            .map(|c| self.byte0 + (c.off + c.ch.len_utf8()) - base)
+            .unwrap_or(self.byte0)
+    }
 }
 
 impl Line {
@@ -462,9 +482,9 @@ fn is_gyomatsu_kinsoku(c: char) -> bool {
 /// 改行の単位。CJKは1字ずつ、欧文は語ごと(語中では折らない)。
 #[derive(Debug)]
 enum Tok {
-    One(char, f32, f32, CharFormat),         // (字, 幅mm, サイズpt, 書式)
-    Word(Vec<(char, f32)>, f32, CharFormat), // (字と幅の列, サイズpt, 書式)
-    Space(f32, f32, CharFormat),
+    One(char, f32, f32, CharFormat, usize),         // (字, 幅mm, サイズpt, 書式, バイト位置)
+    Word(Vec<(char, f32, usize)>, f32, CharFormat), // (字と幅と位置の列, サイズpt, 書式)
+    Space(f32, f32, CharFormat, usize),
 }
 
 fn is_word_char(c: char) -> bool {
@@ -473,21 +493,25 @@ fn is_word_char(c: char) -> bool {
 
 fn tokenize(p: &Paragraph, m: &Metrics) -> Vec<Tok> {
     let mut out = Vec::new();
+    // 段落の頭からのバイト位置。run をまたいで通しで数える
+    let mut off = 0usize;
     for run in &p.runs {
-        let mut word: Vec<(char, f32)> = Vec::new();
+        let mut word: Vec<(char, f32, usize)> = Vec::new();
         for ch in run.text.chars() {
             if is_word_char(ch) {
-                word.push((ch, m.advance_mm(ch, run.size_pt)));
+                word.push((ch, m.advance_mm(ch, run.size_pt), off));
+                off += ch.len_utf8();
                 continue;
             }
             if !word.is_empty() {
                 out.push(Tok::Word(std::mem::take(&mut word), run.size_pt, run.fmt.clone()));
             }
             if ch == ' ' || ch == '\u{3000}' {
-                out.push(Tok::Space(m.advance_mm(ch, run.size_pt), run.size_pt, run.fmt.clone()));
+                out.push(Tok::Space(m.advance_mm(ch, run.size_pt), run.size_pt, run.fmt.clone(), off));
             } else {
-                out.push(Tok::One(ch, m.advance_mm(ch, run.size_pt), run.size_pt, run.fmt.clone()));
+                out.push(Tok::One(ch, m.advance_mm(ch, run.size_pt), run.size_pt, run.fmt.clone(), off));
             }
+            off += ch.len_utf8();
         }
         if !word.is_empty() {
             out.push(Tok::Word(word, run.size_pt, run.fmt.clone()));
@@ -548,20 +572,21 @@ fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>)
         let fmt = para.runs.first().map(|r| r.fmt.clone()).unwrap_or_default();
         for ch in mk.chars() {
             let w = m.advance_mm(ch, size);
-            cur.push(Cell { ch, x_mm: 0.0, w_mm: w, size_pt: size, fmt: fmt.clone() });
+            // 印は本文の一部ではないので off は段落頭(0)のまま
+            cur.push(Cell { ch, x_mm: 0.0, w_mm: w, size_pt: size, fmt: fmt.clone(), off: 0 });
             w_cur += w;
         }
     }
     for tok in tokenize(para, m) {
         let (cells, w): (Vec<Cell>, f32) = match &tok {
-            Tok::One(ch, w, s, f) =>
-                (vec![Cell { ch: *ch, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() }], *w),
+            Tok::One(ch, w, s, f, o) =>
+                (vec![Cell { ch: *ch, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone(), off: *o }], *w),
             Tok::Word(cs, s, f) => (
-                cs.iter().map(|(c, w)| Cell { ch: *c, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() })
+                cs.iter().map(|(c, w, o)| Cell { ch: *c, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone(), off: *o })
                     .collect(),
-                cs.iter().map(|(_, w)| *w).sum()),
-            Tok::Space(w, s, f) =>
-                (vec![Cell { ch: ' ', x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() }], *w),
+                cs.iter().map(|(_, w, _)| *w).sum()),
+            Tok::Space(w, s, f, o) =>
+                (vec![Cell { ch: ' ', x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone(), off: *o }], *w),
         };
 
         if w_cur + w > measure && !cur.is_empty() {
@@ -596,6 +621,8 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
 
     // 段落番号は「何番目の箇条書きか」で決まる。段落の位置ではない
     let mut nth = 0usize;
+    // 本文(段落を \n で繋いだもの)における、いまの段落の頭のバイト位置
+    let mut para_byte0 = 0usize;
     for block in &doc.blocks {
         match block {
             Block::Para(para) => {
@@ -616,7 +643,8 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                     if cells.is_empty() {
                         // 空の段落も**行として持つ**。持たないと、後ろの行の
                         // バイト勘定が1つずつずれて、カーソルが本文とずれる
-                        sheet.lines.push(Line { cells: Vec::new(), y_mm: y, from_body: true });
+                        sheet.lines.push(Line {
+                            cells: Vec::new(), y_mm: y, from_body: true, byte0: para_byte0 });
                         y += frame.line_height_mm * para.spacing();
                         continue;
                     }
@@ -632,9 +660,17 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                         .into_iter()
                         .map(|mut c| { c.x_mm = x; x += c.w_mm; c })
                         .collect();
-                    sheet.lines.push(Line { cells, y_mm: y, from_body: true });
+                    // 行頭の字の段落内位置から、本文の絶対位置を出す。
+                    // 箇条書きの印は off=0 で入っているので、最小値を取れば
+                    // 1行目(印+本文頭)も続きの行も正しく出る
+                    let byte0 = para_byte0
+                        + cells.iter().map(|c| c.off).min().unwrap_or(0);
+                    sheet.lines.push(Line { cells, y_mm: y, from_body: true, byte0 });
                     y += frame.line_height_mm * para.spacing();
                 }
+                // 次の段落の頭 = この段落のバイト数 + 改行1つ
+                let plen: usize = para.runs.iter().map(|r| r.text.len()).sum();
+                para_byte0 += plen + 1;
             }
             Block::Table(table) => {
                 y = layout_table(table, m, frame, y, &mut sheet);
@@ -706,7 +742,7 @@ fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mu
                     .into_iter()
                     .map(|mut c| { c.x_mm = x; x += c.w_mm; c })
                     .collect();
-                sheet.lines.push(Line { cells, y_mm: yy, from_body: false });
+                sheet.lines.push(Line { cells, y_mm: yy, from_body: false, byte0: 0 });
                 yy += lh;
             }
         }
@@ -1210,5 +1246,69 @@ mod empty_line_tests {
         assert!(body[1].cells.is_empty());
         // 3行目は2行ぶん下にある
         assert!((body[2].y_mm - body[0].y_mm - 12.0).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod byte0_tests {
+    use super::*;
+
+    fn lines(text: &str, measure: f32) -> Vec<Line> {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let d = Document::plain(text, 10.5);
+        layout(&d, &m, &Frame { measure_mm: measure, line_height_mm: 6.0, y0_mm: 20.0 })
+            .lines
+    }
+
+    #[test]
+    fn 折り返しても行のバイト位置が本文と合う() {
+        // 「行の文字数 + 1」で数えると、折り返した行の数だけずれていた
+        let text = "あ".repeat(40); // 100mm に入らないので折り返す
+        let ls = lines(&text, 100.0);
+        assert!(ls.len() >= 2, "折り返していない");
+        for l in &ls {
+            // byte0 の位置の字が、その行の先頭の字と一致する
+            let head = text[l.byte0..].chars().next().unwrap();
+            assert_eq!(head, l.cells[0].ch, "byte0 がずれている");
+        }
+        // 連結すると本文に戻る(空白落ちのない文)
+        let total: usize = ls.iter().map(|l| l.byte_end() - l.byte0).sum();
+        assert_eq!(total, text.len());
+    }
+
+    #[test]
+    fn 空白が落ちてもずれない() {
+        // 行末で捨てた空白のぶん、次の行の byte0 が進んでいること
+        let text = format!("{} {}", "a".repeat(40), "b".repeat(40));
+        let ls = lines(&text, 60.0);
+        assert!(ls.len() >= 2);
+        let l2 = &ls[1];
+        let head = text[l2.byte0..].chars().next().unwrap();
+        assert_eq!(head, l2.cells[0].ch, "落ちた空白の勘定が入っていない");
+    }
+
+    #[test]
+    fn 段落をまたいでも合う() {
+        let text = "一つ目\n二つ目の段落\n三";
+        let ls = lines(text, 100.0);
+        for l in &ls {
+            if l.cells.is_empty() { continue }
+            let head = text[l.byte0..].chars().next().unwrap();
+            assert_eq!(head, l.cells[0].ch);
+        }
+    }
+
+    #[test]
+    fn 箇条書きの印はバイト位置に入らない() {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("項目", 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] { p.list = ListKind::Bullet }
+        let s = layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        let l = &s.lines[0];
+        assert_eq!(l.byte0, 0);
+        // 印(・)ぶんが byte_end に乗っていない
+        assert_eq!(l.byte_end(), "項目".len(), "印が本文のバイトに混ざった");
     }
 }
