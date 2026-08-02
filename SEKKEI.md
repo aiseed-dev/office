@@ -278,8 +278,13 @@ d.save("記入済.docx")
 - **E 済 編集の結線 — これが存在理由**(2026-08-02)。`ui` crate に入力の道を1本化し、
   writer と calc の両方が同じ挙動になる。GPUI の `EntityInputHandler` に委譲:
   - **IME が通る**。未確定(marked)は下線つきで本文に見え、確定して初めて undo の1手
-  - キー割り当て: 矢印/Shift+矢印/BackSpace/Delete/Ctrl+A/Enter/Ctrl+Z/Ctrl+S/Ctrl+O
-    (calc は上下/Tab でセル移動、移動の前に必ず確定する)
+  - キー割り当て: 矢印/Shift+矢印/BackSpace/Delete/Ctrl+A/Enter/Ctrl+Z/Ctrl+S/Ctrl+O/
+    **Ctrl+C・X・V**(calc は上下/Tab でセル移動、移動の前に必ず確定する)
+  - コピー&ペースト(2026-08-03): writer は本文の文字。calc は範囲を **TSV** で
+    系のクリップボードへ(他のアプリと相互に貼れる)。アプリ内の貼り付けは
+    式の相対参照を貼り付け先へずらし、外から来た TSV はずらさない。
+    **貼り付けても書式は据え置き**(帳票の枠を壊さない — 範囲 Delete と同じ規則)。
+    切り取りは移動なので参照をずらさない
   - **踏んだ点**: 入力ハンドラは `paint` のときに `window.handle_input` で差す。
     描画ツリーに何も描かない `InputSink` 要素を置く。これが無いと IME もキーも届かない
   - **本文を編集しても表は消えない**(`Document::set_body_text` が表を残す)。テストで固定

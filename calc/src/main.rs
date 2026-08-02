@@ -88,6 +88,62 @@ const HEAD_W: f32 = 46.0;
 const ROWS: u32 = 30;
 const COLS: u32 = 9;
 
+/// 選んだ範囲を TSV(タブ区切り・行は改行)にする。
+/// 式は `=` のまま持つ — 表計算どうしの受け渡しの通り相場。
+fn range_tsv(s: &sheet::Sheet, a: Pos, b: Pos) -> String {
+    (a.row..=b.row)
+        .map(|r| {
+            (a.col..=b.col)
+                .map(|c| s.get(Pos::new(r, c)).map(|x| x.editable()).unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\t")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// TSV を格子に戻す。他のアプリから来るもの(\r\n・末尾の改行)も受ける。
+fn tsv_grid(text: &str) -> Vec<Vec<String>> {
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    text.split('\n')
+        .map(|line| {
+            line.trim_end_matches('\r')
+                .split('\t')
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// 格子を `at` から流し込む。返すのは置いたセルの数。
+///
+/// **書式は据え置く**(帳票の枠を壊さない — 範囲の Delete と同じ規則)。
+/// `shift` があれば式の相対参照をずらす(このアプリの中でのコピー。
+/// 外から来た TSV はずらさない — どこから切り取られたか知りようがない)。
+fn paste_grid(
+    s: &mut sheet::Sheet,
+    at: Pos,
+    grid: &[Vec<String>],
+    shift: Option<(i64, i64)>,
+) -> usize {
+    let mut n = 0usize;
+    for (dr, row) in grid.iter().enumerate() {
+        for (dc, text) in row.iter().enumerate() {
+            let p = Pos::new(at.row + dr as u32, at.col + dc as u32);
+            let fmt = s.get(p).map(|c| c.fmt.clone()).unwrap_or_default();
+            let text = match (shift, text.starts_with('=')) {
+                (Some((r, c)), true) => sheet::model::offset_refs(text, r, c),
+                _ => text.clone(),
+            };
+            let mut cell = Cell::input(&text);
+            cell.fmt = fmt;
+            s.set(p, cell);
+            n += 1;
+        }
+    }
+    n
+}
+
 struct Calc {
     focus: FocusHandle,
     book: Book,
@@ -107,6 +163,9 @@ struct Calc {
     /// 入力欄の undo とは別 — **戻せない操作は事故のとき逃げ道が無い**
     undo_stack: Vec<sheet::Sheet>,
     redo_stack: Vec<sheet::Sheet>,
+    /// コピーの控え(起点, そのとき書いた TSV)。貼り付け時に系のクリップボードと
+    /// 突き合わせ、一致すればアプリ内コピーとして式の参照をずらす
+    clip: Option<(Pos, String)>,
     /// グリッド線(表の薄い線)を出す
     gridlines: bool,
     /// 数式バーの中身。IMEもここに来る(セルの入力は1本のテキスト編集)
@@ -139,6 +198,7 @@ impl Calc {
             filter: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            clip: None,
             gridlines: true,
             input: Editor::new(""),
             path: None,
@@ -346,34 +406,125 @@ impl Calc {
     fn a_backspace(&mut self, _: &ui::Backspace, _: &mut Window, cx: &mut Context<Self>) {
         self.input.backspace(); self.dirty = true; cx.notify();
     }
-    fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(_) = self.anchor {
-            // 範囲を選んでいるときの Delete は、その中身を消す(戻せる)
-            self.checkpoint();
-            let (a, b) = self.sel_rect();
-            let mut n = 0usize;
-            for r in a.row..=b.row {
-                for c in a.col..=b.col {
-                    let p = Pos::new(r, c);
-                    if let Some(cell) = self.sheet().get(p).cloned() {
-                        // 書式は残して中身だけ消す(帳票の枠を壊さない)
-                        self.book.sheets[self.active].set(p, Cell {
-                            formula: None,
-                            value: Value::Empty,
-                            fmt: cell.fmt,
-                        });
-                        n += 1;
-                    }
+    /// 選んだ範囲の中身を消す(**書式は残す** — 帳票の枠を壊さない)。
+    /// 控えを取ってから呼ぶこと。返すのは消したセルの数。
+    fn clear_range(&mut self) -> usize {
+        let (a, b) = self.sel_rect();
+        let mut n = 0usize;
+        for r in a.row..=b.row {
+            for c in a.col..=b.col {
+                let p = Pos::new(r, c);
+                if let Some(cell) = self.sheet().get(p).cloned() {
+                    self.book.sheets[self.active].set(p, Cell {
+                        formula: None,
+                        value: Value::Empty,
+                        fmt: cell.fmt,
+                    });
+                    n += 1;
                 }
             }
-            recalc(&mut self.book.sheets[self.active]);
-            self.dirty = true;
-            self.sync_input();
+        }
+        recalc(&mut self.book.sheets[self.active]);
+        self.dirty = true;
+        self.sync_input();
+        n
+    }
+
+    fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
+        if self.anchor.is_some() {
+            // 範囲を選んでいるときの Delete は、その中身を消す(戻せる)
+            self.checkpoint();
+            let n = self.clear_range();
             self.status = format!("{n} セルの中身を消しました(書式は残る)").into();
         } else {
             self.input.delete();
             self.dirty = true;
         }
+        cx.notify();
+    }
+
+    /// コピー。選んだ範囲(無ければいまのセル)を TSV で系のクリップボードへ。
+    /// 他のアプリにはそのまま貼れる形で、アプリ内には起点を控えて式をずらせる形で。
+    fn a_copy(&mut self, _: &ui::Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.input.has_selection() {
+            // 数式バーの文字を選んでいるなら、その文字のコピー
+            let sel = self.input.selection();
+            if let Some(s) = self.input.text().get(sel) {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(s.to_string()));
+                self.status = "コピーしました".into();
+            }
+            cx.notify();
+            return;
+        }
+        let (a, b) = self.sel_rect();
+        let tsv = range_tsv(self.sheet(), a, b);
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(tsv.clone()));
+        self.clip = Some((a, tsv));
+        self.status = format!("{}:{} をコピーしました", a.a1(), b.a1()).into();
+        cx.notify();
+    }
+
+    /// 切り取り = コピー + 中身を消す(書式は残る。1手で戻せる)。
+    fn a_cut(&mut self, _: &ui::Cut, _: &mut Window, cx: &mut Context<Self>) {
+        if self.input.has_selection() {
+            let sel = self.input.selection();
+            if let Some(s) = self.input.text().get(sel) {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(s.to_string()));
+                self.input.insert("");
+                self.dirty = true;
+                self.status = "切り取りました".into();
+            }
+            cx.notify();
+            return;
+        }
+        let (a, b) = self.sel_rect();
+        let tsv = range_tsv(self.sheet(), a, b);
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(tsv.clone()));
+        // 切り取りの貼り付け先で式をずらさない(移動なので参照はそのまま)
+        self.clip = None;
+        self.checkpoint();
+        let n = self.clear_range();
+        self.status = format!("{n} セルを切り取りました").into();
+        cx.notify();
+    }
+
+    /// 貼り付け。編集中なら文字として、そうでなければセルの格子として。
+    fn a_paste(&mut self, _: &ui::Paste, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
+            self.status = "貼り付けるものがありません".into();
+            cx.notify();
+            return;
+        };
+        if text.is_empty() {
+            cx.notify();
+            return;
+        }
+        // 「編集中」= 数式バーがセルの保存内容から変わっている。
+        // (バーにはセルの中身が常に写っているので、空かどうかでは見分けられない)
+        let saved = self.sheet().get(self.cursor).map(|c| c.editable()).unwrap_or_default();
+        if self.input.text() != saved {
+            // 編集中は文字の貼り付け(打ちかけの式に範囲を継ぎ足す使い方)
+            self.input.insert(&text);
+            self.dirty = true;
+            cx.notify();
+            return;
+        }
+        // アプリ内のコピーなら、式の相対参照を貼り付け先へずらす
+        let shift = match &self.clip {
+            Some((org, tsv)) if *tsv == text => Some((
+                self.cursor.row as i64 - org.row as i64,
+                self.cursor.col as i64 - org.col as i64,
+            )),
+            _ => None,
+        };
+        let grid = tsv_grid(&text);
+        self.checkpoint();
+        let at = self.cursor;
+        let n = paste_grid(&mut self.book.sheets[self.active], at, &grid, shift);
+        recalc(&mut self.book.sheets[self.active]);
+        self.dirty = true;
+        self.sync_input();
+        self.status = format!("{n} セルを貼り付けました(書式は据え置き)").into();
         cx.notify();
     }
     fn a_left(&mut self, _: &ui::Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -1121,6 +1272,9 @@ impl Render for Calc {
             .track_focus(&self.focus)
             .on_action(cx.listener(Calc::a_backspace))
             .on_action(cx.listener(Calc::a_delete))
+            .on_action(cx.listener(Calc::a_copy))
+            .on_action(cx.listener(Calc::a_cut))
+            .on_action(cx.listener(Calc::a_paste))
             .on_action(cx.listener(Calc::a_left))
             .on_action(cx.listener(Calc::a_right))
             .on_action(cx.listener(Calc::a_up))
@@ -1225,6 +1379,83 @@ mod filter_tests {
         assert_eq!(matching(0, "甲"), vec![0, 1, 3], "見出し+一致行でない");
         assert_eq!(matching(0, "乙"), vec![0, 2]);
         assert_eq!(matching(0, "丙"), vec![0], "無い値は見出しだけ");
+    }
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::*;
+
+    fn table() -> sheet::Sheet {
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::new(0, 0), Cell::input("品名"));
+        s.set(Pos::new(0, 1), Cell::input("金額"));
+        s.set(Pos::new(1, 0), Cell::input("甲"));
+        s.set(Pos::new(1, 1), Cell::input("=A2&\"円\""));
+        s
+    }
+
+    #[test]
+    fn コピーはtsvで式が残る() {
+        let s = table();
+        let tsv = range_tsv(&s, Pos::new(0, 0), Pos::new(1, 1));
+        assert_eq!(tsv, "品名\t金額\n甲\t=A2&\"円\"", "TSV の形が違う: {tsv:?}");
+    }
+
+    #[test]
+    fn 空セルは空欄として出る() {
+        let s = table();
+        let tsv = range_tsv(&s, Pos::new(0, 0), Pos::new(2, 1));
+        assert!(tsv.ends_with("\n\t"), "空行の形が違う: {tsv:?}");
+    }
+
+    #[test]
+    fn アプリ内の貼り付けは式がずれる() {
+        let mut s = table();
+        // B2 の式(=A2&"円")を B4 へ: 2行下 → =A4&"円"
+        let grid = vec![vec!["=A2&\"円\"".to_string()]];
+        paste_grid(&mut s, Pos::new(3, 1), &grid, Some((2, 0)));
+        assert_eq!(
+            s.get(Pos::new(3, 1)).and_then(|c| c.formula.clone()).as_deref(),
+            Some("A4&\"円\""),
+            "式の参照がずれていない"
+        );
+    }
+
+    #[test]
+    fn 外から来たtsvは式をずらさない() {
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        let grid = tsv_grid("甲\t100\r\n乙\t=A1*2\n");
+        let n = paste_grid(&mut s, Pos::new(0, 0), &grid, None);
+        assert_eq!(n, 4);
+        assert_eq!(s.value(Pos::new(0, 1)), Value::Number(100.0));
+        assert_eq!(
+            s.get(Pos::new(1, 1)).and_then(|c| c.formula.clone()).as_deref(),
+            Some("A1*2"),
+            "外来の式を勝手にずらした"
+        );
+    }
+
+    #[test]
+    fn 貼り付けても書式は据え置き() {
+        // 帳票の枠(罫線)の上に値を貼っても枠が残る
+        let mut s = sheet::Sheet { name: "枠".into(), ..Default::default() };
+        s.set(Pos::new(0, 0), Cell {
+            formula: None,
+            value: Value::Empty,
+            fmt: CellFormat { borders: Borders::ALL, ..Default::default() },
+        });
+        paste_grid(&mut s, Pos::new(0, 0), &[vec!["100".to_string()]], None);
+        let c = s.get(Pos::new(0, 0)).unwrap();
+        assert_eq!(c.value, Value::Number(100.0));
+        assert_eq!(c.fmt.borders, Borders::ALL, "貼り付けで罫線が消えた");
+    }
+
+    #[test]
+    fn 改行コードと末尾改行を受け流す() {
+        assert_eq!(tsv_grid("a\tb\r\nc\td\r\n"),
+                   vec![vec!["a".to_string(), "b".into()], vec!["c".into(), "d".into()]]);
+        assert_eq!(tsv_grid("1"), vec![vec!["1".to_string()]]);
     }
 }
 

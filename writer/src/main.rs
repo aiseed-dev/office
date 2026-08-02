@@ -975,6 +975,39 @@ impl Writer {
         }
         cx.notify();
     }
+    fn copy(&mut self, _: &ui::Copy, _: &mut Window, cx: &mut Context<Self>) {
+        let sel = self.ed.selection();
+        if sel.is_empty() {
+            self.status = "コピーする選択がありません".into();
+        } else if let Some(s) = self.ed.text().get(sel) {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(s.to_string()));
+            self.status = "コピーしました".into();
+        }
+        cx.notify();
+    }
+    fn cut(&mut self, _: &ui::Cut, _: &mut Window, cx: &mut Context<Self>) {
+        let sel = self.ed.selection();
+        if sel.is_empty() {
+            self.status = "切り取る選択がありません".into();
+        } else if let Some(s) = self.ed.text().get(sel) {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(s.to_string()));
+            // 選択を空文字で置き換える = undo の1手で戻る
+            self.ed.insert("");
+            self.on_edited();
+            self.status = "切り取りました".into();
+        }
+        cx.notify();
+    }
+    fn paste(&mut self, _: &ui::Paste, _: &mut Window, cx: &mut Context<Self>) {
+        match cx.read_from_clipboard().and_then(|i| i.text()) {
+            Some(text) if !text.is_empty() => {
+                // 通常の入力と同じ道(IME の未確定があれば確定してから)
+                handler::replace(self, None, &text);
+            }
+            _ => self.status = "貼り付けるものがありません".into(),
+        }
+        cx.notify();
+    }
     fn undo(&mut self, _: &ui::Undo, _: &mut Window, cx: &mut Context<Self>) {
         if self.ed.undo() {
             self.on_edited();
@@ -1552,6 +1585,9 @@ impl Render for Writer {
             .on_action(cx.listener(Writer::home))
             .on_action(cx.listener(Writer::end))
             .on_action(cx.listener(Writer::enter))
+            .on_action(cx.listener(Writer::copy))
+            .on_action(cx.listener(Writer::cut))
+            .on_action(cx.listener(Writer::paste))
             .on_action(cx.listener(Writer::undo))
             .on_action(cx.listener(Writer::redo))
             .on_action(cx.listener(Writer::do_save))
