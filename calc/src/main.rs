@@ -586,11 +586,8 @@ impl Calc {
             cx.notify();
             return;
         }
-        // 「編集中」= 数式バーがセルの保存内容から変わっている。
-        // (バーにはセルの中身が常に写っているので、空かどうかでは見分けられない)
-        let saved = self.sheet().get(self.cursor).map(|c| c.editable()).unwrap_or_default();
-        if self.input.text() != saved {
-            // 編集中は文字の貼り付け(打ちかけの式に範囲を継ぎ足す使い方)
+        if self.editing() {
+            // 打ちかけの間は文字の貼り付け(書きかけの式に継ぎ足す使い方)
             self.input.insert(&text);
             self.dirty = true;
             cx.notify();
@@ -614,15 +611,24 @@ impl Calc {
         self.status = format!("{n} セルを貼り付けました(書式は据え置き)").into();
         cx.notify();
     }
+    /// 数式バーを打ちかけか(バーの中身がセルの保存内容から変わっているか)。
+    /// バーには選んだセルの中身が常に写っているので、**空かどうかでは分からない**
+    /// — 中身のあるセルで矢印が「見えない文字カーソル」に化け、
+    /// セルから出られなくなる(踏んで直した)。
+    fn editing(&self) -> bool {
+        let saved = self.sheet().get(self.cursor).map(|c| c.editable()).unwrap_or_default();
+        self.input.text() != saved
+    }
+
     fn a_left(&mut self, _: &ui::Left, _: &mut Window, cx: &mut Context<Self>) {
-        // 編集中の文字があればテキスト内を、無ければセルを移動する
-        if self.input.text().is_empty() { self.move_cursor(0, -1) }
-        else { self.input.move_char(false, false) }
+        // 打ちかけなら文字の中を、そうでなければセルを移動する
+        if self.editing() { self.input.move_char(false, false) }
+        else { self.move_cursor(0, -1) }
         cx.notify();
     }
     fn a_right(&mut self, _: &ui::Right, _: &mut Window, cx: &mut Context<Self>) {
-        if self.input.text().is_empty() { self.move_cursor(0, 1) }
-        else { self.input.move_char(true, false) }
+        if self.editing() { self.input.move_char(true, false) }
+        else { self.move_cursor(0, 1) }
         cx.notify();
     }
     fn a_up(&mut self, _: &ui::Up, _: &mut Window, cx: &mut Context<Self>) {
@@ -638,13 +644,13 @@ impl Calc {
         self.move_cursor(1, 0); cx.notify();
     }
     fn a_select_left(&mut self, _: &ui::SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        if self.input.text().is_empty() { self.extend(0, -1) }
-        else { self.input.move_char(false, true) }
+        if self.editing() { self.input.move_char(false, true) }
+        else { self.extend(0, -1) }
         cx.notify();
     }
     fn a_select_right(&mut self, _: &ui::SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        if self.input.text().is_empty() { self.extend(0, 1) }
-        else { self.input.move_char(true, true) }
+        if self.editing() { self.input.move_char(true, true) }
+        else { self.extend(0, 1) }
         cx.notify();
     }
     fn a_select_up(&mut self, _: &ui::SelectUp, _: &mut Window, cx: &mut Context<Self>) {
