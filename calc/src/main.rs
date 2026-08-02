@@ -88,6 +88,18 @@ const HEAD_W: f32 = 46.0;
 const ROWS: u32 = 30;
 const COLS: u32 = 9;
 
+/// 使われていないシート名(Sheet2, Sheet3, …)。
+fn unique_sheet_name(book: &Book) -> String {
+    let mut n = book.sheets.len() + 1;
+    loop {
+        let name = format!("Sheet{n}");
+        if !book.sheets.iter().any(|s| s.name == name) {
+            return name;
+        }
+        n += 1;
+    }
+}
+
 /// 選んだ範囲を TSV(タブ区切り・行は改行)にする。
 /// 式は `=` のまま持つ — 表計算どうしの受け渡しの通り相場。
 fn range_tsv(s: &sheet::Sheet, a: Pos, b: Pos) -> String {
@@ -160,9 +172,13 @@ struct Calc {
     /// 絞り込み(列, 値)。**見え方だけ** — 保存される中身は変わらない
     filter: Option<(u32, String)>,
     /// 表の操作(書式・フィル・行列・結合・並べ替え)を戻すための控え。
-    /// 入力欄の undo とは別 — **戻せない操作は事故のとき逃げ道が無い**
-    undo_stack: Vec<sheet::Sheet>,
-    redo_stack: Vec<sheet::Sheet>,
+    /// 入力欄の undo とは別 — **戻せない操作は事故のとき逃げ道が無い**。
+    /// **どのシートの控えかを一緒に持つ** — シートを切り替えた後の undo が
+    /// 別のシートへ他所の中身を書き戻す事故を防ぐ
+    undo_stack: Vec<(usize, sheet::Sheet)>,
+    redo_stack: Vec<(usize, sheet::Sheet)>,
+    /// シートごとのカーソル・窓・固定(切り替えても場所を失わない)
+    sheet_ui: Vec<(Pos, Pos, Option<Pos>)>,
     /// コピーの控え(起点, そのとき書いた TSV)。貼り付け時に系のクリップボードと
     /// 突き合わせ、一致すればアプリ内コピーとして式の参照をずらす
     clip: Option<(Pos, String)>,
@@ -198,6 +214,7 @@ impl Calc {
             filter: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            sheet_ui: Vec::new(),
             clip: None,
             gridlines: true,
             input: Editor::new(""),
@@ -252,37 +269,94 @@ impl Calc {
     /// 数式バーの内容をセルに入れて再計算する。
     /// いまの表を控える(次の操作を戻せるように)。やり直しの控えは捨てる。
     fn checkpoint(&mut self) {
-        self.undo_stack.push(self.book.sheets[self.active].clone());
+        self.undo_stack.push((self.active, self.book.sheets[self.active].clone()));
         if self.undo_stack.len() > 100 {
             self.undo_stack.remove(0);
         }
         self.redo_stack.clear();
     }
 
+    /// 控えたシートを見せる(別のシートの操作を戻したなら、そこへ移る —
+    /// 見えない場所で表が変わるのは事故のもと)。
+    fn show_sheet(&mut self, idx: usize) {
+        if idx != self.active && idx < self.book.sheets.len() {
+            self.remember_ui();
+            self.active = idx;
+            self.restore_ui();
+            self.anchor = None;
+            self.filter = None;
+        }
+    }
+
     fn undo_sheet(&mut self) {
-        let Some(prev) = self.undo_stack.pop() else {
+        let Some((idx, prev)) = self.undo_stack.pop() else {
             self.status = "戻すものがありません".into();
             return;
         };
-        self.redo_stack.push(self.book.sheets[self.active].clone());
-        self.book.sheets[self.active] = prev;
-        recalc(&mut self.book.sheets[self.active]);
+        self.redo_stack.push((idx, self.book.sheets[idx].clone()));
+        self.book.sheets[idx] = prev;
+        recalc(&mut self.book.sheets[idx]);
+        self.show_sheet(idx);
         self.dirty = true;
         self.sync_input();
         self.status = "戻しました".into();
     }
 
     fn redo_sheet(&mut self) {
-        let Some(next) = self.redo_stack.pop() else {
+        let Some((idx, next)) = self.redo_stack.pop() else {
             self.status = "やり直すものがありません".into();
             return;
         };
-        self.undo_stack.push(self.book.sheets[self.active].clone());
-        self.book.sheets[self.active] = next;
-        recalc(&mut self.book.sheets[self.active]);
+        self.undo_stack.push((idx, self.book.sheets[idx].clone()));
+        self.book.sheets[idx] = next;
+        recalc(&mut self.book.sheets[idx]);
+        self.show_sheet(idx);
         self.dirty = true;
         self.sync_input();
         self.status = "やり直しました".into();
+    }
+
+    /// いまのシートのカーソル・窓・固定を控える。
+    fn remember_ui(&mut self) {
+        while self.sheet_ui.len() < self.book.sheets.len() {
+            self.sheet_ui.push((Pos::new(0, 0), Pos::new(0, 0), None));
+        }
+        self.sheet_ui[self.active] = (self.cursor, self.view, self.frozen);
+    }
+
+    fn restore_ui(&mut self) {
+        let (c, v, f) = self
+            .sheet_ui
+            .get(self.active)
+            .copied()
+            .unwrap_or((Pos::new(0, 0), Pos::new(0, 0), None));
+        self.cursor = c;
+        self.view = v;
+        self.frozen = f;
+    }
+
+    /// シートを切り替える。いまの編集を確定し、場所はシートごとに覚えている。
+    /// 絞り込みは解く(別のシートの列で絞ったままは意味を持たない)。
+    fn switch_sheet(&mut self, i: usize) {
+        if i >= self.book.sheets.len() || i == self.active {
+            return;
+        }
+        self.commit();
+        self.remember_ui();
+        self.active = i;
+        self.restore_ui();
+        self.anchor = None;
+        self.filter = None;
+        self.sync_input();
+        self.status = format!("シート「{}」", self.sheet().name).into();
+    }
+
+    /// シートを1枚足して、そこへ移る。
+    fn add_sheet(&mut self) {
+        let name = unique_sheet_name(&self.book);
+        self.book.sheets.push(sheet::Sheet::new(&name));
+        self.dirty = true;
+        self.switch_sheet(self.book.sheets.len() - 1);
     }
 
     fn commit(&mut self) {
@@ -395,6 +469,13 @@ impl Calc {
                 self.book = book;
                 self.active = 0;
                 self.cursor = Pos::new(0, 0);
+                self.view = Pos::new(0, 0);
+                self.anchor = None;
+                self.frozen = None;
+                self.filter = None;
+                self.sheet_ui.clear();
+                self.undo_stack.clear();
+                self.redo_stack.clear();
                 self.path = Some(p);
                 self.sync_input();
             }
@@ -1254,6 +1335,38 @@ impl Render for Calc {
             grid = grid.child(row);
         }
 
+        // ---- シートの耳(Excel と同じく下に置く) ----
+        let mut sheets_bar = div().flex().flex_row().items_center().gap_1()
+            .px_3().py_1().bg(rgb(0xEFF2F4))
+            .border_t_1().border_color(rgb(0xD5DBE0));
+        for (i, s) in self.book.sheets.iter().enumerate() {
+            let on = i == self.active;
+            sheets_bar = sheets_bar.child(div()
+                .id(SharedString::from(format!("sheet{i}")))
+                .px_3().py_1().rounded_sm()
+                .bg(if on { rgb(0xFFFFFF) } else { rgb(0xEFF2F4) })
+                .border_1().border_color(if on { rgb(0x1B6E3C) } else { rgb(0xD5DBE0) })
+                .text_size(px(11.5))
+                .text_color(if on { rgb(0x1B6E3C) } else { rgb(0x66707A) })
+                .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                .cursor_pointer().hover(|s| s.bg(gpui::white()))
+                .child(SharedString::from(s.name.clone()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.switch_sheet(i);
+                    cx.notify()
+                })));
+        }
+        sheets_bar = sheets_bar.child(div()
+            .id("addsheet")
+            .px_2().py_1().rounded_sm()
+            .text_size(px(12.5)).text_color(rgb(0x1B6E3C))
+            .cursor_pointer().hover(|s| s.bg(gpui::white()))
+            .child("+")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.add_sheet();
+                cx.notify()
+            })));
+
         let notes = if self.notes.is_empty() { None } else {
             let mut n = div().px_4().py_2().bg(rgb(0xFFF6E6))
                 .border_t_1().border_color(rgb(0xE8D5A8))
@@ -1295,6 +1408,7 @@ impl Render for Calc {
             .child(div().flex_1().overflow_hidden().relative()
                    .child(grid)
                    .child(InputSink { view: me }))
+            .child(sheets_bar)
             .children(notes)
     }
 }
@@ -1379,6 +1493,24 @@ mod filter_tests {
         assert_eq!(matching(0, "甲"), vec![0, 1, 3], "見出し+一致行でない");
         assert_eq!(matching(0, "乙"), vec![0, 2]);
         assert_eq!(matching(0, "丙"), vec![0], "無い値は見出しだけ");
+    }
+}
+
+#[cfg(test)]
+mod sheet_name_tests {
+    use super::*;
+
+    #[test]
+    fn 足すシートの名前がぶつからない() {
+        let mut b = Book::new(); // Sheet1
+        assert_eq!(unique_sheet_name(&b), "Sheet2");
+        b.sheets.push(sheet::Sheet::new("Sheet2"));
+        b.sheets.push(sheet::Sheet::new("Sheet3"));
+        assert_eq!(unique_sheet_name(&b), "Sheet4");
+        // 歯抜け(途中の名前が消えた等)でも重複しない
+        b.sheets.remove(1);
+        let n = unique_sheet_name(&b);
+        assert!(!b.sheets.iter().any(|s| s.name == n), "重複した: {n}");
     }
 }
 
