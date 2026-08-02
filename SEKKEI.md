@@ -170,13 +170,15 @@ hunspell と同じくユーザ辞書 `OFFICE_DICT_USER` で受ける。
 境界線は一本:
 **見ながら整える仕事は calc、データを作る・分析する仕事は Python。**
 
+Python 側の道具は **polars を第一にする**(2026-08-03 ユーザー判断)。
+
 | リボンにあるもの | 作らない。Python での正解 |
 |---|---|
 | グラフ・図形・SmartArt | matplotlib 等で描いて、画像として貼る |
 | ソルバー / ゴールシーク | scipy.optimize |
-| テキストからデータ / 区切り位置 | pandas.read_csv(文字コードと桁の事故は pandas が枯れている) |
+| テキストからデータ / 区切り位置 | polars.read_csv(SJIS は先に文字コードを直してから) |
 | 外部リンク(他ブックの参照) | 取り込みは Python でやり、値として渡す(リンク切れの帳票を作らない) |
-| (ピボット集計・予測・統計) | pandas.pivot_table / statsmodels |
+| (ピボット集計・予測・統計) | polars の group_by・pivot / statsmodels |
 
 - ボタンは**灰色のまま残す**(Euro-Office の並びは崩さない)
 - 開いた帳票にあるもの(グラフ・図形・外部参照)は**保存で壊さない**(原文持ち越し済み)
@@ -192,7 +194,7 @@ hunspell と同じくユーザ辞書 `OFFICE_DICT_USER` で受ける。
 
 `sheet` を Python から呼べるようにした(pyo3, crate は `pysheet`、
 import 名は `office_sheet`)。openpyxl と違い、罫線・結合・列幅・図形を
-保ったまま値を差し込める — **pandas で集計 → 帳票の枠を保ったまま差し込む**。
+保ったまま値を差し込める — **polars で集計 → 帳票の枠を保ったまま差し込む**。
 マクロの置き換えがスクリプトになる、という当初の設計と一直線。
 
 ```python
@@ -206,17 +208,17 @@ b.save("out.xlsx")               # 原本から図形・印刷設定を持ち越
 ```
 
 - 値は Python の型のまま(数=float, 文字=str, bool, 空=None)。
-  `s.values()` は list[list] で、そのまま DataFrame にできる
+  `s.values()` は行ごとの list[list] — `polars.DataFrame(…, orient="row")` でそのまま表になる
 - `b.unsupported` に読めなかったものの帳簿が出る。**黙って落とさない**はここでも
 - 配る .so は `cargo build -p pysheet --release --features extension-module`
   (abi3-py310: libpython 非依存で、どの Python 3.10+ でも同じ .so が動く)。
   extension-module を既定にしないのは cargo test がリンクできなくなるため(pyo3 の FAQ)
 - 検査は `pysheet/test.py` を Rust の試験(`tests/python_smoke.rs`)が回す。
   実物の様式7で「差し込んでも結合が崩れない」ことまで見る
-- pandas 連携は実地で確認済み(2026-08-03): miniforge の `.venv`(Python 3.14 +
-  pandas 3.0)で、**3.12 で組んだ abi3 の .so がそのまま動く** — groupby の集計を
-  実物の様式7に差し込み、保存しても結合・元の中身は無傷。test.py の pandas の節は
-  pandas がある環境でだけ回る(無ければ飛ばしたと言う)
+- polars 連携は実地で確認済み(2026-08-03): miniforge の `.venv`(Python 3.14 +
+  polars 1.43)で、**3.12 で組んだ abi3 の .so がそのまま動く** — group_by の集計を
+  実物の様式7に差し込み、保存しても結合・元の中身は無傷。test.py の polars の節は
+  polars がある環境でだけ回る(無ければ飛ばしたと言う)
 
 ## 里程標
 

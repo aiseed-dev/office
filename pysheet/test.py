@@ -90,27 +90,27 @@ if os.path.exists(real):
 else:
     print("実物の様式が無いので、その分の検査は飛ばした", file=sys.stderr)
 
-# --- pandas 連携(pandas がある環境でだけ回る)--------------------------------
-# 集計は pandas、枠は sheet — 分業の橋そのものの検査。
+# --- polars 連携(polars がある環境でだけ回る)--------------------------------
+# 集計は polars、枠は sheet — 分業の橋そのものの検査。
 # 開発機では .venv(miniforge)+ abi3 の .so で:
 #   cargo build -p pysheet --release --features extension-module
 #   mkdir -p /tmp/os && cp target/release/liboffice_sheet.so /tmp/os/office_sheet.so
 #   PYTHONPATH=/tmp/os .venv/bin/python pysheet/test.py
 try:
-    import pandas as pd
+    import polars as pl
 except ImportError:
-    print("pandas が無いので、その分の検査は飛ばした", file=sys.stderr)
+    print("polars が無いので、その分の検査は飛ばした", file=sys.stderr)
 else:
-    df = pd.DataFrame({"品名": ["甲", "甲", "乙"], "金額": [100, 150, 40]})
-    g = df.groupby("品名", sort=True)["金額"].sum()
+    df = pl.DataFrame({"品名": ["甲", "甲", "乙"], "金額": [100, 150, 40]})
+    g = df.group_by("品名").agg(pl.col("金額").sum()).sort("品名")
     pb = office_sheet.Book()
     ps = pb[0]
-    for i, (name, total) in enumerate(g.items(), start=1):
+    for i, (name, total) in enumerate(g.iter_rows(), start=1):
         ps[f"A{i}"] = name
         ps[f"B{i}"] = float(total)
     ps["B3"] = "=SUM(B1:B2)"
-    check(ps["B3"] == 290, f"pandas の集計が差し込めない: {ps['B3']}")
-    back = pd.DataFrame(ps.values())
+    check(ps["B3"] == 290, f"polars の集計が差し込めない: {ps['B3']}")
+    back = pl.DataFrame(ps.values(), orient="row")
     check(back.shape == (3, 2), f"values() が DataFrame にならない: {back.shape}")
 
 print("OK")

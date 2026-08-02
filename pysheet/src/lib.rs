@@ -2,7 +2,7 @@
 //!
 //! 分業の設計(SEKKEI.md): **データを作る・分析する仕事は Python、
 //! 見ながら整える仕事は calc。** その橋がこれ。
-//! pandas で集計した結果を、**帳票の枠(罫線・結合・列幅・図形)を
+//! polars で集計した結果を、**帳票の枠(罫線・結合・列幅・図形)を
 //! 保ったまま**実物の様式 xlsx に差し込んで保存できる。
 //! openpyxl との違いはそこ — 開いて保存しただけで様式が崩れない。
 //!
@@ -270,13 +270,14 @@ impl PySheet {
         })
     }
 
-    /// 使われている範囲 (行数, 列数)。pandas の shape と同じ向き。
+    /// 使われている範囲 (行数, 列数)。DataFrame の shape と同じ向き。
     #[getter]
     fn shape(&self) -> PyResult<(u32, u32)> {
         self.with(|s| Ok(s.extent()))
     }
 
-    /// 使われている範囲の値を list[list] で。pandas.DataFrame にそのまま渡せる。
+    /// 使われている範囲の値を list[list](行ごと)で。
+    /// `polars.DataFrame(s.values(), orient="row")` でそのまま表になる。
     fn values(&self) -> PyResult<Vec<Vec<Option<Out>>>> {
         self.with(|s| {
             let (rows, cols) = s.extent();
