@@ -1,0 +1,22 @@
+[package]
+name = "pysheet"    # sheet を Python から呼ぶ(pandas で集計 → 帳票の枠を保ったまま差し込む)
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "sheet の Python 束縛。openpyxl と違い、罫線・結合・列幅を保ったまま値を差し込める"
+
+[lib]
+# Python から `import office_sheet` で見える名前
+name = "office_sheet"
+crate-type = ["cdylib"]
+
+[dependencies]
+sheet = { path = "../sheet" }
+pyo3 = { version = "0.29", features = ["abi3-py310"] }
+
+[features]
+# 配る .so はこれを付けて組む(libpython に依存しない、どの 3.10+ でも動く):
+#   cargo build -p pysheet --release --features extension-module
+# 既定で付けないのは cargo test のため — extension-module は Python の記号を
+# 未解決のまま残すので、試験の実行ファイルがリンクできなくなる(pyo3 の FAQ どおり)
+extension-module = ["pyo3/extension-module"]

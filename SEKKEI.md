@@ -188,12 +188,31 @@ hunspell と同じくユーザ辞書 `OFFICE_DICT_USER` で受ける。
 - 並べ替え・フィルター: 見ながらやる操作
 - データの入力規則・条件付き書式: 入力の現場で効くもの(未実装、やる側)
 
-### 先の一手
+### 分業の橋 — `pysheet`(済 2026-08-03)
 
-`sheet` crate を Python から呼べるようにする(pyo3)。openpyxl と違い、
-sheet は罫線・結合・列幅を正しく往復するので、
-**pandas で集計 → sheet で帳票の枠を保ったまま差し込む**という分業が立つ。
+`sheet` を Python から呼べるようにした(pyo3, crate は `pysheet`、
+import 名は `office_sheet`)。openpyxl と違い、罫線・結合・列幅・図形を
+保ったまま値を差し込める — **pandas で集計 → 帳票の枠を保ったまま差し込む**。
 マクロの置き換えがスクリプトになる、という当初の設計と一直線。
+
+```python
+import office_sheet
+b = office_sheet.Book.open("様式7.xlsx")
+s = b["提案見積書"]              # b[0] でも
+s["A30"] = "日本フネン株式会社"   # 書式は据え置き。文字列は「打ったのと同じ」解釈
+s["C30"] = "=B30*100"            # 式。置いた時点で再計算される
+s.insert_row(30)                 # 明細行を増やす。残った式の参照も動く
+b.save("out.xlsx")               # 原本から図形・印刷設定を持ち越す
+```
+
+- 値は Python の型のまま(数=float, 文字=str, bool, 空=None)。
+  `s.values()` は list[list] で、そのまま DataFrame にできる
+- `b.unsupported` に読めなかったものの帳簿が出る。**黙って落とさない**はここでも
+- 配る .so は `cargo build -p pysheet --release --features extension-module`
+  (abi3-py310: libpython 非依存で、どの Python 3.10+ でも同じ .so が動く)。
+  extension-module を既定にしないのは cargo test がリンクできなくなるため(pyo3 の FAQ)
+- 検査は `pysheet/test.py` を Rust の試験(`tests/python_smoke.rs`)が回す。
+  実物の様式7で「差し込んでも結合が崩れない」ことまで見る
 
 ## 里程標
 
