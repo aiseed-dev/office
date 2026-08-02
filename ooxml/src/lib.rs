@@ -75,7 +75,40 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
         .map_err(|_| "word/document.xml がありません(docxではない可能性)".to_string())?
         .read_to_string(&mut xml)
         .map_err(|e| format!("document.xml を読めません: {e}"))?;
-    Ok(parse_document_xml(&xml))
+
+    // 画像の表示のために、関係ID → 実体 を先に引いておく。
+    // rels: <Relationship Id="rId5" Target="media/image1.png"/>
+    let mut media: std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>> =
+        Default::default();
+    let mut rels = String::new();
+    if let Ok(mut f) = zip.by_name("word/_rels/document.xml.rels") {
+        let _ = f.read_to_string(&mut rels);
+    }
+    let mut at = 0usize;
+    while let Some(i) = rels[at..].find("Id=\"") {
+        let s = at + i + 4;
+        let Some(e) = rels[s..].find('"') else { break };
+        let id = rels[s..s + e].to_string();
+        // 同じ Relationship の中の Target を探す(次の > まで)
+        let tail = &rels[s + e..];
+        if let Some(ti) = tail.find("Target=\"") {
+            let ts = ti + 8;
+            if let Some(te) = tail[ts..].find('"') {
+                let target = &tail[ts..ts + te];
+                if target.starts_with("media/") {
+                    let path = format!("word/{target}");
+                    if let Ok(mut mf) = zip.by_name(&path) {
+                        let mut buf = Vec::new();
+                        if mf.read_to_end(&mut buf).is_ok() {
+                            media.insert(id, std::sync::Arc::new(buf));
+                        }
+                    }
+                }
+            }
+        }
+        at = s + e;
+    }
+    Ok(parse_document_with(&xml, &media))
 }
 
 /// 組み立て中の表。表は入れ子になりうるのでスタックで持つ。
@@ -165,7 +198,33 @@ fn wrap_with_ns(raw: &str, decls: &std::collections::BTreeMap<String, String>) -
     Some(out)
 }
 
+/// 原文から表示用の画像を引く。EMU(914400/inch)→ mm は ÷36000。
+fn image_of(
+    raw: &str,
+    media: &std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
+) -> Option<kumihan::InlineImage> {
+    let grab = |pat: &str| -> Option<String> {
+        let i = raw.find(pat)? + pat.len();
+        let end = raw[i..].find('"')? + i;
+        Some(raw[i..end].to_string())
+    };
+    let rid = grab("r:embed=\"")?;
+    let bytes = media.get(&rid)?.clone();
+    // wp:extent cx/cy(EMU)。無ければ表示しない(大きさを勝手に決めない)
+    let cx: f32 = grab("cx=\"")?.parse().ok()?;
+    let cy: f32 = grab("cy=\"")?.parse().ok()?;
+    Some(kumihan::InlineImage { bytes, w_mm: cx / 36000.0, h_mm: cy / 36000.0 })
+}
+
 pub fn parse_document_xml(xml: &str) -> (Document, Report) {
+    parse_document_with(xml, &Default::default())
+}
+
+/// media は 関係ID(rId5)→ 画像の実体。`read` が rels と media から作る。
+pub fn parse_document_with(
+    xml: &str,
+    media: &std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
+) -> (Document, Report) {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
 
@@ -187,6 +246,8 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
     let mut page_break_before = false;
     // 読めなかった要素の原文(画像など)。段落ごとに集めて持ち越す
     let mut anchors: Vec<String> = Vec::new();
+    // 表示できる画像(r:embed と wp:extent が読めたもの)
+    let mut images: Vec<kumihan::InlineImage> = Vec::new();
     // 原本の root が宣言している名前空間。持ち越す原文の接頭辞をこれで包む
     let mut ns_decls: std::collections::BTreeMap<String, String> = Default::default();
     let mut in_ppr = false;
@@ -294,10 +355,14 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                             let raw = &xml[start_pos..end];
                             // 原文が使う接頭辞の宣言を、包む run に付ける。
                             // 付けないと保存した XML が「未宣言の接頭辞」で壊れる
+                            // 表示用: 画像の実体と大きさが分かれば拾う
+                            if let Some(im) = image_of(raw, media) {
+                                images.push(im);
+                            }
                             match wrap_with_ns(raw, &ns_decls) {
                                 Some(wrapped) => {
                                     anchors.push(wrapped);
-                                    rep.note("画像・図形(保存では残る。表示は未対応)");
+                                    rep.note("画像・図形(保存では残る)");
                                 }
                                 None => {
                                     // 出どころの分からない接頭辞。壊れたXMLを書くより
@@ -400,6 +465,7 @@ pub fn parse_document_xml(xml: &str) -> (Document, Report) {
                             rep.runs += runs.len();
                             rep.paragraphs += 1;
                             let p = Paragraph { align, anchors: std::mem::take(&mut anchors),
+                                images: std::mem::take(&mut images),
                                 page_break_before, list, indent, line_spacing, runs: if runs.is_empty() {
                                 vec![Run { text: String::new(), size_pt: DEFAULT_PT, font: None, fmt: Default::default() }]
                             } else { runs } };
@@ -589,7 +655,8 @@ pub fn write_document_xml(doc: &Document) -> String {
                     for cell in row {
                         w.write_event(Event::Start(BS::new("w:tc"))).unwrap();
                         if cell.paragraphs.is_empty() {
-                            para(&mut w, &Paragraph { align: Default::default(), anchors: Vec::new(), page_break_before: false,
+                            para(&mut w, &Paragraph { align: Default::default(), anchors: Vec::new(),
+                    images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: Vec::new() });
                         } else {
                             for p in &cell.paragraphs { para(&mut w, p) }
@@ -672,7 +739,8 @@ mod tests {
     use kumihan::{Align, CharFormat, ListKind, Block, Cellbox, Document, Paragraph, Run, Table};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph { align: Default::default(), anchors: Vec::new(), page_break_before: false,
+        Paragraph { align: Default::default(), anchors: Vec::new(),
+                    images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
@@ -706,7 +774,8 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(), page_break_before: false,
+        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
+                    images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
             Run { text: "本文".into(), size_pt: 10.5, font: None, fmt: Default::default() },
@@ -738,7 +807,8 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(), page_break_before: false,
+        let d = Document { font: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
+                    images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
         let (back, _) = round_trip(&d);
@@ -831,6 +901,7 @@ mod font_tests {
             blocks: vec![Block::Para(Paragraph {
                 align: Default::default(),
                 anchors: Vec::new(),
+                    images: Vec::new(),
                 page_break_before: false,
                     list: Default::default(),
                 indent: 0,
@@ -881,7 +952,8 @@ mod fmt_tests {
         let f = CharFormat { bold: true, italic: true, underline: true, ..Default::default() };
         let d = Document {
             font: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(), page_break_before: false,
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
+                    images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("見出し", f.clone())] })],
         };
         let back = roundtrip(&d);
@@ -893,7 +965,8 @@ mod fmt_tests {
         let f = CharFormat { strike: true, color: Some("FF0000".into()), ..Default::default() };
         let d = Document {
             font: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(), page_break_before: false,
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
+                    images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("赤", f.clone())] })],
         };
         assert_eq!(roundtrip(&d).paragraphs().next().unwrap().runs[0].fmt, f);
@@ -907,6 +980,7 @@ mod fmt_tests {
                 blocks: vec![Block::Para(Paragraph {
                     align: a,
                     anchors: Vec::new(),
+                    images: Vec::new(),
                     page_break_before: false,
                     list: Default::default(),
                     indent: 0,
@@ -954,6 +1028,7 @@ mod para_tests {
         Paragraph {
             align: Align::Left,
             anchors: Vec::new(),
+                    images: Vec::new(),
             page_break_before: false,
             list,
             indent,

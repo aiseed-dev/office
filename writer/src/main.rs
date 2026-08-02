@@ -116,6 +116,8 @@ struct Writer {
     target: Target,
     /// 記号の一覧を出しているか
     symbols: bool,
+    /// 画像の実体 → gpui の画像(作り直すと毎フレーム復号されるため控える)
+    image_cache: std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>,
     /// 置換の板。開いている間、打鍵は検索欄に入る
     find_open: bool,
     /// 0=検索語 1=置換後
@@ -171,6 +173,7 @@ impl Writer {
             zoom: 1.0,
             target: Target::Body,
             symbols: false,
+            image_cache: Default::default(),
             find_open: false,
             find_field: 0,
             find_ed: Editor::new(""),
@@ -991,6 +994,29 @@ impl Render for Writer {
         let mut paper = div().absolute().left(px(28.0)).top(px(14.0))
             .w(px(210.0 * pxmm)).h(px(297.0 * pxmm))
             .bg(gpui::white()).shadow_lg();
+
+        // 画像。組版が置いた位置に、そのまま出す
+        for (i, (bytes, [x, top, w_mm, h_mm])) in self.page.images.iter().enumerate() {
+            let src = self.image_cache.entry(std::sync::Arc::as_ptr(bytes) as usize)
+                .or_insert_with(|| {
+                    let format = match bytes.get(..4) {
+                        Some([0x89, b'P', b'N', b'G']) => gpui::ImageFormat::Png,
+                        Some([0xFF, 0xD8, ..]) => gpui::ImageFormat::Jpeg,
+                        _ => gpui::ImageFormat::Png,
+                    };
+                    std::sync::Arc::new(gpui::Image::from_bytes(format, bytes.to_vec()))
+                })
+                .clone();
+            let _ = i;
+            paper = paper.child(
+                gpui::img(src)
+                    .absolute()
+                    .left(px((MARGIN_MM + x) * pxmm))
+                    .top(px(top * pxmm))
+                    .w(px(w_mm * pxmm))
+                    .h(px(h_mm * pxmm)),
+            );
+        }
 
         // 表の罫線。紙面の座標をそのまま引く
         for r in &self.page.rules {

@@ -47,6 +47,15 @@ pub struct Run {
     pub fmt: CharFormat,
 }
 
+/// 段落に入っている画像。表示のためのもの。
+#[derive(Debug, Clone)]
+pub struct InlineImage {
+    /// 画像ファイルの中身(png/jpeg のまま)
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    pub w_mm: f32,
+    pub h_mm: f32,
+}
+
 /// 段落の揃え。docx の `w:jc`。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Align {
@@ -93,9 +102,11 @@ pub enum ListKind {
 pub struct Paragraph {
     pub runs: Vec<Run>,
     /// 読めなかった要素(画像など)の原文。**理解はしないが、捨てない。**
-    /// 保存でそのまま返す。表示はまだしない(段落の並びの中の位置は失われ、
-    /// 段落の末尾に戻る)
+    /// 保存でそのまま返す
     pub anchors: Vec<String>,
+    /// 表示できる画像(anchors のうち、絵の実体と大きさが分かったもの)。
+    /// 保存には使わない — 保存は anchors の原文が担う
+    pub images: Vec<InlineImage>,
     pub align: Align,
     /// この段落の前で改ページする(docx の w:pageBreakBefore)
     pub page_break_before: bool,
@@ -192,7 +203,7 @@ impl Document {
         // 引き継ぐ元(段落だけを順に)
         #[allow(clippy::type_complexity)]
         let old: Vec<(Align, Option<String>, CharFormat, Option<f32>, ListKind, u8, f32,
-                      Vec<String>, bool)> = self
+                      Vec<String>, bool, Vec<InlineImage>)> = self
             .paragraphs()
             .map(|p| {
                 let r = p.runs.first();
@@ -201,7 +212,7 @@ impl Document {
                  r.map(|r| r.fmt.clone()).unwrap_or_default(),
                  r.map(|r| r.size_pt),
                  p.list, p.indent, p.line_spacing, p.anchors.clone(),
-                 p.page_break_before)
+                 p.page_break_before, p.images.clone())
             })
             .collect();
         self.blocks = text
@@ -210,13 +221,14 @@ impl Document {
             .map(|(i, s)| {
                 // 段落の性質は同じ位置から引き継ぐ。**改ページも画像(anchors)も**
                 // ここで持ち越さないと、1文字打つだけで消える
-                let (align, font, fmt, old_pt, list, indent, ls, anchors, pbb) =
+                let (align, font, fmt, old_pt, list, indent, ls, anchors, pbb, images) =
                     old.get(i).cloned().unwrap_or((Align::default(), None,
                         CharFormat::default(), None, ListKind::default(), 0, 1.0,
-                        Vec::new(), false));
+                        Vec::new(), false, Vec::new()));
                 Block::Para(Paragraph {
                     align,
                     anchors,
+                    images,
                     page_break_before: pbb,
                     list,
                     indent,
@@ -369,6 +381,7 @@ impl Document {
                 .map(|p| Block::Para(Paragraph {
                     align: Default::default(),
                     anchors: Vec::new(),
+                    images: Vec::new(),
                     page_break_before: false,
                     list: Default::default(),
                     indent: 0,
@@ -444,6 +457,8 @@ pub struct Sheet {
     pub rules: Vec<[f32; 4]>,
     /// 表のセルの当たり判定(クリックでセルを選ぶため)
     pub cell_boxes: Vec<CellBox>,
+    /// 置いた画像(実体, [x, 上端y, 幅, 高さ] mm)。画面も紙もこれを見る
+    pub images: Vec<(std::sync::Arc<Vec<u8>>, [f32; 4])>,
 }
 
 /// 表のセル1つぶんの場所。
@@ -643,6 +658,10 @@ fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>)
 /// セルの中の余白(mm)
 const CELL_PAD: f32 = 1.4;
 
+fn lh_of(para: &Paragraph, frame: &Frame) -> f32 {
+    frame.line_height_mm * para.spacing()
+}
+
 pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
     let mut sheet = Sheet::default();
     let mut y = frame.y0_mm;
@@ -697,6 +716,13 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                         + cells.iter().map(|c| c.off).min().unwrap_or(0);
                     sheet.lines.push(Line { cells, y_mm: y, from_body: true, byte0, cell: None });
                     y += frame.line_height_mm * para.spacing();
+                }
+                // 画像は段落の下に置く。幅が行長を超えるなら比例で縮める
+                for im in &para.images {
+                    let scale = if im.w_mm > measure { measure / im.w_mm } else { 1.0 };
+                    let (w, h) = (im.w_mm * scale, im.h_mm * scale);
+                    sheet.images.push((im.bytes.clone(), [indent_mm, y - lh_of(para, frame) * 0.6, w, h]));
+                    y += h + frame.line_height_mm * 0.4;
                 }
                 // 次の段落の頭 = この段落のバイト数 + 改行1つ
                 let plen: usize = para.runs.iter().map(|r| r.text.len()).sum();
