@@ -49,19 +49,28 @@ pub fn sheet_to_pdf<W: Write>(
         col_x.push(col_x.last().unwrap() + w);
     }
 
-    let rows_per_page =
-        (((paper.height_mm - 2.0 * paper.margin_mm) / ROW_MM).floor() as u32).max(1);
+    // 行の高さ(pt → mm)。指定のない行は既定
+    let row_mm = |r: u32| -> f32 {
+        grid.row_height.get(&r).map(|pt| pt * 25.4 / 72.0).unwrap_or(ROW_MM)
+    };
+    let usable = paper.height_mm - 2.0 * paper.margin_mm;
 
+    let mut y_used = 0.0f32; // このページで使った高さ
+    let mut page_no = 1u32;
     for r in 0..rows.max(1) {
-        if r > 0 && r % rows_per_page == 0 {
+        let rh = row_mm(r);
+        if y_used + rh > usable && y_used > 0.0 {
+            page_no += 1;
+            y_used = 0.0;
             let (np, nl) = doc.add_page(
                 Mm(paper.width_mm),
                 Mm(paper.height_mm),
-                format!("帳票 {}", r / rows_per_page + 1),
+                format!("帳票 {page_no}"),
             );
             l = doc.get_page(np).get_layer(nl);
         }
-        let y_top = paper.height_mm - paper.margin_mm - (r % rows_per_page) as f32 * ROW_MM;
+        let y_top = paper.height_mm - paper.margin_mm - y_used;
+        y_used += rh;
         for c in 0..cols.max(1) {
             let p = sheet::Pos::new(r, c);
             let x = paper.margin_mm + col_x[c as usize];
@@ -72,9 +81,9 @@ pub fn sheet_to_pdf<W: Write>(
             let b = cell.fmt.borders;
             for (on, (x1, y1, x2, y2)) in [
                 (b.top, (x, y_top, x + cw, y_top)),
-                (b.bottom, (x, y_top - ROW_MM, x + cw, y_top - ROW_MM)),
-                (b.left, (x, y_top, x, y_top - ROW_MM)),
-                (b.right, (x + cw, y_top, x + cw, y_top - ROW_MM)),
+                (b.bottom, (x, y_top - rh, x + cw, y_top - rh)),
+                (b.left, (x, y_top, x, y_top - rh)),
+                (b.right, (x + cw, y_top, x + cw, y_top - rh)),
             ] {
                 if on {
                     l.add_line(Line {
@@ -115,7 +124,7 @@ pub fn sheet_to_pdf<W: Write>(
             } else {
                 x + 1.5
             };
-            let ty = y_top - ROW_MM + 2.0;
+            let ty = y_top - rh + 2.0;
             l.use_text(&shown, pt, Mm(tx), Mm(ty), &font);
             if cell.fmt.bold {
                 l.use_text(&shown, pt, Mm(tx + 0.1), Mm(ty), &font);

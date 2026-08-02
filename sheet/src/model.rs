@@ -218,6 +218,8 @@ pub struct Sheet {
     /// 列幅(xlsx の単位 = 標準フォントの「0」何個ぶん)。無い列は既定幅。
     /// これも読み飛ばして保存すると帳票の形が変わる
     pub col_width: BTreeMap<u32, f32>,
+    /// 行の高さ(pt)。無い行は既定。列幅と同じ構図
+    pub row_height: BTreeMap<u32, f32>,
 }
 
 impl Sheet {
@@ -312,6 +314,11 @@ impl Sheet {
         self.shift(|p| p.row >= at, 1, 0);
         self.fix_formulas(at, 1, true);
         self.shift_merges(at, 1, true);
+        self.row_height = self
+            .row_height
+            .iter()
+            .map(|(r, h)| (if *r >= at { r + 1 } else { *r }, *h))
+            .collect();
     }
 
     /// 行を1つ抜く。
@@ -320,6 +327,12 @@ impl Sheet {
         self.shift(|p| p.row > at, -1, 0);
         self.fix_formulas(at, -1, true);
         self.shift_merges(at, -1, true);
+        self.row_height = self
+            .row_height
+            .iter()
+            .filter(|(r, _)| **r != at)
+            .map(|(r, h)| (if *r > at { r - 1 } else { *r }, *h))
+            .collect();
     }
 
     pub fn insert_col(&mut self, at: u32) {

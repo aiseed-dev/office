@@ -165,6 +165,11 @@ impl Calc {
 
     /// カーソルを動かす(動かす前に編集中の内容を確定する)。
     /// いま選んでいる長方形(左上, 右下)。
+    /// 行の画面高。文書の指定(xlsx の ht、pt)に従う。既定 15pt = 24px
+    fn row_px(&self, r: u32) -> f32 {
+        self.sheet().row_height.get(&r).map(|pt| pt * 24.0 / 15.0).unwrap_or(ROW_H)
+    }
+
     /// 列の画面幅。文書の指定(xlsx の width)に従う
     fn col_px(&self, c: u32) -> f32 {
         self.sheet().col_width.get(&c).map(|w| w * PX_PER_CHW).unwrap_or(COL_W)
@@ -590,7 +595,10 @@ impl EntityInputHandler for Calc {
                 bounds.origin.x
                     + px(HEAD_W + self.col_x(self.cursor.col) - self.col_x(self.view.col)),
                 bounds.origin.y
-                    + px((self.cursor.row - self.view.row + 2) as f32 * ROW_H),
+                    + px(2.0 * ROW_H
+                        + (self.view.row..self.cursor.row)
+                            .map(|r| self.row_px(r))
+                            .sum::<f32>()),
             ),
             size(px(self.col_px(self.cursor.col)), px(ROW_H)),
         ))
@@ -724,8 +732,9 @@ impl Render for Calc {
         grid = grid.child(head);
 
         for r in self.view.row..self.view.row + ROWS {
+            let rh = self.row_px(r);
             let mut row = div().flex().flex_row()
-                .child(div().w(px(HEAD_W)).h(px(ROW_H))
+                .child(div().w(px(HEAD_W)).h(px(rh))
                     .bg(rgb(0xEFF2F4)).border_r_1().border_b_1()
                     .border_color(rgb(0xD5DBE0))
                     .flex().items_center().justify_center()
@@ -755,7 +764,7 @@ impl Render for Calc {
                     && (ra.row..=rb.row).contains(&r) && (ra.col..=rb.col).contains(&c);
                 let mut d = div()
                     .id(SharedString::from(p.a1()))
-                    .w(px(self.col_px(c))).h(px(ROW_H))
+                    .w(px(self.col_px(c))).h(px(rh))
                     .border_r_1().border_b_1()
                     .border_color(if self.gridlines { rgb(0xE1E6EA) } else { rgb(0xFFFFFF) })
                     .bg(if sel { rgb(0xEAF5EE) } else if in_range { rgb(0xF2F8F4) } else { rgb(0xFFFFFF) })

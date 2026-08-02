@@ -79,6 +79,22 @@ fn merge(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
     }
 }
 
+/// `<row r="3" ht="27.5" customHeight="1">` — 指定のある行だけ持つ。
+fn row_height(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
+    let custom = attr(e, "customHeight").as_deref() == Some("1");
+    if !custom {
+        return;
+    }
+    if let (Some(r), Some(h)) = (
+        attr(e, "r").and_then(|v| v.parse::<u32>().ok()),
+        attr(e, "ht").and_then(|v| v.parse::<f32>().ok()),
+    ) {
+        if r >= 1 {
+            sh.row_height.insert(r - 1, h);
+        }
+    }
+}
+
 /// `<col min="1" max="3" width="12.5"/>` — min..=max は1始まり。
 fn col_width(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
     let g = |k: &str| attr(e, k).and_then(|v| v.parse::<f32>().ok());
@@ -105,6 +121,7 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
         match r.read_event_into(&mut buf) {
             Ok(Event::Eof) | Err(_) => break,
             Ok(Event::Start(e)) => match local(e.name().as_ref()) {
+                b"row" => row_height(&e, &mut sh),
                 b"c" => {
                     pos = attr(&e, "r").and_then(|s| Pos::parse(&s));
                     ty = attr(&e, "t").unwrap_or_default();
@@ -352,6 +369,10 @@ pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
         for (r, cells) in rows {
             let mut row = BytesStart::new("row");
             row.push_attribute(("r", (r + 1).to_string().as_str()));
+            if let Some(h) = sh.row_height.get(&r) {
+                row.push_attribute(("ht", h.to_string().as_str()));
+                row.push_attribute(("customHeight", "1"));
+            }
             w.write_event(Event::Start(row)).unwrap();
             for (p, c) in cells {
                 let mut ce = BytesStart::new("c");
@@ -579,5 +600,33 @@ mod colwidth_round {
         let (book, _) = crate::xlsx::read(f).unwrap();
         let n: usize = book.sheets.iter().map(|s| s.col_width.len()).sum();
         assert!(n > 0, "実物の列幅を1つも読めていない");
+    }
+}
+
+#[cfg(test)]
+mod rowheight_round {
+    use crate::model::{Cell, Pos, Value};
+    use crate::{Book, Sheet};
+
+    #[test]
+    fn 行の高さが往復する() {
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.set(Pos::parse("A3").unwrap(), Cell {
+            formula: None, value: Value::Text("高い行".into()), fmt: Default::default() });
+        s.row_height.insert(2, 27.5);
+        let mut buf = Vec::new();
+        crate::xlsx::write(&Book { sheets: vec![s] }, std::io::Cursor::new(&mut buf)).unwrap();
+        let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
+        assert_eq!(back.sheets[0].row_height.get(&2), Some(&27.5), "行の高さが消えた");
+    }
+
+    #[test]
+    fn 行の出し入れで高さも動く() {
+        let mut s = Sheet { name: "帳票".into(), ..Default::default() };
+        s.row_height.insert(3, 30.0);
+        s.insert_row(0);
+        assert_eq!(s.row_height.get(&4), Some(&30.0), "{:?}", s.row_height);
+        s.remove_row(0);
+        assert_eq!(s.row_height.get(&3), Some(&30.0));
     }
 }
