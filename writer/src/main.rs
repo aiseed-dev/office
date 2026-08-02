@@ -322,6 +322,55 @@ impl Writer {
         );
     }
 
+    /// クリックした画素位置(編集領域からの相対)にカーソルを置く。
+    fn click_at(&mut self, rel_x: f32, rel_y: f32, extend: bool) {
+        let pxmm = PX_PER_MM * self.zoom;
+        // 紙は編集領域の (28,14)px に置いてある
+        let x_mm = (rel_x - 28.0) / pxmm - MARGIN_MM;
+        let y_mm = (rel_y - 14.0) / pxmm;
+
+        // 一番近いベースラインの本文行を選ぶ(クリックは字の少し上に落ちる)
+        let target = y_mm + LINE_MM * 0.3;
+        let mut best: Option<(f32, usize)> = None; // (距離, 本文行の通し番号)
+        let mut nth = 0usize;
+        for line in &self.page.lines {
+            if !line.from_body {
+                continue;
+            }
+            let d = (line.y_mm - target).abs();
+            if best.map_or(true, |(bd, _)| d < bd) {
+                best = Some((d, nth));
+            }
+            nth += 1;
+        }
+        let Some((_, want)) = best else { return };
+
+        // 行の頭までのバイト数 + 行の中の位置
+        let mut byte = 0usize;
+        let mut nth = 0usize;
+        for line in &self.page.lines {
+            if !line.from_body {
+                continue;
+            }
+            if nth == want {
+                let mut x = line.cells.first().map(|c| c.x_mm).unwrap_or(0.0);
+                for c in &line.cells {
+                    // 字の真ん中より左なら、その字の前
+                    if x_mm < x + c.w_mm / 2.0 {
+                        break;
+                    }
+                    x += c.w_mm;
+                    byte += c.ch.len_utf8();
+                }
+                break;
+            }
+            byte += line.text().len() + 1;
+            nth += 1;
+        }
+        let byte = byte.min(self.ed.text().len());
+        self.ed.move_to(byte, extend);
+    }
+
     fn run_cmd(&mut self, id: &str) {
         match id {
             "open" => {
@@ -640,6 +689,13 @@ impl Render for Writer {
         // 未確定(変換中)の下線を出すため、行ごとのバイト範囲を数えながら描く
         let mut seen = 0usize;
         for line in &self.page.lines {
+            if line.cells.is_empty() {
+                // 空行。描くものは無いが、バイト勘定には入っている
+                if line.from_body {
+                    seen += 1;
+                }
+                continue;
+            }
             let text = line.text();
             let pt = line.cells[0].size_pt;
             let sz = pt * 96.0 / 72.0 * self.zoom;
@@ -836,6 +892,21 @@ impl gpui::Element for InputSink {
             ElementInputHandler::new(bounds, self.view.clone()),
             cx,
         );
+        // クリックでカーソルを置く。編集領域の座標を知っているのはここだけ
+        let view = self.view.clone();
+        window.on_mouse_event(move |e: &gpui::MouseDownEvent, phase, _w, cx| {
+            if phase != gpui::DispatchPhase::Bubble
+                || e.button != gpui::MouseButton::Left
+                || !bounds.contains(&e.position)
+            {
+                return;
+            }
+            let rel = e.position - bounds.origin;
+            view.update(cx, |w, cx| {
+                w.click_at(f32::from(rel.x), f32::from(rel.y), e.modifiers.shift);
+                cx.notify();
+            });
+        });
     }
 }
 

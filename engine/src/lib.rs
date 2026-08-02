@@ -614,6 +614,9 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                 }
                 for cells in break_para(para, m, measure, marker.as_deref()) {
                     if cells.is_empty() {
+                        // 空の段落も**行として持つ**。持たないと、後ろの行の
+                        // バイト勘定が1つずつずれて、カーソルが本文とずれる
+                        sheet.lines.push(Line { cells: Vec::new(), y_mm: y, from_body: true });
                         y += frame.line_height_mm * para.spacing();
                         continue;
                     }
@@ -1188,5 +1191,24 @@ mod gridcol_tests {
         vx.dedup_by(|a, b| (*a - *b).abs() < 0.01);
         assert!((vx[1] - 60.0).abs() < 0.1, "比率が守られていない: {vx:?}");
         assert!((vx[2] - 100.0).abs() < 0.1, "右へはみ出した: {vx:?}");
+    }
+}
+
+#[cfg(test)]
+mod empty_line_tests {
+    use super::*;
+
+    #[test]
+    fn 空の段落も行として持つ() {
+        // 持たないと、後ろの行のバイト勘定がずれてカーソルが合わなくなる
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let d = Document::plain("一行目\n\n三行目", 10.5);
+        let s = layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        let body: Vec<&Line> = s.lines.iter().filter(|l| l.from_body).collect();
+        assert_eq!(body.len(), 3, "空行が消えた: {} 行", body.len());
+        assert!(body[1].cells.is_empty());
+        // 3行目は2行ぶん下にある
+        assert!((body[2].y_mm - body[0].y_mm - 12.0).abs() < 0.01);
     }
 }
