@@ -97,9 +97,9 @@ pub const WRITER: &[Tab] = &[
         x("消しゴム", "eraser"),
     ]},
     Tab { name: "レイアウト", cmds: &[
-        x("余白", "pagemargins"),
-        x("印刷の向き", "pageorient"),
-        x("ページのサイズ", "pagesize"),
+        c("pagemargins", "余白", "pagemargins"),
+        c("pageorient", "印刷の向き", "pageorient"),
+        c("pagesize", "ページのサイズ", "pagesize"),
         x("列の挿入", "columns"),
         x("行番号を表示する", "line-numbers"),
         x("ハイフン設定の変更", "hyphenation"),

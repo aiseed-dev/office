@@ -524,6 +524,62 @@ impl Writer {
         };
     }
 
+    /// 用紙の設定を変える。**文書に書き戻す**(sect_raw を作り替える)ので
+    /// 保存で残る。画面と紙は同じ寸法で追随する。
+    fn set_page(&mut self, f: impl Fn(&mut kumihan::PageSetup)) {
+        f(&mut self.pg);
+        self.doc.page = Some(self.pg);
+        let tw = |mm: f32| -> i64 { (mm * 20.0 * 72.0 / 25.4).round() as i64 };
+        let landscape = self.pg.w_mm > self.pg.h_mm;
+        // 原文があっても、寸法だけはこちらが決めた値で作り替える。
+        // ヘッダーの参照などは残したいので、pgSz/pgMar 以外は原文から引き継ぐ
+        let rest = self
+            .doc
+            .sect_raw
+            .as_deref()
+            .map(|s| {
+                let mut out = String::new();
+                let mut skip = false;
+                for part in s.split_inclusive('>') {
+                    let t = part.trim_start();
+                    if t.starts_with("<w:sectPr") || t.starts_with("</w:sectPr") {
+                        continue;
+                    }
+                    if t.starts_with("<w:pgSz") || t.starts_with("<w:pgMar") {
+                        skip = !part.trim_end().ends_with("/>");
+                        continue;
+                    }
+                    if skip {
+                        if t.starts_with("</w:pgSz") || t.starts_with("</w:pgMar") {
+                            skip = false;
+                        }
+                        continue;
+                    }
+                    out.push_str(part);
+                }
+                out
+            })
+            .unwrap_or_default();
+        self.doc.sect_raw = Some(format!(
+            "<w:sectPr><w:pgSz w:w=\"{}\" w:h=\"{}\"{}/>\
+             <w:pgMar w:top=\"{}\" w:right=\"{}\" w:bottom=\"{}\" w:left=\"{}\"/>{rest}</w:sectPr>",
+            tw(self.pg.w_mm),
+            tw(self.pg.h_mm),
+            if landscape { " w:orient=\"landscape\"" } else { "" },
+            tw(self.pg.top_mm),
+            tw(self.pg.right_mm),
+            tw(self.pg.bottom_mm),
+            tw(self.pg.left_mm),
+        ));
+        self.dirty = true;
+        self.relayout_keep();
+        self.status = format!(
+            "用紙 {:.0}×{:.0}mm / 余白 {:.0}mm",
+            self.pg.w_mm, self.pg.h_mm, self.pg.left_mm
+        )
+        .into();
+    }
+
     fn set_align(&mut self, a: Align) {
         match self.target {
             Target::Body => {
@@ -709,6 +765,7 @@ impl Writer {
         "instable", "inssymbol", "replace",
         "spell", "wordcount", "zoom-in", "zoom-out", "hidenchars", "ruler",
         "fontname", "fontsize",
+        "pageorient", "pagesize", "pagemargins",
     ];
 
     fn run_cmd(&mut self, id: &str) {
@@ -812,6 +869,32 @@ impl Writer {
             "hidenchars" => self.show_marks = !self.show_marks,
             // 一覧板(フォント・大きさ)。選ぶのは板の中
             "fontname" => { self.font_list = !self.font_list; self.size_list = false; }
+            // 用紙。向き / サイズ / 余白(選ぶ小窓は無いが、回して選べる)
+            "pageorient" => self.set_page(|pg| {
+                std::mem::swap(&mut pg.w_mm, &mut pg.h_mm);
+            }),
+            "pagesize" => self.set_page(|pg| {
+                // A4 → B5 → A3 → A4(向きは保つ)
+                let landscape = pg.w_mm > pg.h_mm;
+                let (w, h) = match (pg.w_mm.min(pg.h_mm) * 10.0) as u32 {
+                    2100 => (182.0, 257.0), // → B5
+                    1820 => (297.0, 420.0), // → A3
+                    _ => (210.0, 297.0),    // → A4
+                };
+                (pg.w_mm, pg.h_mm) = if landscape { (h, w) } else { (w, h) };
+            }),
+            "pagemargins" => self.set_page(|pg| {
+                // 標準20 → 狭い12 → 広い30 → 標準
+                let next = match pg.left_mm as u32 {
+                    20 => 12.0,
+                    12 => 30.0,
+                    _ => 20.0,
+                };
+                pg.left_mm = next;
+                pg.right_mm = next;
+                pg.top_mm = next;
+                pg.bottom_mm = next;
+            }),
             "fontsize" => { self.size_list = !self.size_list; self.font_list = false; }
             "ruler" => self.ruler = !self.ruler,
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
@@ -1687,5 +1770,53 @@ mod wiring_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod page_setup_tests {
+    use super::*;
+
+    #[test]
+    fn 用紙の変更が保存で残る() {
+        // 画面で変えただけで docx に書かれないなら、それは飾り
+        let mut d = Document::plain("本文", SIZE_PT);
+        let mut pg = kumihan::PageSetup::default();
+        std::mem::swap(&mut pg.w_mm, &mut pg.h_mm); // 横向き
+        d.page = Some(pg);
+        d.sect_raw = Some(format!(
+            "<w:sectPr><w:pgSz w:w=\"{}\" w:h=\"{}\" w:orient=\"landscape\"/>\
+             <w:pgMar w:top=\"1134\" w:right=\"1134\" w:bottom=\"1134\" w:left=\"1134\"/></w:sectPr>",
+            (pg.w_mm * 56.6929) as i64, (pg.h_mm * 56.6929) as i64));
+        let mut buf = Vec::new();
+        ooxml::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
+        let (back, _) = ooxml::read(std::io::Cursor::new(&buf)).unwrap();
+        let bp = back.page.expect("用紙が消えた");
+        assert!(bp.w_mm > bp.h_mm, "横向きが消えた: {}×{}", bp.w_mm, bp.h_mm);
+    }
+
+    #[test]
+    fn ヘッダーの参照は用紙を変えても残る() {
+        // set_page は pgSz/pgMar だけ作り替え、他は原文から引き継ぐ
+        let raw = r#"<w:sectPr><w:headerReference r:id="rId8"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>"#;
+        // set_page 内の引き継ぎと同じ処理を直接なぞる
+        let mut out = String::new();
+        let mut skip = false;
+        for part in raw.split_inclusive('>') {
+            let t = part.trim_start();
+            if t.starts_with("<w:sectPr") || t.starts_with("</w:sectPr") {
+                continue;
+            }
+            if t.starts_with("<w:pgSz") || t.starts_with("<w:pgMar") {
+                skip = !part.trim_end().ends_with("/>");
+                continue;
+            }
+            if skip {
+                continue;
+            }
+            out.push_str(part);
+        }
+        assert!(out.contains("headerReference"), "ヘッダーの参照が落ちた: {out}");
+        assert!(!out.contains("pgSz"), "古い用紙が残った: {out}");
     }
 }
