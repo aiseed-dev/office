@@ -338,28 +338,73 @@ impl Writer {
         self.proof = r.findings;
     }
 
+    /// 編集中のセルの段落へ書式を掛ける(セルは短いので丸ごと掛ける)。
+    fn each_cell_para(&mut self, f: impl Fn(&mut kumihan::Paragraph)) {
+        let Target::Cell { table, row, col } = self.target else { return };
+        self.flush_target();
+        if let Some(kumihan::Block::Table(tb)) = self
+            .doc
+            .blocks
+            .iter_mut()
+            .filter(|b| matches!(b, kumihan::Block::Table(_)))
+            .nth(table)
+        {
+            if let Some(cell) = tb.rows.get_mut(row).and_then(|r| r.get_mut(col)) {
+                for p in &mut cell.paragraphs {
+                    f(p);
+                }
+            }
+        }
+    }
+
     /// 選択している段落の文字書式を入切する。
-    fn toggle(&mut self, f: impl Fn(&mut kumihan::CharFormat)) {
-        let sel = self.ed.selection();
-        self.doc.set_body_text(self.ed.text(), SIZE_PT);
-        self.doc.apply_char_format(sel, f);
+    ///
+    /// **編集先が本文かセルかで掛け先が違う。** セル編集中に本文へ掛けると、
+    /// set_body_text がセルの文章で本文を上書きしてしまう。
+    fn toggle(&mut self, f: impl Fn(&mut kumihan::CharFormat) + Copy) {
+        match self.target {
+            Target::Body => {
+                let sel = self.ed.selection();
+                self.doc.set_body_text(self.ed.text(), SIZE_PT);
+                self.doc.apply_char_format(sel, f);
+            }
+            Target::Cell { .. } => self.each_cell_para(|p| {
+                for r in &mut p.runs {
+                    f(&mut r.fmt);
+                }
+            }),
+        }
         self.dirty = true;
         self.relayout_keep();
     }
 
     /// 選んでいる段落の性質を変える。
-    fn para(&mut self, f: impl Fn(&mut kumihan::Paragraph)) {
-        let sel = self.ed.selection();
-        self.doc.set_body_text(self.ed.text(), SIZE_PT);
-        self.doc.apply_para(sel, f);
+    fn para(&mut self, f: impl Fn(&mut kumihan::Paragraph) + Copy) {
+        match self.target {
+            Target::Body => {
+                let sel = self.ed.selection();
+                self.doc.set_body_text(self.ed.text(), SIZE_PT);
+                self.doc.apply_para(sel, f);
+            }
+            Target::Cell { .. } => self.each_cell_para(f),
+        }
         self.dirty = true;
         self.relayout_keep();
     }
 
-    fn size(&mut self, f: impl Fn(f32) -> f32) {
-        let sel = self.ed.selection();
-        self.doc.set_body_text(self.ed.text(), SIZE_PT);
-        self.doc.apply_size(sel, f);
+    fn size(&mut self, f: impl Fn(f32) -> f32 + Copy) {
+        match self.target {
+            Target::Body => {
+                let sel = self.ed.selection();
+                self.doc.set_body_text(self.ed.text(), SIZE_PT);
+                self.doc.apply_size(sel, f);
+            }
+            Target::Cell { .. } => self.each_cell_para(|p| {
+                for r in &mut p.runs {
+                    r.size_pt = f(r.size_pt).clamp(4.0, 400.0);
+                }
+            }),
+        }
         self.dirty = true;
         self.relayout_keep();
     }
@@ -391,9 +436,14 @@ impl Writer {
     }
 
     fn set_align(&mut self, a: Align) {
-        let sel = self.ed.selection();
-        self.doc.set_body_text(self.ed.text(), SIZE_PT);
-        self.doc.apply_align(sel, a);
+        match self.target {
+            Target::Body => {
+                let sel = self.ed.selection();
+                self.doc.set_body_text(self.ed.text(), SIZE_PT);
+                self.doc.apply_align(sel, a);
+            }
+            Target::Cell { .. } => self.each_cell_para(|p| p.align = a),
+        }
         self.dirty = true;
         self.relayout_keep();
     }
