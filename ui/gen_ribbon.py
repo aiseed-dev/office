@@ -40,6 +40,9 @@ READY = {
         "incfont": "incfont", "decfont": "decfont", "print": "pdf",
         "fontcolor": "fontcolor", "align-left": "align-left",
         "align-right": "align-right",
+        "markers": "markers", "numbering": "numbering",
+        "incoffset": "incoffset", "decoffset": "decoffset",
+        "linespace": "linespace",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

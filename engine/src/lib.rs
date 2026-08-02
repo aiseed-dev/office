@@ -78,10 +78,42 @@ impl Align {
     }
 }
 
+/// 箇条書きの種類。docx の `w:numPr` に対応する。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListKind {
+    #[default]
+    None,
+    /// 中黒の箇条書き
+    Bullet,
+    /// 段落番号
+    Number,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Paragraph {
     pub runs: Vec<Run>,
     pub align: Align,
+    pub list: ListKind,
+    /// 左のインデント段数。1段 = 全角2文字ぶん(日本の書類の慣習)
+    pub indent: u8,
+    /// 行間の倍率。1.0 が既定
+    pub line_spacing: f32,
+}
+
+impl Paragraph {
+    /// 行間の倍率。0 や負が入っていても壊れない値を返す。
+    pub fn spacing(&self) -> f32 {
+        if self.line_spacing <= 0.0 { 1.0 } else { self.line_spacing.clamp(0.5, 5.0) }
+    }
+
+    /// 箇条書きの頭に付く印。組版のときに本文の前へ置く。
+    pub fn marker(&self, nth: usize) -> Option<String> {
+        match self.list {
+            ListKind::None => None,
+            ListKind::Bullet => Some("・".into()),
+            ListKind::Number => Some(format!("{}. ", nth + 1)),
+        }
+    }
 }
 
 /// 表の1セル。中は段落の列(セルの中にも段落がある)
@@ -150,23 +182,29 @@ impl Document {
         let tables: Vec<Block> = self.blocks.iter()
             .filter(|b| matches!(b, Block::Table(_))).cloned().collect();
         // 引き継ぐ元(段落だけを順に)
-        let old: Vec<(Align, Option<String>, CharFormat, Option<f32>)> = self
+        let old: Vec<(Align, Option<String>, CharFormat, Option<f32>, ListKind, u8, f32)> = self
             .paragraphs()
             .map(|p| {
                 let r = p.runs.first();
                 (p.align,
                  r.and_then(|r| r.font.clone()),
                  r.map(|r| r.fmt.clone()).unwrap_or_default(),
-                 r.map(|r| r.size_pt))
+                 r.map(|r| r.size_pt),
+                 p.list, p.indent, p.line_spacing)
             })
             .collect();
         self.blocks = text
             .split('\n')
             .enumerate()
             .map(|(i, s)| {
-                let (align, font, fmt, old_pt) = old.get(i).cloned().unwrap_or_default();
+                let (align, font, fmt, old_pt, list, indent, ls) =
+                    old.get(i).cloned().unwrap_or((Align::default(), None,
+                        CharFormat::default(), None, ListKind::default(), 0, 1.0));
                 Block::Para(Paragraph {
                     align,
+                    list,
+                    indent,
+                    line_spacing: ls,
                     runs: vec![Run {
                         text: s.to_string(),
                         // 段落に付いていた大きさを守る。無ければ既定
@@ -259,6 +297,24 @@ impl Document {
         self.paragraphs().nth(target.start).and_then(|p| p.runs.first()).map(|r| r.size_pt)
     }
 
+    /// 選択範囲にかかる段落の性質(箇条書き・インデント・行間)を変える。
+    pub fn apply_para(&mut self, range: std::ops::Range<usize>, f: impl Fn(&mut Paragraph)) {
+        let target = self.para_range(range);
+        for (i, b) in self.blocks.iter_mut().filter(|b| matches!(b, Block::Para(_))).enumerate() {
+            if target.contains(&i) {
+                if let Block::Para(p) = b {
+                    f(p);
+                }
+            }
+        }
+    }
+
+    /// いま選択範囲の段落の性質。
+    pub fn para_at(&self, range: std::ops::Range<usize>) -> Option<&Paragraph> {
+        let target = self.para_range(range);
+        self.paragraphs().nth(target.start)
+    }
+
     /// 選択範囲にかかる段落の揃えを変える。
     pub fn apply_align(&mut self, range: std::ops::Range<usize>, align: Align) {
         let target = self.para_range(range);
@@ -296,6 +352,9 @@ impl Document {
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
                     align: Default::default(),
+                    list: Default::default(),
+                    indent: 0,
+                    line_spacing: 1.0,
                     runs: vec![Run { text: p.to_string(), size_pt, font: None, fmt: Default::default() }] }))
                 .collect(),
         }
@@ -440,7 +499,18 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
     let mut sheet = Sheet::default();
     let mut y = frame.y0_mm;
 
+    // 段落番号は「何番目の箇条書きか」で決まる。段落の位置ではない
+    let mut nth = 0usize;
     for para in doc.paragraphs() {
+        // インデント1段 = 全角2文字ぶん(日本の書類の慣習)
+        let em = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5) * 25.4 / 72.0;
+        let indent_mm = para.indent as f32 * em * 2.0;
+        let measure = (frame.measure_mm - indent_mm).max(em);
+        let marker = para.marker(nth);
+        match para.list {
+            ListKind::None => nth = 0,
+            _ => nth += 1,
+        }
         let mut done: Vec<Vec<Cell>> = Vec::new();
         let mut cur: Vec<Cell> = Vec::new();
         let mut w_cur = 0.0f32;
@@ -470,6 +540,17 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
             carry
         }
 
+        // 箇条書きの印は本文の前に置く。**本文の一部にはしない**ので、
+        // 編集中の文字位置とずれない(印は組版のときだけ現れる)
+        if let Some(mk) = &marker {
+            let size = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5);
+            let fmt = para.runs.first().map(|r| r.fmt.clone()).unwrap_or_default();
+            for ch in mk.chars() {
+                let w = m.advance_mm(ch, size);
+                cur.push(Cell { ch, x_mm: 0.0, w_mm: w, size_pt: size, fmt: fmt.clone() });
+                w_cur += w;
+            }
+        }
         for tok in tokenize(para, m) {
             let (cells, w): (Vec<Cell>, f32) = match &tok {
                 Tok::One(ch, w, s, f) =>
@@ -482,7 +563,7 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                     (vec![Cell { ch: ' ', x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone() }], *w),
             };
 
-            if w_cur + w > frame.measure_mm && !cur.is_empty() {
+            if w_cur + w > measure && !cur.is_empty() {
                 if let Tok::Space(..) = tok {
                     // 行末に空白は要らない。行を折るだけ
                     cur = close(&mut done, &mut cur, &mut w_cur, None);
@@ -506,13 +587,13 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
         // x座標を確定して紙面へ
         for cells in done {
             if cells.is_empty() {
-                y += frame.line_height_mm;
+                y += frame.line_height_mm * para.spacing();
                 continue;
             }
             // 揃え。**行の幅と行長の差を、どこに置くか**の話でしかない
             let w: f32 = cells.iter().map(|c| c.w_mm).sum();
-            let slack = (frame.measure_mm - w).max(0.0);
-            let mut x = match para.align {
+            let slack = (measure - w).max(0.0);
+            let mut x = indent_mm + match para.align {
                 Align::Left | Align::Justify => 0.0,
                 Align::Center => slack / 2.0,
                 Align::Right => slack,
@@ -522,7 +603,7 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                 .map(|mut c| { c.x_mm = x; x += c.w_mm; c })
                 .collect();
             sheet.lines.push(Line { cells, y_mm: y });
-            y += frame.line_height_mm;
+            y += frame.line_height_mm * para.spacing();
         }
     }
     sheet
@@ -767,5 +848,92 @@ mod size_tests {
         d.apply_font(0..2, Some("BIZ UDPゴシック".into()));
         assert_eq!(d.paragraphs().next().unwrap().runs[0].font.as_deref(), Some("BIZ UDPゴシック"));
         assert_eq!(d.paragraphs().nth(1).unwrap().runs[0].font, None, "他の段落まで変わった");
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    fn sheet(setup: impl Fn(&mut Document)) -> Sheet {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("一つ目\n二つ目\n三つ目", 10.5);
+        setup(&mut d);
+        layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 })
+    }
+
+    fn text(s: &Sheet, i: usize) -> String {
+        s.lines.get(i).map(|l| l.text()).unwrap_or_default()
+    }
+
+    #[test]
+    fn 箇条書きの印が本文の前に出る() {
+        let s = sheet(|d| {
+            for b in &mut d.blocks {
+                if let Block::Para(p) = b { p.list = ListKind::Bullet }
+            }
+        });
+        assert!(text(&s, 0).starts_with('・'), "印が出ていない: {:?}", text(&s, 0));
+    }
+
+    #[test]
+    fn 段落番号は連番になる() {
+        let s = sheet(|d| {
+            for b in &mut d.blocks {
+                if let Block::Para(p) = b { p.list = ListKind::Number }
+            }
+        });
+        assert!(text(&s, 0).starts_with("1."), "{:?}", text(&s, 0));
+        assert!(text(&s, 1).starts_with("2."), "{:?}", text(&s, 1));
+        assert!(text(&s, 2).starts_with("3."), "{:?}", text(&s, 2));
+    }
+
+    #[test]
+    fn 印は本文を書き換えない() {
+        // 編集中の文字位置とずれると、カーソルが合わなくなる
+        let mut d = Document::plain("一つ目", 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] { p.list = ListKind::Bullet }
+        assert_eq!(d.body_text(), "一つ目", "本文に印が混ざった");
+    }
+
+    #[test]
+    fn インデントで右へ寄る() {
+        let plain = sheet(|_| {});
+        let ind = sheet(|d| {
+            for b in &mut d.blocks {
+                if let Block::Para(p) = b { p.indent = 2 }
+            }
+        });
+        assert!(ind.lines[0].cells[0].x_mm > plain.lines[0].cells[0].x_mm + 5.0,
+                "インデントが効いていない");
+    }
+
+    #[test]
+    fn 行間で行が離れる() {
+        let plain = sheet(|_| {});
+        let wide = sheet(|d| {
+            for b in &mut d.blocks {
+                if let Block::Para(p) = b { p.line_spacing = 2.0 }
+            }
+        });
+        let gap = |s: &Sheet| s.lines[1].y_mm - s.lines[0].y_mm;
+        assert!((gap(&wide) - gap(&plain) * 2.0).abs() < 0.1,
+                "行間が倍になっていない: {} → {}", gap(&plain), gap(&wide));
+    }
+
+    #[test]
+    fn インデントすると行長が縮む() {
+        // 右端がはみ出さないこと
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let long = "あ".repeat(60);
+        let mut d = Document::plain(&long, 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] { p.indent = 3 }
+        let s = layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        for l in &s.lines {
+            let right = l.cells.last().map(|c| c.x_mm + c.w_mm).unwrap_or(0.0);
+            assert!(right <= 100.5, "行長を超えた: {right}mm");
+        }
     }
 }

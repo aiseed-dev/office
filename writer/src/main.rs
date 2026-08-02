@@ -21,7 +21,7 @@ use gpui::{
     WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
-use kumihan::{layout, Align, Document, Editor, Frame, Metrics, Sheet as Page};
+use kumihan::{layout, Align, Document, Editor, Frame, ListKind, Metrics, Sheet as Page};
 use ui::{handler, ribbon, HasEditor};
 
 /// 本文のフォント。**同梱せず、システムから探す**
@@ -255,6 +255,15 @@ impl Writer {
         self.relayout_keep();
     }
 
+    /// 選んでいる段落の性質を変える。
+    fn para(&mut self, f: impl Fn(&mut kumihan::Paragraph)) {
+        let sel = self.ed.selection();
+        self.doc.set_body_text(self.ed.text(), SIZE_PT);
+        self.doc.apply_para(sel, f);
+        self.dirty = true;
+        self.relayout_keep();
+    }
+
     fn size(&mut self, f: impl Fn(f32) -> f32) {
         let sel = self.ed.selection();
         self.doc.set_body_text(self.ed.text(), SIZE_PT);
@@ -338,6 +347,24 @@ impl Writer {
             // 文字色。押すたびに 赤 → 青 → 黒(解除)と回す。
             // 色を選ぶ小窓はまだ無いので、**無い機能を有るように見せず**
             // 使える範囲で回す形にしてある
+            // 箇条書き・段落番号。押すたびに入切する
+            "markers" => self.para(|p| {
+                p.list = if p.list == ListKind::Bullet { ListKind::None } else { ListKind::Bullet }
+            }),
+            "numbering" => self.para(|p| {
+                p.list = if p.list == ListKind::Number { ListKind::None } else { ListKind::Number }
+            }),
+            // インデント。0〜20段に留める
+            "incoffset" => self.para(|p| p.indent = (p.indent + 1).min(20)),
+            "decoffset" => self.para(|p| p.indent = p.indent.saturating_sub(1)),
+            // 行間。1.0 → 1.5 → 2.0 → 1.0 と回す(小窓がまだ無いので)
+            "linespace" => self.para(|p| {
+                p.line_spacing = match p.spacing() {
+                    s if s < 1.25 => 1.5,
+                    s if s < 1.75 => 2.0,
+                    _ => 1.0,
+                }
+            }),
             "fontcolor" => self.toggle(|f| {
                 f.color = match f.color.as_deref() {
                     None => Some("C00000".into()),
