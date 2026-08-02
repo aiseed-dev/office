@@ -43,7 +43,7 @@ READY = {
         "markers": "markers", "numbering": "numbering",
         "wordcount": "wordcount", "spell": "spell", "pagebreak": "pagebreak",
         "zoom-in": "zoom-in", "zoom-out": "zoom-out",
-        "instable": "instable", "inssymbol": "inssymbol",
+        "instable": "instable", "inssymbol": "inssymbol", "replace": "replace",
         "incoffset": "incoffset", "decoffset": "decoffset",
         "linespace": "linespace",
     },

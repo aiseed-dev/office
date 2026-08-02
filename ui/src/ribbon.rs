@@ -72,7 +72,7 @@ pub const WRITER: &[Tab] = &[
         x("段落の背景色", "paracolor"),
         x("罫線", "borders"),
         x("段落のスタイル", "styles"),
-        x("置き換え", "replace"),
+        c("replace", "置き換え", "replace"),
         c("selectall", "すべて選択", "select-all"),
     ]},
     Tab { name: "挿入", cmds: &[

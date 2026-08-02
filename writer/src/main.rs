@@ -116,6 +116,12 @@ struct Writer {
     target: Target,
     /// 記号の一覧を出しているか
     symbols: bool,
+    /// 置換の板。開いている間、打鍵は検索欄に入る
+    find_open: bool,
+    /// 0=検索語 1=置換後
+    find_field: usize,
+    find_ed: Editor,
+    repl_ed: Editor,
     /// 校正の指摘(レビュー > 校正)。英語は辞書、日本語はモデル
     proof: Vec<ui::check::Finding>,
     proof_msg: SharedString,
@@ -125,12 +131,26 @@ struct Writer {
 
 impl HasEditor for Writer {
     fn editor(&mut self) -> &mut Editor {
-        &mut self.ed
+        // 置換の板が開いている間、入力(IME含む)は検索欄へ入る。
+        // 別の入力部品を作らず、同じ Editor と結線を使い回す
+        if self.find_open {
+            if self.find_field == 0 { &mut self.find_ed } else { &mut self.repl_ed }
+        } else {
+            &mut self.ed
+        }
     }
     fn editor_ref(&self) -> &Editor {
-        &self.ed
+        if self.find_open {
+            if self.find_field == 0 { &self.find_ed } else { &self.repl_ed }
+        } else {
+            &self.ed
+        }
     }
     fn on_edited(&mut self) {
+        if self.find_open {
+            // 検索欄への打鍵は文書を変えない
+            return;
+        }
         self.dirty = true;
         self.relayout();
     }
@@ -151,6 +171,10 @@ impl Writer {
             zoom: 1.0,
             target: Target::Body,
             symbols: false,
+            find_open: false,
+            find_field: 0,
+            find_ed: Editor::new(""),
+            repl_ed: Editor::new(""),
             font_name: kumihan::font::for_document(None)
                 .map(|(f, _)| SharedString::from(f.name.clone()))
                 .unwrap_or_else(|_| "sans-serif".into()),
@@ -547,6 +571,72 @@ impl Writer {
         self.ed.move_to(byte, extend);
     }
 
+    /// 次の一致を選ぶ(カーソルの後ろから。末尾まで無ければ頭から一周)。
+    fn find_next(&mut self) {
+        let term = self.find_ed.text().to_string();
+        if term.is_empty() {
+            self.status = "検索語が空です".into();
+            return;
+        }
+        let text = self.ed.text().to_string();
+        let from = self.ed.selection().end;
+        let hit = text[from..]
+            .find(&term)
+            .map(|i| from + i)
+            .or_else(|| text.find(&term));
+        match hit {
+            Some(i) => {
+                self.ed.move_to(i, false);
+                self.ed.move_to(i + term.len(), true);
+                self.status = "".into();
+            }
+            None => self.status = format!("「{term}」は見つかりません").into(),
+        }
+    }
+
+    /// いま選ばれている一致を置き換えて、次へ。
+    fn replace_current(&mut self) {
+        let term = self.find_ed.text().to_string();
+        let repl = self.repl_ed.text().to_string();
+        if term.is_empty() {
+            return;
+        }
+        let sel = self.ed.selection();
+        let selected: String = self.ed.text()[sel.clone()].to_string();
+        if selected == term {
+            self.ed.insert(&repl);
+            self.dirty = true;
+            self.relayout();
+        }
+        self.find_next();
+    }
+
+    /// 全部置き換える。**何件変えたかを言う**(黙って書き換えない)。
+    fn replace_all(&mut self) {
+        let term = self.find_ed.text().to_string();
+        let repl = self.repl_ed.text().to_string();
+        if term.is_empty() {
+            return;
+        }
+        let mut n = 0usize;
+        loop {
+            let text = self.ed.text().to_string();
+            let Some(i) = text.find(&term) else { break };
+            self.ed.move_to(i, false);
+            self.ed.move_to(i + term.len(), true);
+            self.ed.insert(&repl);
+            n += 1;
+            if n > 100_000 {
+                break; // 置換後が検索語を含むと止まらなくなるのを防ぐ
+            }
+        }
+        if n > 0 {
+            self.dirty = true;
+            self.relayout();
+        }
+        self.status = format!("{n} 件を置き換えました").into();
+    }
+
     fn run_cmd(&mut self, id: &str) {
         match id {
             "open" => {
@@ -614,6 +704,15 @@ impl Writer {
             }
             // 記号の一覧(押すと出る/消える)
             "inssymbol" => self.symbols = !self.symbols,
+            // 置換の板。開いている間、打鍵は検索欄に入る
+            "replace" => {
+                self.find_open = !self.find_open;
+                self.find_field = 0;
+                if self.find_open {
+                    self.switch_target(Target::Body);
+                    self.status = "検索語を打って Enter で次へ".into();
+                }
+            }
             // 画面の倍率。50〜200%。紙は変わらない
             "zoom-in" => self.zoom = (self.zoom + 0.1).min(2.0),
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
@@ -646,47 +745,51 @@ impl Writer {
 
     // ---- 割り当てられた操作 ----
     fn backspace(&mut self, _: &ui::Backspace, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.backspace();
+        self.editor().backspace();
         self.on_edited();
         cx.notify();
     }
     fn delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.delete();
+        self.editor().delete();
         self.on_edited();
         cx.notify();
     }
     fn left(&mut self, _: &ui::Left, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.move_char(false, false);
+        self.editor().move_char(false, false);
         cx.notify();
     }
     fn right(&mut self, _: &ui::Right, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.move_char(true, false);
+        self.editor().move_char(true, false);
         cx.notify();
     }
     fn select_left(&mut self, _: &ui::SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.move_char(false, true);
+        self.editor().move_char(false, true);
         cx.notify();
     }
     fn select_right(&mut self, _: &ui::SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.move_char(true, true);
+        self.editor().move_char(true, true);
         cx.notify();
     }
     fn select_all(&mut self, _: &ui::SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.select_all();
+        self.editor().select_all();
         cx.notify();
     }
     fn home(&mut self, _: &ui::Home, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.move_to(0, false);
+        self.editor().move_to(0, false);
         cx.notify();
     }
     fn end(&mut self, _: &ui::End, _: &mut Window, cx: &mut Context<Self>) {
-        let n = self.ed.text().len();
-        self.ed.move_to(n, false);
+        let n = self.editor_ref().text().len();
+        self.editor().move_to(n, false);
         cx.notify();
     }
     fn enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
-        self.ed.insert("\n");
-        self.on_edited();
+        if self.find_open {
+            self.find_next();
+        } else {
+            self.editor().insert("\n");
+            self.on_edited();
+        }
         cx.notify();
     }
     fn undo(&mut self, _: &ui::Undo, _: &mut Window, cx: &mut Context<Self>) {
@@ -966,6 +1069,60 @@ impl Render for Writer {
             .w(px(1.5)).h(px(SIZE_PT * 96.0 / 72.0 * self.zoom * 1.15))
             .bg(rgb(0x165E83)));
 
+        // 置換の板
+        let find_panel = if !self.find_open {
+            None
+        } else {
+            let field = |label: &str, ed: &Editor, active: bool| {
+                // caret は | で見せる(専用の入力部品を作らない割り切り)
+                let mut s = ed.text().to_string();
+                let cur = ed.cursor().min(s.len());
+                if active {
+                    s.insert(cur, '|');
+                }
+                div().flex().flex_row().items_center().gap_2()
+                    .child(div().w(px(64.0)).text_size(px(11.5))
+                        .text_color(rgb(0x66707A)).child(SharedString::from(label.to_string())))
+                    .child(div().flex_1().px_2().py_1().rounded_sm()
+                        .border_1()
+                        .border_color(if active { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                        .bg(gpui::white())
+                        .text_size(px(12.5))
+                        .whitespace_nowrap().overflow_hidden()
+                        .child(SharedString::from(s)))
+            };
+            let btn = |id: &str, label: &str| {
+                div().id(SharedString::from(id.to_string()))
+                    .px_2p5().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).text_color(rgb(0x1B6E3C))
+                    .text_size(px(11.5)).cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .child(SharedString::from(label.to_string()))
+            };
+            Some(div().absolute().left(px(16.0)).top(px(8.0)).w(px(430.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(field("検索", &self.find_ed, self.find_field == 0)
+                    .id("find-f").cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| { this.find_field = 0; cx.notify() })))
+                .child(field("置換後", &self.repl_ed, self.find_field == 1)
+                    .id("find-r").cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| { this.find_field = 1; cx.notify() })))
+                .child(div().flex().flex_row().gap_2()
+                    .child(btn("f-next", "次へ (Enter)")
+                        .on_click(cx.listener(|this, _, _, cx| { this.find_next(); cx.notify() })))
+                    .child(btn("f-one", "置換")
+                        .on_click(cx.listener(|this, _, _, cx| { this.replace_current(); cx.notify() })))
+                    .child(btn("f-all", "すべて置換")
+                        .on_click(cx.listener(|this, _, _, cx| { this.replace_all(); cx.notify() })))
+                    .child(div().flex_1())
+                    .child(btn("f-close", "閉じる")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.find_open = false; cx.notify()
+                        })))))
+        };
+
         // 記号の一覧。事務の書類で使うものだけ(飾りの絵文字は入れない)
         let symbol_panel = if !self.symbols {
             None
@@ -1060,6 +1217,7 @@ impl Render for Writer {
                 div().flex_1().relative()
                     .child(paper)
                     .children(notes)
+                    .children(find_panel)
                     .children(symbol_panel)
                     .children(proof_panel)
                     .child(InputSink { view: me }),
@@ -1207,5 +1365,41 @@ mod cell_edit_tests {
         set_cell_text(&mut c, "直した");
         assert_eq!(c.paragraphs[0].align, kumihan::Align::Center, "揃えが消えた");
         assert!(c.paragraphs[0].runs[0].fmt.bold, "太字が消えた");
+    }
+}
+
+#[cfg(test)]
+mod find_tests {
+    use super::*;
+
+    fn w(text: &str) -> (Editor, Editor, Editor) {
+        (Editor::new(text), Editor::new(""), Editor::new(""))
+    }
+
+    // find_next/replace の中身はエディタ操作の列なので、
+    // ここでは検索の規則(後ろから・一周する)だけを関数で確かめる
+    fn next_hit(text: &str, term: &str, from: usize) -> Option<usize> {
+        text[from..].find(term).map(|i| from + i).or_else(|| text.find(term))
+    }
+
+    #[test]
+    fn カーソルの後ろから探す() {
+        let t = "誤りを直す。誤りは残さない。";
+        let first = next_hit(t, "誤り", 0).unwrap();
+        let second = next_hit(t, "誤り", first + "誤り".len()).unwrap();
+        assert!(second > first);
+    }
+
+    #[test]
+    fn 末尾まで無ければ頭から一周() {
+        let t = "誤りを直す。";
+        let hit = next_hit(t, "誤り", 10);
+        assert_eq!(hit, Some(0), "一周していない");
+    }
+
+    #[test]
+    fn 無ければ無いと言える() {
+        assert_eq!(next_hit("本文", "存在しない", 0), None);
+        let _ = w("x");
     }
 }
