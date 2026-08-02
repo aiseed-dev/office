@@ -68,6 +68,8 @@ struct Calc {
     book: Book,
     active: usize,
     cursor: Pos,
+    /// 範囲選択の起点(Shift+矢印/クリックで伸ばす)。無ければ1セル
+    anchor: Option<Pos>,
     /// 数式バーの中身。IMEもここに来る(セルの入力は1本のテキスト編集)
     input: Editor,
     path: Option<PathBuf>,
@@ -91,6 +93,7 @@ impl Calc {
             book: Book::new(),
             active: 0,
             cursor: Pos::new(0, 0),
+            anchor: None,
             input: Editor::new(""),
             path: None,
             status: "".into(),
@@ -150,7 +153,31 @@ impl Calc {
     }
 
     /// カーソルを動かす(動かす前に編集中の内容を確定する)。
+    /// いま選んでいる長方形(左上, 右下)。
+    fn sel_rect(&self) -> (Pos, Pos) {
+        let a = self.anchor.unwrap_or(self.cursor);
+        let c = self.cursor;
+        (Pos::new(a.row.min(c.row), a.col.min(c.col)),
+         Pos::new(a.row.max(c.row), a.col.max(c.col)))
+    }
+
+    /// Shift+矢印。起点を置いてから動く
+    fn extend(&mut self, dr: i32, dc: i32) {
+        if self.anchor.is_none() {
+            self.anchor = Some(self.cursor);
+        }
+        self.commit();
+        let r = (self.cursor.row as i32 + dr).max(0) as u32;
+        let c = (self.cursor.col as i32 + dc).max(0) as u32;
+        self.cursor = Pos::new(r.min(ROWS - 1), c.min(COLS - 1));
+        let (a, b) = self.sel_rect();
+        self.status = format!("{}:{}", a.a1(), b.a1()).into();
+        self.sync_input();
+    }
+
     fn move_cursor(&mut self, dr: i32, dc: i32) {
+        // 普通の移動は選択を解く
+        self.anchor = None;
         self.commit();
         let r = (self.cursor.row as i32 + dr).max(0) as u32;
         let c = (self.cursor.col as i32 + dc).max(0) as u32;
@@ -219,6 +246,22 @@ impl Calc {
     fn a_enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
         self.move_cursor(1, 0); cx.notify();
     }
+    fn a_select_left(&mut self, _: &ui::SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.input.text().is_empty() { self.extend(0, -1) }
+        else { self.input.move_char(false, true) }
+        cx.notify();
+    }
+    fn a_select_right(&mut self, _: &ui::SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.input.text().is_empty() { self.extend(0, 1) }
+        else { self.input.move_char(true, true) }
+        cx.notify();
+    }
+    fn a_select_up(&mut self, _: &ui::SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.extend(-1, 0); cx.notify();
+    }
+    fn a_select_down(&mut self, _: &ui::SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.extend(1, 0); cx.notify();
+    }
     fn a_select_all(&mut self, _: &ui::SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.input.select_all(); cx.notify();
     }
@@ -240,12 +283,42 @@ impl Calc {
     /// **値の無いセルにも掛ける** — 罫線だけを引くのは帳票では普通の操作。
     fn fmt(&mut self, f: impl Fn(&mut CellFormat)) {
         self.commit();
-        let p = self.cursor;
-        let mut c = self.sheet().get(p).cloned().unwrap_or_default();
-        f(&mut c.fmt);
-        self.book.sheets[self.active].set(p, c);
+        // 範囲選択があれば全部に掛ける。罫線も塗りも、帳票は範囲でやる仕事
+        let (a, b) = self.sel_rect();
+        for r in a.row..=b.row {
+            for cidx in a.col..=b.col {
+                let p = Pos::new(r, cidx);
+                let mut c = self.sheet().get(p).cloned().unwrap_or_default();
+                f(&mut c.fmt);
+                self.book.sheets[self.active].set(p, c);
+            }
+        }
         self.dirty = true;
         recalc(&mut self.book.sheets[self.active]);
+    }
+
+    /// 選んだ範囲を結合する。**値は消さない** — 左上以外の値は隠れるだけで、
+    /// 結合を解けば戻る(黙って捨てない)。
+    fn merge_selection(&mut self) {
+        let (a, b) = self.sel_rect();
+        if a == b {
+            self.status = "結合する範囲を Shift+矢印で選んでください".into();
+            return;
+        }
+        let sh = &mut self.book.sheets[self.active];
+        // 同じ範囲がもう結合されていたら解く(押すたびに入切)
+        if let Some(i) = sh.merges.iter().position(|m| *m == (a, b)) {
+            sh.merges.remove(i);
+            self.status = format!("{}:{} の結合を解きました", a.a1(), b.a1()).into();
+        } else {
+            sh.merges.retain(|(x, y)| {
+                // 重なる結合は先に外す(入れ子の結合は帳票を壊す)
+                y.row < a.row || x.row > b.row || y.col < a.col || x.col > b.col
+            });
+            sh.merges.push((a, b));
+            self.status = format!("{}:{} を結合しました", a.a1(), b.a1()).into();
+        }
+        self.dirty = true;
     }
 
     /// 行・列を出し入れする。
@@ -311,6 +384,7 @@ impl Calc {
             // 書式のクリア。値は消さない
             "clear" => self.fmt(|f| *f = CellFormat::default()),
             // 塗りつぶし。黄 → 水色 → 解除(色を選ぶ小窓がまだ無い)
+            "merge" => self.merge_selection(),
             "fillparag" => self.fmt(|f| {
                 f.fill = match f.fill.as_deref() {
                     None => Some("FFF2CC".into()),
@@ -572,11 +646,14 @@ impl Render for Calc {
                 let is_num = matches!(v, Value::Number(_));
                 let is_err = matches!(v, Value::Error(_));
                 let sel = p == self.cursor;
+                let (ra, rb) = self.sel_rect();
+                let in_range = self.anchor.is_some()
+                    && (ra.row..=rb.row).contains(&r) && (ra.col..=rb.col).contains(&c);
                 let mut d = div()
                     .id(SharedString::from(p.a1()))
                     .w(px(COL_W)).h(px(ROW_H))
                     .border_r_1().border_b_1().border_color(rgb(0xE1E6EA))
-                    .bg(if sel { rgb(0xEAF5EE) } else { rgb(0xFFFFFF) })
+                    .bg(if sel { rgb(0xEAF5EE) } else if in_range { rgb(0xF2F8F4) } else { rgb(0xFFFFFF) })
                     .flex().items_center()
                     .px_1p5()
                     .text_size(px(12.5)).font_family("Noto Sans JP")
@@ -654,6 +731,10 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_tab))
             .on_action(cx.listener(Calc::a_enter))
             .on_action(cx.listener(Calc::a_select_all))
+            .on_action(cx.listener(Calc::a_select_left))
+            .on_action(cx.listener(Calc::a_select_right))
+            .on_action(cx.listener(Calc::a_select_up))
+            .on_action(cx.listener(Calc::a_select_down))
             .on_action(cx.listener(Calc::a_undo))
             .on_action(cx.listener(Calc::a_save))
             .on_action(cx.listener(Calc::a_open))

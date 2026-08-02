@@ -24,6 +24,7 @@ actions!(
     jo_edit,
     [
         Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll,
+        SelectUp, SelectDown,
         Home, End, Enter, Undo, Redo, Save, Open, Up, Down, Tab,
     ]
 );
@@ -37,6 +38,8 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("right", Right, Some(context)),
         KeyBinding::new("shift-left", SelectLeft, Some(context)),
         KeyBinding::new("shift-right", SelectRight, Some(context)),
+        KeyBinding::new("shift-up", SelectUp, Some(context)),
+        KeyBinding::new("shift-down", SelectDown, Some(context)),
         KeyBinding::new("ctrl-a", SelectAll, Some(context)),
         KeyBinding::new("home", Home, Some(context)),
         KeyBinding::new("end", End, Some(context)),
