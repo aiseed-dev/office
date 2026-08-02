@@ -84,6 +84,11 @@ fn set_cell_text(c: &mut kumihan::Cellbox, text: &str) {
 }
 
 const PX_PER_MM: f32 = 96.0 / 25.4;
+/// gpui の文字は行の高さが既定で黄金比(1.618×文字サイズ)なので、
+/// グリフは div の頭から余白の半分ぶん下に描かれる。自前で引く線
+/// (変換の下線・下線・取り消し線・蛍光ペン)はそのぶん下げて
+/// グリフの実位置に合わせる — 合わせないと下線が文字を横切る
+const HALF_LEADING: f32 = 0.309; // (1.618 - 1) / 2
 const MARGIN_MM: f32 = 20.0;
 const MEASURE_MM: f32 = 210.0 - 2.0 * MARGIN_MM;
 const SIZE_PT: f32 = 10.5;
@@ -1397,7 +1402,7 @@ impl Render for Writer {
                     };
                     paper = paper.child(div().absolute()
                         .left(px((x0 + w(a)) * pxmm))
-                        .top(px(top + sz * 1.05))
+                        .top(px(top + sz * (1.05 + HALF_LEADING)))
                         .w(px((w(b) - w(a)).max(1.0) * pxmm))
                         .h(px(2.0)).bg(rgb(0x165E83)));
                 }
@@ -1423,7 +1428,7 @@ impl Render for Writer {
                     _ => rgb(0xF7EFA8),
                 };
                 paper = paper.child(div().absolute()
-                    .left(px(x0 * pxmm)).top(px(top))
+                    .left(px(x0 * pxmm)).top(px(top + sz * HALF_LEADING))
                     .w(px(w_mm * pxmm)).h(px(sz * 1.15))
                     .bg(bg));
             }
@@ -1465,7 +1470,10 @@ impl Render for Writer {
             }
             // 下線・取り消し線は自分で引く(gpui の text に無い)
             let w_mm: f32 = line.cells.iter().map(|c| c.w_mm).sum();
-            for (on, dy) in [(f.underline, sz * 1.05), (f.strike, sz * 0.35)] {
+            for (on, dy) in [
+                (f.underline, sz * (1.05 + HALF_LEADING)),
+                (f.strike, sz * (0.35 + HALF_LEADING)),
+            ] {
                 if on {
                     paper = paper.child(div().absolute()
                         .left(px(x0 * pxmm)).top(px(top + dy))
