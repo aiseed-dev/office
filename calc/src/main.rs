@@ -552,6 +552,7 @@ impl Calc {
         "bold", "italic", "underline", "borders", "fillparag", "fontcolor",
         "align-left", "align-center", "align-right",
         "comma", "currency", "percents", "digit-inc", "digit-dec", "clear",
+        "strikeout", "top", "middle", "bottom", "wrap", "incfont", "decfont",
         "cell-ins", "cell-del", "insrow", "inscol",
         "merge", "custom-sort", "rem-duplicates", "setfilter", "clear-filter",
         "fill-num", "freeze", "show-formulas", "show-gridlines",
@@ -584,6 +585,21 @@ impl Calc {
             "bold" => self.fmt(|f| f.bold = !f.bold),
             "italic" => self.fmt(|f| f.italic = !f.italic),
             "underline" => self.fmt(|f| f.underline = !f.underline),
+            "strikeout" => self.fmt(|f| f.strike = !f.strike),
+            // 縦の揃えと折り返し
+            "top" => self.fmt(|f| f.valign = sheet::model::VAlign::Top),
+            "middle" => self.fmt(|f| f.valign = sheet::model::VAlign::Middle),
+            "bottom" => self.fmt(|f| f.valign = sheet::model::VAlign::Bottom),
+            "wrap" => self.fmt(|f| f.wrap = !f.wrap),
+            // 文字の大きさ(4〜72pt)
+            "incfont" => self.fmt(|f| {
+                let pt = f.size_c.map(|c| c as f32 / 100.0).unwrap_or(11.0);
+                f.size_c = Some((((pt + 1.0).min(72.0)) * 100.0) as u32);
+            }),
+            "decfont" => self.fmt(|f| {
+                let pt = f.size_c.map(|c| c as f32 / 100.0).unwrap_or(11.0);
+                f.size_c = Some((((pt - 1.0).max(4.0)) * 100.0) as u32);
+            }),
             "align-left" => self.fmt(|f| f.align = HAlign::Left),
             "align-center" => self.fmt(|f| f.align = HAlign::Center),
             "align-right" => self.fmt(|f| f.align = HAlign::Right),
@@ -993,7 +1009,10 @@ impl Render for Calc {
                     .bg(if sel { rgb(0xEAF5EE) } else if in_range { rgb(0xF2F8F4) } else { rgb(0xFFFFFF) })
                     .flex().items_center()
                     .px_1p5()
-                    .text_size(px(12.5)).font_family("Noto Sans JP")
+                    .text_size(px(cell.and_then(|x| x.fmt.size_c)
+                        .map(|c| c as f32 / 100.0 * 24.0 / 15.0 * 0.8)
+                        .unwrap_or(12.5)))
+                    .font_family("Noto Sans JP")
                     .overflow_hidden().whitespace_nowrap()
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1030,6 +1049,15 @@ impl Render for Calc {
                 if f.borders.right { d = d.border_r_1().border_color(ink) }
                 if sel {
                     d = d.border_2().border_color(rgb(0x1B6E3C));
+                }
+                // 縦の揃え(既定は下 = xlsx の既定)
+                match f.valign {
+                    sheet::model::VAlign::Top => d = d.items_start(),
+                    sheet::model::VAlign::Middle => d = d.items_center(),
+                    sheet::model::VAlign::Bottom => d = d.items_end(),
+                }
+                if f.wrap {
+                    d = d.whitespace_normal().overflow_hidden();
                 }
                 // 揃えの指定があればそちらが勝つ(既定は数=右・文字=左)
                 match f.align {

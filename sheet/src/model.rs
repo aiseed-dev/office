@@ -139,6 +139,33 @@ impl HAlign {
     }
 }
 
+/// セルの縦の揃え。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum VAlign {
+    Top,
+    Middle,
+    /// xlsx の既定は下揃え
+    #[default]
+    Bottom,
+}
+
+impl VAlign {
+    pub fn as_xlsx(self) -> Option<&'static str> {
+        match self {
+            VAlign::Top => Some("top"),
+            VAlign::Middle => Some("center"),
+            VAlign::Bottom => None,
+        }
+    }
+    pub fn from_xlsx(v: &str) -> VAlign {
+        match v {
+            "top" => VAlign::Top,
+            "center" => VAlign::Middle,
+            _ => VAlign::Bottom,
+        }
+    }
+}
+
 /// セルの書式。xlsx の `styles.xml`(xf / font / fill / border)に対応する。
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CellFormat {
@@ -153,6 +180,12 @@ pub struct CellFormat {
     pub color: Option<String>,
     /// 書体の名前(xlsx の `<font><name>`)。文書の設定
     pub font: Option<String>,
+    /// 文字の大きさ(pt×100 で持つ。f32 だと Ord が付かない)
+    pub size_c: Option<u32>,
+    pub strike: bool,
+    pub valign: VAlign,
+    /// 折り返して全体を表示
+    pub wrap: bool,
     /// 表示形式(`#,##0` `0.00%` など)。xlsx の numFmt
     pub number_format: Option<String>,
 }

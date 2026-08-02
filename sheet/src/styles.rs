@@ -12,7 +12,19 @@ use std::collections::BTreeMap;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::model::{Borders, CellFormat, HAlign};
+use crate::model::{Borders, CellFormat, HAlign, VAlign};
+
+/// styles.xml の <font> 1つぶん。
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Fnt {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strike: bool,
+    size_c: Option<u32>,
+    color: Option<String>,
+    name: Option<String>,
+}
 
 fn local(n: &[u8]) -> &[u8] {
     match n.iter().position(|c| *c == b':') {
@@ -28,7 +40,7 @@ fn attr(e: &quick_xml::events::BytesStart, k: &str) -> Option<String> {
 
 /// `styles.xml` を読んで、索引 → 書式 の表にする。
 pub fn parse(xml: &str) -> Vec<CellFormat> {
-    let mut fonts: Vec<(bool, bool, bool, Option<String>, Option<String>)> = Vec::new();
+    let mut fonts: Vec<Fnt> = Vec::new();
     let mut fills: Vec<Option<String>> = Vec::new();
     let mut borders: Vec<Borders> = Vec::new();
     let mut numfmts: BTreeMap<u32, String> = BTreeMap::new();
@@ -36,7 +48,7 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
 
     // いま何の中にいるか。同じ名前の要素が section ごとに意味を変えるため
     let (mut in_fonts, mut in_fills, mut in_borders, mut in_cellxfs) = (false, false, false, false);
-    let mut font = (false, false, false, None::<String>, None::<String>);
+    let mut font = Fnt::default();
     let mut fill: Option<String> = None;
     let mut bd = Borders::default();
     let mut side: Option<Vec<u8>> = None;
@@ -89,17 +101,23 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
                 }
             }
             b"font" if in_fonts => {
-                font = (false, false, false, None, None);
+                font = Fnt::default();
                 if empty {
                     fonts.push(std::mem::take(&mut font));
                 }
             }
-            b"b" if in_fonts => font.0 = on(&e),
-            b"i" if in_fonts => font.1 = on(&e),
-            b"u" if in_fonts => font.2 = true,
-            b"color" if in_fonts => font.3 = rgb(&e),
+            b"b" if in_fonts => font.bold = on(&e),
+            b"i" if in_fonts => font.italic = on(&e),
+            b"u" if in_fonts => font.underline = true,
+            b"strike" if in_fonts => font.strike = on(&e),
+            b"sz" if in_fonts => {
+                font.size_c = attr(&e, "val")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .map(|pt| (pt * 100.0) as u32);
+            }
+            b"color" if in_fonts => font.color = rgb(&e),
             // 書体は文書の設定。読み捨てない
-            b"name" if in_fonts => font.4 = attr(&e, "val"),
+            b"name" if in_fonts => font.name = attr(&e, "val"),
             b"fill" if in_fills => {
                 fill = None;
                 if empty {
@@ -137,7 +155,12 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
             b"alignment" if in_cellxfs => {
                 if let Some(x) = xf.take() {
                     let a = attr(&e, "horizontal").map(|v| HAlign::from_xlsx(&v));
-                    xfs.push(resolve(x, &fonts, &fills, &borders, &numfmts, a));
+                    let va = attr(&e, "vertical").map(|v| VAlign::from_xlsx(&v));
+                    let wrap = attr(&e, "wrapText").as_deref() == Some("1");
+                    let mut f = resolve(x, &fonts, &fills, &borders, &numfmts, a);
+                    f.valign = va.unwrap_or_default();
+                    f.wrap = wrap;
+                    xfs.push(f);
                 }
             }
             _ => {}
@@ -161,7 +184,7 @@ fn rgb(e: &quick_xml::events::BytesStart) -> Option<String> {
 
 fn resolve(
     (fid, fillid, bid, nfid): (usize, usize, usize, u32),
-    fonts: &[(bool, bool, bool, Option<String>, Option<String>)],
+    fonts: &[Fnt],
     fills: &[Option<String>],
     borders: &[Borders],
     numfmts: &BTreeMap<u32, String>,
@@ -169,11 +192,15 @@ fn resolve(
 ) -> CellFormat {
     let f = fonts.get(fid).cloned().unwrap_or_default();
     CellFormat {
-        bold: f.0,
-        italic: f.1,
-        underline: f.2,
-        color: f.3,
-        font: f.4,
+        bold: f.bold,
+        italic: f.italic,
+        underline: f.underline,
+        strike: f.strike,
+        size_c: f.size_c,
+        valign: VAlign::default(),
+        wrap: false,
+        color: f.color,
+        font: f.name,
         fill: fills.get(fillid).cloned().flatten(),
         borders: borders.get(bid).copied().unwrap_or_default(),
         align: align.unwrap_or_default(),
@@ -286,15 +313,19 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
             order.push(f.clone());
         }
     }
-    let mut fonts: Vec<(bool, bool, bool, Option<String>, Option<String>)> =
-        vec![(false, false, false, None, None)];
+    let mut fonts: Vec<Fnt> =
+        vec![Fnt::default()];
     let mut fills: Vec<Option<String>> = vec![None, None]; // 0=none 1=gray125 は予約席
     let mut borders: Vec<Borders> = vec![Borders::NONE];
     let mut numfmts: Vec<String> = Vec::new();
-    let mut xfs: Vec<(usize, usize, usize, usize, HAlign)> = Vec::new();
+    let mut xfs: Vec<(usize, usize, usize, usize, HAlign, VAlign, bool)> = Vec::new();
 
     for f in &order {
-        let font = (f.bold, f.italic, f.underline, f.color.clone(), f.font.clone());
+        let font = Fnt {
+            bold: f.bold, italic: f.italic, underline: f.underline,
+            strike: f.strike, size_c: f.size_c,
+            color: f.color.clone(), name: f.font.clone(),
+        };
         let fi = idx(&mut fonts, font);
         let fl = match &f.fill {
             Some(c) => idx(&mut fills, Some(c.clone())),
@@ -308,7 +339,7 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
             }
             None => 0,
         };
-        xfs.push((fi, fl, bi, ni, f.align));
+        xfs.push((fi, fl, bi, ni, f.align, f.valign, f.wrap));
     }
 
     let mut s = String::from(
@@ -327,13 +358,19 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
         s.push_str("</numFmts>");
     }
     s.push_str(&format!("<fonts count=\"{}\">", fonts.len()));
-    for (b, i, u, c, name) in &fonts {
-        s.push_str("<font><sz val=\"11\"/>");
-        if *b { s.push_str("<b/>") }
-        if *i { s.push_str("<i/>") }
-        if *u { s.push_str("<u/>") }
-        if let Some(c) = c { s.push_str(&format!("<color rgb=\"FF{c}\"/>")) }
-        if let Some(n) = name { s.push_str(&format!("<name val=\"{}\"/>", esc(n))) }
+    for f in &fonts {
+        // 大きさは指定があるときだけ書く。無いのに 11 と書くと、
+        // 読み戻しで「11pt の指定がある」ことになってしまう
+        s.push_str("<font>");
+        if let Some(c) = f.size_c {
+            s.push_str(&format!("<sz val=\"{}\"/>", c as f32 / 100.0));
+        }
+        if f.bold { s.push_str("<b/>") }
+        if f.italic { s.push_str("<i/>") }
+        if f.underline { s.push_str("<u/>") }
+        if f.strike { s.push_str("<strike/>") }
+        if let Some(c) = &f.color { s.push_str(&format!("<color rgb=\"FF{c}\"/>")) }
+        if let Some(n) = &f.name { s.push_str(&format!("<name val=\"{}\"/>", esc(n))) }
         s.push_str("</font>");
     }
     s.push_str("</fonts>");
@@ -364,15 +401,26 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
     s.push_str("</borders>");
     s.push_str("<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>");
     s.push_str(&format!("<cellXfs count=\"{}\">", xfs.len()));
-    for (fi, fl, bi, ni, al) in &xfs {
+    for (fi, fl, bi, ni, al, va, wrap) in &xfs {
         // applyX を付けないと読み手が無視することがある
         s.push_str(&format!(
             "<xf numFmtId=\"{ni}\" fontId=\"{fi}\" fillId=\"{fl}\" borderId=\"{bi}\" xfId=\"0\"\
              applyNumberFormat=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\""
         ));
-        match al.as_xlsx() {
-            Some(a) => s.push_str(&format!(" applyAlignment=\"1\"><alignment horizontal=\"{a}\"/></xf>")),
-            None => s.push_str("/>"),
+        let mut attrs = String::new();
+        if let Some(a) = al.as_xlsx() {
+            attrs.push_str(&format!(" horizontal=\"{a}\""));
+        }
+        if let Some(v) = va.as_xlsx() {
+            attrs.push_str(&format!(" vertical=\"{v}\""));
+        }
+        if *wrap {
+            attrs.push_str(" wrapText=\"1\"");
+        }
+        if attrs.is_empty() {
+            s.push_str("/>");
+        } else {
+            s.push_str(&format!(" applyAlignment=\"1\"><alignment{attrs}/></xf>"));
         }
     }
     s.push_str("</cellXfs>");
@@ -472,5 +520,35 @@ mod font_name_tests {
         let back = &parse(&xml)[map[&f]];
         assert_eq!(back.font.as_deref(), Some("ＭＳ 明朝"), "書体名が消えた");
         assert!(back.bold);
+    }
+}
+
+#[cfg(test)]
+mod more_fmt_tests {
+    use super::*;
+
+    #[test]
+    fn 大きさと取り消し線と縦揃えと折り返しが往復する() {
+        let f = CellFormat {
+            size_c: Some(1400), // 14pt
+            strike: true,
+            valign: VAlign::Middle,
+            wrap: true,
+            ..Default::default()
+        };
+        let (xml, map) = build(&[f.clone()]);
+        let back = &parse(&xml)[map[&f]];
+        assert_eq!(back.size_c, Some(1400), "大きさが消えた");
+        assert!(back.strike, "取り消し線が消えた");
+        assert_eq!(back.valign, VAlign::Middle, "縦揃えが消えた");
+        assert!(back.wrap, "折り返しが消えた");
+    }
+
+    #[test]
+    fn 既定の縦揃えは書かない() {
+        // xlsx の既定は下揃え。書かないことが既定を表す
+        let f = CellFormat { bold: true, ..Default::default() };
+        let (xml, _) = build(&[f]);
+        assert!(!xml.contains("vertical="), "既定なのに縦揃えを書いた");
     }
 }
