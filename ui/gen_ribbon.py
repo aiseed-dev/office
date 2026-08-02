@@ -56,6 +56,9 @@ READY = {
         "digit-inc": "digit-inc", "digit-dec": "digit-dec",
         "align-left": "align-left", "align-right": "align-right",
         "custom-sort": "custom-sort", "rem-duplicates": "rem-duplicates",
+        "fillparag": "fillparag", "fontcolor": "fontcolor", "merge": "merge",
+        "math": "fn-math", "text": "fn-text", "logical": "fn-logical",
+        "recent": "fn-recent",
     },
 }
 
