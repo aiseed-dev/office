@@ -183,6 +183,8 @@ struct Calc {
     menu_at: Option<(f32, f32)>,
     /// 開いている子メニュー(挿入▸ など)
     menu_sub: Option<&'static str>,
+    /// 「ドロップダウンリストから選択」の一覧(候補, 出す場所)
+    pick: Option<(Vec<String>, (f32, f32))>,
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
     /// 画面の窓の左上(スクロール)。**表は画面より大きい**
@@ -232,6 +234,7 @@ impl Calc {
             wheel: (0.0, 0.0),
             menu_at: None,
             menu_sub: None,
+            pick: None,
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
@@ -402,6 +405,7 @@ impl Calc {
     /// メニューが出ていたら閉じる(項目の上の押下は stop_propagation でここに来ない)。
     fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool) {
         self.menu_at = None;
+        self.pick = None;
         let Some(p) = self.cell_at(x, y) else { return };
         self.commit();
         if shift {
@@ -481,6 +485,20 @@ impl Calc {
             y += self.row_px(r);
         }
         (cfound && rfound).then_some((x, y))
+    }
+
+    /// 一覧から選んだ値をセルに入れる(書式は据え置き)。
+    fn pick_value(&mut self, v: &str) {
+        self.checkpoint();
+        let p = self.cursor;
+        let fmt = self.sheet().get(p).map(|c| c.fmt.clone()).unwrap_or_default();
+        let mut cell = Cell::input(v);
+        cell.fmt = fmt;
+        self.book.sheets[self.active].set(p, cell);
+        recalc(&mut self.book.sheets[self.active]);
+        self.dirty = true;
+        self.sync_input();
+        self.status = format!("{} に入れました", p.a1()).into();
     }
 
     /// メニューの項目を実行する。
@@ -587,6 +605,7 @@ impl Calc {
                     }
                 }
             }
+            "picklist" => self.open_pick_list(),
             "freeze" => self.run_cmd("freeze"),
             // 数値の書式・関数はリボンと同じ配線を通す
             "comma" | "currency" | "percents" | "digit-inc" | "digit-dec"
@@ -655,10 +674,46 @@ impl Calc {
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        // 子メニュー → 親メニュー、の順で閉じる
-        if self.menu_sub.take().is_some() || self.menu_at.take().is_some() {
+        // 一覧 → 子メニュー → 親メニュー、の順で閉じる
+        if self.pick.take().is_some()
+            || self.menu_sub.take().is_some()
+            || self.menu_at.take().is_some()
+        {
             cx.notify();
         }
+    }
+
+    /// 「ドロップダウンリストから選択」。同じ列に既にある値の一覧を出す
+    /// (Excel の Alt+↓ と同じ発想。入力規則が無くても、列の値は候補になる)。
+    fn open_pick_list(&mut self) {
+        let col = self.cursor.col;
+        let (rows, _) = self.sheet().extent();
+        let mut vals: Vec<String> = Vec::new();
+        for r in 0..rows {
+            if r == self.cursor.row {
+                continue;
+            }
+            if let Some(c) = self.sheet().get(Pos::new(r, col)) {
+                // 式の結果ではなく「打つもの」を候補にする(文字の値だけ)
+                if c.formula.is_none() {
+                    let v = c.value.display();
+                    if !v.is_empty() && !vals.contains(&v) {
+                        vals.push(v);
+                    }
+                }
+            }
+        }
+        if vals.is_empty() {
+            self.status = "この列にはまだ値がありません".into();
+            return;
+        }
+        vals.sort();
+        vals.truncate(12);
+        let at = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        self.pick = Some((vals, at));
     }
 
     /// シートを切り替える。いまの編集を確定し、場所はシートごとに覚えている。
@@ -1878,7 +1933,7 @@ impl Render for Calc {
                 ("", "セルをフォーマットする", "", false, false),
                 ("numfmt", "数値の書式", "", true, true),
                 ("", "条件付き書式", "", false, false),
-                ("", "ドロップダウンリストから選択する", "", false, false),
+                ("picklist", "ドロップダウンリストから選択する", "", true, false),
                 ("", "名前の定義", "", false, false),
                 ("", "", "", false, false),
                 ("func", "関数を挿入", "", true, true),
@@ -2013,6 +2068,32 @@ impl Render for Calc {
                 .children(sub_panel)
         });
 
+        // ---- ドロップダウンリスト(同じ列の値の一覧) ----
+        let pick_panel = self.pick.clone().map(|(vals, (vx, vy))| {
+            let mut p = div().absolute().left(px(vx)).top(px(vy))
+                .w(px(self.col_px(self.cursor.col).max(120.0)))
+                .p_1().rounded_md().bg(rgb(0xFFFFFF))
+                .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            for (i, v) in vals.into_iter().enumerate() {
+                p = p.child(div()
+                    .id(SharedString::from(format!("pk{i}")))
+                    .px_2().py_1().rounded_sm().cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                    .whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(v.clone()))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                        move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.pick = None;
+                            this.pick_value(&v);
+                            cx.notify();
+                        })));
+            }
+            p
+        });
+
         let notes = if self.notes.is_empty() { None } else {
             let mut n = div().px_4().py_2().bg(rgb(0xFFF6E6))
                 .border_t_1().border_color(rgb(0xE8D5A8))
@@ -2076,7 +2157,8 @@ impl Render for Calc {
                    }))
                    .child(grid)
                    .child(InputSink { view: me })
-                   .children(menu))
+                   .children(menu)
+                   .children(pick_panel))
             .child(sheets_bar)
             .children(notes)
     }
