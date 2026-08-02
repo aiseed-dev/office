@@ -218,9 +218,12 @@ mod tests {
     </styleSheet>"##;
 
     #[test]
-    fn 素の書式は何も付かない() {
+    fn 既定の書体も書式として持つ() {
+        // 書体名を font に入れるようにしたので、標本の0番は「素」ではなくなった。
+        // 名前が付いているなら、それは書式の一部
         let x = parse(SAMPLE);
-        assert!(x[0].is_plain(), "{:?}", x[0]);
+        assert_eq!(x[0].font.as_deref(), Some("ＭＳ Ｐゴシック"));
+        assert!(!x[0].bold && x[0].borders == Borders::NONE, "{:?}", x[0]);
     }
 
     #[test]
