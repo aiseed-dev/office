@@ -349,10 +349,9 @@ impl Writer {
             .as_ref()
             .and_then(|old| std::fs::read(old).ok())
             .map(std::io::Cursor::new);
-        match std::fs::File::create(&p)
-            .map_err(|e| e.to_string())
-            .and_then(|f| ooxml::write_with(&self.doc, original, std::io::BufWriter::new(f)))
-        {
+        match kumihan::atomic::save(&p, |f| {
+            ooxml::write_with(&self.doc, original, std::io::BufWriter::new(f))
+        }) {
             Ok(_) => {
                 let caveat = if self.notes.is_empty() {
                     ""
@@ -504,20 +503,18 @@ impl Writer {
         else {
             return;
         };
-        let r = std::fs::File::create(&p)
-            .map_err(|e| e.to_string())
-            .and_then(|f| {
-                paper::to_pdf(
-                    &self.page,
-                    &self.font_bytes,
-                    paper::Paper {
-                        width_mm: self.pg.w_mm,
-                        height_mm: self.pg.h_mm,
-                        margin_mm: self.pg.left_mm,
-                    },
-                    std::io::BufWriter::new(f),
-                )
-            });
+        let r = kumihan::atomic::save(&p, |f| {
+            paper::to_pdf(
+                &self.page,
+                &self.font_bytes,
+                paper::Paper {
+                    width_mm: self.pg.w_mm,
+                    height_mm: self.pg.h_mm,
+                    margin_mm: self.pg.left_mm,
+                },
+                std::io::BufWriter::new(f),
+            )
+        });
         self.status = match r {
             Ok(_) => format!("PDF にしました — {}", p.file_name().unwrap_or_default().to_string_lossy()).into(),
             Err(e) => format!("PDF にできません: {e}").into(),

@@ -347,7 +347,34 @@ impl Calc {
         self.input.backspace(); self.dirty = true; cx.notify();
     }
     fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
-        self.input.delete(); self.dirty = true; cx.notify();
+        if let Some(_) = self.anchor {
+            // 範囲を選んでいるときの Delete は、その中身を消す(戻せる)
+            self.checkpoint();
+            let (a, b) = self.sel_rect();
+            let mut n = 0usize;
+            for r in a.row..=b.row {
+                for c in a.col..=b.col {
+                    let p = Pos::new(r, c);
+                    if let Some(cell) = self.sheet().get(p).cloned() {
+                        // 書式は残して中身だけ消す(帳票の枠を壊さない)
+                        self.book.sheets[self.active].set(p, Cell {
+                            formula: None,
+                            value: Value::Empty,
+                            fmt: cell.fmt,
+                        });
+                        n += 1;
+                    }
+                }
+            }
+            recalc(&mut self.book.sheets[self.active]);
+            self.dirty = true;
+            self.sync_input();
+            self.status = format!("{n} セルの中身を消しました(書式は残る)").into();
+        } else {
+            self.input.delete();
+            self.dirty = true;
+        }
+        cx.notify();
     }
     fn a_left(&mut self, _: &ui::Left, _: &mut Window, cx: &mut Context<Self>) {
         // 編集中の文字があればテキスト内を、無ければセルを移動する
@@ -513,7 +540,7 @@ impl Calc {
                 return;
             }
         };
-        let r = std::fs::File::create(&p).map_err(|e| e.to_string()).and_then(|f| {
+        let r = kumihan::atomic::save(&p, |f| {
             paper::grid::sheet_to_pdf(
                 &self.book.sheets[self.active],
                 &data,
@@ -772,10 +799,9 @@ impl Calc {
             .as_ref()
             .and_then(|old| std::fs::read(old).ok())
             .map(std::io::Cursor::new);
-        match std::fs::File::create(&p)
-            .map_err(|e| e.to_string())
-            .and_then(|f| sheet::xlsx::write_with(&self.book, original, std::io::BufWriter::new(f)))
-        {
+        match kumihan::atomic::save(&p, |f| {
+            sheet::xlsx::write_with(&self.book, original, std::io::BufWriter::new(f))
+        }) {
             Ok(_) => {
                 self.status = format!(
                     "保存しました — {}",

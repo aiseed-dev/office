@@ -513,6 +513,7 @@ pub struct CellBox {
 
 // ---------- フォント(字幅の出どころ) ----------
 
+pub mod atomic;
 pub mod font;
 
 pub struct Metrics<'a> {
