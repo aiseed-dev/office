@@ -48,6 +48,18 @@ use ui::{handler, ribbon, HasEditor};
 
 const ROW_H: f32 = 24.0;
 /// `RRGGBB` を色にする。読めなければ黒
+/// 下地に選択の緑を混ぜる。**塗りを置き換えない** — 選択中も帳票本来の色が
+/// 透けて見える(選択を解かないと色が確かめられない、を避ける)。
+fn tint(base: gpui::Rgba, k: f32) -> gpui::Rgba {
+    let accent = (0x1B as f32 / 255.0, 0x6E as f32 / 255.0, 0x3C as f32 / 255.0);
+    gpui::Rgba {
+        r: base.r * (1.0 - k) + accent.0 * k,
+        g: base.g * (1.0 - k) + accent.1 * k,
+        b: base.b * (1.0 - k) + accent.2 * k,
+        a: 1.0,
+    }
+}
+
 fn hex(s: &str) -> gpui::Rgba {
     let g = |i: usize| {
         s.get(i * 2..i * 2 + 2)
@@ -1489,18 +1501,15 @@ impl Render for Calc {
                 // セルの id は当たり判定ではなく描画の区別のためだけに残す
                 // 罫線・塗り・文字書式。**帳票の見た目はここで決まる**
                 let f = cell.map(|x| x.fmt.clone()).unwrap_or_default();
-                if let Some(c) = &f.fill {
-                    d = d.bg(hex(c));
-                }
-                // **選択は塗りより上。** 塗りのあるセルで選択が見えないと、
-                // 範囲の操作(消す・貼る・罫線)が信用できない。
-                // 色も白と見分けの付く濃さにする(薄すぎて「選択できていない」に
-                // 見えていた — 踏んで直した)
-                if in_range {
-                    d = d.bg(rgb(0xC8E2D3));
-                }
-                if sel {
-                    d = d.bg(rgb(0xE3F1E9));
+                let base = f.fill.as_deref().map(hex).unwrap_or(gpui::Rgba {
+                    r: 1.0, g: 1.0, b: 1.0, a: 1.0,
+                });
+                d = d.bg(base);
+                // 範囲は下地に緑を**混ぜて**見せる(塗りは透けて残る)。
+                // カーソルのセルは下地のまま — 外周の太枠と、範囲の中で
+                // 一つだけ色が抜けていることで居場所が分かる(Excel の作法)
+                if in_range && !sel {
+                    d = d.bg(tint(base, 0.20));
                 }
                 if f.bold {
                     d = d.font_weight(gpui::FontWeight::BOLD);
