@@ -310,6 +310,21 @@ impl Calc {
             "digit-dec" => self.decimals(-1),
             // 書式のクリア。値は消さない
             "clear" => self.fmt(|f| *f = CellFormat::default()),
+            // 塗りつぶし。黄 → 水色 → 解除(色を選ぶ小窓がまだ無い)
+            "fillparag" => self.fmt(|f| {
+                f.fill = match f.fill.as_deref() {
+                    None => Some("FFF2CC".into()),
+                    Some("FFF2CC") => Some("DEEAF6".into()),
+                    _ => None,
+                }
+            }),
+            "fontcolor" => self.fmt(|f| {
+                f.color = match f.color.as_deref() {
+                    None => Some("C00000".into()),
+                    Some("C00000") => Some("1F4E79".into()),
+                    _ => None,
+                }
+            }),
             // 並べ替えは**見出しを据え置き、行はまるごと動かす**
             "custom-sort" => {
                 self.commit();

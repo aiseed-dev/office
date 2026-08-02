@@ -33,7 +33,7 @@ LOCALE = "ja"
 READY = {
     "writer": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
-        "select-all": "selectall", "replace": "spell",
+        "select-all": "selectall",
         "bold": "bold", "italic": "italic", "underline": "underline",
         "strikeout": "strikeout",
         "align-center": "align-center", "align-just": "align-just",
@@ -41,6 +41,7 @@ READY = {
         "fontcolor": "fontcolor", "align-left": "align-left",
         "align-right": "align-right",
         "markers": "markers", "numbering": "numbering",
+        "wordcount": "wordcount", "spell": "spell",
         "incoffset": "incoffset", "decoffset": "decoffset",
         "linespace": "linespace",
     },
@@ -184,7 +185,42 @@ def label_of(app_loc, prefix, slot):
                 return re.split(r"[。<（(]", app_loc[full])[0].strip()
     if slot in FALLBACK:
         return FALLBACK[slot]
+    if slot in DYN_LABELS:
+        return DYN_LABELS[slot]
     return slot
+
+
+# テンプレートに無いタブ(JS で動的に作られる)。
+# 並びは Euro-Office の実物: 文書 = ファイル ホーム 挿入 描画 レイアウト
+# 参考資料 ヘッダー/フッター レビュー 表示 / 表計算 = … 数式 データ 表示。
+# 除外(共同編集・保護・プラグイン)はそもそも入れない。
+DYNAMIC = {
+    "documenteditor": [
+        ("draw", 3, [("pen", "ペン"), ("highlighter", "蛍光ペン"), ("eraser", "消しゴム")]),
+        ("headerfooter", 6, [
+            ("edit-header", "ヘッダーの編集"), ("edit-footer", "フッターの編集"),
+            ("pagenum", "ページ番号"), ("datetime", "日付＆時刻"), ("numpages", "ページ数"),
+        ]),
+        ("review", 7, [
+            ("spell", "スペルチェック"), ("wordcount", "文字カウント"),
+            ("track-changes", "変更履歴"), ("comment", "コメント"),
+        ]),
+        ("view", 8, [
+            ("zoom-in", "拡大"), ("zoom-out", "縮小"),
+            ("ruler", "ルーラー"), ("darkmode", "ダークモード"),
+        ]),
+    ],
+    "spreadsheeteditor": [
+        ("draw", 3, [("pen", "ペン"), ("highlighter", "蛍光ペン"), ("eraser", "消しゴム")]),
+        ("view", 99, [
+            ("freeze", "ウィンドウ枠の固定"), ("sheet-view", "シートの表示"),
+            ("show-gridlines", "グリッド線"), ("show-headings", "見出し"),
+        ]),
+    ],
+}
+
+TAB_NAME_KEYS = {"draw": "Draw", "headerfooter": "HeaderFooter",
+                 "review": "Review", "view": "View"}
 
 
 def tabs_of(app, prefix):
@@ -205,7 +241,22 @@ def tabs_of(app, prefix):
         alias = {"ins": "insert", "links": "links"}
         name = names.get(alias.get(tab, tab), names.get(tab, tab))
         out.append((name, slots))
+    # 動的なタブを Euro-Office の位置に差し込む
+    for key, at, cmds in DYNAMIC.get(app, []):
+        nk = TAB_NAME_KEYS[key].lower()
+        name = names.get(nk, TAB_NAME_KEYS[key])
+        entry = (name, [c for c, _ in cmds])
+        for c, label in cmds:
+            DYN_LABELS[c] = label
+        if at >= len(out):
+            out.append(entry)
+        else:
+            out.insert(at, entry)
     return out, loc
+
+
+# 動的タブのボタン名(ja.json に鍵が無いものの既定)
+DYN_LABELS = {}
 
 
 def emit():

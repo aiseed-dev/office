@@ -45,11 +45,31 @@ pub fn to_pdf<W: Write>(
     let font = doc
         .add_external_font(std::io::Cursor::new(font_data))
         .map_err(|e| e.to_string())?;
-    let l = doc.get_page(page).get_layer(layer);
+    let mut l = doc.get_page(page).get_layer(layer);
+
+    // **改ページはここでやる。** 紙面は1枚の長い巻物として来るので、
+    // 紙の高さを超えたら次のページに移し、y を巻き戻す。
+    // これをやらないと、長い文書が1ページ目の下へ黙ってはみ出す。
+    let bottom = paper.height_mm - paper.margin_mm;
+    let mut page_no = 0u32;
+    let mut offset = 0.0f32; // このページの先頭が、巻物のどの高さか
 
     for line in &sheet.lines {
         if line.cells.is_empty() {
             continue;
+        }
+        let mut y_roll = line.y_mm - offset;
+        if y_roll > bottom {
+            // 次のページへ。行の紙面上の高さは(余白ぶんを除いて)そのまま続ける
+            page_no += 1;
+            offset = line.y_mm - paper.margin_mm;
+            y_roll = paper.margin_mm;
+            let (np, nl) = doc.add_page(
+                Mm(paper.width_mm),
+                Mm(paper.height_mm),
+                format!("本文 {}", page_no + 1),
+            );
+            l = doc.get_page(np).get_layer(nl);
         }
         // 太字は同じ書体を少しずらして二度打つ(合成太字)。
         // 太字の実体を別に持っていないので、**持っていないものを持っている顔をしない**
@@ -58,7 +78,7 @@ pub fn to_pdf<W: Write>(
         let pt = line.cells[0].size_pt;
         let x = paper.margin_mm + line.cells[0].x_mm;
         // PDF の原点は左下。紙面の y は上からなので裏返す
-        let y = paper.height_mm - line.y_mm;
+        let y = paper.height_mm - y_roll;
 
         l.use_text(&text, pt, Mm(x), Mm(y), &font);
         if bold {
@@ -149,5 +169,45 @@ mod tests {
         let mut buf = Vec::new();
         to_pdf(&Sheet::default(), &data, Paper::default(), &mut buf).unwrap();
         assert_eq!(&buf[..5], b"%PDF-");
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use kumihan::{font, layout, Document, Frame, Metrics};
+
+    use super::*;
+
+    fn pages(n_lines: usize) -> usize {
+        let (fam, _) = font::for_document(None).unwrap();
+        let data = font::load(fam).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let text = vec!["行"; n_lines].join("\n");
+        let d = Document::plain(&text, 10.5);
+        let s = layout(&d, &m, &Frame { measure_mm: 170.0, line_height_mm: 6.4, y0_mm: 24.0 });
+        let mut buf = Vec::new();
+        to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        // ページ数は PDF の /Count に書かれている
+        let hay = String::from_utf8_lossy(&buf).to_string();
+        let i = hay.find("/Count ").expect("/Count が無い") + 7;
+        hay[i..].chars().take_while(|c| c.is_ascii_digit())
+            .collect::<String>().parse().unwrap()
+    }
+
+    #[test]
+    fn 長い文書は複数ページになる() {
+        // A4 で本文が入るのは 40行くらい。100行が1ページに収まっていたら
+        // それは「下へ黙ってはみ出している」ということ
+        assert_eq!(pages(10), 1, "10行で複数ページになった");
+        let p100 = pages(100);
+        assert!(p100 >= 3, "100行が {p100} ページにしかならない(はみ出している)");
+    }
+
+    #[test]
+    fn ページ数が行数に見合う() {
+        // A4(y0=24, 下余白20)に入るのは約40行。100行なら3ページ
+        let n = pages(100);
+        assert!((3..=4).contains(&n), "100行が {n} ページ(40行/頁の見当と合わない)");
+        assert!(pages(300) >= 8, "300行が {} ページ", pages(300));
     }
 }

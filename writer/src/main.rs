@@ -365,6 +365,15 @@ impl Writer {
                     _ => 1.0,
                 }
             }),
+            // 文字カウント。日本語は「単語数」に意味が無いので**文字数**を出す
+            "wordcount" => {
+                let text = self.ed.text();
+                let all = text.chars().filter(|c| *c != '\n').count();
+                let ink = text.chars().filter(|c| !c.is_whitespace()).count();
+                let paras = text.split('\n').filter(|s| !s.trim().is_empty()).count();
+                self.status = format!(
+                    "文字数 {ink}(空白込み {all})/ 段落 {paras}").into();
+            }
             "fontcolor" => self.toggle(|f| {
                 f.color = match f.color.as_deref() {
                     None => Some("C00000".into()),
