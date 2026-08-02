@@ -120,6 +120,10 @@ struct Writer {
     show_marks: bool,
     /// ルーラー(mm の目盛り)を見せるか
     ruler: bool,
+    /// フォントの一覧を出しているか
+    font_list: bool,
+    /// 大きさの一覧を出しているか
+    size_list: bool,
     /// 画像の実体 → gpui の画像(作り直すと毎フレーム復号されるため控える)
     image_cache: std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>,
     /// 組版に使うフォントの実体。**文書の書体に従う**(開くたびに引き直す)
@@ -183,6 +187,8 @@ impl Writer {
             symbols: false,
             show_marks: false,
             ruler: false,
+            font_list: false,
+            size_list: false,
             image_cache: Default::default(),
             font_bytes: std::sync::Arc::new(font_data().to_vec()),
             pg: kumihan::PageSetup::default(),
@@ -702,6 +708,7 @@ impl Writer {
         "incoffset", "decoffset", "linespace", "pagebreak",
         "instable", "inssymbol", "replace",
         "spell", "wordcount", "zoom-in", "zoom-out", "hidenchars", "ruler",
+        "fontname", "fontsize",
     ];
 
     fn run_cmd(&mut self, id: &str) {
@@ -803,6 +810,9 @@ impl Writer {
             "zoom-in" => self.zoom = (self.zoom + 0.1).min(2.0),
             // 見え方だけの切り替え(文書は変わらない)
             "hidenchars" => self.show_marks = !self.show_marks,
+            // 一覧板(フォント・大きさ)。選ぶのは板の中
+            "fontname" => { self.font_list = !self.font_list; self.size_list = false; }
+            "fontsize" => { self.size_list = !self.size_list; self.font_list = false; }
             "ruler" => self.ruler = !self.ruler,
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
@@ -1305,6 +1315,77 @@ impl Render for Writer {
                         })))))
         };
 
+        // フォントの一覧。この機械にある日本語の書体だけ
+        let font_panel = if !self.font_list {
+            None
+        } else {
+            let names: Vec<String> = kumihan::font::list()
+                .iter()
+                .filter(|f| f.japanese && f.regular)
+                .map(|f| f.name.clone())
+                .take(24)
+                .collect();
+            let mut d = div().absolute().left(px(16.0)).top(px(8.0)).w(px(280.0))
+                .p_2().rounded_md().bg(gpui::white())
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_0p5()
+                .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
+                    .child("書体(選んだ段落に掛かる)"));
+            for name in names {
+                let shown = SharedString::from(name.clone());
+                let is_current = self.font_name.as_ref() == name.as_str();
+                d = d.child(div()
+                    .id(SharedString::from(format!("font-{name}")))
+                    .px_2().py_0p5().rounded_sm()
+                    .text_size(px(12.5))
+                    .font_family(shown.clone())
+                    .bg(if is_current { rgb(0xEAF5EE) } else { rgb(0xFFFFFF) })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF2F7)))
+                    .child(shown)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let n = name.clone();
+                        let sel = this.ed.selection();
+                        this.flush_target();
+                        this.doc.apply_font(sel, Some(n.clone()));
+                        this.dirty = true;
+                        this.relayout_keep();
+                        this.font_list = false;
+                        this.status = format!("書体を「{n}」に").into();
+                        cx.notify();
+                    })));
+            }
+            Some(d)
+        };
+
+        // 大きさの一覧
+        let size_panel = if !self.size_list {
+            None
+        } else {
+            let mut d = div().absolute().left(px(16.0)).top(px(8.0)).w(px(200.0))
+                .p_2().rounded_md().bg(gpui::white())
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_row().flex_wrap().gap_1();
+            for pt in [8.0f32, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 22.0, 26.0, 36.0] {
+                d = d.child(div()
+                    .id(SharedString::from(format!("pt-{pt}")))
+                    .px_2().py_1().rounded_sm().text_size(px(12.0))
+                    .cursor_pointer().hover(|s| s.bg(rgb(0xEAF2F7)))
+                    .child(SharedString::from(format!("{pt}")))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let sel = this.ed.selection();
+                        this.flush_target();
+                        this.doc.apply_size(sel, move |_| pt);
+                        this.dirty = true;
+                        this.relayout_keep();
+                        this.size_list = false;
+                        this.status = format!("大きさを {pt}pt に").into();
+                        cx.notify();
+                    })));
+            }
+            Some(d)
+        };
+
         // 記号の一覧。事務の書類で使うものだけ(飾りの絵文字は入れない)
         let symbol_panel = if !self.symbols {
             None
@@ -1400,6 +1481,8 @@ impl Render for Writer {
                     .child(paper)
                     .children(notes)
                     .children(find_panel)
+                    .children(font_panel)
+                    .children(size_panel)
                     .children(symbol_panel)
                     .children(proof_panel)
                     .child(InputSink { view: me }),

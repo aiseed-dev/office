@@ -45,8 +45,8 @@ pub const WRITER: &[Tab] = &[
         c("pdf", "印刷", "print"),
     ]},
     Tab { name: "ホーム", cmds: &[
-        x("フォント", "fontname"),
-        x("フォントのサイズ", "fontsize"),
+        c("fontname", "フォント", "fontname"),
+        c("fontsize", "フォントのサイズ", "fontsize"),
         c("incfont", "フォントサイズの拡大", "incfont"),
         c("decfont", "フォントサイズの縮小", "decfont"),
         x("大文字小文字を変更", "changecase"),
