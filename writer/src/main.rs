@@ -112,6 +112,10 @@ struct Writer {
     font_name: SharedString,
     /// 画面の倍率。**紙は変わらない** — 見る大きさだけの話
     zoom: f32,
+    /// 縦のスクロール(紙の座標 mm)。0 が紙の頭
+    scroll_mm: f32,
+    /// 編集領域の高さ(px)。描画のたびに実測し、キャレット追従に使う
+    view_h_px: f32,
     /// いま編集しているもの。**Editor は常にこの対象の文章を持つ**
     target: Target,
     /// 記号の一覧を出しているか
@@ -167,6 +171,7 @@ impl HasEditor for Writer {
         }
         self.dirty = true;
         self.relayout();
+        self.follow_caret();
     }
 }
 
@@ -183,6 +188,8 @@ impl Writer {
             dirty: false,
             tab: 0,
             zoom: 1.0,
+            scroll_mm: 0.0,
+            view_h_px: 800.0,
             target: Target::Body,
             symbols: false,
             show_marks: false,
@@ -602,11 +609,37 @@ impl Writer {
     }
 
     /// クリックした画素位置(編集領域からの相対)にカーソルを置く。
+    /// 文書の下端(紙の座標 mm)。1ページに満たなくても紙1枚ぶんは白い
+    fn content_mm(&self) -> f32 {
+        self.page.lines.last().map(|l| l.y_mm + 30.0).unwrap_or(0.0).max(self.pg.h_mm)
+    }
+
+    /// 縦にスクロールする(画素)。紙の頭より上・末尾より下へは行かない。
+    fn scroll_px(&mut self, dy_px: f32) {
+        let pxmm = PX_PER_MM * self.zoom;
+        let view_mm = (self.view_h_px / pxmm).max(20.0);
+        let max = (self.content_mm() + 20.0 - view_mm).max(0.0);
+        self.scroll_mm = (self.scroll_mm + dy_px / pxmm).clamp(0.0, max);
+    }
+
+    /// キャレットが窓から出ていたら、見える所まで紙を送る。
+    fn follow_caret(&mut self) {
+        let pxmm = PX_PER_MM * self.zoom;
+        let (_, cy) = self.caret_xy();
+        let view_mm = (self.view_h_px / pxmm).max(20.0);
+        if cy > self.scroll_mm + view_mm - 15.0 {
+            self.scroll_mm = cy - (view_mm - 15.0);
+        }
+        if cy < self.scroll_mm + 5.0 {
+            self.scroll_mm = (cy - 5.0).max(0.0);
+        }
+    }
+
     fn click_at(&mut self, rel_x: f32, rel_y: f32, extend: bool) {
         let pxmm = PX_PER_MM * self.zoom;
-        // 紙は編集領域の (28,14)px に置いてある
+        // 紙は編集領域の (28,14)px に置いてあり、スクロールで上へずれている
         let x_mm = (rel_x - 28.0) / pxmm - self.pg.left_mm;
-        let y_mm = (rel_y - 14.0) / pxmm;
+        let y_mm = (rel_y - 14.0) / pxmm + self.scroll_mm;
 
         // 表のセルの中なら、そのセルの編集に切り替える
         let hit_box = self.page.cell_boxes.iter().find(|b| {
@@ -1093,12 +1126,13 @@ impl EntityInputHandler for Writer {
         _w: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<gpui::Pixels>> {
-        // IME の候補窓をキャレットの下に出す
+        // IME の候補窓をキャレットの下に出す(スクロールと倍率を織り込む)
+        let pxmm = PX_PER_MM * self.zoom;
         let (x, y) = self.caret_xy();
         Some(Bounds::new(
             gpui::point(
-                bounds.origin.x + px(28.0 + x * PX_PER_MM),
-                bounds.origin.y + px(y * PX_PER_MM),
+                bounds.origin.x + px(28.0 + x * pxmm),
+                bounds.origin.y + px(14.0 + (y - self.scroll_mm) * pxmm),
             ),
             size(px(2.0), px(SIZE_PT * 96.0 / 72.0)),
         ))
@@ -1117,10 +1151,13 @@ impl EntityInputHandler for Writer {
 }
 
 impl Render for Writer {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let me: Entity<Writer> = cx.entity();
         // 画面の倍率(紙のミリは変えず、画素への写像だけ変える)
         let pxmm = PX_PER_MM * self.zoom;
+        // 編集領域の高さを実測しておく(キャレット追従・スクロールの止めに使う)。
+        // リボンのぶん(約110px)を引いた近似で足りる
+        self.view_h_px = (f32::from(window.viewport_size().height) - 110.0).max(100.0);
         let marked = self.ed.marked_range();
         let (cx_mm, cy_mm) = self.caret_xy();
 
@@ -1191,8 +1228,10 @@ impl Render for Writer {
                        if self.dirty { "● " } else { "" }, self.status))));
         let bar = div().flex().flex_col().child(tabs).child(cmds);
 
-        let mut paper = div().absolute().left(px(28.0)).top(px(14.0))
-            .w(px(self.pg.w_mm * pxmm)).h(px(self.pg.h_mm * pxmm))
+        // 紙。スクロールは紙ごと上へずらすだけ(中身は全部この容器の子)
+        let mut paper = div().absolute()
+            .left(px(28.0)).top(px(14.0 - self.scroll_mm * pxmm))
+            .w(px(self.pg.w_mm * pxmm)).h(px(self.content_mm() * pxmm))
             .bg(gpui::white()).shadow_lg();
 
         // ルーラー(10mm ごとの目盛り。余白の位置が分かる)
@@ -1594,7 +1633,16 @@ impl Render for Writer {
             .on_action(cx.listener(Writer::do_open))
             .child(bar)
             .child(
-                div().flex_1().relative()
+                div().flex_1().relative().overflow_hidden()
+                    .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, _, cx| {
+                        // 上に回すと delta は正 → 紙は頭の方へ戻る
+                        let dy = match e.delta {
+                            gpui::ScrollDelta::Pixels(p) => f32::from(p.y),
+                            gpui::ScrollDelta::Lines(l) => l.y * 40.0,
+                        };
+                        this.scroll_px(-dy);
+                        cx.notify();
+                    }))
                     .child(paper)
                     .children(notes)
                     .children(find_panel)

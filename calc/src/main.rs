@@ -165,6 +165,8 @@ struct Calc {
     anchor: Option<Pos>,
     /// ドラッグ選択の始点(マウスの左を押した位置。離すと終わる)
     drag: Option<Pos>,
+    /// ホイールの端数(触板の細かい送りを捨てずに貯める)
+    wheel: (f32, f32),
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
     /// 画面の窓の左上(スクロール)。**表は画面より大きい**
@@ -211,6 +213,7 @@ impl Calc {
             cursor: Pos::new(0, 0),
             anchor: None,
             drag: None,
+            wheel: (0.0, 0.0),
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
@@ -1440,6 +1443,25 @@ impl Render for Calc {
             .child(bar)
             .child(formula_bar)
             .child(div().flex_1().overflow_hidden().relative()
+                   // ホイールで窓を動かす(下に回すと先の行が見える)
+                   .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, _, cx| {
+                       let (dx, dy) = match e.delta {
+                           gpui::ScrollDelta::Pixels(p) =>
+                               (-f32::from(p.x) / COL_W, -f32::from(p.y) / ROW_H),
+                           gpui::ScrollDelta::Lines(l) => (-l.x, -l.y * 3.0),
+                       };
+                       this.wheel.0 += dy;
+                       this.wheel.1 += dx;
+                       let dr = this.wheel.0.trunc() as i32;
+                       let dc = this.wheel.1.trunc() as i32;
+                       this.wheel.0 -= dr as f32;
+                       this.wheel.1 -= dc as f32;
+                       if dr != 0 || dc != 0 {
+                           this.view.row = (this.view.row as i32 + dr).clamp(0, 9999) as u32;
+                           this.view.col = (this.view.col as i32 + dc).clamp(0, 255) as u32;
+                           cx.notify();
+                       }
+                   }))
                    .child(grid)
                    .child(InputSink { view: me }))
             .child(sheets_bar)
