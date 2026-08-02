@@ -265,6 +265,61 @@ pub struct Sheet {
     pub links: BTreeMap<Pos, String>,
     /// セルのコメント。commentsN.xml と往復する
     pub comments: BTreeMap<Pos, String>,
+    /// 条件付き書式(cellIs だけ)。xlsx の conditionalFormatting と往復する
+    pub cond: Vec<CondRule>,
+}
+
+/// 条件付き書式の1本。「範囲の値が◯◯なら、この見た目」。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CondRule {
+    pub range: (Pos, Pos),
+    pub op: CondOp,
+    pub value: f64,
+    /// 文字色 RRGGBB
+    pub color: Option<String>,
+    /// 塗り RRGGBB
+    pub fill: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CondOp {
+    Gt,
+    Lt,
+    Eq,
+}
+
+impl CondOp {
+    pub fn as_xlsx(self) -> &'static str {
+        match self {
+            CondOp::Gt => "greaterThan",
+            CondOp::Lt => "lessThan",
+            CondOp::Eq => "equal",
+        }
+    }
+    pub fn from_xlsx(s: &str) -> Option<CondOp> {
+        match s {
+            "greaterThan" => Some(CondOp::Gt),
+            "lessThan" => Some(CondOp::Lt),
+            "equal" => Some(CondOp::Eq),
+            _ => None,
+        }
+    }
+}
+
+impl CondRule {
+    /// この位置のこの値に効くか。数の値だけを見る(文字は対象にしない)。
+    pub fn hits(&self, p: Pos, v: &Value) -> bool {
+        let (a, b) = self.range;
+        if !((a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col)) {
+            return false;
+        }
+        let Value::Number(n) = v else { return false };
+        match self.op {
+            CondOp::Gt => *n > self.value,
+            CondOp::Lt => *n < self.value,
+            CondOp::Eq => (*n - self.value).abs() < f64::EPSILON,
+        }
+    }
 }
 
 impl Sheet {

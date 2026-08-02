@@ -114,6 +114,51 @@ fn col_width(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
     }
 }
 
+/// styles.xml の dxfs(条件付き書式の見た目)→ (文字色, 塗り) の列。
+fn parse_dxfs(xml: &str) -> Vec<(Option<String>, Option<String>)> {
+    let mut r = Reader::from_str(xml);
+    let mut out = Vec::new();
+    let mut buf = Vec::new();
+    let (mut in_dxfs, mut in_dxf, mut in_font, mut in_fill) = (false, false, false, false);
+    let mut cur: (Option<String>, Option<String>) = (None, None);
+    loop {
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
+                b"dxfs" => in_dxfs = true,
+                b"dxf" if in_dxfs => {
+                    in_dxf = true;
+                    cur = (None, None);
+                }
+                b"font" if in_dxf => in_font = true,
+                b"fill" if in_dxf => in_fill = true,
+                b"color" if in_font => {
+                    cur.0 = attr(&e, "rgb").map(|v| v.trim_start_matches("FF").to_string());
+                }
+                b"bgColor" if in_fill => {
+                    cur.1 = attr(&e, "rgb").map(|v| v.trim_start_matches("FF").to_string());
+                }
+                _ => {}
+            },
+            Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                b"dxfs" => in_dxfs = false,
+                b"dxf" => {
+                    if in_dxf {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                    in_dxf = false;
+                }
+                b"font" => in_font = false,
+                b"fill" => in_fill = false,
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
 /// _rels/*.rels → (Id, Type, Target, 外部か)
 fn parse_rels(xml: &str) -> Vec<(String, String, String, bool)> {
     let mut r = Reader::from_str(xml);
@@ -279,10 +324,12 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
 
     // 書式表を先に読む。セルの s= はこの索引
     let mut styles: Vec<crate::model::CellFormat> = Vec::new();
+    let mut dxfs: Vec<(Option<String>, Option<String>)> = Vec::new();
     if let Ok(mut f) = zip.by_name("xl/styles.xml") {
         let mut s = String::new();
         let _ = f.read_to_string(&mut s);
         styles = crate::styles::parse(&s);
+        dxfs = parse_dxfs(&s);
     }
 
     let shared = {
@@ -375,6 +422,79 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
             let mut rs = String::new();
             let _ = f.read_to_string(&mut rs);
             rels = parse_rels(&rs);
+        }
+        // 条件付き書式。cellIs(値との比較)だけ理解し、他は報告
+        {
+            let mut r = Reader::from_str(&s);
+            let mut buf = Vec::new();
+            let mut sqref: Option<(Pos, Pos)> = None;
+            let mut rule: Option<(String, Option<usize>)> = None; // (operator, dxfId)
+            let mut in_formula = false;
+            let mut formula = String::new();
+            loop {
+                match r.read_event_into(&mut buf) {
+                    Ok(Event::Eof) | Err(_) => break,
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if local(e.name().as_ref()) == b"conditionalFormatting" =>
+                    {
+                        sqref = attr(&e, "sqref").and_then(|v| {
+                            let v = v.split_whitespace().next()?.to_string();
+                            match v.split_once(':') {
+                                Some((a, b)) => Some((Pos::parse(a)?, Pos::parse(b)?)),
+                                None => {
+                                    let p = Pos::parse(&v)?;
+                                    Some((p, p))
+                                }
+                            }
+                        });
+                    }
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"cfRule" => {
+                        if attr(&e, "type").as_deref() == Some("cellIs") {
+                            rule = Some((
+                                attr(&e, "operator").unwrap_or_default(),
+                                attr(&e, "dxfId").and_then(|v| v.parse().ok()),
+                            ));
+                        } else {
+                            rep.note("条件付き書式(cellIs 以外。保存で失われる)");
+                            rule = None;
+                        }
+                        formula.clear();
+                    }
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"formula" => {
+                        in_formula = true;
+                    }
+                    Ok(Event::Text(t)) if in_formula => {
+                        formula.push_str(&t.unescape().unwrap_or_default());
+                    }
+                    Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                        b"formula" => in_formula = false,
+                        b"cfRule" => {
+                            if let (Some(range), Some((op_s, dxf))) = (sqref, rule.take()) {
+                                match (
+                                    crate::model::CondOp::from_xlsx(&op_s),
+                                    formula.trim().parse::<f64>(),
+                                ) {
+                                    (Some(op), Ok(value)) => {
+                                        let (color, fill) = dxf
+                                            .and_then(|i| dxfs.get(i).cloned())
+                                            .unwrap_or((None, None));
+                                        sh.cond.push(crate::model::CondRule {
+                                            range, op, value, color, fill,
+                                        });
+                                    }
+                                    _ => rep.note(
+                                        "条件付き書式(値との比較以外。保存で失われる)",
+                                    ),
+                                }
+                            }
+                        }
+                        b"conditionalFormatting" => sqref = None,
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                buf.clear();
+            }
         }
         // ハイパーリンク。r:id の付いた外部URLだけ理解し、文書内の場所は報告
         {
@@ -665,6 +785,42 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         v
     };
     let (styles_xml, style_idx) = crate::styles::build(&used);
+    // 条件付き書式の見た目(dxfs)。全シートの規則から集めて番号を振る
+    let dxf_list: Vec<(Option<String>, Option<String>)> = {
+        let mut v = Vec::new();
+        for sh in &book.sheets {
+            for r in &sh.cond {
+                let pair = (r.color.clone(), r.fill.clone());
+                if !v.contains(&pair) {
+                    v.push(pair);
+                }
+            }
+        }
+        v
+    };
+    let styles_xml = if dxf_list.is_empty() {
+        styles_xml
+    } else {
+        let mut dx = format!("<dxfs count=\"{}\">", dxf_list.len());
+        for (color, fill) in &dxf_list {
+            dx.push_str("<dxf>");
+            if let Some(c) = color {
+                dx.push_str(&format!("<font><color rgb=\"FF{c}\"/></font>"));
+            }
+            if let Some(f) = fill {
+                dx.push_str(&format!(
+                    "<fill><patternFill><bgColor rgb=\"FF{f}\"/></patternFill></fill>"
+                ));
+            }
+            dx.push_str("</dxf>");
+        }
+        dx.push_str("</dxfs>");
+        let mut s = styles_xml;
+        if let Some(p) = s.rfind("</styleSheet>") {
+            s.insert_str(p, &dx);
+        }
+        s
+    };
 
     let overrides: String = (1..=book.sheets.len())
         .map(|i| format!(r#"<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#))
@@ -827,6 +983,31 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         w.write_event(Event::End(BytesEnd::new("worksheet"))).unwrap();
         let mut body = String::from_utf8(w.into_inner().into_inner()).unwrap();
+        // 条件付き書式(schema では mergeCells の後・hyperlinks の前)
+        if !sh.cond.is_empty() {
+            let mut cf = String::new();
+            for (n, r) in sh.cond.iter().enumerate() {
+                let dxf = dxf_list
+                    .iter()
+                    .position(|p| *p == (r.color.clone(), r.fill.clone()))
+                    .unwrap_or(0);
+                let (a, b) = r.range;
+                let sq = if a == b {
+                    a.a1()
+                } else {
+                    format!("{}:{}", a.a1(), b.a1())
+                };
+                cf.push_str(&format!(
+                    r#"<conditionalFormatting sqref="{sq}"><cfRule type="cellIs" dxfId="{dxf}" priority="{}" operator="{}"><formula>{}</formula></cfRule></conditionalFormatting>"#,
+                    n + 1,
+                    r.op.as_xlsx(),
+                    r.value
+                ));
+            }
+            if let Some(pos) = body.rfind("</worksheet>") {
+                body.insert_str(pos, &cf);
+            }
+        }
         // ハイパーリンク(schema では mergeCells の後・印刷まわりの前)
         if !sh.links.is_empty() {
             let mut hl = String::from("<hyperlinks>");
@@ -1316,5 +1497,37 @@ mod link_comment_tests {
         z.by_name("[Content_Types].xml").unwrap().read_to_string(&mut ct).unwrap();
         assert!(ct.contains("/xl/comments1.xml"), "コメントの宣言が無い");
         assert!(ct.contains("Extension=\"vml\""), "VML の宣言が無い");
+    }
+}
+
+#[cfg(test)]
+mod cond_tests {
+    use super::*;
+    use crate::model::{Cell, CondOp, CondRule};
+
+    #[test]
+    fn 条件付き書式が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("-5"));
+        b.sheets[0].cond.push(CondRule {
+            range: (Pos::parse("A1").unwrap(), Pos::parse("A9").unwrap()),
+            op: CondOp::Lt,
+            value: 0.0,
+            color: Some("C00000".into()),
+            fill: None,
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let r = &back.sheets[0].cond;
+        assert_eq!(r.len(), 1, "規則が往復しない");
+        assert_eq!(r[0].op, CondOp::Lt);
+        assert_eq!(r[0].value, 0.0);
+        assert_eq!(r[0].color.as_deref(), Some("C00000"), "見た目(dxf)が往復しない");
+        // 効き方
+        assert!(r[0].hits(Pos::parse("A1").unwrap(), &Value::Number(-5.0)));
+        assert!(!r[0].hits(Pos::parse("A1").unwrap(), &Value::Number(5.0)));
+        assert!(!r[0].hits(Pos::parse("B1").unwrap(), &Value::Number(-5.0)), "範囲の外に効いた");
     }
 }

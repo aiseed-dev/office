@@ -635,6 +635,45 @@ impl Calc {
                     }
                 }
             }
+            "cond-neg" => {
+                self.commit();
+                self.checkpoint();
+                let range = self.sel_rect();
+                self.book.sheets[self.active].cond.push(sheet::model::CondRule {
+                    range,
+                    op: sheet::model::CondOp::Lt,
+                    value: 0.0,
+                    color: Some("C00000".into()),
+                    fill: None,
+                });
+                self.dirty = true;
+                self.status = format!(
+                    "{}:{} — 0未満を赤字にしました",
+                    range.0.a1(), range.1.a1()
+                ).into();
+            }
+            "cond-gt" => {
+                self.commit();
+                self.prompt = Some(("cond-gt", Editor::new("")));
+            }
+            "cond-lt" => {
+                self.commit();
+                self.prompt = Some(("cond-lt", Editor::new("")));
+            }
+            "cond-clear" => {
+                self.commit();
+                self.checkpoint();
+                let (a, b) = self.sel_rect();
+                let before = self.book.sheets[self.active].cond.len();
+                self.book.sheets[self.active].cond.retain(|r| {
+                    let (ra, rb) = r.range;
+                    // 選んだ範囲と重なる規則を消す
+                    !(ra.row <= b.row && rb.row >= a.row && ra.col <= b.col && rb.col >= a.col)
+                });
+                let n = before - self.book.sheets[self.active].cond.len();
+                self.dirty = true;
+                self.status = format!("{n} 本の条件を消しました").into();
+            }
             "picklist" => self.open_pick_list(),
             "defname" => {
                 self.commit();
@@ -691,6 +730,12 @@ impl Calc {
             "filter" => vec![
                 ("filter-set", "選択した値で絞り込む", self.filter.is_none()),
                 ("filter-clear", "絞り込みを解く", self.filter.is_some()),
+            ],
+            "cond" => vec![
+                ("cond-neg", "0未満を赤字にする", true),
+                ("cond-gt", "値より大きいと薄緑の塗り…", true),
+                ("cond-lt", "値より小さいと薄赤の塗り…", true),
+                ("cond-clear", "この範囲の条件を消す", true),
             ],
             "numfmt" => vec![
                 ("comma", "桁区切り(1,000)", true),
@@ -778,6 +823,28 @@ impl Calc {
                     self.dirty = true;
                     self.status = format!("{} にコメントを付けました(保存で残ります)", p.a1()).into();
                 }
+            }
+            "cond-gt" | "cond-lt" => {
+                let Ok(value) = text.parse::<f64>() else {
+                    self.status = format!("「{text}」は数として読めません").into();
+                    return;
+                };
+                self.checkpoint();
+                let range = self.sel_rect();
+                let gt = kind == "cond-gt";
+                self.book.sheets[self.active].cond.push(sheet::model::CondRule {
+                    range,
+                    op: if gt { sheet::model::CondOp::Gt } else { sheet::model::CondOp::Lt },
+                    value,
+                    color: None,
+                    fill: Some(if gt { "E2EFDA".into() } else { "FCE4D6".into() }),
+                });
+                self.dirty = true;
+                self.status = format!(
+                    "{}:{} — {value} より{}を塗ります",
+                    range.0.a1(), range.1.a1(),
+                    if gt { "大きい値" } else { "小さい値" }
+                ).into();
             }
             "link" => {
                 let p = self.cursor;
@@ -1988,9 +2055,21 @@ impl Render for Calc {
                 // セルの id は当たり判定ではなく描画の区別のためだけに残す
                 // 罫線・塗り・文字書式。**帳票の見た目はここで決まる**
                 let f = cell.map(|x| x.fmt.clone()).unwrap_or_default();
-                let base = f.fill.as_deref().map(hex).unwrap_or(gpui::Rgba {
+                let mut base = f.fill.as_deref().map(hex).unwrap_or(gpui::Rgba {
                     r: 1.0, g: 1.0, b: 1.0, a: 1.0,
                 });
+                // 条件付き書式。**付けた条件は画面に出す**(出ないなら飾り)
+                let mut cond_color: Option<gpui::Rgba> = None;
+                for rule in &self.sheet().cond {
+                    if rule.hits(p, &v) {
+                        if let Some(fill) = &rule.fill {
+                            base = hex(fill);
+                        }
+                        if let Some(c) = &rule.color {
+                            cond_color = Some(hex(c));
+                        }
+                    }
+                }
                 d = d.bg(base);
                 // 範囲は下地に緑を**混ぜて**見せる(塗りは透けて残る)。
                 // 色を抜くのは**起点のセル**(最初に選んだ方)— ドラッグで
@@ -2055,10 +2134,17 @@ impl Render for Calc {
                 if is_num && f.align == HAlign::General {
                     d = d.justify_end();
                 }
-                d = d.text_color(if is_err { rgb(0xB3261E) } else { rgb(0x1B1B1B) });
-                // リンクのあるセルは青(Ctrl+クリックで開く)
-                if self.sheet().links.contains_key(&p) {
+                // 文字色の優先順: エラー > リンク > 条件 > セルの色 > 既定
+                // (以前は最後に既定色で上書きしていて、セルの文字色が死んでいた)
+                if is_err {
+                    d = d.text_color(rgb(0xB3261E));
+                } else if self.sheet().links.contains_key(&p) {
+                    // リンクのあるセルは青(Ctrl+クリックで開く)
                     d = d.text_color(rgb(0x1F4E79));
+                } else if let Some(c) = cond_color {
+                    d = d.text_color(c);
+                } else if f.color.is_none() {
+                    d = d.text_color(rgb(0x1B1B1B));
                 }
                 // コメントのあるセルは右上に赤い角印
                 if self.sheet().comments.contains_key(&p) {
@@ -2131,7 +2217,7 @@ impl Render for Calc {
                 ("", "", "", false, false),
                 ("fmtcells", "セルをフォーマットする", "", true, false),
                 ("numfmt", "数値の書式", "", true, true),
-                ("", "条件付き書式", "", false, false),
+                ("cond", "条件付き書式", "", true, true),
                 ("picklist", "ドロップダウンリストから選択する", "", true, false),
                 ("defname", "名前の定義", "", true, false),
                 ("", "", "", false, false),
@@ -2304,6 +2390,8 @@ impl Render for Calc {
                 "name" => format!("名前の定義 — {range} に名前を付ける"),
                 "comment" => format!("コメント — {}(空にして Enter で消す)", self.cursor.a1()),
                 "link" => format!("ハイパーリンク — {}(空にして Enter で外す)", self.cursor.a1()),
+                "cond-gt" => format!("条件付き書式 — {range} で、いくつより大きい値を塗る?"),
+                "cond-lt" => format!("条件付き書式 — {range} で、いくつより小さい値を塗る?"),
                 _ => String::new(),
             };
             // キャレットは | で見せる(writer の検索欄と同じ割り切り)
