@@ -548,6 +548,45 @@ impl Calc {
             }
             "filter-set" => self.run_cmd("setfilter"),
             "filter-clear" => self.run_cmd("clear-filter"),
+            "reapply" => {
+                if let Some((c, v)) = self.filter.clone() {
+                    let n = self.matching_rows(c, &v).len();
+                    self.status = format!(
+                        "{}列を「{v}」で絞り込み直しました({n}行が一致)",
+                        Pos::new(0, c).a1().trim_end_matches('1')
+                    )
+                    .into();
+                }
+            }
+            // セル単位のシフト(挿入・削除)。結合をまたぐときは断られる
+            "inscell-right" | "inscell-down" | "delcell-left" | "delcell-up" => {
+                self.commit();
+                self.checkpoint();
+                let (a, b) = self.sel_rect();
+                let r = match id {
+                    "inscell-right" => self.book.sheets[self.active].insert_cells(a, b, true),
+                    "inscell-down" => self.book.sheets[self.active].insert_cells(a, b, false),
+                    "delcell-left" => self.book.sheets[self.active].delete_cells(a, b, true),
+                    _ => self.book.sheets[self.active].delete_cells(a, b, false),
+                };
+                match r {
+                    Ok(n) => {
+                        recalc(&mut self.book.sheets[self.active]);
+                        self.dirty = true;
+                        self.anchor = None;
+                        self.sync_input();
+                        self.status = format!(
+                            "{n} セルをシフトしました(動いたセルへの参照も直っています)"
+                        )
+                        .into();
+                    }
+                    Err(e) => {
+                        // 何も変えていないので、積んだ控えは戻す
+                        self.undo_stack.pop();
+                        self.status = e.into();
+                    }
+                }
+            }
             "freeze" => self.run_cmd("freeze"),
             // 数値の書式・関数はリボンと同じ配線を通す
             "comma" | "currency" | "percents" | "digit-inc" | "digit-dec"
@@ -562,14 +601,16 @@ impl Calc {
     fn menu_sub_entries(&self, sub: &str) -> Vec<(&'static str, &'static str, bool)> {
         match sub {
             "ins" => vec![
-                ("insrow", "行を上に挿入", true),
-                ("inscol", "列を左に挿入", true),
-                ("", "セルを挿入(シフト)", false),
+                ("inscell-right", "セルを右にシフト", true),
+                ("inscell-down", "セルを下にシフト", true),
+                ("insrow", "行全体", true),
+                ("inscol", "列全体", true),
             ],
             "del" => vec![
-                ("delrow", "行を削除", true),
-                ("delcol", "列を削除", true),
-                ("", "セルを削除(シフト)", false),
+                ("delcell-left", "セルを左にシフト", true),
+                ("delcell-up", "セルを上にシフト", true),
+                ("delrow", "行全体", true),
+                ("delcol", "列全体", true),
             ],
             "clr" => vec![
                 ("clear-all", "すべて", true),
@@ -1830,7 +1871,7 @@ impl Render for Calc {
                 ("", "", "", false, false),
                 ("sort", "並べ替え", "", true, true),
                 ("filter", "フィルター", "", true, true),
-                ("", "再適用", "", false, false),
+                ("reapply", "再適用", "", self.filter.is_some(), false),
                 ("", "", "", false, false),
                 ("", "コメントを追加", "", false, false),
                 ("", "", "", false, false),

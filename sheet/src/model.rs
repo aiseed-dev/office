@@ -1072,6 +1072,280 @@ mod sort_tests {
     }
 }
 
+/// 参照の引き直しの結果。
+pub enum MapRef {
+    /// そのまま
+    Keep,
+    /// 参照先が動いた(一緒に動かす)
+    To(Pos),
+    /// 参照先が消えた(#REF! にする — 黙って別のセルを指すより良い)
+    Broken,
+}
+
+/// 式の中の A1 参照を、写像 `f` で引き直す。
+/// 文字列の中・関数名は触らない。`$` の形は保つ。
+pub fn map_refs(formula: &str, f: impl Fn(Pos) -> MapRef) -> String {
+    let ch: Vec<char> = formula.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < ch.len() {
+        if ch[i] == '"' {
+            out.push('"');
+            i += 1;
+            while i < ch.len() {
+                out.push(ch[i]);
+                if ch[i] == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        let start = i;
+        let mut j = i;
+        let abs_col = j < ch.len() && ch[j] == '$';
+        if abs_col {
+            j += 1;
+        }
+        let letters = j;
+        while j < ch.len() && ch[j].is_ascii_alphabetic() {
+            j += 1;
+        }
+        if j == letters {
+            out.push(ch[i]);
+            i += 1;
+            continue;
+        }
+        let abs_row = j < ch.len() && ch[j] == '$';
+        if abs_row {
+            j += 1;
+        }
+        let digits = j;
+        while j < ch.len() && ch[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digits {
+            out.extend(&ch[start..j]);
+            i = j;
+            continue;
+        }
+        let raw: String = ch[start..j].iter().collect();
+        match Pos::parse(&raw) {
+            Some(p) => match f(p) {
+                MapRef::Keep => out.push_str(&raw),
+                MapRef::Broken => out.push_str("#REF!"),
+                MapRef::To(np) => {
+                    let a1 = np.a1();
+                    let split = a1.find(|c: char| c.is_ascii_digit()).unwrap_or(a1.len());
+                    let (c, r) = a1.split_at(split);
+                    out.push_str(&format!(
+                        "{}{c}{}{r}",
+                        if abs_col { "$" } else { "" },
+                        if abs_row { "$" } else { "" }
+                    ));
+                }
+            },
+            None => out.push_str(&raw),
+        }
+        i = j;
+    }
+    out
+}
+
+impl Sheet {
+    /// 全部の式の参照を写像で引き直す。
+    fn remap_formulas(&mut self, f: impl Fn(Pos) -> MapRef) {
+        for c in self.cells.values_mut() {
+            if let Some(fla) = &c.formula {
+                c.formula = Some(map_refs(fla, &f));
+            }
+        }
+    }
+
+    /// 結合が「動く帯」の境界をまたいでいないか。またぐなら断る(Excel と同じ)。
+    fn merges_cross(&self, in_band: impl Fn(Pos) -> bool) -> bool {
+        self.merges.iter().any(|(a, b)| {
+            let corners = [
+                Pos::new(a.row, a.col),
+                Pos::new(a.row, b.col),
+                Pos::new(b.row, a.col),
+                Pos::new(b.row, b.col),
+            ];
+            let inside = corners.iter().filter(|p| in_band(**p)).count();
+            inside != 0 && inside != corners.len()
+        })
+    }
+
+    /// 部分的な挿入。選んだ範囲の大きさぶん、帯のセルを右(または下)へずらす。
+    /// **動いたセルを指す参照も一緒に動く。** 結合が帯をまたぐときは断る。
+    pub fn insert_cells(&mut self, a: Pos, b: Pos, right: bool) -> Result<usize, String> {
+        let n = if right { b.col - a.col + 1 } else { b.row - a.row + 1 };
+        let in_band = |p: Pos| {
+            if right {
+                (a.row..=b.row).contains(&p.row) && p.col >= a.col
+            } else {
+                (a.col..=b.col).contains(&p.col) && p.row >= a.row
+            }
+        };
+        if self.merges_cross(&in_band) {
+            return Err("結合されたセルが範囲をまたいでいるため、シフトできません".into());
+        }
+        let shift = |p: Pos| {
+            if right { Pos::new(p.row, p.col + n) } else { Pos::new(p.row + n, p.col) }
+        };
+        // 式の参照を先に引き直す(セルを動かす前の位置で判定する)
+        self.remap_formulas(|p| if in_band(p) { MapRef::To(shift(p)) } else { MapRef::Keep });
+        // セルを動かす
+        let moved: Vec<(Pos, Cell)> = self
+            .cells
+            .iter()
+            .filter(|(p, _)| in_band(**p))
+            .map(|(p, c)| (*p, c.clone()))
+            .collect();
+        let count = moved.len();
+        for (p, _) in &moved {
+            self.cells.remove(p);
+        }
+        for (p, c) in moved {
+            self.cells.insert(shift(p), c);
+        }
+        // 帯の中の結合も一緒に
+        for (m1, m2) in self.merges.iter_mut() {
+            if in_band(*m1) {
+                *m1 = shift(*m1);
+                *m2 = shift(*m2);
+            }
+        }
+        Ok(count)
+    }
+
+    /// 部分的な削除。選んだ範囲を消し、帯の先のセルを左(または上)へ詰める。
+    /// **消えた範囲を指していた参照は #REF! になる。**
+    pub fn delete_cells(&mut self, a: Pos, b: Pos, left: bool) -> Result<usize, String> {
+        let n = if left { b.col - a.col + 1 } else { b.row - a.row + 1 };
+        let in_range =
+            |p: Pos| (a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col);
+        let beyond = |p: Pos| {
+            if left {
+                (a.row..=b.row).contains(&p.row) && p.col > b.col
+            } else {
+                (a.col..=b.col).contains(&p.col) && p.row > b.row
+            }
+        };
+        let in_band = |p: Pos| in_range(p) || beyond(p);
+        if self.merges_cross(&in_band) {
+            return Err("結合されたセルが範囲をまたいでいるため、シフトできません".into());
+        }
+        let shift_back = |p: Pos| {
+            if left { Pos::new(p.row, p.col - n) } else { Pos::new(p.row - n, p.col) }
+        };
+        self.remap_formulas(|p| {
+            if in_range(p) {
+                MapRef::Broken
+            } else if beyond(p) {
+                MapRef::To(shift_back(p))
+            } else {
+                MapRef::Keep
+            }
+        });
+        let removed = self.cells.iter().filter(|(p, _)| in_range(**p)).count();
+        self.cells.retain(|p, _| !in_range(*p));
+        let moved: Vec<(Pos, Cell)> = self
+            .cells
+            .iter()
+            .filter(|(p, _)| beyond(**p))
+            .map(|(p, c)| (*p, c.clone()))
+            .collect();
+        for (p, _) in &moved {
+            self.cells.remove(p);
+        }
+        for (p, c) in moved {
+            self.cells.insert(shift_back(p), c);
+        }
+        self.merges.retain(|(m1, _)| !in_range(*m1));
+        for (m1, m2) in self.merges.iter_mut() {
+            if beyond(*m1) {
+                *m1 = shift_back(*m1);
+                *m2 = shift_back(*m2);
+            }
+        }
+        Ok(removed)
+    }
+}
+
+#[cfg(test)]
+mod cellshift_tests {
+    use super::*;
+
+    fn s3() -> Sheet {
+        let mut s = Sheet::new("表");
+        s.set(Pos::parse("A1").unwrap(), Cell::input("1"));
+        s.set(Pos::parse("A2").unwrap(), Cell::input("2"));
+        s.set(Pos::parse("B1").unwrap(), Cell::input("=A2*10"));
+        s
+    }
+
+    #[test]
+    fn 下へシフトすると参照も付いて動く() {
+        let mut s = s3();
+        // A1 の場所に1セル挿入(A列だけ下へ)
+        s.insert_cells(Pos::parse("A1").unwrap(), Pos::parse("A1").unwrap(), false).unwrap();
+        assert!(s.get(Pos::parse("A1").unwrap()).is_none(), "挿した場所が空でない");
+        assert_eq!(s.value(Pos::parse("A2").unwrap()), Value::Number(1.0));
+        assert_eq!(s.value(Pos::parse("A3").unwrap()), Value::Number(2.0));
+        // B1 は動かないが、指していた A2 は A3 へ動いた
+        assert_eq!(
+            s.get(Pos::parse("B1").unwrap()).and_then(|c| c.formula.clone()).as_deref(),
+            Some("A3*10"),
+            "動いたセルへの参照が付いて動いていない"
+        );
+    }
+
+    #[test]
+    fn 右へシフトは行の帯だけ動く() {
+        let mut s = s3();
+        s.insert_cells(Pos::parse("A1").unwrap(), Pos::parse("A1").unwrap(), true).unwrap();
+        assert_eq!(s.value(Pos::parse("B1").unwrap()), Value::Number(1.0), "右へ動いていない");
+        // 2行目は帯の外。動かない
+        assert_eq!(s.value(Pos::parse("A2").unwrap()), Value::Number(2.0));
+        // 元の B1 の式は C1 へ動き、A2 への参照はそのまま
+        assert_eq!(
+            s.get(Pos::parse("C1").unwrap()).and_then(|c| c.formula.clone()).as_deref(),
+            Some("A2*10")
+        );
+    }
+
+    #[test]
+    fn 上へ詰めると消えた参照はrefになる() {
+        let mut s = s3();
+        // A1 を削除して上へ詰める → A2(=1)ではなく元A1が消え、A2の中身が A1 へ
+        s.delete_cells(Pos::parse("A1").unwrap(), Pos::parse("A1").unwrap(), false).unwrap();
+        assert_eq!(s.value(Pos::parse("A1").unwrap()), Value::Number(2.0), "詰まっていない");
+        // B1 が指していた A2 は A1 へ動いた
+        assert_eq!(
+            s.get(Pos::parse("B1").unwrap()).and_then(|c| c.formula.clone()).as_deref(),
+            Some("A1*10")
+        );
+        // こんどは参照先そのものを消す
+        let mut s2 = s3();
+        s2.delete_cells(Pos::parse("A2").unwrap(), Pos::parse("A2").unwrap(), false).unwrap();
+        assert_eq!(
+            s2.get(Pos::parse("B1").unwrap()).and_then(|c| c.formula.clone()).as_deref(),
+            Some("#REF!*10"),
+            "消えた参照が黙って別のセルを指した"
+        );
+    }
+
+    #[test]
+    fn 結合が帯をまたぐと断る() {
+        let mut s = s3();
+        s.merges.push((Pos::parse("A1").unwrap(), Pos::parse("B1").unwrap()));
+        let r = s.insert_cells(Pos::parse("A1").unwrap(), Pos::parse("A1").unwrap(), false);
+        assert!(r.is_err(), "結合をまたぐシフトを黙って通した");
+    }
+}
+
 /// 式の中の相対参照を (dr, dc) だけずらす。**コピーの規則**。
 ///
 /// 行の出し入れ(`shift_refs`)とは別物 — コピーでは位置に関係なく
