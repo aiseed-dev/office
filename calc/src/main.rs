@@ -187,6 +187,8 @@ struct Calc {
     pick: Option<(Vec<String>, (f32, f32))>,
     /// 書式の小窓(セルをフォーマットする)。範囲を選び直しながら使える
     fmt_panel: Option<(f32, f32)>,
+    /// 小さな入力の板(種類, 入力欄)。"name"=名前の定義。開いている間は打鍵がここへ
+    prompt: Option<(&'static str, Editor)>,
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
     /// 画面の窓の左上(スクロール)。**表は画面より大きい**
@@ -219,9 +221,25 @@ struct Calc {
 }
 
 impl HasEditor for Calc {
-    fn editor(&mut self) -> &mut Editor { &mut self.input }
-    fn editor_ref(&self) -> &Editor { &self.input }
-    fn on_edited(&mut self) { self.dirty = true }
+    // 小さな入力の板(名前の定義など)が開いている間は、打鍵(IME含む)はそこへ
+    fn editor(&mut self) -> &mut Editor {
+        match &mut self.prompt {
+            Some((_, ed)) => ed,
+            None => &mut self.input,
+        }
+    }
+    fn editor_ref(&self) -> &Editor {
+        match &self.prompt {
+            Some((_, ed)) => ed,
+            None => &self.input,
+        }
+    }
+    fn on_edited(&mut self) {
+        // 板への打鍵は文書を変えない
+        if self.prompt.is_none() {
+            self.dirty = true;
+        }
+    }
 }
 
 impl Calc {
@@ -238,6 +256,7 @@ impl Calc {
             menu_sub: None,
             pick: None,
             fmt_panel: None,
+            prompt: None,
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
@@ -609,6 +628,10 @@ impl Calc {
                 }
             }
             "picklist" => self.open_pick_list(),
+            "defname" => {
+                self.commit();
+                self.prompt = Some(("name", Editor::new("")));
+            }
             "fmtcells" => {
                 // メニューの出ていた場所の近くに小窓を開く
                 self.fmt_panel = Some(menu_was_at.unwrap_or((HEAD_W + 24.0, ROW_H + 24.0)));
@@ -681,13 +704,51 @@ impl Calc {
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        // 一覧 → 子メニュー → 親メニュー → 書式の小窓、の順で閉じる
-        if self.pick.take().is_some()
+        // 入力の板 → 一覧 → 子メニュー → 親メニュー → 書式の小窓、の順で閉じる
+        if self.prompt.take().is_some()
+            || self.pick.take().is_some()
             || self.menu_sub.take().is_some()
             || self.menu_at.take().is_some()
             || self.fmt_panel.take().is_some()
         {
             cx.notify();
+        }
+    }
+
+    /// 入力の板を確定する(Enter)。
+    fn finish_prompt(&mut self) {
+        let Some((kind, ed)) = self.prompt.take() else { return };
+        let text = ed.text().trim().to_string();
+        match kind {
+            "name" => {
+                if text.is_empty() {
+                    self.status = "名前を付けませんでした".into();
+                    return;
+                }
+                let ok = text.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    && !text.chars().next().unwrap().is_ascii_digit()
+                    && Pos::parse(&text).is_none();
+                if !ok {
+                    self.status = format!(
+                        "「{text}」は名前にできません(文字と数字と _。セル参照の形は不可)"
+                    )
+                    .into();
+                    return;
+                }
+                let (a, b) = self.sel_rect();
+                let range = if self.anchor.is_some() {
+                    format!("{}:{}", a.a1(), b.a1())
+                } else {
+                    a.a1()
+                };
+                let s = &mut self.book.sheets[self.active];
+                s.names.retain(|(n, _)| *n != text);
+                s.names.push((text.clone(), range.clone()));
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.status = format!("名前「{text}」= {range}(式の中で使えます)").into();
+            }
+            _ => {}
         }
     }
 
@@ -931,7 +992,13 @@ impl Calc {
 
     // ---- 割り当てられた操作 ----
     fn a_backspace(&mut self, _: &ui::Backspace, _: &mut Window, cx: &mut Context<Self>) {
-        self.input.backspace(); self.dirty = true; cx.notify();
+        if let Some((_, ed)) = &mut self.prompt {
+            ed.backspace();
+        } else {
+            self.input.backspace();
+            self.dirty = true;
+        }
+        cx.notify();
     }
     /// 選んだ範囲の中身を消す(**書式は残す** — 帳票の枠を壊さない)。
     /// 控えを取ってから呼ぶこと。返すのは消したセルの数。
@@ -1061,13 +1128,15 @@ impl Calc {
     }
 
     fn a_left(&mut self, _: &ui::Left, _: &mut Window, cx: &mut Context<Self>) {
-        // 打ちかけなら文字の中を、そうでなければセルを移動する
-        if self.editing() { self.input.move_char(false, false) }
+        // 板 → 打ちかけの文字 → セル、の順で見る
+        if let Some((_, ed)) = &mut self.prompt { ed.move_char(false, false) }
+        else if self.editing() { self.input.move_char(false, false) }
         else { self.move_cursor(0, -1) }
         cx.notify();
     }
     fn a_right(&mut self, _: &ui::Right, _: &mut Window, cx: &mut Context<Self>) {
-        if self.editing() { self.input.move_char(true, false) }
+        if let Some((_, ed)) = &mut self.prompt { ed.move_char(true, false) }
+        else if self.editing() { self.input.move_char(true, false) }
         else { self.move_cursor(0, 1) }
         cx.notify();
     }
@@ -1081,7 +1150,12 @@ impl Calc {
         self.move_cursor(0, 1); cx.notify();
     }
     fn a_enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_cursor(1, 0); cx.notify();
+        if self.prompt.is_some() {
+            self.finish_prompt();
+        } else {
+            self.move_cursor(1, 0);
+        }
+        cx.notify();
     }
     fn a_select_left(&mut self, _: &ui::SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         if self.editing() { self.input.move_char(false, true) }
@@ -1999,7 +2073,7 @@ impl Render for Calc {
                 ("numfmt", "数値の書式", "", true, true),
                 ("", "条件付き書式", "", false, false),
                 ("picklist", "ドロップダウンリストから選択する", "", true, false),
-                ("", "名前の定義", "", false, false),
+                ("defname", "名前の定義", "", true, false),
                 ("", "", "", false, false),
                 ("func", "関数を挿入", "", true, true),
                 ("", "ハイパーリンク", "", false, false),
@@ -2131,6 +2205,36 @@ impl Render for Calc {
             div().absolute().left(px(0.0)).top(px(0.0)).size_full()
                 .child(m)
                 .children(sub_panel)
+        });
+
+        // ---- 入力の板(名前の定義など) ----
+        let prompt_panel = self.prompt.as_ref().map(|(kind, ed)| {
+            let (a, b) = self.sel_rect();
+            let range = if self.anchor.is_some() {
+                format!("{}:{}", a.a1(), b.a1())
+            } else {
+                a.a1()
+            };
+            let title = match *kind {
+                "name" => format!("名前の定義 — {range} に名前を付ける"),
+                _ => String::new(),
+            };
+            // キャレットは | で見せる(writer の検索欄と同じ割り切り)
+            let mut text = ed.text().to_string();
+            let cur = ed.cursor().min(text.len());
+            text.insert(cur, '|');
+            div().absolute().left(px(HEAD_W + 40.0)).top(px(ROW_H + 24.0)).w(px(380.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().text_size(px(12.0)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x1B6E3C)).child(SharedString::from(title)))
+                .child(div().mt_1p5().px_2().py_1().bg(rgb(0xFFFFFF))
+                    .border_1().border_color(rgb(0xC6CDD3)).rounded_sm()
+                    .text_size(px(13.0)).font_family("Noto Sans JP")
+                    .child(SharedString::from(text)))
+                .child(div().mt_1().text_size(px(10.5)).text_color(rgb(0x66707A))
+                    .child("Enter で決定 / Esc で取消。定義した名前は式の中で使えます(=単価*2)"))
         });
 
         // ---- 書式の小窓(セルをフォーマットする) ----
@@ -2329,7 +2433,8 @@ impl Render for Calc {
                    .child(InputSink { view: me })
                    .children(fmt_panel)
                    .children(menu)
-                   .children(pick_panel))
+                   .children(pick_panel)
+                   .children(prompt_panel))
             .child(sheets_bar)
             .children(notes)
     }

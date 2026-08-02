@@ -477,12 +477,67 @@ fn deps(formula: &str) -> Vec<Pos> {
     out
 }
 
+/// 式の中の「名前」を参照に置き換える(=単価*2 → =A1*2)。
+/// 文字列の中は触らない。名前の前後が識別子の続きなら置き換えない。
+/// 長い名前から先に試す(「単価」と「単価計」を取り違えない)。
+fn expand_names(f: &str, names: &[(String, String)]) -> String {
+    if names.is_empty() {
+        return f.to_string();
+    }
+    let mut sorted: Vec<&(String, String)> = names.iter().collect();
+    sorted.sort_by_key(|(n, _)| std::cmp::Reverse(n.chars().count()));
+    let ch: Vec<char> = f.chars().collect();
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut i = 0;
+    while i < ch.len() {
+        if ch[i] == '"' {
+            out.push('"');
+            i += 1;
+            while i < ch.len() {
+                out.push(ch[i]);
+                if ch[i] == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // 識別子の途中からは始めない
+        let prev_ident = i > 0 && ident(ch[i - 1]);
+        if !prev_ident {
+            let mut hit = None;
+            for (n, r) in &sorted {
+                let nc: Vec<char> = n.chars().collect();
+                if !nc.is_empty() && ch[i..].starts_with(&nc[..]) {
+                    let after = ch.get(i + nc.len()).copied();
+                    if !after.map(ident).unwrap_or(false) {
+                        hit = Some((nc.len(), r.clone()));
+                        break;
+                    }
+                }
+            }
+            if let Some((len, r)) = hit {
+                out.push_str(&r);
+                i += len;
+                continue;
+            }
+        }
+        out.push(ch[i]);
+        i += 1;
+    }
+    out
+}
+
 /// シート全体を再計算する。循環参照は #CIRC! にする(黙って0にしない)。
 pub fn recalc(sheet: &mut Sheet) {
     let formulas: Vec<(Pos, String)> = sheet
         .cells
         .iter()
-        .filter_map(|(p, c)| c.formula.as_ref().map(|f| (*p, f.clone())))
+        .filter_map(|(p, c)| {
+            c.formula.as_ref().map(|f| (*p, expand_names(f, &sheet.names)))
+        })
         .collect();
 
     let mut resolved: HashMap<Pos, Value> = HashMap::new();
@@ -731,5 +786,45 @@ mod more_fn_tests {
     fn 文字の整形() {
         assert_eq!(eval("=TRIM(\"  余白  \")", &[]), Value::Text("余白".into()));
         assert_eq!(eval("=UPPER(\"abc\")", &[]), Value::Text("ABC".into()));
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    #[test]
+    fn 名前が式で使える() {
+        let mut s = Sheet::new("表");
+        s.set(Pos::parse("A1").unwrap(), Cell::input("100"));
+        s.set(Pos::parse("B1").unwrap(), Cell::input("=単価*2"));
+        s.names.push(("単価".into(), "A1".into()));
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("B1").unwrap()), Value::Number(200.0),
+            "名前が参照に展開されない");
+    }
+
+    #[test]
+    fn 範囲の名前がsumで使える() {
+        let mut s = Sheet::new("表");
+        for (r, v) in [(0, "10"), (1, "20"), (2, "30")] {
+            s.set(Pos::new(r, 0), Cell::input(v));
+        }
+        s.set(Pos::new(3, 0), Cell::input("=SUM(明細)"));
+        s.names.push(("明細".into(), "A1:A3".into()));
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::new(3, 0)), Value::Number(60.0));
+    }
+
+    #[test]
+    fn 名前の途中一致では置き換えない() {
+        assert_eq!(expand_names("単価計*2", &[("単価".into(), "A1".into())]),
+            "単価計*2", "「単価計」の頭だけ置き換えた");
+        assert_eq!(expand_names("\"単価\"&A1", &[("単価".into(), "B9".into())]),
+            "\"単価\"&A1", "文字列の中を置き換えた");
+        // 長い名前が勝つ
+        assert_eq!(expand_names("単価計", &[
+            ("単価".into(), "A1".into()), ("単価計".into(), "B1".into())]), "B1");
     }
 }

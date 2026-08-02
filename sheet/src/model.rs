@@ -258,6 +258,9 @@ pub struct Sheet {
     pub default_col_width: Option<f32>,
     /// 行の高さ(pt)。無い行は既定。列幅と同じ構図
     pub row_height: BTreeMap<u32, f32>,
+    /// 名前の定義(名前, 参照 "A1" か "A1:B2")。式の中で名前が使える。
+    /// workbook.xml の definedNames と往復する
+    pub names: Vec<(String, String)>,
 }
 
 impl Sheet {
@@ -291,11 +294,14 @@ impl Sheet {
 #[derive(Debug, Clone, Default)]
 pub struct Book {
     pub sheets: Vec<Sheet>,
+    /// こちらが理解できなかった definedName の原文(Print_Area など)。
+    /// **理解はしないが、捨てない。** 保存でそのまま返す
+    pub names_raw: Vec<String>,
 }
 
 impl Book {
     pub fn new() -> Book {
-        Book { sheets: vec![Sheet::new("Sheet1")] }
+        Book { sheets: vec![Sheet::new("Sheet1")], names_raw: Vec::new() }
     }
 }
 

@@ -227,20 +227,52 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
             Err(_) => Vec::new(),
         }
     };
-    // シート名(workbook.xml の並び順)
+    // シート名(workbook.xml の並び順)と、名前の定義
     let mut names = Vec::new();
+    // (名前, 中身) — 中身は 'Sheet1'!$A$1:$B$2 の形
+    let mut defined: Vec<(String, String)> = Vec::new();
+    // 理解できなかった definedName の原文(hidden 属性つき等)。捨てない
+    let mut defined_raw: Vec<String> = Vec::new();
     if let Ok(mut f) = zip.by_name("xl/workbook.xml") {
         let mut s = String::new();
         let _ = f.read_to_string(&mut s);
         let mut r = Reader::from_str(&s);
         let mut buf = Vec::new();
+        let mut in_defined: Option<(String, bool, usize)> = None; // (name, 属性が単純か, 原文の頭)
+        let mut text = String::new();
+        let mut last = r.buffer_position() as usize;
         loop {
-            match r.read_event_into(&mut buf) {
+            let ev = r.read_event_into(&mut buf);
+            let start_pos = last;
+            last = r.buffer_position() as usize;
+            match ev {
                 Ok(Event::Eof) | Err(_) => break,
                 Ok(Event::Start(e)) | Ok(Event::Empty(e))
                     if local(e.name().as_ref()) == b"sheet" =>
                 {
                     names.push(attr(&e, "name").unwrap_or_else(|| "Sheet".into()));
+                }
+                Ok(Event::Start(e)) if local(e.name().as_ref()) == b"definedName" => {
+                    // name= 以外の属性(hidden 等)が付いていたら「単純ではない」
+                    let simple = e.attributes().flatten().count() == 1;
+                    in_defined = Some((
+                        attr(&e, "name").unwrap_or_default(),
+                        simple,
+                        start_pos,
+                    ));
+                    text.clear();
+                }
+                Ok(Event::Text(t)) if in_defined.is_some() => {
+                    text.push_str(&t.unescape().unwrap_or_default());
+                }
+                Ok(Event::End(e)) if local(e.name().as_ref()) == b"definedName" => {
+                    if let Some((nm, simple, at)) = in_defined.take() {
+                        if simple {
+                            defined.push((nm, std::mem::take(&mut text)));
+                        } else {
+                            defined_raw.push(s[at..last].to_string());
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -254,7 +286,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     let mut paths = paths;
     paths.sort();
 
-    let mut book = Book { sheets: Vec::new() };
+    let mut book = Book { sheets: Vec::new(), names_raw: defined_raw };
     for (i, path) in paths.iter().enumerate() {
         let mut s = String::new();
         if let Ok(mut f) = zip.by_name(path) { let _ = f.read_to_string(&mut s); }
@@ -264,6 +296,27 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     }
     if book.sheets.is_empty() {
         return Err("worksheet がありません(xlsxではない可能性)".into());
+    }
+    // 名前の定義をシートへ配る。'Sheet1'!$A$1:$B$2 の形だけ理解し、
+    // それ以外(複数範囲・行列全体・_xlnm 系)は原文のまま持ち越す
+    for (nm, target) in defined {
+        match split_defined(&target) {
+            Some((sheet_name, r)) => {
+                match book.sheets.iter_mut().find(|s| s.name == sheet_name) {
+                    Some(sh) => sh.names.push((nm, r)),
+                    None => book.names_raw.push(format!(
+                        "<definedName name=\"{}\">{}</definedName>",
+                        esc(&nm),
+                        esc(&target)
+                    )),
+                }
+            }
+            None => book.names_raw.push(format!(
+                "<definedName name=\"{}\">{}</definedName>",
+                esc(&nm),
+                esc(&target)
+            )),
+        }
     }
     Ok((book, rep))
 }
@@ -282,6 +335,85 @@ const RNS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relatio
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
      .replace('"', "&quot;")
+}
+
+/// definedName の中身を (シート名, "A1" か "A1:B2") に分ける。
+/// 'Sheet 1'!$A$1 の引用も解く。理解できない形なら None(原文で持ち越す側)。
+fn split_defined(target: &str) -> Option<(String, String)> {
+    let (sheet, r) = target.split_once('!')?;
+    let sheet = sheet.trim();
+    let sheet = if let Some(q) = sheet.strip_prefix('\'') {
+        q.strip_suffix('\'')?.replace("''", "'")
+    } else {
+        sheet.to_string()
+    };
+    let plain: String = r.chars().filter(|c| *c != '$').collect();
+    // A1 か A1:B2 の形だけ。複数範囲(カンマ)や行・列全体は理解しない
+    let ok = match plain.split_once(':') {
+        Some((a, b)) => Pos::parse(a).is_some() && Pos::parse(b).is_some(),
+        None => Pos::parse(&plain).is_some(),
+    };
+    ok.then_some((sheet, plain))
+}
+
+/// "A1" / "A1:B2" → "$A$1" / "$A$1:$B$2"
+fn dollars(r: &str) -> String {
+    let one = |s: &str| -> String {
+        let split = s.find(|c: char| c.is_ascii_digit()).unwrap_or(s.len());
+        let (c, n) = s.split_at(split);
+        format!("${c}${n}")
+    };
+    match r.split_once(':') {
+        Some((a, b)) => format!("{}:{}", one(a), one(b)),
+        None => one(r),
+    }
+}
+
+/// 原本の workbook.xml の definedNames を、こちらの塊に置き換える。
+fn patch_defined_names(workbook: &str, block: &str) -> String {
+    let mut s = workbook.to_string();
+    if let Some(i) = s.find("<definedNames>") {
+        if let Some(j) = s[i..].find("</definedNames>") {
+            s.replace_range(i..i + j + "</definedNames>".len(), "");
+        }
+    } else if let Some(i) = s.find("<definedNames/>") {
+        s.replace_range(i..i + "<definedNames/>".len(), "");
+    }
+    if block.is_empty() {
+        return s;
+    }
+    // 位置は sheets の直後(スキーマの並び)
+    match s.find("</sheets>") {
+        Some(i) => {
+            let at = i + "</sheets>".len();
+            s.insert_str(at, block);
+            s
+        }
+        None => s,
+    }
+}
+
+/// 全シートの名前の定義 + 理解しなかった原文を definedNames の塊にする。
+fn defined_names_xml(book: &Book) -> String {
+    let mut inner = String::new();
+    for raw in &book.names_raw {
+        inner.push_str(raw);
+    }
+    for s in &book.sheets {
+        for (n, r) in &s.names {
+            inner.push_str(&format!(
+                "<definedName name=\"{}\">'{}'!{}</definedName>",
+                esc(n),
+                s.name.replace('\'', "''"),
+                dollars(r)
+            ));
+        }
+    }
+    if inner.is_empty() {
+        String::new()
+    } else {
+        format!("<definedNames>{inner}</definedNames>")
+    }
 }
 
 pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
@@ -336,6 +468,14 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     if n >= 1 {
                         sheet_extras[n - 1] = extra;
                     }
+                }
+                if name == "xl/workbook.xml" {
+                    // 名前の定義はこちらの帳簿(モデル+原文持ち越し)が正。
+                    // 原本の definedNames を置き換えて持ち越す
+                    let s = String::from_utf8_lossy(&buf).to_string();
+                    let patched = patch_defined_names(&s, &defined_names_xml(book));
+                    carried.push((name, patched.into_bytes()));
+                    continue;
                 }
                 if !regenerated {
                     carried.push((name, buf));
@@ -400,7 +540,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     if !carry {
     put("xl/workbook.xml", &format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="{NS}" xmlns:r="{RNS}"><sheets>{sheets_xml}</sheets></workbook>"#))?;
+<workbook xmlns="{NS}" xmlns:r="{RNS}"><sheets>{sheets_xml}</sheets>{}</workbook>"#,
+        defined_names_xml(book)))?;
 
     let wrels: String = (1..=book.sheets.len())
         .map(|i| format!(r#"<Relationship Id="rId{i}" Type="{RNS}/worksheet" Target="worksheets/sheet{i}.xml"/>"#))
@@ -537,7 +678,7 @@ mod fmt_round {
             formula: None, value: Value::Text("品名".into()), fmt: fmt.clone() });
         s.set(Pos { row: 0, col: 1 }, Cell {
             formula: None, value: Value::Number(1200.0), fmt });
-        Book { sheets: vec![s] }
+        Book { sheets: vec![s], names_raw: Vec::new() }
     }
 
     fn roundtrip(b: &Book) -> Book {
@@ -599,7 +740,7 @@ mod fmt_round {
             value: Value::Empty,
             fmt: CellFormat { borders: Borders::ALL, ..Default::default() },
         });
-        let back = roundtrip(&Book { sheets: vec![sh] });
+        let back = roundtrip(&Book { sheets: vec![sh], names_raw: Vec::new() });
         let c = back.sheets[0].get(Pos { row: 2, col: 2 });
         assert!(c.is_some(), "値の無い罫線セルが消えた");
         assert_eq!(c.unwrap().fmt.borders, Borders::ALL);
@@ -625,7 +766,7 @@ mod merge_round {
             formula: None, value: Value::Text("見出し".into()), fmt: Default::default() });
         s.merges.push((Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
         s.merges.push((Pos::parse("A2").unwrap(), Pos::parse("A4").unwrap()));
-        let back = roundtrip(&Book { sheets: vec![s] });
+        let back = roundtrip(&Book { sheets: vec![s], names_raw: Vec::new() });
         assert_eq!(back.sheets[0].merges.len(), 2, "結合が消えた");
         assert_eq!(back.sheets[0].merges[0],
                    (Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
@@ -675,7 +816,7 @@ mod colwidth_round {
         s.col_width.insert(0, 3.5);
         s.col_width.insert(2, 24.0);
         let mut buf = Vec::new();
-        crate::xlsx::write(&Book { sheets: vec![s] }, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
         let cw = &back.sheets[0].col_width;
         assert_eq!(cw.get(&0), Some(&3.5), "列幅が消えた: {cw:?}");
@@ -715,7 +856,7 @@ mod rowheight_round {
             formula: None, value: Value::Text("高い行".into()), fmt: Default::default() });
         s.row_height.insert(2, 27.5);
         let mut buf = Vec::new();
-        crate::xlsx::write(&Book { sheets: vec![s] }, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
         assert_eq!(back.sheets[0].row_height.get(&2), Some(&27.5), "行の高さが消えた");
     }
@@ -823,5 +964,45 @@ mod carry_tests {
         let z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
         let names: Vec<String> = z.file_names().map(String::from).collect();
         assert!(!names.iter().any(|n| n == "xl/calcChain.xml"), "古い計算順を持ち越した");
+    }
+}
+
+#[cfg(test)]
+mod name_roundtrip_tests {
+    use super::*;
+    use crate::model::Cell;
+    use crate::recalc;
+
+    #[test]
+    fn 名前の定義が往復して式で効く() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("100"));
+        b.sheets[0].set(Pos::parse("B1").unwrap(), Cell::input("=単価*2"));
+        b.sheets[0].names.push(("単価".into(), "A1".into()));
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (mut back, _) = read(buf).expect("読めない");
+        assert_eq!(back.sheets[0].names, vec![("単価".to_string(), "A1".to_string())],
+            "名前が往復しない");
+        recalc(&mut back.sheets[0]);
+        assert_eq!(back.sheets[0].value(Pos::parse("B1").unwrap()), Value::Number(200.0));
+    }
+
+    #[test]
+    fn 実物のprint_areaを壊さない() {
+        let src = "/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/実施要領様式7_提案見積書.xlsx";
+        let Ok(bytes) = std::fs::read(src) else { return };
+        let (book, _) = read(Cursor::new(&bytes)).expect("読めない");
+        let mut out = Cursor::new(Vec::new());
+        write_with(&book, Some(Cursor::new(&bytes)), &mut out).expect("書けない");
+        out.set_position(0);
+        let mut z = zip::ZipArchive::new(out).expect("zipでない");
+        let mut s = String::new();
+        use std::io::Read as _;
+        z.by_name("xl/workbook.xml").expect("workbookが無い")
+            .read_to_string(&mut s).unwrap();
+        assert!(s.contains("_xlnm.Print_Area"),
+            "印刷範囲(Print_Area)が保存で消えた");
     }
 }
