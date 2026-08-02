@@ -163,6 +163,8 @@ struct Calc {
     cursor: Pos,
     /// 範囲選択の起点(Shift+矢印/クリックで伸ばす)。無ければ1セル
     anchor: Option<Pos>,
+    /// ドラッグ選択の始点(マウスの左を押した位置。離すと終わる)
+    drag: Option<Pos>,
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
     /// 画面の窓の左上(スクロール)。**表は画面より大きい**
@@ -208,6 +210,7 @@ impl Calc {
             active: 0,
             cursor: Pos::new(0, 0),
             anchor: None,
+            drag: None,
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
@@ -1273,11 +1276,32 @@ impl Render for Calc {
                     .font_family("Noto Sans JP")
                     .overflow_hidden().whitespace_nowrap()
                     .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.commit();          // 移る前に、いま打っていた内容を入れる
-                        this.cursor = p;
-                        this.sync_input();
-                        cx.notify();
+                    // 押した位置が選択の始まり。Shift+クリックはいまの位置から伸ばす
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                        move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            this.commit();      // 移る前に、いま打っていた内容を入れる
+                            if e.modifiers.shift {
+                                if this.anchor.is_none() {
+                                    this.anchor = Some(this.cursor);
+                                }
+                            } else {
+                                this.anchor = None;
+                                this.drag = Some(p);
+                            }
+                            this.cursor = p;
+                            this.sync_input();
+                            cx.notify();
+                        }))
+                    // 押したまま通り過ぎたセルまで選択を広げる
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(start) = this.drag {
+                            if this.cursor != p {
+                                this.cursor = p;
+                                this.anchor = if p == start { None } else { Some(start) };
+                                this.sync_input();
+                                cx.notify();
+                            }
+                        }
                     }));
                 // 罫線・塗り・文字書式。**帳票の見た目はここで決まる**
                 let f = cell.map(|x| x.fmt.clone()).unwrap_or_default();
@@ -1383,6 +1407,16 @@ impl Render for Calc {
         div().size_full().flex().flex_col().bg(rgb(0xF3F5F7))
             .key_context("jo_edit")
             .track_focus(&self.focus)
+            // どこで離してもドラッグ選択は終わる(セルの外で離しても引きずらない)
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if this.drag.take().is_some() {
+                    if this.anchor.is_some() {
+                        let (a, b) = this.sel_rect();
+                        this.status = format!("{}:{}", a.a1(), b.a1()).into();
+                    }
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(Calc::a_backspace))
             .on_action(cx.listener(Calc::a_delete))
             .on_action(cx.listener(Calc::a_copy))
