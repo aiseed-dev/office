@@ -103,6 +103,10 @@ struct Calc {
     frozen: Option<Pos>,
     /// 絞り込み(列, 値)。**見え方だけ** — 保存される中身は変わらない
     filter: Option<(u32, String)>,
+    /// 表の操作(書式・フィル・行列・結合・並べ替え)を戻すための控え。
+    /// 入力欄の undo とは別 — **戻せない操作は事故のとき逃げ道が無い**
+    undo_stack: Vec<sheet::Sheet>,
+    redo_stack: Vec<sheet::Sheet>,
     /// グリッド線(表の薄い線)を出す
     gridlines: bool,
     /// 数式バーの中身。IMEもここに来る(セルの入力は1本のテキスト編集)
@@ -133,6 +137,8 @@ impl Calc {
             view: Pos::new(0, 0),
             frozen: None,
             filter: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             gridlines: true,
             input: Editor::new(""),
             path: None,
@@ -184,8 +190,49 @@ impl Calc {
     }
 
     /// 数式バーの内容をセルに入れて再計算する。
+    /// いまの表を控える(次の操作を戻せるように)。やり直しの控えは捨てる。
+    fn checkpoint(&mut self) {
+        self.undo_stack.push(self.book.sheets[self.active].clone());
+        if self.undo_stack.len() > 100 {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    fn undo_sheet(&mut self) {
+        let Some(prev) = self.undo_stack.pop() else {
+            self.status = "戻すものがありません".into();
+            return;
+        };
+        self.redo_stack.push(self.book.sheets[self.active].clone());
+        self.book.sheets[self.active] = prev;
+        recalc(&mut self.book.sheets[self.active]);
+        self.dirty = true;
+        self.sync_input();
+        self.status = "戻しました".into();
+    }
+
+    fn redo_sheet(&mut self) {
+        let Some(next) = self.redo_stack.pop() else {
+            self.status = "やり直すものがありません".into();
+            return;
+        };
+        self.undo_stack.push(self.book.sheets[self.active].clone());
+        self.book.sheets[self.active] = next;
+        recalc(&mut self.book.sheets[self.active]);
+        self.dirty = true;
+        self.sync_input();
+        self.status = "やり直しました".into();
+    }
+
     fn commit(&mut self) {
         let (cur, text) = (self.cursor, self.input.text().to_string());
+        // 変わっていなければ何もしない(移動のたびに履歴が積まれるのを防ぐ)
+        let now = self.sheet().get(cur).map(|c| c.editable()).unwrap_or_default();
+        if now == text {
+            return;
+        }
+        self.checkpoint();
         self.sheet_mut().set(cur, Cell::input(&text));
         let s = self.sheet_mut();
         recalc(s);
@@ -345,7 +392,16 @@ impl Calc {
         self.input.select_all(); cx.notify();
     }
     fn a_undo(&mut self, _: &ui::Undo, _: &mut Window, cx: &mut Context<Self>) {
-        self.input.undo(); cx.notify();
+        if !self.input.undo() {
+            self.undo_sheet();
+        }
+        cx.notify();
+    }
+    fn a_redo(&mut self, _: &ui::Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.input.redo() {
+            self.redo_sheet();
+        }
+        cx.notify();
     }
     fn a_save(&mut self, _: &ui::Save, _: &mut Window, cx: &mut Context<Self>) {
         self.commit(); self.save(); cx.notify();
@@ -362,6 +418,7 @@ impl Calc {
     /// **値の無いセルにも掛ける** — 罫線だけを引くのは帳票では普通の操作。
     fn fmt(&mut self, f: impl Fn(&mut CellFormat)) {
         self.commit();
+        self.checkpoint();
         // 範囲選択があれば全部に掛ける。罫線も塗りも、帳票は範囲でやる仕事
         let (a, b) = self.sel_rect();
         for r in a.row..=b.row {
@@ -379,6 +436,7 @@ impl Calc {
     /// 選んだ範囲を結合する。**値は消さない** — 左上以外の値は隠れるだけで、
     /// 結合を解けば戻る(黙って捨てない)。
     fn merge_selection(&mut self) {
+        self.checkpoint();
         let (a, b) = self.sel_rect();
         if a == b {
             self.status = "結合する範囲を Shift+矢印で選んでください".into();
@@ -403,6 +461,7 @@ impl Calc {
     /// 行・列を出し入れする。
     fn rowcol(&mut self, f: impl Fn(&mut sheet::Sheet, Pos)) {
         self.commit();
+        self.checkpoint();
         let p = self.cursor;
         f(&mut self.book.sheets[self.active], p);
         self.dirty = true;
@@ -493,7 +552,16 @@ impl Calc {
                     .add_filter("Excelブック", &["xlsx"]).pick_file() { self.open(p) }
             }
             "save" => { self.commit(); self.save() }
-            "undo" => { self.input.undo(); }
+            "undo" => {
+                if !self.input.undo() {
+                    self.undo_sheet();
+                }
+            }
+            "redo" => {
+                if !self.input.redo() {
+                    self.redo_sheet();
+                }
+            }
             "selectall" => self.input.select_all(),
             // 罫線 — **日本の帳票の本体**
             "borders" => self.fmt(|f| {
@@ -525,6 +593,7 @@ impl Calc {
                     self.status = "Shift+↓ で埋める範囲を選んでください(先頭行を下へ写します)".into();
                 } else {
                     self.commit();
+                    self.checkpoint();
                     let sh = &mut self.book.sheets[self.active];
                     let mut n = 0usize;
                     for c in a.col..=b.col {
@@ -606,6 +675,7 @@ impl Calc {
             // 並べ替えは**見出しを据え置き、行はまるごと動かす**
             "custom-sort" => {
                 self.commit();
+                self.checkpoint();
                 let c = self.cursor.col;
                 self.book.sheets[self.active].sort_by_column(c, true, true);
                 self.dirty = true;
@@ -615,6 +685,7 @@ impl Calc {
             }
             "rem-duplicates" => {
                 self.commit();
+                self.checkpoint();
                 let n = self.book.sheets[self.active].remove_duplicate_rows(true);
                 self.dirty = true;
                 recalc(&mut self.book.sheets[self.active]);
@@ -970,6 +1041,7 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_tab))
             .on_action(cx.listener(Calc::a_enter))
             .on_action(cx.listener(Calc::a_select_all))
+            .on_action(cx.listener(Calc::a_redo))
             .on_action(cx.listener(Calc::a_select_left))
             .on_action(cx.listener(Calc::a_select_right))
             .on_action(cx.listener(Calc::a_select_up))
