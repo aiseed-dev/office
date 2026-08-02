@@ -1252,6 +1252,11 @@ impl gpui::Element for InputSink {
         _: Option<&gpui::InspectorElementId>, window: &mut Window, cx: &mut App)
         -> (gpui::LayoutId, ()) {
         let mut s = gpui::Style::default();
+        // **格子の上に全面で重ねる。** 流れの中に置くと格子の右へ押し出され、
+        // bounds が格子とずれてマウスが一切当たらなくなる(踏んで直した)
+        s.position = gpui::Position::Absolute;
+        s.inset.top = gpui::px(0.0).into();
+        s.inset.left = gpui::px(0.0).into();
         s.size.width = gpui::relative(1.0).into();
         s.size.height = gpui::relative(1.0).into();
         (window.request_layout(s, [], cx), ())
