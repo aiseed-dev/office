@@ -1,0 +1,19 @@
+target/
+vendor/
+
+# 機械ごとの設定。絶対パスや symlink が入るので追跡しない
+.cargo/
+.linklibs/
+
+# 手元に残すが、公開するものではない
+core/
+demo.html
+index.html
+logo.svg
+
+# 検証で出るもの
+*.pdf
+lang/corpus/txt/
+
+# 本文のフォントは同梱しない(システムから探す)
+assets/

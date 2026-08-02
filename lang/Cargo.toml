@@ -1,0 +1,18 @@
+[package]
+name = "lang"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+# gpui に依存しない。画面が無くても回せることがこのクレートの存在理由。
+# 青空文庫の17,000作品を窓越しには測れない。
+[dependencies]
+
+[[bin]]
+name = "furigana-bench"
+path = "src/bin/furigana-bench.rs"
+
+# 単体で使える校正の道具。hunspell と同じように、誰でもパイプで通せる形にする
+[[bin]]
+name = "office-spell"
+path = "src/bin/office-spell.rs"

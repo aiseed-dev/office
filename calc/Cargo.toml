@@ -1,0 +1,14 @@
+[package]
+name = "calc"       # xlsx互換の表計算。writer とは別のソフト
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sheet = { path = "../sheet" }
+kumihan = { path = "../engine" }
+ui = { path = "../ui" }
+# GPUI は crates.io に無いので、版を固定して zed から直に取る
+gpui = { git = "https://github.com/zed-industries/zed", rev = "5e1fd392f67e27fa1da91bad43eef7db1a5dec23" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "5e1fd392f67e27fa1da91bad43eef7db1a5dec23", features = ["wayland", "x11"] }
+rfd = "0.14"

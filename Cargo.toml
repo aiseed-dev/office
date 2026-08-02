@@ -1,0 +1,10 @@
+[workspace]
+members = ["engine", "ooxml", "sheet", "lang", "paper", "ui", "writer", "calc"]
+resolver = "2"
+# vendor は参照するだけ。workspace に取り込むと zed 側の
+# `workspace = true` 継承がこちらのルートを見に来て壊れる
+exclude = ["vendor", "core"]
+
+[workspace.package]
+edition = "2021"
+license = "AGPL-3.0-or-later"

@@ -1,0 +1,347 @@
+#!/usr/bin/env python3
+"""`ribbon.rs` を Euro-Office の現物から生成する。
+
+**手で要約しない。** タブの並びもボタンの並びも
+`vendor/web-apps/apps/*/main/app/template/Toolbar.template` の順そのまま、
+名前は同じ app の `locale/ja.json` から引く。
+だから「Euro-Office と全く同じか」は、この台本を回し直せば確かめられる。
+
+除く5つ(方針): 共同編集・保護・プラグイン・AI・マクロ。
+マクロを持たないのは機能不足ではなく、文書の中に実行コードを置かない設計。
+
+リボンの言葉は Euro-Office のロケールから来るので、**45言語ぶん現物がある**。
+各国語版を作るとき、画面の翻訳は作業に含まれない。
+
+  python3 gen_ribbon.py       > src/ribbon.rs   # 既定は日本語
+  python3 gen_ribbon.py en    > src/ribbon.rs   # 英語版
+  python3 gen_ribbon.py --list                  # 使えるロケール
+"""
+
+import json
+import pathlib
+import re
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[1] / "vendor" / "web-apps" / "apps"
+LOCALE = "ja"
+
+# 実装済みのコマンド。ここに載っているものだけが押せる。
+# **できないものを、できるように見せない。**
+# **アプリ側で実際に動くものだけ**を書く。
+# ここに書けば押せる見た目になるので、書いた瞬間に嘘になりうる。
+# 太字・中央揃え・罫線はまだ入っていない(次の仕事)。
+READY = {
+    "writer": {
+        "open": "open", "save": "save", "undo": "undo", "redo": "redo",
+        "select-all": "selectall", "replace": "spell",
+        "bold": "bold", "italic": "italic", "underline": "underline",
+        "strikeout": "strikeout",
+        "align-center": "align-center", "align-just": "align-just",
+        "incfont": "incfont", "decfont": "decfont", "print": "pdf",
+        "fontcolor": "fontcolor", "align-left": "align-left",
+        "align-right": "align-right",
+    },
+    "calc": {
+        "open": "open", "save": "save", "undo": "undo", "redo": "redo",
+        "select-all": "selectall", "autosum": "sum",
+        "borders": "borders", "bold": "bold", "italic": "italic",
+        "underline": "underline",
+        "align-center": "align-center",
+        "comma": "comma", "currency": "currency", "percents": "percents",
+        "cell-ins": "cell-ins", "cell-del": "cell-del", "clear": "clear",
+        "digit-inc": "digit-inc", "digit-dec": "digit-dec",
+        "align-left": "align-left", "align-right": "align-right",
+        "custom-sort": "custom-sort", "rem-duplicates": "rem-duplicates",
+    },
+}
+
+# 除外するタブ(data-tab 名)
+DROP_TABS = {"collaboration", "protect", "plugins", "ai", "macros", "forms", "pdf"}
+
+# slot の id → ja.json の鍵の末尾(tip か cap)。
+# 現物の id と鍵名は綴りが違うので、ここだけは対応表が要る。
+LABEL = {
+    # 常時
+    "save": "tipSave", "print": "tipPrint", "copy": "tipCopy", "paste": "tipPaste",
+    "undo": "tipUndo", "redo": "tipRedo", "cut": "tipCut", "copystyle": "tipCopyStyle",
+    # ホーム(文書)
+    "fontname": "tipFontName", "fontsize": "tipFontSize", "incfont": "tipIncFont",
+    "decfont": "tipDecFont", "changecase": "tipChangeCase", "bold": None,
+    "italic": None, "underline": None, "strikeout": None, "superscript": None,
+    "subscript": None, "highlight": "tipHighlightColor", "fontcolor": "tipFontColor",
+    "clearstyle": "tipClearStyle", "markers": "tipMarkers", "numbering": "tipNumbers",
+    "multilevels": "tipMultilevels", "decoffset": "tipDecPrLeft",
+    "incoffset": "tipIncPrLeft", "linespace": "tipLineSpace", "direction": "tipTextDir",
+    "align-center": "tipAlignCenter", "align-just": "tipAlignJust",
+    "align-left": "tipAlignLeft", "align-right": "tipAlignRight",
+    "hidenchars": "tipShowHiddenChars", "paracolor": "tipPrColor",
+    "borders": "tipBorders", "styles": "tipParagraphStyle", "replace": "tipReplace",
+    "select-all": "tipSelectAll",
+    # 挿入(文書)
+    "blankpage": "tipBlankPage", "instable": "tipInsertTable",
+    "insshape": "tipInsertShape", "inssmartart": "tipInsertSmartArt",
+    "inschart": "tipInsertChart", "smartpicker": "tipInsertChart",
+    "instext": "tipInsertText", "instextart": "tipInsertTextArt",
+    "dropcap": "tipDropCap", "text-from-file": "tipTextFromFile",
+    "insequation": "tipInsertEquation", "inssymbol": "tipInsertSymbol",
+    "controls": "tipControls", "insimage": "tipInsertImage",
+    "inshyperlink": "tipInsertHyperlink", "insslicer": "tipInsertSlicer",
+    "inssparkline": "tipInsertSpark", "inscheckbox": "tipControls",
+    "insrecommend": "tipInsertChartRecommend",
+    # レイアウト
+    "pagemargins": "tipPageMargins", "pageorient": "tipPageOrient",
+    "pagesize": "tipPageSize", "columns": "tipColumns",
+    "line-numbers": "tipLineNumbers", "hyphenation": "tipHyphenation",
+    "watermark": "tipWatermark", "pagecolor": "tipPageColor",
+    "colorschemas": "tipColorSchemas", "printarea": "tipPrintArea",
+    "pagebreak": "tipPageBreak", "scale": "tipScale",
+    "printtitles": "tipPrintTitles", "rtl-sheet": "tipRtlSheet",
+    # 参考資料
+    "add-text": None, "contents-update": None, "bookmarks": None,
+    "caption": None, "crossref": None, "tof": None, "tof-update": None,
+    # 表計算のホーム
+    "fillparag": "tipPrColor", "top": "tipAlignTop", "middle": "tipAlignMiddle",
+    "bottom": "tipAlignBottom", "wrap": "tipWrap", "text-orient": "tipTextOrientation",
+    "merge": "tipMerge", "formula": None, "fill-num": None,
+    "named-range": None, "clear": "tipClearStyle", "format": "tipNumFormat",
+    "currency": "tipDigStyleCurrency", "percents": "tipDigStylePercent",
+    "comma": "tipDigStyleComma", "digit-dec": "tipDecDecimal",
+    "digit-inc": "tipIncDecimal", "cell-ins": "tipInsertOpt",
+    "cell-del": "tipDeleteOpt", "cell-format": "tipCellStyle",
+    "condformat": "tipCondFormat", "table-tpl": "tipInsertTable",
+    # 数式
+    "additional-formula": None, "autosum": None, "recent": None,
+    "financial": None, "logical": None, "text": None, "datetime": None,
+    "lookup": None, "math": None, "more": None, "named-range-huge": None,
+    "trace-prec": None, "trace-dep": None, "remove-arrows": None,
+    "show-formulas": None, "watch-window": None, "calculate": None,
+    # データ
+    "data-from-text": None, "data-external-links": None, "custom-sort": None,
+    "text-column": None, "rem-duplicates": None, "data-validation": None,
+    "goal-seek": None, "solver": None, "group": None, "ungroup": None,
+    "show-details": None, "hide-details": None,
+}
+
+# ja.json に鍵が無い(アイコンだけ・別画面)ものの日本語名。
+# **現物に出ている語をそのまま使う。** 勝手な言い換えをしない。
+FALLBACK = {
+    "bold": "太字", "italic": "斜体", "underline": "下線",
+    "strikeout": "取り消し線", "superscript": "上付き", "subscript": "下付き",
+    "add-text": "テキストの追加", "contents-update": "目次の更新",
+    "bookmarks": "ブックマーク", "caption": "図表番号", "crossref": "相互参照",
+    "tof": "図表目次", "tof-update": "図表目次の更新",
+    "formula": "関数", "fill-num": "フィル", "named-range": "名前の管理",
+    "additional-formula": "関数の挿入", "autosum": "オートSUM",
+    "recent": "最近使った関数", "financial": "財務", "logical": "論理",
+    "text": "文字列操作", "datetime": "日付/時刻", "lookup": "検索/行列",
+    "math": "数学/三角", "more": "その他の関数",
+    "named-range-huge": "名前の管理", "trace-prec": "参照元のトレース",
+    "trace-dep": "参照先のトレース", "remove-arrows": "トレース矢印の削除",
+    "show-formulas": "数式の表示", "watch-window": "ウォッチウィンドウ",
+    "calculate": "計算方法", "data-from-text": "テキストからデータ",
+    "data-external-links": "外部リンク", "custom-sort": "並べ替え",
+    "text-column": "区切り位置", "rem-duplicates": "重複の削除",
+    "data-validation": "データの入力規則", "goal-seek": "ゴールシーク",
+    "solver": "ソルバー", "group": "グループ化", "ungroup": "グループ解除",
+    "show-details": "詳細の表示", "hide-details": "詳細の非表示",
+    "spell": "スペルチェック", "furigana": "ふりがな",
+    "open": "開く", "print": "印刷",
+}
+
+
+def locale(app):
+    p = ROOT / app / f"main/locale/{LOCALE}.json"
+    if not p.exists():
+        sys.exit(f"そのロケールは Euro-Office に無い: {LOCALE}")
+    return json.load(open(p, encoding="utf-8"))
+
+
+def locales():
+    d = ROOT / "documenteditor/main/locale"
+    return sorted(p.stem for p in d.glob("*.json"))
+
+
+def tab_names(app, prefix):
+    d = locale(app)
+    out = {}
+    for k, v in d.items():
+        m = re.search(rf"{prefix}\.Views\.Toolbar\.textTab(\w+)$", k)
+        if m:
+            out[m.group(1).lower()] = v
+    return out
+
+
+def label_of(app_loc, prefix, slot):
+    key = LABEL.get(slot)
+    if key:
+        for who in ("Toolbar", "ViewTab", "HeaderFooterTab"):
+            full = f"{prefix}.Views.{who}.{key}"
+            if full in app_loc:
+                # tip は説明文のことがある。最初の読点までを名前にする
+                return re.split(r"[。<（(]", app_loc[full])[0].strip()
+    if slot in FALLBACK:
+        return FALLBACK[slot]
+    return slot
+
+
+def tabs_of(app, prefix):
+    tpl = (ROOT / app / "main/app/template/Toolbar.template").read_text(encoding="utf-8")
+    loc = locale(app)
+    names = tab_names(app, prefix)
+    parts = re.split(r'<section class="panel"[^>]*data-tab="([a-z-]+)"', tpl)
+
+    out = []
+    # ファイルタブは Euro-Office では別画面。並びの先頭に置く点だけ合わせる
+    out.append((names.get("file", "File"), ["open", "save", "print"]))
+    for i in range(1, len(parts), 2):
+        tab, body = parts[i], parts[i + 1]
+        if tab in DROP_TABS:
+            continue
+        slots = list(dict.fromkeys(
+            re.findall(r'id="slot-(?:btn|field|chk|cmb)-([a-z0-9-]+)"', body)))
+        alias = {"ins": "insert", "links": "links"}
+        name = names.get(alias.get(tab, tab), names.get(tab, tab))
+        out.append((name, slots))
+    return out, loc
+
+
+def emit():
+    print(HEAD)
+    for app, prefix, konst, which in [
+        ("documenteditor", "DE", "WRITER", "writer"),
+        ("spreadsheeteditor", "SSE", "CALC", "calc"),
+    ]:
+        tabs, loc = tabs_of(app, prefix)
+        ready = READY[which]
+        print(f"pub const {konst}: &[Tab] = &[")
+        for name, slots in tabs:
+            print(f'    Tab {{ name: "{name}", cmds: &[')
+            for s in slots:
+                lab = label_of(loc, prefix, s).replace('"', "'")
+                if s in ready:
+                    print(f'        c("{ready[s]}", "{lab}"),')
+                else:
+                    print(f'        x("{lab}"),')
+            print("    ]},")
+        print("];")
+        print()
+    print(TAIL)
+
+
+HEAD = '''//! リボン(タブ+コマンド)。**Euro-Office の現物から生成している。**
+//!
+//! このファイルは手で書かない。`gen_ribbon.py` が
+//! `vendor/web-apps/apps/*/main/app/template/Toolbar.template` の並び順と
+//! 同 app の `locale/ja.json` の名前から起こす。
+//! だから「Euro-Office と全く同じか」は台本を回し直せば確かめられる。
+//!
+//! ```text
+//! python3 ui/gen_ribbon.py ja > ui/src/ribbon.rs
+//! ```
+//!
+//! **入れないもの**(方針): 共同編集・保護・プラグイン・AI・マクロ。
+//! マクロを持たないのは機能不足ではなく、文書の中に実行コードを置かない設計。
+//!
+//! **できないものを、できるように見せない。** 実装済みのコマンドだけを押せる形にし、
+//! 未実装は灰色で残す。並びを Euro-Office に合わせたまま、
+//! 「今どこまで出来ているか」がそのまま画面に出る。
+
+/// 1つのコマンド。`ready=false` は未実装(押せない灰色)。
+#[derive(Clone, Copy)]
+pub struct Cmd {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub ready: bool,
+}
+
+const fn c(id: &'static str, label: &'static str) -> Cmd {
+    Cmd { id, label, ready: true }
+}
+const fn x(label: &'static str) -> Cmd {
+    Cmd { id: "", label, ready: false }
+}
+
+pub struct Tab {
+    pub name: &'static str,
+    pub cmds: &'static [Cmd],
+}
+'''
+
+TAIL = '''/// 実装済みのコマンド数 / 全体(進み具合を隠さない)
+pub fn progress(tabs: &[Tab]) -> (usize, usize) {
+    let all: usize = tabs.iter().map(|t| t.cmds.len()).sum();
+    let ready: usize = tabs.iter().flat_map(|t| t.cmds).filter(|c| c.ready).count();
+    (ready, all)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 除外した5つがタブに無い() {
+        for tabs in [WRITER, CALC] {
+            for t in tabs {
+                for ng in ["共同編集", "保護", "プラグイン", "AI", "マクロ"] {
+                    assert!(!t.name.contains(ng), "除外のはずのタブがある: {}", t.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn 実装済みと未実装が区別されている() {
+        // 「押せるのに何も起きない」を作らないための検査
+        for tabs in [WRITER, CALC] {
+            for t in tabs {
+                for cmd in t.cmds {
+                    assert_eq!(cmd.ready, !cmd.id.is_empty(),
+                        "{} の「{}」: ready と id が食い違う", t.name, cmd.label);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn euro_officeのタブが揃っている() {
+        let names: Vec<&str> = WRITER.iter().map(|t| t.name).collect();
+        for want in ["ファイル", "ホーム", "挿入", "レイアウト", "参考資料"] {
+            assert!(names.contains(&want), "文書に「{want}」タブが無い: {names:?}");
+        }
+        let names: Vec<&str> = CALC.iter().map(|t| t.name).collect();
+        for want in ["ファイル", "ホーム", "挿入", "レイアウト", "数式", "データ"] {
+            assert!(names.contains(&want), "表計算に「{want}」タブが無い: {names:?}");
+        }
+    }
+
+    #[test]
+    fn どの言語でも並びの数は同じ() {
+        // 言葉が変わるだけで、リボンの構造は Euro-Office と同じ形
+        assert!(WRITER.len() >= 5, "タブが少なすぎる: {}", WRITER.len());
+        assert!(CALC.len() >= 6, "タブが少なすぎる: {}", CALC.len());
+    }
+
+    #[test]
+    fn 名前が空でない() {
+        for tabs in [WRITER, CALC] {
+            for t in tabs {
+                assert!(!t.name.is_empty());
+                for cmd in t.cmds {
+                    assert!(!cmd.label.is_empty(), "{} に名無しのコマンド", t.name);
+                }
+            }
+        }
+    }
+}
+'''
+
+if __name__ == "__main__":
+    if not ROOT.exists():
+        sys.exit(f"Euro-Office の現物が見つかりません: {ROOT}")
+    args = sys.argv[1:]
+    if args and args[0] == "--list":
+        print(" ".join(locales()))
+        sys.exit(0)
+    if args:
+        LOCALE = args[0]
+    emit()

@@ -1,0 +1,14 @@
+[package]
+name = "ooxml"      # K3: docx ⇄ kumihan の文書モデル。互換は書式の境界で守る
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "OOXML(docx)の読み書き。全部は実装しない — 読めないものは読めないと言う"
+
+[dependencies]
+kumihan = { path = "../engine" }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.36"
+
+[dev-dependencies]
+printpdf = "0.7"

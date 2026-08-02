@@ -1,0 +1,10 @@
+[package]
+name = "sheet"      # C0: xlsx の読み書きと表計算の核。UI非依存
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+description = "SpreadsheetML(xlsx)の読み書きと式の再計算。マクロは実装しない(設計判断)"
+
+[dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.36"
