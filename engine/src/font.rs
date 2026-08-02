@@ -139,10 +139,37 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
+/// 無い書体の筋の通った代替。**明朝の書類を黙ってゴシックにしない。**
+///
+/// Windows の書体(ＭＳ 明朝など)は Linux に無いのが普通なので、
+/// 系統(明朝/ゴシック)を保って置き換える。
+pub fn substitute(name: &str) -> Option<&'static Family> {
+    let mincho = name.contains("明朝") || name.to_lowercase().contains("mincho");
+    let gothic = name.contains("ゴシック")
+        || name.to_lowercase().contains("gothic")
+        || name.contains("メイリオ")
+        || name.to_lowercase().contains("meiryo");
+    let candidates: &[&str] = if mincho {
+        &["IPAex明朝", "Noto Serif CJK JP", "BIZ UDP明朝", "BIZ UD明朝", "IPA P明朝", "IPA明朝"]
+    } else if gothic {
+        &["IPAexゴシック", "Noto Sans CJK JP", "BIZ UDPゴシック", "IPA Pゴシック"]
+    } else {
+        return None;
+    };
+    candidates.iter().find_map(|c| resolve(c))
+}
+
 /// 文書が書体を指定していないとき、あるいは指定されたものが無いときに使う。
 ///
 /// **日本語が組めるものを選ぶ。** 英字だけのフォントに落ちると豆腐になる。
+/// 同じ「日本語が組める」でも、名前順の先頭(AR PL UMing 等)より
+/// 見慣れたものを先に。
 pub fn fallback() -> Option<&'static Family> {
+    for c in ["Noto Sans CJK JP", "IPAexゴシック", "BIZ UDPゴシック", "IPA Pゴシック"] {
+        if let Some(f) = resolve(c) {
+            return Some(f);
+        }
+    }
     list().iter().find(|f| f.japanese)
 }
 
@@ -154,6 +181,10 @@ pub fn for_document(wanted: Option<&str>) -> Result<(&'static Family, bool), Str
     if let Some(w) = wanted.filter(|s| !s.is_empty()) {
         if let Some(f) = resolve(w) {
             return Ok((f, true));
+        }
+        // 系統を保った代替(明朝→明朝)を先に。無ければ一般の代替
+        if let Some(f) = substitute(w) {
+            return Ok((f, false));
         }
         let f = fallback().ok_or_else(|| missing(Some(w)))?;
         return Ok((f, false));
@@ -236,6 +267,24 @@ mod tests {
         let (f, exact) = for_document(None).unwrap();
         assert!(exact);
         assert!(f.japanese);
+    }
+
+    #[test]
+    fn 明朝の書類はゴシックに化けない() {
+        // ＭＳ 明朝は Linux に無い。でも代替は明朝系であるべき
+        let (f, exact) = for_document(Some("ＭＳ 明朝")).unwrap();
+        assert!(!exact);
+        assert!(
+            f.name.contains("明朝") || f.name.contains("Serif"),
+            "明朝の代替がゴシックになった: {}",
+            f.name
+        );
+        let (g, _) = for_document(Some("ＭＳ ゴシック")).unwrap();
+        assert!(
+            g.name.contains("ゴシック") || g.name.contains("Sans"),
+            "ゴシックの代替が変: {}",
+            g.name
+        );
     }
 
     #[test]

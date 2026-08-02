@@ -118,6 +118,8 @@ struct Writer {
     symbols: bool,
     /// 画像の実体 → gpui の画像(作り直すと毎フレーム復号されるため控える)
     image_cache: std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>,
+    /// 組版に使うフォントの実体。**文書の書体に従う**(開くたびに引き直す)
+    font_bytes: std::sync::Arc<Vec<u8>>,
     /// 置換の板。開いている間、打鍵は検索欄に入る
     find_open: bool,
     /// 0=検索語 1=置換後
@@ -174,6 +176,7 @@ impl Writer {
             target: Target::Body,
             symbols: false,
             image_cache: Default::default(),
+            font_bytes: std::sync::Arc::new(font_data().to_vec()),
             find_open: false,
             find_field: 0,
             find_ed: Editor::new(""),
@@ -256,12 +259,33 @@ impl Writer {
 
     fn relayout(&mut self) {
         self.flush_target();
-        let m = Metrics::new(font_data()).expect("フォント");
+        let m = Metrics::new(&self.font_bytes).expect("フォント");
         self.page = layout(
             &self.doc,
             &m,
             &Frame { measure_mm: MEASURE_MM, line_height_mm: LINE_MM, y0_mm: Y0_MM },
         );
+    }
+
+    /// 文書の書体を実体に結ぶ。無ければ系統を保って代替し、**そう言う**。
+    fn adopt_font(&mut self) {
+        let wanted = self.doc.font.clone();
+        match kumihan::font::for_document(wanted.as_deref()) {
+            Ok((fam, exact)) => {
+                if let Ok(b) = kumihan::font::load(fam) {
+                    self.font_bytes = std::sync::Arc::new(b);
+                    self.font_name = SharedString::from(fam.name.clone());
+                }
+                if !exact {
+                    if let Some(w) = &wanted {
+                        self.notes.push(
+                            format!("書体「{w}」が無いので「{}」で表示", fam.name).into(),
+                        );
+                    }
+                }
+            }
+            Err(e) => self.status = e.into(),
+        }
     }
 
     fn open(&mut self, p: PathBuf) {
@@ -284,6 +308,8 @@ impl Writer {
                 )
                 .into();
                 self.set_doc(doc);
+                self.adopt_font();
+                self.relayout_keep();
                 self.path = Some(p);
                 self.dirty = false;
             }
@@ -467,7 +493,7 @@ impl Writer {
             .and_then(|f| {
                 paper::to_pdf(
                     &self.page,
-                    font_data(),
+                    &self.font_bytes,
                     paper::Paper { margin_mm: MARGIN_MM, ..Default::default() },
                     std::io::BufWriter::new(f),
                 )
@@ -494,8 +520,7 @@ impl Writer {
     /// 書式を触ったあとの組み直し。**本文を戻さない**
     /// (戻すと今つけた書式が消える)。
     fn relayout_keep(&mut self) {
-        let data = font_data();
-        let m = Metrics::new(data).expect("フォント");
+        let m = Metrics::new(&self.font_bytes).expect("フォント");
         self.page = layout(
             &self.doc,
             &m,

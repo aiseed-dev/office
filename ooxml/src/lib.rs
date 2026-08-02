@@ -108,7 +108,26 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
         }
         at = s + e;
     }
-    Ok(parse_document_with(&xml, &media))
+    let (mut doc, rep) = parse_document_with(&xml, &media);
+    // 文書の既定書体(styles.xml の docDefaults)。読まないと
+    // 明朝の書類がこちらの既定(ゴシック)で表示される
+    let mut styles = String::new();
+    if let Ok(mut f) = zip.by_name("word/styles.xml") {
+        let _ = f.read_to_string(&mut styles);
+    }
+    if let Some(i) = styles.find("docDefaults") {
+        let head = &styles[i..(i + 600).min(styles.len())];
+        for key in ["w:eastAsia=\"", "w:ascii=\""] {
+            if let Some(j) = head.find(key) {
+                let s = j + key.len();
+                if let Some(e) = head[s..].find('"') {
+                    doc.font = Some(head[s..s + e].to_string());
+                    break;
+                }
+            }
+        }
+    }
+    Ok((doc, rep))
 }
 
 /// 組み立て中の表。表は入れ子になりうるのでスタックで持つ。
