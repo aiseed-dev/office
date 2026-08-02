@@ -141,7 +141,7 @@ pub const CALC: &[Tab] = &[
     Tab { name: "ファイル", cmds: &[
         c("open", "開く", "open"),
         c("save", "保存", "save"),
-        x("印刷", "print"),
+        c("pdf", "印刷", "print"),
     ]},
     Tab { name: "ホーム", cmds: &[
         x("フォント", "fontname"),

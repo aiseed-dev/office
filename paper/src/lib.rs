@@ -6,6 +6,8 @@
 //!
 //! engine 側に置かないのは、engine を PDF から独立させておくため。
 
+pub mod grid;
+
 use std::io::{BufWriter, Write};
 
 use kumihan::{CharFormat, Sheet};

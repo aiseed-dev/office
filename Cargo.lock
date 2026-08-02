@@ -779,6 +779,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "kumihan",
+ "paper",
  "rfd",
  "sheet",
  "ui",
@@ -3876,6 +3877,7 @@ version = "0.1.0"
 dependencies = [
  "kumihan",
  "printpdf",
+ "sheet",
 ]
 
 [[package]]

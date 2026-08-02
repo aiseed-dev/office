@@ -61,6 +61,7 @@ READY = {
         "math": "fn-math", "text": "fn-text", "logical": "fn-logical",
         "recent": "fn-recent",
         "show-formulas": "show-formulas", "show-gridlines": "show-gridlines",
+        "print": "pdf",
     },
 }
 

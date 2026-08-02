@@ -8,4 +8,5 @@ license.workspace = true
 # (engine の設計: 画面も紙も、同じ紙面を別の面に写す)
 [dependencies]
 kumihan = { path = "../engine" }
+sheet = { path = "../sheet" }
 printpdf = "0.7"

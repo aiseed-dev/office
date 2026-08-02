@@ -358,6 +358,49 @@ impl Calc {
         });
     }
 
+    fn save_pdf(&mut self) {
+        self.commit();
+        let Some(p) = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_file_name("帳票.pdf")
+            .save_file()
+        else {
+            return;
+        };
+        let (fam, exact) = match kumihan::font::for_document(None) {
+            Ok(x) => x,
+            Err(e) => {
+                self.status = format!("PDF にできません: {e}").into();
+                return;
+            }
+        };
+        let data = match kumihan::font::load(fam) {
+            Ok(d) => d,
+            Err(e) => {
+                self.status = format!("PDF にできません: {e}").into();
+                return;
+            }
+        };
+        let r = std::fs::File::create(&p).map_err(|e| e.to_string()).and_then(|f| {
+            paper::grid::sheet_to_pdf(
+                &self.book.sheets[self.active],
+                &data,
+                paper::Paper::default(),
+                std::io::BufWriter::new(f),
+            )
+        });
+        self.status = match r {
+            // 塗りの色と列幅はまだ紙に出ない。黙って出したことにしない
+            Ok(_) => format!(
+                "PDF にしました(塗りと列幅は未対応)— {}{}",
+                p.file_name().unwrap_or_default().to_string_lossy(),
+                if exact { "" } else { " ※代替フォント" }
+            )
+            .into(),
+            Err(e) => format!("PDF にできません: {e}").into(),
+        };
+    }
+
     fn run_cmd(&mut self, id: &str) {
         match id {
             "open" => {
@@ -393,6 +436,8 @@ impl Calc {
             "merge" => self.merge_selection(),
             // 表示。**値は変えない** — 見え方だけの話
             "show-formulas" => self.show_formulas = !self.show_formulas,
+            // 帳票を PDF に。画面に見えているもの(値・書式・罫線)を写す
+            "pdf" => self.save_pdf(),
             "show-gridlines" => self.gridlines = !self.gridlines,
             "fillparag" => self.fmt(|f| {
                 f.fill = match f.fill.as_deref() {

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 sheet = { path = "../sheet" }
+paper = { path = "../paper" }
 kumihan = { path = "../engine" }
 ui = { path = "../ui" }
 # GPUI は crates.io に無いので、版を固定して zed から直に取る
