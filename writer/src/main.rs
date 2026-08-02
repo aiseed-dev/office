@@ -682,6 +682,7 @@ impl Writer {
     const HANDLED: &'static [&'static str] = &[
         "open", "save", "undo", "redo", "selectall", "pdf",
         "bold", "italic", "underline", "strikeout", "fontcolor",
+        "superscript", "subscript", "highlight", "clearstyle",
         "align-left", "align-center", "align-right", "align-just",
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
@@ -705,6 +706,25 @@ impl Writer {
             "italic" => self.toggle(|f| f.italic = !f.italic),
             "underline" => self.toggle(|f| f.underline = !f.underline),
             "strikeout" => self.toggle(|f| f.strike = !f.strike),
+            // 上付きと下付きは同時には成らない
+            "superscript" => self.toggle(|f| {
+                f.superscript = !f.superscript;
+                if f.superscript { f.subscript = false }
+            }),
+            "subscript" => self.toggle(|f| {
+                f.subscript = !f.subscript;
+                if f.subscript { f.superscript = false }
+            }),
+            // 蛍光ペン。黄 → 緑 → 解除(色を選ぶ小窓はまだ無い)
+            "highlight" => self.toggle(|f| {
+                f.highlight = match f.highlight.as_deref() {
+                    None => Some("yellow".into()),
+                    Some("yellow") => Some("green".into()),
+                    _ => None,
+                }
+            }),
+            // 書式のクリア。文字書式だけを外す(本文と段落の性質は残す)
+            "clearstyle" => self.toggle(|f| *f = Default::default()),
             // 段落の揃え
             "align-left" => self.set_align(Align::Left),
             "align-center" => self.set_align(Align::Center),
@@ -1109,6 +1129,27 @@ impl Render for Writer {
             // 書式は字が持っている。行の頭の字のものを行に掛ける
             // (段落まるごとに掛ける粒度なので、行の中で混ざらない)
             let f = &line.cells[0].fmt;
+            // 上付き・下付きは小さく描き、少し上下へずらす(段落単位の近似)
+            let (sz, top) = if f.superscript {
+                (sz * 0.7, top - sz * 0.25)
+            } else if f.subscript {
+                (sz * 0.7, top + sz * 0.25)
+            } else {
+                (sz, top)
+            };
+            // 蛍光ペン。字の下に色を敷く
+            if let Some(h) = &f.highlight {
+                let w_mm: f32 = line.cells.iter().map(|c| c.w_mm).sum();
+                let bg = match h.as_str() {
+                    "green" => rgb(0xC9F0C9),
+                    "cyan" => rgb(0xC9EEF0),
+                    _ => rgb(0xF7EFA8),
+                };
+                paper = paper.child(div().absolute()
+                    .left(px(x0 * pxmm)).top(px(top))
+                    .w(px(w_mm * pxmm)).h(px(sz * 1.15))
+                    .bg(bg));
+            }
             let mut d = div().absolute()
                 .left(px(x0 * pxmm)).top(px(top))
                 .text_size(px(sz))

@@ -26,6 +26,11 @@ pub struct CharFormat {
     pub italic: bool,
     pub underline: bool,
     pub strike: bool,
+    /// 上付き(x²)・下付き(H₂O)。docx の w:vertAlign
+    pub superscript: bool,
+    pub subscript: bool,
+    /// 蛍光ペン。docx の w:highlight(yellow 等の名前で持つ)
+    pub highlight: Option<String>,
     /// 文字色。`RRGGBB`(docx の `w:color w:val` と同じ形)
     pub color: Option<String>,
 }

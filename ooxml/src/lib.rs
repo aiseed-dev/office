@@ -333,6 +333,17 @@ pub fn parse_document_with(
                     b"color" if in_rpr => {
                         fmt.color = attr(&e, "val").filter(|v| !v.is_empty() && v != "auto");
                     }
+                    b"vertAlign" if in_rpr => {
+                        match attr(&e, "val").as_deref() {
+                            Some("superscript") => fmt.superscript = true,
+                            Some("subscript") => fmt.subscript = true,
+                            _ => {}
+                        }
+                    }
+                    b"highlight" if in_rpr => {
+                        fmt.highlight = attr(&e, "val").filter(|v| v != "none");
+                    }
+
                     // 箇条書きは numId で決まる。1 を中黒、2 を段落番号として扱う
                     // (numbering.xml を持たないので、往復できる最小の約束にしてある)
                     b"numId" if in_ppr => {
@@ -430,6 +441,17 @@ pub fn parse_document_with(
                     b"color" if in_rpr => {
                         fmt.color = attr(&e, "val").filter(|v| !v.is_empty() && v != "auto");
                     }
+                    b"vertAlign" if in_rpr => {
+                        match attr(&e, "val").as_deref() {
+                            Some("superscript") => fmt.superscript = true,
+                            Some("subscript") => fmt.subscript = true,
+                            _ => {}
+                        }
+                    }
+                    b"highlight" if in_rpr => {
+                        fmt.highlight = attr(&e, "val").filter(|v| v != "none");
+                    }
+
                     // 箇条書きは numId で決まる。1 を中黒、2 を段落番号として扱う
                     // (numbering.xml を持たないので、往復できる最小の約束にしてある)
                     b"numId" if in_ppr => {
@@ -611,6 +633,17 @@ pub fn write_document_xml(doc: &Document) -> String {
                 w.write_event(Event::Empty(u)).unwrap();
             }
             if run.fmt.strike { w.write_event(Event::Empty(BS::new("w:strike"))).unwrap() }
+            if run.fmt.superscript || run.fmt.subscript {
+                let mut va = BS::new("w:vertAlign");
+                va.push_attribute(("w:val",
+                    if run.fmt.superscript { "superscript" } else { "subscript" }));
+                w.write_event(Event::Empty(va)).unwrap();
+            }
+            if let Some(h) = &run.fmt.highlight {
+                let mut hl = BS::new("w:highlight");
+                hl.push_attribute(("w:val", h.as_str()));
+                w.write_event(Event::Empty(hl)).unwrap();
+            }
             if let Some(c) = &run.fmt.color {
                 let mut col = BS::new("w:color");
                 col.push_attribute(("w:val", c.as_str()));
@@ -1270,5 +1303,45 @@ mod anchor_tests {
         doc.set_body_text("図を直した", 10.5);
         let out = crate::write_document_xml(&doc);
         assert!(out.contains("rId7"), "編集しただけで画像が消えた");
+    }
+}
+
+#[cfg(test)]
+mod vertalign_tests {
+    use kumihan::{Align, Block, CharFormat, Document, Paragraph, Run};
+
+    fn doc_with(fmt: CharFormat) -> Document {
+        Document {
+            font: None,
+            blocks: vec![Block::Para(Paragraph {
+                align: Align::Left,
+                runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
+                ..Default::default()
+            })],
+        }
+    }
+
+    #[test]
+    fn 上付きと蛍光ペンが往復する() {
+        let f = CharFormat {
+            superscript: true,
+            highlight: Some("yellow".into()),
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        crate::write(&doc_with(f.clone()), std::io::Cursor::new(&mut buf)).unwrap();
+        let (back, _) = crate::read(std::io::Cursor::new(&buf)).unwrap();
+        let got = &back.paragraphs().next().unwrap().runs[0].fmt;
+        assert!(got.superscript, "上付きが消えた");
+        assert_eq!(got.highlight.as_deref(), Some("yellow"), "蛍光ペンが消えた");
+    }
+
+    #[test]
+    fn 下付きも往復する() {
+        let f = CharFormat { subscript: true, ..Default::default() };
+        let mut buf = Vec::new();
+        crate::write(&doc_with(f.clone()), std::io::Cursor::new(&mut buf)).unwrap();
+        let (back, _) = crate::read(std::io::Cursor::new(&buf)).unwrap();
+        assert!(back.paragraphs().next().unwrap().runs[0].fmt.subscript);
     }
 }
