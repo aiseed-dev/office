@@ -181,6 +181,8 @@ struct Calc {
     wheel: (f32, f32),
     /// 右クリックのメニュー(出ている場所。格子領域の px)
     menu_at: Option<(f32, f32)>,
+    /// 開いている子メニュー(挿入▸ など)
+    menu_sub: Option<&'static str>,
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
     /// 画面の窓の左上(スクロール)。**表は画面より大きい**
@@ -229,6 +231,7 @@ impl Calc {
             drag: None,
             wheel: (0.0, 0.0),
             menu_at: None,
+            menu_sub: None,
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
@@ -454,6 +457,7 @@ impl Calc {
             }
         }
         self.menu_at = Some((x, y));
+        self.menu_sub = None;
     }
 
     /// いま表示されているセルの左上(格子領域の px)。画面の外なら None。
@@ -482,15 +486,36 @@ impl Calc {
     /// メニューの項目を実行する。
     fn menu_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.menu_at = None;
+        self.menu_sub = None;
         match id {
             "cut" => self.a_cut(&ui::Cut, window, cx),
             "copy" => self.a_copy(&ui::Copy, window, cx),
             "paste" => self.a_paste(&ui::Paste, window, cx),
-            "clearcells" => {
+            // 消去。Euro-Office の「消去 ▸」に対応する3段
+            "clear-all" => {
+                self.commit();
+                self.checkpoint();
+                let (a, b) = self.sel_rect();
+                let mut n = 0usize;
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        n += self.book.sheets[self.active]
+                            .cells
+                            .remove(&Pos::new(r, c))
+                            .is_some() as usize;
+                    }
+                }
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.sync_input();
+                self.status = format!("{n} セルを消去しました(中身も書式も)").into();
+            }
+            "clear-text" => {
                 self.checkpoint();
                 let n = self.clear_range();
                 self.status = format!("{n} セルの中身を消しました(書式は残る)").into();
             }
+            "clear-fmt" => self.run_cmd("clear"),
             "insrow" => {
                 self.rowcol(|s, p| s.insert_row(p.row));
                 self.status = "行を挿しました(下の式の参照も直っています)".into();
@@ -507,18 +532,74 @@ impl Calc {
                 self.rowcol(|s, p| s.remove_col(p.col));
                 self.status = "列を削除しました".into();
             }
-            "merge" => self.run_cmd("merge"),
-            "sort" => self.run_cmd("custom-sort"),
-            "filter" => {
-                if self.filter.is_some() {
-                    self.run_cmd("clear-filter");
-                } else {
-                    self.run_cmd("setfilter");
-                }
+            "sort-asc" | "sort-desc" => {
+                self.commit();
+                self.checkpoint();
+                let c = self.cursor.col;
+                self.book.sheets[self.active].sort_by_column(c, id == "sort-asc", true);
+                self.dirty = true;
+                recalc(&mut self.book.sheets[self.active]);
+                self.status = format!(
+                    "{} 列で{}に並べ替えました",
+                    Pos::new(0, c).a1().trim_end_matches('1'),
+                    if id == "sort-asc" { "昇順" } else { "降順" }
+                )
+                .into();
             }
+            "filter-set" => self.run_cmd("setfilter"),
+            "filter-clear" => self.run_cmd("clear-filter"),
+            "freeze" => self.run_cmd("freeze"),
+            // 数値の書式・関数はリボンと同じ配線を通す
+            "comma" | "currency" | "percents" | "digit-inc" | "digit-dec"
+            | "sum" | "average" | "count" | "max" | "min" => self.run_cmd(id),
             _ => {}
         }
         cx.notify();
+    }
+
+    /// 子メニューの中身 (id, 名前, 押せるか)。
+    /// **並びと名前は Euro-Office に合わせ、未実装は灰色**(リボンと同じ方針)。
+    fn menu_sub_entries(&self, sub: &str) -> Vec<(&'static str, &'static str, bool)> {
+        match sub {
+            "ins" => vec![
+                ("insrow", "行を上に挿入", true),
+                ("inscol", "列を左に挿入", true),
+                ("", "セルを挿入(シフト)", false),
+            ],
+            "del" => vec![
+                ("delrow", "行を削除", true),
+                ("delcol", "列を削除", true),
+                ("", "セルを削除(シフト)", false),
+            ],
+            "clr" => vec![
+                ("clear-all", "すべて", true),
+                ("clear-text", "テキスト(書式は残す)", true),
+                ("clear-fmt", "書式(中身は残す)", true),
+            ],
+            "sort" => vec![
+                ("sort-asc", "昇順", true),
+                ("sort-desc", "降順", true),
+            ],
+            "filter" => vec![
+                ("filter-set", "選択した値で絞り込む", self.filter.is_none()),
+                ("filter-clear", "絞り込みを解く", self.filter.is_some()),
+            ],
+            "numfmt" => vec![
+                ("comma", "桁区切り(1,000)", true),
+                ("currency", "通貨(¥)", true),
+                ("percents", "パーセント(%)", true),
+                ("digit-inc", "小数を増やす", true),
+                ("digit-dec", "小数を減らす", true),
+            ],
+            "func" => vec![
+                ("sum", "SUM(合計)", true),
+                ("average", "AVERAGE(平均)", true),
+                ("count", "COUNT(個数)", true),
+                ("max", "MAX(最大)", true),
+                ("min", "MIN(最小)", true),
+            ],
+            _ => vec![],
+        }
     }
 
     fn a_context_menu(&mut self, _: &ui::ContextMenu, _: &mut Window, cx: &mut Context<Self>) {
@@ -528,11 +609,13 @@ impl Calc {
             .map(|(x, y)| (x + 16.0, y + 16.0))
             .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
         self.menu_at = Some((x, y));
+        self.menu_sub = None;
         cx.notify();
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        if self.menu_at.take().is_some() {
+        // 子メニュー → 親メニュー、の順で閉じる
+        if self.menu_sub.take().is_some() || self.menu_at.take().is_some() {
             cx.notify();
         }
     }
@@ -1728,67 +1811,165 @@ impl Render for Calc {
             })));
 
         // ---- 右クリックのメニュー ----
+        // **並びと名前は Euro-Office の右クリックメニューに合わせる**(リボンと
+        // 同じ理由 — 乗り換える人が場所を覚え直さずに済む)。未実装は灰色。
+        // AI・コメントなどの「入れないもの/まだ無いもの」も、場所だけは本家どおり。
         // InputSink より**後**に描く(bubble は後に登録した方が先に走るので、
         // 項目の stop_propagation が InputSink のセル選択より先に効く)
         let menu = self.menu_at.map(|(mx, my)| {
-            let sel_txt = if self.anchor.is_some() {
-                let (a, b) = self.sel_rect();
-                format!("{}:{}", a.a1(), b.a1())
-            } else {
-                self.cursor.a1()
-            };
-            let filter_label =
-                if self.filter.is_some() { "絞り込みを解く" } else { "この値で絞り込む" };
-            let entries: Vec<(&'static str, String, &'static str)> = vec![
-                ("cut", format!("{sel_txt} を切り取り"), "Ctrl+X"),
-                ("copy", format!("{sel_txt} をコピー"), "Ctrl+C"),
-                ("paste", "貼り付け".into(), "Ctrl+V"),
-                ("", String::new(), ""),
-                ("clearcells", "中身を消す(書式は残す)".into(), "Delete"),
-                ("", String::new(), ""),
-                ("insrow", "行を挿入".into(), ""),
-                ("delrow", "行を削除".into(), ""),
-                ("inscol", "列を挿入".into(), ""),
-                ("delcol", "列を削除".into(), ""),
-                ("", String::new(), ""),
-                ("merge", "セルを結合 / 解除".into(), ""),
-                ("sort", "この列で並べ替え".into(), ""),
-                ("filter", filter_label.into(), ""),
+            // (id, 名前, 付記, 押せるか, 子メニューか)
+            #[allow(clippy::type_complexity)]
+            let entries: Vec<(&'static str, &'static str, &'static str, bool, bool)> = vec![
+                ("cut", "切り取り", "Ctrl+X", true, false),
+                ("copy", "コピー", "Ctrl+C", true, false),
+                ("paste", "貼り付け", "Ctrl+V", true, false),
+                ("", "", "", false, false),
+                ("ins", "挿入", "", true, true),
+                ("del", "削除", "", true, true),
+                ("clr", "消去", "", true, true),
+                ("", "", "", false, false),
+                ("sort", "並べ替え", "", true, true),
+                ("filter", "フィルター", "", true, true),
+                ("", "再適用", "", false, false),
+                ("", "", "", false, false),
+                ("", "コメントを追加", "", false, false),
+                ("", "", "", false, false),
+                ("", "セルをフォーマットする", "", false, false),
+                ("numfmt", "数値の書式", "", true, true),
+                ("", "条件付き書式", "", false, false),
+                ("", "ドロップダウンリストから選択する", "", false, false),
+                ("", "名前の定義", "", false, false),
+                ("", "", "", false, false),
+                ("func", "関数を挿入", "", true, true),
+                ("", "ハイパーリンク", "", false, false),
+                ("", "", "", false, false),
+                ("freeze", "枠の固定", "", true, false),
             ];
             // 画面の右・下で切れないように少し戻す
-            let h_est = entries.len() as f32 * 26.0 + 10.0;
+            const ITEM_H: f32 = 25.0;
+            const SEP_H: f32 = 9.0;
+            let h_est: f32 = entries.iter()
+                .map(|e| if e.0.is_empty() && e.1.is_empty() { SEP_H } else { ITEM_H })
+                .sum::<f32>() + 10.0;
             let grid_w = HEAD_W
                 + grid_cols(self.frozen, self.view, COLS)
                     .iter()
                     .map(|c| self.col_px(*c))
                     .sum::<f32>();
-            let mx = mx.min((grid_w - 240.0).max(0.0));
-            let my = my.min((ROW_H + ROWS as f32 * ROW_H - h_est).max(0.0));
-            let mut m = div().absolute().left(px(mx)).top(px(my)).w(px(232.0))
+            let grid_h = ROW_H + ROWS as f32 * ROW_H;
+            let mx = mx.min((grid_w - 250.0).max(0.0));
+            let my = my.min((grid_h - h_est).max(0.0));
+
+            let mut m = div().absolute().left(px(mx)).top(px(my)).w(px(244.0))
                 .p_1().rounded_md().bg(rgb(0xFFFFFF))
                 .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
                 // メニューの余白を押してもセルに抜けない
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
-            for (id, label, hint) in entries {
-                if id.is_empty() {
+            // 開いている子メニューの縦位置(親項目の高さに合わせる)
+            let mut sub_panel: Option<gpui::Div> = None;
+            let mut y_acc = 4.0f32;
+            for (i, (id, label, hint, ready, is_sub)) in entries.iter().enumerate() {
+                let (id, label, hint, ready, is_sub) = (*id, *label, *hint, *ready, *is_sub);
+                if id.is_empty() && label.is_empty() {
                     m = m.child(div().h(px(1.0)).my_1().bg(rgb(0xE1E6EA)));
+                    y_acc += SEP_H;
                     continue;
                 }
+                let row_y = y_acc;
+                y_acc += ITEM_H;
+                if !ready {
+                    // 未実装。押せるように見せない(場所だけ本家どおりに残す)
+                    m = m.child(div()
+                        .flex().flex_row().items_center().justify_between().gap_4()
+                        .px_3().py_1()
+                        .child(div().text_size(px(12.5)).text_color(rgb(0xB6BDC4))
+                            .child(label))
+                        .child(div().text_size(px(10.5)).text_color(rgb(0xD5DBE0))
+                            .child(if is_sub { "▸" } else { hint })));
+                    continue;
+                }
+                if is_sub {
+                    let open = self.menu_sub == Some(id);
+                    m = m.child(div()
+                        .id(SharedString::from(format!("m{i}")))
+                        .flex().flex_row().items_center().justify_between().gap_4()
+                        .px_3().py_1().rounded_sm().cursor_pointer()
+                        .bg(if open { rgb(0xEAF5EE) } else { rgb(0xFFFFFF) })
+                        .hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .child(div().text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                            .child(label))
+                        .child(div().text_size(px(11.0)).text_color(rgb(0x66707A)).child("▸"))
+                        // 触れたら開く(本家と同じ)。押しても開く
+                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                            if this.menu_sub != Some(id) {
+                                this.menu_sub = Some(id);
+                                cx.notify();
+                            }
+                        }))
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                            move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.menu_sub = Some(id);
+                                cx.notify();
+                            })));
+                    if open {
+                        // 子の板。親項目の右横に出す
+                        let mut sp = div().absolute()
+                            .left(px(mx + 244.0)).top(px(my + row_y))
+                            .w(px(210.0)).p_1().rounded_md().bg(rgb(0xFFFFFF))
+                            .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
+                            .on_mouse_down(gpui::MouseButton::Left,
+                                |_, _, cx| cx.stop_propagation());
+                        for (j, (sid, slabel, sready)) in
+                            self.menu_sub_entries(id).into_iter().enumerate()
+                        {
+                            if !sready {
+                                sp = sp.child(div().px_3().py_1()
+                                    .text_size(px(12.5)).text_color(rgb(0xB6BDC4))
+                                    .child(slabel));
+                                continue;
+                            }
+                            sp = sp.child(div()
+                                .id(SharedString::from(format!("s{i}-{j}")))
+                                .px_3().py_1().rounded_sm().cursor_pointer()
+                                .hover(|s| s.bg(rgb(0xEAF5EE)))
+                                .text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                                .child(slabel)
+                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                                    move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        this.menu_action(sid, window, cx);
+                                    })));
+                        }
+                        sub_panel = Some(sp);
+                    }
+                    continue;
+                }
+                // 普通の項目
                 m = m.child(div()
-                    .id(id)
+                    .id(SharedString::from(format!("m{i}")))
                     .flex().flex_row().items_center().justify_between().gap_4()
                     .px_3().py_1().rounded_sm().cursor_pointer()
                     .hover(|s| s.bg(rgb(0xEAF5EE)))
                     .child(div().text_size(px(12.5)).text_color(rgb(0x1B1B1B))
-                        .child(SharedString::from(label)))
+                        .child(label))
                     .child(div().text_size(px(10.5)).text_color(rgb(0x9AA5AE)).child(hint))
+                    // 実行できる普通の項目に触れたら、開いていた子は閉じる
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if this.menu_sub.is_some() {
+                            this.menu_sub = None;
+                            cx.notify();
+                        }
+                    }))
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                         move |this, _, window, cx| {
                             cx.stop_propagation();
                             this.menu_action(id, window, cx);
                         })));
             }
-            m
+            div().absolute().left(px(0.0)).top(px(0.0)).size_full()
+                .child(m)
+                .children(sub_panel)
         });
 
         let notes = if self.notes.is_empty() { None } else {
