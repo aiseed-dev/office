@@ -985,11 +985,23 @@ impl Writer {
             }
             hit
         };
-        // 目次の行。レベルぶん字下げし、番号を添える
+        // 目次の行。レベルぶん字下げし、点線(…)を実フォントの字幅で詰めて
+        // 番号を右端に着地させる(揃えの機構は使わず、文字で作る —
+        // 静的な本文なので、開いた Word でもそのままの見た目になる)
+        let m = Metrics::new(&self.font_bytes).expect("フォント");
+        let measure = self.pg.measure_mm();
+        let w_of = |s: &str| -> f32 { s.chars().map(|c| m.advance_mm(c, SIZE_PT)).sum() };
+        let (dot_w, sp_w) = (m.advance_mm('…', SIZE_PT), m.advance_mm('　', SIZE_PT));
         let lines: Vec<(u8, String)> = heads
             .iter()
             .map(|(n, t, b)| {
-                (*n, format!("{}{}　…… {}", "　".repeat((*n - 1) as usize), t, page_of(*b)))
+                let head = format!("{}{}", "　".repeat((*n - 1) as usize), t);
+                let num = page_of(*b).to_string();
+                // 前後に全角1つずつの空きを置き、残りを … で埋める。
+                // 1mm の安全代 — 端数で行長を超えると折り返して目次が崩れる
+                let avail = measure - w_of(&head) - w_of(&num) - 2.0 * sp_w - 1.0;
+                let dots = (avail / dot_w).floor().max(0.0) as usize;
+                (*n, format!("{head}　{}　{num}", "…".repeat(dots)))
             })
             .collect();
 
