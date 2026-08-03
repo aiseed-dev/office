@@ -100,6 +100,36 @@ const HEAD_W: f32 = 46.0;
 const ROWS: u32 = 30;
 const COLS: u32 = 9;
 
+/// 境界の取っ手の当たり幅(縁から前後この px 以内で掴める)
+const GRIP: f32 = 4.0;
+
+/// `start` から `sizes` の幅で並ぶ区分のうち、`pos` がどの区分の
+/// 右端(下端)±GRIP に掛かるかを返す。列見出し・行見出しの境界の当たり判定。
+fn grip_hit(sizes: &[(u32, f32)], start: f32, pos: f32) -> Option<u32> {
+    let mut edge = start;
+    for (i, w) in sizes {
+        edge += w;
+        if (pos - edge).abs() <= GRIP {
+            return Some(*i);
+        }
+    }
+    None
+}
+
+/// 見出しの境界を掴んだドラッグ(列幅・行高を変える)
+struct SizeDrag {
+    /// 列か(false なら行)
+    col: bool,
+    idx: u32,
+    /// 掴んだ位置(px。列なら x、行なら y)
+    grab: f32,
+    /// 掴んだときの大きさ(px)
+    base: f32,
+    /// 動かしたか。**最初に動いた瞬間に undo の控えを取る** —
+    /// 掴んだだけ(クリック)で redo の控えが消えるのを防ぐ
+    moved: bool,
+}
+
 /// 使われていないシート名(Sheet2, Sheet3, …)。
 fn unique_sheet_name(book: &Book) -> String {
     let mut n = book.sheets.len() + 1;
@@ -243,6 +273,8 @@ struct Calc {
     anchor: Option<Pos>,
     /// ドラッグ選択の始点(マウスの左を押した位置。離すと終わる)
     drag: Option<Pos>,
+    /// 見出しの境界を掴んだドラッグ(列幅・行高)。セル選択の drag とは別
+    size_drag: Option<SizeDrag>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 右クリックのメニュー(出ている場所。格子領域の px)
@@ -321,6 +353,7 @@ impl Calc {
             cursor: Pos::new(0, 0),
             anchor: None,
             drag: None,
+            size_drag: None,
             wheel: (0.0, 0.0),
             menu_at: None,
             menu_sub: None,
@@ -495,11 +528,80 @@ impl Calc {
         Some(Pos { row: row?, col: col? })
     }
 
+    /// 見出しの帯の上の、列幅・行高の取っ手(境界 ±GRIP px)。Some((列か, 番号))。
+    /// 描画・cell_at と同じ並び(固定・窓・絞り込み)を使う —
+    /// ずれると別の境界を掴んでしまう。
+    fn size_grip_at(&self, x: f32, y: f32) -> Option<(bool, u32)> {
+        if y < ROW_H && x >= HEAD_W {
+            let cols: Vec<(u32, f32)> = grid_cols(self.frozen, self.view, COLS)
+                .into_iter()
+                .map(|c| (c, self.col_px(c)))
+                .collect();
+            return grip_hit(&cols, HEAD_W, x).map(|c| (true, c));
+        }
+        if x < HEAD_W && y >= ROW_H {
+            let rows: Vec<(u32, f32)> = self
+                .visible_rows()
+                .into_iter()
+                .map(|r| (r, self.row_px(r)))
+                .collect();
+            return grip_hit(&rows, ROW_H, y).map(|r| (false, r));
+        }
+        None
+    }
+
+    /// 境界を掴んだまま動いた。列幅・行高をその場で変える(見ながら合わせる)。
+    /// 最小幅で止める — ゼロにすると列が消えて掴み直せない。
+    fn size_drag_at(&mut self, x: f32, y: f32) {
+        let Some(d) = &self.size_drag else { return };
+        let (col, idx, grab, base, moved) = (d.col, d.idx, d.grab, d.base, d.moved);
+        if !moved {
+            self.checkpoint();
+            if let Some(d) = &mut self.size_drag {
+                d.moved = true;
+            }
+        }
+        if col {
+            let w = (base + x - grab).max(9.0) / PX_PER_CHW;
+            let w = (w * 100.0).round() / 100.0;
+            self.sheet_mut().col_width.insert(idx, w);
+            self.status = format!(
+                "{}列の幅: {w}({:.0}px)",
+                col_name(idx),
+                w * PX_PER_CHW
+            )
+            .into();
+        } else {
+            let pt = (base + y - grab).max(6.0) * 15.0 / 24.0;
+            let pt = (pt * 100.0).round() / 100.0;
+            self.sheet_mut().row_height.insert(idx, pt);
+            self.status = format!(
+                "{}行の高さ: {pt}pt({:.0}px)",
+                idx + 1,
+                pt * 24.0 / 15.0
+            )
+            .into();
+        }
+        self.dirty = true;
+    }
+
     /// マウスの左を押した(格子領域の座標)。押したセルが選択の始まり。
     /// メニューが出ていたら閉じる(項目の上の押下は stop_propagation でここに来ない)。
     fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool, ctrl: bool) {
         self.menu_at = None;
         self.pick = None;
+        // 見出しの境界の取っ手が最優先(セルの当たり判定より先に見る)
+        if let Some((is_col, idx)) = self.size_grip_at(x, y) {
+            self.commit();
+            self.size_drag = Some(SizeDrag {
+                col: is_col,
+                idx,
+                grab: if is_col { x } else { y },
+                base: if is_col { self.col_px(idx) } else { self.row_px(idx) },
+                moved: false,
+            });
+            return;
+        }
         let Some(p) = self.cell_at(x, y) else { return };
         // Ctrl+クリックはリンクを開く(基幹網の外は既定のブラウザに任せる)
         if ctrl && !shift {
@@ -541,6 +643,10 @@ impl Calc {
 
     /// 離した。ドラッグ選択はここで確定する。
     fn mouse_up(&mut self) {
+        if self.size_drag.take().is_some() {
+            // 幅・高さの確定。status は size_drag_at が出している
+            return;
+        }
         if self.drag.take().is_some() && self.anchor.is_some() {
             let (a, b) = self.sel_rect();
             self.status = format!("{}:{}", a.a1(), b.a1()).into();
@@ -2097,7 +2203,10 @@ impl gpui::Element for InputSink {
             }
             let rel = e.position - bounds.origin;
             view.update(cx, |c, cx| {
-                if c.drag.is_some() {
+                if c.size_drag.is_some() {
+                    c.size_drag_at(f32::from(rel.x), f32::from(rel.y));
+                    cx.notify();
+                } else if c.drag.is_some() {
                     c.mouse_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
                 }
@@ -2251,7 +2360,12 @@ impl Render for Calc {
                 .border_color(rgb(0xD5DBE0))
                 .flex().items_center().justify_center()
                 .text_size(px(11.5)).text_color(rgb(0x66707A))
-                .child(SharedString::from(col_name(c))));
+                .child(SharedString::from(col_name(c)))
+                // 右端の帯は幅を変える取っ手(カーソル形状の誘いだけ。
+                // 当たり判定は InputSink の窓レベルで size_grip_at がやる)
+                .relative().child(div().absolute()
+                    .top(px(0.0)).right(px(-GRIP)).w(px(GRIP * 2.0)).h_full()
+                    .cursor_col_resize()));
         }
         grid = grid.child(head);
 
@@ -2265,7 +2379,11 @@ impl Render for Calc {
                     .border_color(rgb(0xD5DBE0))
                     .flex().items_center().justify_center()
                     .text_size(px(11.5)).text_color(rgb(0x66707A))
-                    .child(SharedString::from((r + 1).to_string())));
+                    .child(SharedString::from((r + 1).to_string()))
+                    // 下端の帯は高さを変える取っ手(列見出しの右端と同じ仕掛け)
+                    .relative().child(div().absolute()
+                        .left(px(0.0)).bottom(px(-GRIP)).w_full().h(px(GRIP * 2.0))
+                        .cursor_row_resize()));
             for c in grid_cols(self.frozen, self.view, COLS) {
                 let p = Pos::new(r, c);
                 let cell = self.sheet().get(p);
@@ -2958,6 +3076,38 @@ mod freeze_tests {
         let mut sorted = rows.clone();
         sorted.dedup();
         assert_eq!(rows.len(), sorted.len(), "行が二重に出た: {rows:?}");
+    }
+}
+
+#[cfg(test)]
+mod size_grip_tests {
+    use super::*;
+
+    #[test]
+    fn 境界の近くだけ掴める() {
+        // 2列(48px, 108px)が HEAD_W から並ぶ
+        let cols = [(0u32, 48.0f32), (1, 108.0)];
+        let e1 = HEAD_W + 48.0; // 1本目の境界
+        let e2 = e1 + 108.0; // 2本目
+        assert_eq!(grip_hit(&cols, HEAD_W, e1), Some(0));
+        assert_eq!(grip_hit(&cols, HEAD_W, e1 - GRIP), Some(0), "縁の手前±GRIPで掴めない");
+        assert_eq!(grip_hit(&cols, HEAD_W, e1 + GRIP), Some(0));
+        assert_eq!(grip_hit(&cols, HEAD_W, e2 - 1.0), Some(1), "2本目の境界が累積位置にない");
+        assert_eq!(grip_hit(&cols, HEAD_W, e1 + GRIP + 1.0), None, "境界の外で掴めた");
+        assert_eq!(grip_hit(&cols, HEAD_W, HEAD_W + 10.0), None, "列の中ほどで掴めた");
+    }
+
+    #[test]
+    fn 幅の換算が往復する() {
+        // 画面px → xlsxの字数 → 画面px が(丸め2桁でも)崩れない
+        let px0 = 108.0f32;
+        let w = ((px0 / PX_PER_CHW) * 100.0).round() / 100.0;
+        assert!((w - 8.43).abs() < 0.01, "既定幅が 8.43 にならない: {w}");
+        assert!((w * PX_PER_CHW - px0).abs() < 0.5, "幅の往復がずれる");
+        // 行: 画面px → pt → 画面px。既定 24px = 15pt
+        let pt = (24.0f32 * 15.0 / 24.0 * 100.0).round() / 100.0;
+        assert_eq!(pt, 15.0);
+        assert_eq!(pt * 24.0 / 15.0, 24.0);
     }
 }
 

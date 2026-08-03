@@ -19,9 +19,13 @@
 
 ## 環境の注意
 
-- cargo が PATH に無い機械なら `export PATH="$HOME/.cargo/bin:$PATH"`
+- cargo が PATH に無い機械なら `export PATH="$HOME/.cargo/bin:$PATH"`。
+  そもそも rustup ごと無い機械もある — その場合は user レベルの導入で足りる
+  (`curl https://sh.rustup.rs | sh -s -- -y`。sudo 不要。2026-08-03 に実施済み)
 - `.cargo/config.toml` と `.linklibs/` は**この機械固有**(libxkbcommon-x11 の
-  開発リンク回避)。別の機械では不要か、作り直しが要る
+  開発リンク回避)。別の機械では不要か、作り直しが要る。
+  作り直しは2手: `.linklibs/libxkbcommon-x11.so` → 実行時の `.so.0` へ symlink、
+  `.cargo/config.toml` に `rustflags = ["-L", "<絶対パス>/.linklibs"]`
 - 実物の様式(検査の材料)は
   `/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/` にある。
   **無い環境ではテストは黙って飛ぶ**(失敗はしない)。可能ならコピーして持つ
@@ -59,7 +63,8 @@
 
 済: calc の右クリックメニュー(Euro-Office 準拠・灰色ゼロ)、
 Paste Special(独自)、複数シート、条件付き書式・コメント・リンク・
-名前の定義(xlsx 往復つき)、コピー範囲の破線。
+名前の定義(xlsx 往復つき)、コピー範囲の破線、
+列幅・行高のドラッグ(見出しの境界を掴む。undo 可・xlsx 往復は元からある)。
 writer の選択描画・ドラッグ選択・全カーソル操作・右クリックメニュー・
 段落の帯と囲み枠・画像の挿入(media/rels/Content_Types 生成)。
 両アプリの窓の移動・終了確認(別糸)・スクロール・クリップボード。
@@ -71,5 +76,6 @@ pysheet(Python 束縛、polars 連携)。
    済み。モデル化(header/footer の段落列)+ 紙面への描画 +
    ooxml の headerN.xml 読み書きが本体
 2. 目次(見出しスタイルが前提)、writer の残りの灰色
-3. 小さい残件: ファイル選択の非同期化、calc の列幅ドラッグ、
-   writer のキャレット表示の改善、変換下線の位置の実機確認
+3. 小さい残件: ファイル選択の非同期化、
+   writer のキャレット表示の改善、変換下線の位置の実機確認、
+   calc の列幅境界のダブルクリックで内容に合わせる(文字幅の実測が要るので見送った)
