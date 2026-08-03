@@ -2467,6 +2467,7 @@ impl Calc {
         "inschart", "insimage", "inshyperlink", "replace",
         "changecase", "format", "cell-format", "fontname", "fontsize",
         "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
+        "scale", "pagebreak", "printtitles", "print-gridlines", "print-headings",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2733,6 +2734,92 @@ impl Calc {
                         .collect(),
                     at,
                 ));
+            }
+            // 拡大縮小印刷: 100→90→80→70→50→100
+            "scale" => {
+                self.commit();
+                self.checkpoint();
+                let sh = self.sheet_mut();
+                let next = match sh.print_scale.unwrap_or(100) {
+                    100 => 90,
+                    90 => 80,
+                    80 => 70,
+                    70 => 50,
+                    _ => 100,
+                };
+                sh.print_scale = if next == 100 { None } else { Some(next) };
+                self.dirty = true;
+                self.status = format!("拡大縮小印刷: {next}%(PDF と保存に効きます)").into();
+            }
+            // 改ページ: いまの行から新しい紙を始める(もう一度で解除)
+            "pagebreak" => {
+                self.commit();
+                self.checkpoint();
+                let r = self.cursor.row;
+                let sh = self.sheet_mut();
+                if let Some(i) = sh.row_breaks.iter().position(|b| *b == r) {
+                    sh.row_breaks.remove(i);
+                    self.dirty = true;
+                    self.status = format!("{} 行の改ページを外しました", r + 1).into();
+                } else if r == 0 {
+                    self.undo_stack.pop();
+                    self.status = "1行目の前では改ページできません".into();
+                } else {
+                    sh.row_breaks.push(r);
+                    self.dirty = true;
+                    self.status =
+                        format!("{} 行から新しい紙にします(もう一度で解除)", r + 1).into();
+                }
+            }
+            // タイトルを印刷: 選んだ行を各ページの頭で繰り返す。選択なしで解除
+            "printtitles" => {
+                self.commit();
+                if self.anchor.is_some() {
+                    self.checkpoint();
+                    let (a, b) = self.sel_rect();
+                    self.sheet_mut().print_title_rows = Some((a.row, b.row));
+                    self.dirty = true;
+                    self.status = format!(
+                        "{}〜{} 行を各ページの頭で繰り返します(選択なしで押すと解除)",
+                        a.row + 1,
+                        b.row + 1
+                    )
+                    .into();
+                } else if self.sheet().print_title_rows.is_some() {
+                    self.checkpoint();
+                    self.sheet_mut().print_title_rows = None;
+                    self.dirty = true;
+                    self.status = "タイトル行を解除しました".into();
+                } else {
+                    self.status =
+                        "繰り返す行を選んでから押してください(行の見出しをクリック)".into();
+                }
+            }
+            "print-gridlines" => {
+                self.commit();
+                self.checkpoint();
+                let sh = self.sheet_mut();
+                sh.print_gridlines = !sh.print_gridlines;
+                let on = sh.print_gridlines;
+                self.dirty = true;
+                self.status = format!(
+                    "枠線の印刷: {}",
+                    if on { "する(表の薄い線が紙に出ます)" } else { "しない" }
+                )
+                .into();
+            }
+            "print-headings" => {
+                self.commit();
+                self.checkpoint();
+                let sh = self.sheet_mut();
+                sh.print_headings = !sh.print_headings;
+                let on = sh.print_headings;
+                self.dirty = true;
+                self.status = format!(
+                    "見出しの印刷: {}",
+                    if on { "する(行番号と列名が余白に出ます)" } else { "しない" }
+                )
+                .into();
             }
             // 検索と置換(ホーム > 置き換え)。板を2枚続けて使う
             "replace" => {

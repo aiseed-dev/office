@@ -285,6 +285,24 @@ fn image_anchor_xml(im: &crate::model::SheetImage, rid: &str, id: u32) -> String
     )
 }
 
+/// `_xlnm.Print_Titles` の行の部($1:$4)を(シート番号, (先頭行, 末尾行))に解く。
+/// 列の繰り返し($A:$B)や混在は None(原文のまま持ち越す)。
+fn parse_print_titles(raw: &str) -> Option<(usize, (u32, u32))> {
+    let sid = raw
+        .split(SID_ATTR)
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .and_then(|v| v.parse::<usize>().ok())?;
+    let body = raw.split('>').nth(1).and_then(|r| r.split('<').next())?;
+    let range = body.rsplit('!').next()?.replace('$', "");
+    let (a, b) = range.split_once(':')?;
+    let (a, b) = (a.trim().parse::<u32>().ok()?, b.trim().parse::<u32>().ok()?);
+    if a == 0 || b == 0 {
+        return None;
+    }
+    Some((sid, (a - 1, b - 1)))
+}
+
 fn resolve_target(t: &str) -> String {
     if let Some(rest) = t.strip_prefix("../") {
         format!("xl/{rest}")
@@ -372,6 +390,19 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
                 b"pageSetup" => {
                     sh.landscape = attr(&e, "orientation").as_deref() == Some("landscape");
                     sh.paper_size = attr(&e, "paperSize").and_then(|v| v.parse().ok());
+                    sh.print_scale = attr(&e, "scale").and_then(|v| v.parse().ok());
+                }
+                b"printOptions" => {
+                    let on = |k: &str| {
+                        matches!(attr(&e, k).as_deref(), Some("1") | Some("true"))
+                    };
+                    sh.print_gridlines = on("gridLines");
+                    sh.print_headings = on("headings");
+                }
+                b"brk" => {
+                    if let Some(id) = attr(&e, "id").and_then(|v| v.parse().ok()) {
+                        sh.row_breaks.push(id);
+                    }
                 }
                 b"pageMargins" => {
                     let g = |k: &str| {
@@ -789,6 +820,15 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                 }
             }
         }
+        if raw.contains("_xlnm.Print_Titles") {
+            // 行の部($1:$4)だけ読む。列の繰り返しはまだ(原文のまま残す)
+            if let Some((sid, rows)) = parse_print_titles(&raw) {
+                if let Some(sh) = book.sheets.get_mut(sid) {
+                    sh.print_title_rows = Some(rows);
+                    continue;
+                }
+            }
+        }
         rest.push(raw);
     }
     book.names_raw = rest;
@@ -907,6 +947,15 @@ fn defined_names_xml(book: &Book) -> String {
     for raw in &book.names_raw {
         inner.push_str(raw);
     }
+    // タイトル行(モデルが正)
+    for (i, sh) in book.sheets.iter().enumerate() {
+        if let Some((a, b)) = sh.print_title_rows {
+            inner.push_str(&format!(
+                "<definedName name=\"_xlnm.Print_Titles\" localSheetId=\"{i}\">{}</definedName>",
+                esc(&format!("'{}'!${}:${}", sh.name.replace('\'', "''"), a + 1, b + 1))
+            ));
+        }
+    }
     // 印刷範囲(モデルが正)。シート名は常に引用符で包む(空白・記号に安全)
     for (i, sh) in book.sheets.iter().enumerate() {
         if sh.print_areas.is_empty() {
@@ -967,6 +1016,17 @@ fn print_extra_xml(orig: &str, sh: &Sheet) -> String {
         Some(orig[i..j].to_string())
     };
     let inch = |mm: f32| format!("{:.5}", mm / 25.4);
+    // printOptions(枠線・見出しの印刷)。モデルの真偽を原文へ織り込む
+    let popts = {
+        let el = take("<printOptions").unwrap_or_else(|| "<printOptions/>".to_string());
+        let el = set_attr(&el, "gridLines", if sh.print_gridlines { "1" } else { "0" });
+        let el = set_attr(&el, "headings", if sh.print_headings { "1" } else { "0" });
+        if !sh.print_gridlines && !sh.print_headings && !orig.contains("<printOptions") {
+            None
+        } else {
+            Some(el)
+        }
+    };
     let margins = match (sh.margins_mm, take("<pageMargins")) {
         (Some((l, r, t, b)), Some(el)) => {
             let el = set_attr(&el, "left", &inch(l));
@@ -982,7 +1042,9 @@ fn print_extra_xml(orig: &str, sh: &Sheet) -> String {
     };
     let setup = {
         let orig_el = take("<pageSetup");
-        if !sh.landscape && sh.paper_size.is_none() && orig_el.is_none() {
+        if !sh.landscape && sh.paper_size.is_none() && sh.print_scale.is_none()
+            && orig_el.is_none()
+        {
             None
         } else {
             let el = orig_el.unwrap_or_else(|| "<pageSetup/>".to_string());
@@ -991,18 +1053,40 @@ fn print_extra_xml(orig: &str, sh: &Sheet) -> String {
                 "orientation",
                 if sh.landscape { "landscape" } else { "portrait" },
             );
-            Some(match sh.paper_size {
+            let el = match sh.paper_size {
                 Some(c) => set_attr(&el, "paperSize", &c.to_string()),
+                None => el,
+            };
+            Some(match sh.print_scale {
+                Some(sc) => set_attr(&el, "scale", &sc.to_string()),
                 None => el,
             })
         }
     };
     let mut out = String::new();
+    if let Some(po) = popts {
+        out.push_str(&po);
+    }
     if let Some(m) = margins {
         out.push_str(&m);
     }
     if let Some(su) = setup {
         out.push_str(&su);
+    }
+    // 改ページ(モデルが正。原文の rowBreaks は読みでモデルへ入っている)
+    if !sh.row_breaks.is_empty() {
+        let mut sorted = sh.row_breaks.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        out.push_str(&format!(
+            r#"<rowBreaks count="{}" manualBreakCount="{}">"#,
+            sorted.len(),
+            sorted.len()
+        ));
+        for r in sorted {
+            out.push_str(&format!(r#"<brk id="{r}" max="16383" man="1"/>"#));
+        }
+        out.push_str("</rowBreaks>");
     }
     if let Some(d) = take("<drawing") {
         out.push_str(&d);
@@ -1053,7 +1137,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     // シート本体は作り直すが、印刷まわりと図形の参照は引き継ぐ
                     let s = String::from_utf8_lossy(&buf);
                     let mut extra = String::new();
-                    for pat in ["<pageMargins", "<pageSetup", "<drawing"] {
+                    for pat in ["<printOptions", "<pageMargins", "<pageSetup", "<drawing"] {
                         if let Some(i) = s.find(pat) {
                             if let Some(j) = s[i..].find("/>") {
                                 extra.push_str(&s[i..i + j + 2]);
@@ -2270,5 +2354,30 @@ mod image_roundtrip_tests {
             b3.sheets[0].images.iter().any(|im| im.at == Pos::new(5, 5)),
             "足した方の錨が無い"
         );
+    }
+}
+
+#[cfg(test)]
+mod print_extras_roundtrip_tests {
+    use super::*;
+
+    #[test]
+    fn 拡大縮小と改ページとタイトル行が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].print_scale = Some(80);
+        b.sheets[0].row_breaks = vec![10, 30];
+        b.sheets[0].print_gridlines = true;
+        b.sheets[0].print_headings = true;
+        b.sheets[0].print_title_rows = Some((0, 1));
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let sh = &back.sheets[0];
+        assert_eq!(sh.print_scale, Some(80), "scale が往復しない");
+        assert_eq!(sh.row_breaks, vec![10, 30], "改ページが往復しない");
+        assert!(sh.print_gridlines && sh.print_headings, "printOptions が往復しない");
+        assert_eq!(sh.print_title_rows, Some((0, 1)), "タイトル行が往復しない");
     }
 }

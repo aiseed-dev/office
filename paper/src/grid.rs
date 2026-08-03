@@ -58,6 +58,8 @@ pub fn sheet_to_pdf<W: Write>(
     let (ml, mr, mt, mb) = setup
         .margins_mm
         .unwrap_or((paper.margin_mm, paper.margin_mm, paper.margin_mm, paper.margin_mm));
+    // 拡大縮小印刷(pageSetup scale)。列幅・行高・文字を同じ倍で
+    let scale = grid.print_scale.unwrap_or(100).clamp(10, 400) as f32 / 100.0;
     let (doc, page, layer) = PdfDocument::new(
         &grid.name,
         Mm(paper.width_mm),
@@ -73,7 +75,7 @@ pub fn sheet_to_pdf<W: Write>(
     let ncols = (c1 - c0).max(1);
     let col_mm: Vec<f32> = (c0..c0 + ncols)
         .map(|c| grid.col_width.get(&c).copied().or(grid.default_col_width)
-            .map(|w| w * MM_PER_CHW).unwrap_or(COL_MM))
+            .map(|w| w * MM_PER_CHW).unwrap_or(COL_MM) * scale)
         .collect();
     let mut col_x = vec![0.0f32];
     for w in &col_mm {
@@ -87,26 +89,65 @@ pub fn sheet_to_pdf<W: Write>(
 
     // 行の高さ(pt → mm)。指定のない行は既定
     let row_mm = |r: u32| -> f32 {
-        grid.row_height.get(&r).map(|pt| pt * 25.4 / 72.0).unwrap_or(ROW_MM)
+        grid.row_height.get(&r).map(|pt| pt * 25.4 / 72.0).unwrap_or(ROW_MM) * scale
     };
     let usable = paper.height_mm - mt - mb;
 
-    let mut y_used = 0.0f32; // このページで使った高さ
-    let mut page_no = 1u32;
-    for r in r0..r1.max(r0 + 1) {
-        let rh = row_mm(r);
-        if y_used + rh > usable && y_used > 0.0 {
-            page_no += 1;
-            y_used = 0.0;
-            let (np, nl) = doc.add_page(
-                Mm(paper.width_mm),
-                Mm(paper.height_mm),
-                format!("帳票 {page_no}"),
-            );
-            l = doc.get_page(np).get_layer(nl);
+    // 各ページの頭で繰り返すタイトル行(自分のいる範囲の外は繰り返さない)
+    let title_rows: Vec<u32> = grid
+        .print_title_rows
+        .map(|(a, b)| (a..=b).filter(|r| *r < r1).collect())
+        .unwrap_or_default();
+
+    // 1行を紙に描く(セルの塗り・罫線・値、印刷の枠線・行番号)
+    #[allow(clippy::too_many_arguments)]
+    fn draw_row(
+        grid: &Grid,
+        l: &PdfLayerReference,
+        font: &IndirectFontRef,
+        r: u32,
+        y_top: f32,
+        rh: f32,
+        ml: f32,
+        c0: u32,
+        ncols: u32,
+        col_x: &[f32],
+        col_mm: &[f32],
+        scale: f32,
+    ) {
+        // 印刷の枠線(printOptions gridLines)。薄い灰で先に敷く
+        if grid.print_gridlines {
+            l.set_outline_color(Color::Rgb(Rgb::new(0.85, 0.87, 0.89, None)));
+            let w_total = col_x[ncols as usize];
+            for (x1, y1, x2, y2) in [
+                (ml, y_top, ml + w_total, y_top),
+                (ml, y_top - rh, ml + w_total, y_top - rh),
+            ] {
+                l.add_line(Line {
+                    points: vec![
+                        (Point::new(Mm(x1), Mm(y1)), false),
+                        (Point::new(Mm(x2), Mm(y2)), false),
+                    ],
+                    is_closed: false,
+                });
+            }
+            for i in 0..=ncols as usize {
+                l.add_line(Line {
+                    points: vec![
+                        (Point::new(Mm(ml + col_x[i]), Mm(y_top)), false),
+                        (Point::new(Mm(ml + col_x[i]), Mm(y_top - rh)), false),
+                    ],
+                    is_closed: false,
+                });
+            }
+            l.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
         }
-        let y_top = paper.height_mm - mt - y_used;
-        y_used += rh;
+        // 行番号(printOptions headings)。左の余白に小さく
+        if grid.print_headings {
+            l.set_fill_color(Color::Rgb(Rgb::new(0.4, 0.44, 0.48, None)));
+            l.use_text((r + 1).to_string(), 6.5, Mm(ml - 7.0), Mm(y_top - rh + 2.0), font);
+            l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+        }
         for c in c0..c0 + ncols {
             let p = sheet::Pos::new(r, c);
             let x = ml + col_x[(c - c0) as usize];
@@ -129,9 +170,7 @@ pub fn sheet_to_pdf<W: Write>(
             // 塗りは罫線より先に敷く(線を塗り潰さない)
             if let Some((cr, cg, cb)) = fill.as_deref().and_then(hex_rgb) {
                 l.set_fill_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));
-                l.add_rect(Rect::new(
-                    Mm(x), Mm(y_top - rh), Mm(x + cw), Mm(y_top),
-                ));
+                l.add_rect(Rect::new(Mm(x), Mm(y_top - rh), Mm(x + cw), Mm(y_top)));
                 l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
             }
 
@@ -168,7 +207,7 @@ pub fn sheet_to_pdf<W: Write>(
                 HAlign::Left | HAlign::Center => false,
                 HAlign::General => matches!(cell.value, Value::Number(_)),
             };
-            let pt = 9.5f32;
+            let pt = 9.5f32 * scale;
             let tx = if right {
                 // だいたいの字幅で右に寄せる(全角 1em / 半角 0.55em)
                 let w: f32 = shown
@@ -188,14 +227,61 @@ pub fn sheet_to_pdf<W: Write>(
             if let Some((cr, cg, cb)) = colored {
                 l.set_fill_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));
             }
-            l.use_text(&shown, pt, Mm(tx), Mm(ty), &font);
+            l.use_text(&shown, pt, Mm(tx), Mm(ty), font);
             if cell.fmt.bold {
-                l.use_text(&shown, pt, Mm(tx + 0.1), Mm(ty), &font);
+                l.use_text(&shown, pt, Mm(tx + 0.1), Mm(ty), font);
             }
             if colored.is_some() {
                 l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
             }
         }
+    }
+
+    // 列名の見出し(printOptions headings)。各ページの上の余白に
+    let draw_col_heads = |l: &PdfLayerReference| {
+        if !grid.print_headings {
+            return;
+        }
+        l.set_fill_color(Color::Rgb(Rgb::new(0.4, 0.44, 0.48, None)));
+        for c in c0..c0 + ncols {
+            let x = ml + col_x[(c - c0) as usize] + col_mm[(c - c0) as usize] / 2.0 - 1.0;
+            let name = sheet::Pos::new(0, c).a1();
+            let name = name.trim_end_matches('1');
+            l.use_text(name, 6.5, Mm(x), Mm(paper.height_mm - mt + 1.5), &font);
+        }
+        l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+    };
+
+    let mut y_used = 0.0f32; // このページで使った高さ
+    let mut page_no = 1u32;
+    draw_col_heads(&l);
+    for r in r0..r1.max(r0 + 1) {
+        let rh = row_mm(r);
+        // 改ページ(rowBreaks: この行から新しい紙)か、紙が尽きたら次のページ
+        let break_here = y_used > 0.0 && grid.row_breaks.contains(&r);
+        if break_here || (y_used + rh > usable && y_used > 0.0) {
+            page_no += 1;
+            y_used = 0.0;
+            let (np, nl) = doc.add_page(
+                Mm(paper.width_mm),
+                Mm(paper.height_mm),
+                format!("帳票 {page_no}"),
+            );
+            l = doc.get_page(np).get_layer(nl);
+            draw_col_heads(&l);
+            // タイトル行を頭で繰り返す(いま描く行が自分自身なら繰り返さない)
+            if !title_rows.contains(&r) {
+                for tr in &title_rows {
+                    let th = row_mm(*tr);
+                    let y_top = paper.height_mm - mt - y_used;
+                    draw_row(grid, &l, &font, *tr, y_top, th, ml, c0, ncols, &col_x, &col_mm, scale);
+                    y_used += th;
+                }
+            }
+        }
+        let y_top = paper.height_mm - mt - y_used;
+        y_used += rh;
+        draw_row(grid, &l, &font, r, y_top, rh, ml, c0, ncols, &col_x, &col_mm, scale);
     }
     doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())?;
     Ok(clipped)
@@ -385,5 +471,75 @@ mod print_setup_tests {
             &PrintSetup { area: None, margins_mm: Some((10.0, 10.0, 100.0, 100.0)) },
             &mut wide).unwrap();
         assert!(pages(&wide) > pages(&narrow), "余白が紙の枚数に効いていない");
+    }
+}
+
+#[cfg(test)]
+mod print_extras_tests {
+    use sheet::model::{Cell, Pos, Value};
+
+    use super::*;
+
+    fn long_sheet() -> Grid {
+        let mut s = Grid { name: "長い".into(), ..Default::default() };
+        for r in 0..30 {
+            s.set(Pos::new(r, 0), Cell {
+                formula: None, value: Value::Number(r as f64), fmt: Default::default() });
+        }
+        s
+    }
+
+    fn pages(buf: &[u8]) -> usize {
+        let hay = String::from_utf8_lossy(buf).to_string();
+        let i = hay.find("/Count ").unwrap() + 7;
+        hay[i..].chars().take_while(|c| c.is_ascii_digit())
+            .collect::<String>().parse().unwrap()
+    }
+
+    #[test]
+    fn 改ページで紙が割れる() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let mut s = long_sheet(); // 30行 = 既定では1ページに収まる
+        let mut one = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut one).unwrap();
+        assert_eq!(pages(&one), 1);
+        s.row_breaks = vec![10, 20];
+        let mut broken = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut broken).unwrap();
+        assert_eq!(pages(&broken), 3, "改ページが効いていない");
+    }
+
+    #[test]
+    fn 拡大縮小で入る行数が変わる() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let mut s = Grid { name: "s".into(), ..Default::default() };
+        for r in 0..80 {
+            s.set(Pos::new(r, 0), Cell {
+                formula: None, value: Value::Number(r as f64), fmt: Default::default() });
+        }
+        let mut full = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut full).unwrap();
+        s.print_scale = Some(50);
+        let mut half = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut half).unwrap();
+        assert!(pages(&half) < pages(&full), "縮小しても紙が減らない");
+    }
+
+    #[test]
+    fn タイトル行は2ページ目にも出る() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let mut s = long_sheet();
+        s.print_title_rows = Some((0, 0));
+        s.row_breaks = vec![15];
+        // 描画対象の行数で確かめる: タイトル繰り返しの分、テキスト描画が1つ増える
+        let mut with_t = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut with_t).unwrap();
+        s.print_title_rows = None;
+        let mut without = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut without).unwrap();
+        assert!(with_t.len() > without.len(), "タイトル行の繰り返しが出ていない");
     }
 }

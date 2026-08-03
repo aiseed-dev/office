@@ -106,6 +106,9 @@ READY = {
         "fontsize": "fontsize",
         "financial": "fn-financial", "datetime": "fn-datetime",
         "lookup": "fn-lookup", "more": "fn-more",
+        "scale": "scale", "pagebreak": "pagebreak",
+        "printtitles": "printtitles", "print-gridlines": "print-gridlines",
+        "print-headings": "print-headings",
     },
 }
 

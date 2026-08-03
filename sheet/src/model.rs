@@ -279,6 +279,16 @@ pub struct Sheet {
     /// 印刷範囲(definedName _xlnm.Print_Area)。編集の対象なのでモデルで持つ
     /// (xlsx との往復は読み書きが解く)。複数の域も持てる
     pub print_areas: Vec<(Pos, Pos)>,
+    /// 拡大縮小印刷(pageSetup scale、%)。無ければ 100
+    pub print_scale: Option<u32>,
+    /// 改ページ(このモデルでは「新しい紙をここから始める行」0起点。
+    /// xlsx の rowBreaks/brk@id と同じ数え方)
+    pub row_breaks: Vec<u32>,
+    /// 枠線・見出し(行番号と列名)も印刷する(printOptions)
+    pub print_gridlines: bool,
+    pub print_headings: bool,
+    /// タイトル行(各ページの頭で繰り返す行の範囲。Print_Titles の行の部)
+    pub print_title_rows: Option<(u32, u32)>,
     /// 読んだ xlsx の画像(**表示だけ**。保存は原文の drawing 持ち越しが担う —
     /// 図形など理解しない部品を壊さないため、読んだ絵はこちらで書き直さない)
     pub images: Vec<SheetImage>,
