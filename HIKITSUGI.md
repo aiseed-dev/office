@@ -144,7 +144,9 @@ displayBackgroundShape)・透かし(ヘッダーの VML と往復。紙は回転
 **編集モデルの run 粒度化**(部分書式=選択の字だけ太字などが可能に。
 段落の増減で性質がずれる持病・表が末尾へ動く持病も解消。
 設計は SEKKEI「writer の編集モデル」)・
-相互参照(run が持つ REF/PAGEREF。設計は SEKKEI「writer の相互参照」)。
+相互参照(run が持つ REF/PAGEREF。設計は SEKKEI「writer の相互参照」)・
+writer の排他ロック(calc と同じ .~lock.名前#。先客が居れば上書きせず
+別名保存へ。終了確認も calc と同じく実ファイルの未保存変更だけ)。
 writer は 77/80(残る灰色3は下記 — 縦書きを含む)。
 両アプリの窓の移動・終了確認(別糸)・スクロール・クリップボード。
 pysheet(Python 束縛、polars 連携)。

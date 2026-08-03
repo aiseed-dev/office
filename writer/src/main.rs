@@ -203,6 +203,36 @@ fn para_text(p: &kumihan::Paragraph) -> String {
     p.runs.iter().map(|r| r.text.as_str()).collect()
 }
 
+/// 排他ロックの置き場所(LibreOffice と同じ `.~lock.名前#`)。calc と同じ形。
+fn lock_path_for(p: &std::path::Path) -> PathBuf {
+    let name = p.file_name().unwrap_or_default().to_string_lossy();
+    p.with_file_name(format!(".~lock.{name}#"))
+}
+
+/// 自分の名乗り(誰が開いているか)。user@host。
+fn lock_identity() -> String {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "?".into());
+    let host = std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "?".into());
+    format!("{user}@{host}")
+}
+
+/// 先客のロックを読む(あれば名乗りを返す)。自分自身のロックは先客と見ない。
+fn foreign_lock(p: &std::path::Path) -> Option<String> {
+    let lp = lock_path_for(p);
+    let raw = std::fs::read_to_string(lp).ok()?;
+    let who = raw
+        .split(',')
+        .map(str::trim)
+        .find(|t| !t.is_empty())
+        .unwrap_or("誰か")
+        .to_string();
+    (who != lock_identity()).then_some(who)
+}
+
 /// 文字の種類。**日本語の「語」は文字種の変わり目で切る**(分かち書きが無いので、
 /// 英数の連なり・ひらがな・カタカナ・漢字・記号の境を語の境とみなす。IME や
 /// エディタの通り相場)。
@@ -359,6 +389,10 @@ struct Writer {
     /// 変更履歴を記録中か。記録開始時点の段落の写しを持つ
     track: bool,
     track_base: Option<Vec<String>>,
+    /// 自分が置いた排他ロック(.~lock.名前#)。閉じるときに外す
+    my_lock: Option<PathBuf>,
+    /// 先客の名乗り(user@host)。居る間は上書き保存をしない
+    locked_by: Option<String>,
     /// 紙面に出すヘッダー・フッターの行(1ページ目の番号で組んだもの)
     header_lines: Vec<kumihan::Line>,
     footer_lines: Vec<kumihan::Line>,
@@ -506,6 +540,8 @@ impl Writer {
             ink_cur: None,
             track: false,
             track_base: None,
+            my_lock: None,
+            locked_by: None,
             ink_undo: Vec::new(),
             page_offsets: vec![0.0],
             header_lines: Vec::new(),
@@ -848,6 +884,32 @@ impl Writer {
         }
     }
 
+    /// 自分のロックを外す(閉じる・別のファイルへ移るとき)。
+    fn release_lock(&mut self) {
+        if let Some(lp) = self.my_lock.take() {
+            let _ = std::fs::remove_file(lp);
+        }
+    }
+
+    /// このファイルのロックを見て、先客が居れば警告、居なければ自分が取る。
+    fn acquire_lock(&mut self, p: &std::path::Path) {
+        self.release_lock();
+        match foreign_lock(p) {
+            Some(who) => {
+                self.locked_by = Some(who);
+                // ロックは取らない(先客の邪魔をしない)
+            }
+            None => {
+                self.locked_by = None;
+                let lp = lock_path_for(p);
+                // LibreOffice と同じ気持ちの中身(名乗りだけ)
+                if std::fs::write(&lp, format!("{},;", lock_identity())).is_ok() {
+                    self.my_lock = Some(lp);
+                }
+            }
+        }
+    }
+
     fn open(&mut self, p: PathBuf) {
         self.target = Target::Body;
         // 前の文書の板が残っていると、打鍵が新しい文書のヘッダーを潰す
@@ -875,6 +937,15 @@ impl Writer {
                 self.set_doc(doc);
                 self.adopt_font();
                 self.relayout_keep();
+                // 排他(共有フォルダの「後勝ちで潰す」を防ぐ。calc と同じ)
+                self.acquire_lock(&p);
+                if let Some(who) = self.locked_by.clone() {
+                    self.status = format!(
+                        "{} — **{who} が開いています**。上書き保存はできません(別の名前で保存へ)",
+                        self.status
+                    )
+                    .into();
+                }
                 self.path = Some(p);
                 self.dirty = false;
             }
@@ -887,11 +958,20 @@ impl Writer {
     /// `then_quit` なら保存が済んだときだけ終了する — 書きかけを黙って捨てない。
     fn save(&mut self, then_quit: bool, cx: &mut Context<Self>) {
         if let Some(p) = self.path.clone() {
-            self.save_to(p);
-            if then_quit && !self.dirty {
-                cx.quit();
+            if self.locked_by.is_none() {
+                self.save_to(p);
+                if then_quit && !self.dirty {
+                    self.release_lock();
+                    cx.quit();
+                }
+                return;
             }
-            return;
+            // 先客の作業を後勝ちで潰さない。別の名前でなら保存できる
+            self.status = format!(
+                "{} が開いているため上書きしません。別の名前で保存します",
+                self.locked_by.as_deref().unwrap_or("誰か")
+            )
+            .into();
         }
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new().add_filter("Word文書", &["docx"]).save_file()
@@ -903,6 +983,7 @@ impl Writer {
                     Some(p) => {
                         this.save_to(p);
                         if then_quit && !this.dirty {
+                            this.release_lock();
                             cx.quit();
                         }
                     }
@@ -939,6 +1020,9 @@ impl Writer {
                     p.file_name().unwrap_or_default().to_string_lossy()
                 )
                 .into();
+                // 保存先のロックを取り直す(別の名前で保存したときは
+                // 新しいファイルの側を守る。同じ名前なら実質そのまま)
+                self.acquire_lock(&p);
                 self.path = Some(p);
                 self.dirty = false;
             }
@@ -2864,7 +2948,10 @@ impl Writer {
     /// 確認のダイアログで主の糸を塞がない — 塞ぐと画面ごと固まり、
     /// GNOME に「応答なし」と判定される(calc で踏んで直したのと同じ)。
     fn request_quit(&mut self, cx: &mut Context<Self>) {
-        if !self.dirty {
+        // 確認は**実ファイルの未保存変更**にだけ出す(calc と同じ発注者指示)。
+        // 名前も付けていない試し打ちにまで確認を出すと、確認が煩さで押し流される
+        if !self.dirty || self.path.is_none() {
+            self.release_lock();
             cx.quit();
             return;
         }
@@ -2882,7 +2969,10 @@ impl Writer {
                 match r {
                     // 保存先が未定なら別の糸で選ばせ、済んだときだけ終了する
                     rfd::MessageDialogResult::Yes => this.save(true, cx),
-                    rfd::MessageDialogResult::No => cx.quit(),
+                    rfd::MessageDialogResult::No => {
+                        this.release_lock();
+                        cx.quit();
+                    }
                     _ => this.status = "終了をやめました".into(),
                 }
                 cx.notify();
@@ -4432,10 +4522,11 @@ fn main() {
                 let v = view.clone();
                 window.on_window_should_close(cx, move |_, cx| {
                     let quit_now = v.update(cx, |this, cx| {
-                        if this.dirty {
+                        if this.dirty && this.path.is_some() {
                             this.request_quit(cx);
                             false
                         } else {
+                            this.release_lock();
                             true
                         }
                     });
@@ -4598,6 +4689,29 @@ mod page_setup_tests {
         }
         assert!(out.contains("headerReference"), "ヘッダーの参照が落ちた: {out}");
         assert!(!out.contains("pgSz"), "古い用紙が残った: {out}");
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn ロックの置き場所と先客の判定() {
+        let dir = std::env::temp_dir().join(format!("jolock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc = dir.join("文書.docx");
+        std::fs::write(&doc, b"x").unwrap();
+        let lp = lock_path_for(&doc);
+        assert!(lp.file_name().unwrap().to_string_lossy().starts_with(".~lock."),
+            "LibreOffice と同じ場所でない: {lp:?}");
+        // 先客のロック
+        std::fs::write(&lp, "花子@dev2,;").unwrap();
+        assert_eq!(foreign_lock(&doc).as_deref(), Some("花子@dev2"), "先客が見えない");
+        // 自分のロックは先客と見ない
+        std::fs::write(&lp, format!("{},;", lock_identity())).unwrap();
+        assert_eq!(foreign_lock(&doc), None, "自分を先客と見た");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
