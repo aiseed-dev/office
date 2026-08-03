@@ -1472,16 +1472,26 @@ impl Calc {
                     } else {
                         self.status = format!("「{name}」はありません").into();
                     }
-                } else if let Some(name) = t.strip_prefix('@') {
-                    // ブックに載ったコード = 出所が自分とは限らない。必ず檻の中
-                    match self.book.scripts.iter().find(|(n, _)| n == name.trim()) {
+                } else if let Some(rest) = t.strip_prefix('@') {
+                    // ブックに載ったコード = 出所が自分とは限らない。必ず檻の中。
+                    // 網は既定で閉じる。「@名前 net」と**その場で打ったときだけ**開く
+                    // (許可はブックに保存されない — 毎回が明示の同意)
+                    let (name, net) = match rest.trim().strip_suffix(" net") {
+                        Some(n) => (n.trim(), true),
+                        None => (rest.trim(), false),
+                    };
+                    match self.book.scripts.iter().find(|(n, _)| n == name) {
                         Some((_, code)) => {
                             let code = code.clone();
-                            self.run_python_inner(code, true, cx);
+                            if net {
+                                self.status =
+                                    "網あり檻で実行します(ファイルは守られたまま)".into();
+                            }
+                            self.run_python_inner(code, true, net, cx);
                         }
                         None => {
                             self.status =
-                                format!("「{}」はありません(@list で一覧)", name.trim()).into();
+                                format!("「{name}」はありません(@list で一覧)").into();
                         }
                     }
                 } else {
@@ -2601,7 +2611,9 @@ impl Calc {
     /// office_sheet(pysheet)で b(ブック)と s(いまのシート)を束縛して
     /// 利用者のコードを回し、保存されたものを読み戻して**1手として**適用する。
     fn run_python(&mut self, user_code: String, cx: &mut Context<Self>) {
-        self.run_python_inner(user_code, false, cx);
+        // 自分で打った/選んだコード: 檻はかけるが網は許す(自分の道具が
+        // Web から取り込むのは普通の仕事。守るのは機械のファイルの方)
+        self.run_python_inner(user_code, false, true, cx);
     }
 
     /// sandbox=true は**必ず**bubblewrap の檻の中で回す(ブックに載っていた
@@ -2609,7 +2621,13 @@ impl Calc {
     /// 実ファイルは読み取り専用・ホームは不可視・書けるのは交換用の一時領域だけ。
     /// 檻が無い機械では載せたコードは**実行しない**(そう言う)。
     /// 自分で打った/選んだコードも、檻があれば檻で回す(深層防御)。
-    fn run_python_inner(&mut self, user_code: String, sandbox: bool, cx: &mut Context<Self>) {
+    fn run_python_inner(
+        &mut self,
+        user_code: String,
+        sandbox: bool,
+        allow_net: bool,
+        cx: &mut Context<Self>,
+    ) {
         if !self.commit() {
             return;
         }
@@ -2669,6 +2687,7 @@ impl Calc {
                         .to_string(),
                 );
             }
+            let _ = allow_net;
             let mut cmd = if have_bwrap {
                 // 檻: / は読み取り専用、ホームは空、書けるのは作業場だけ、ネット無し
                 let venv = std::fs::canonicalize(".venv").unwrap_or_default();
@@ -2681,8 +2700,10 @@ impl Calc {
                     c.arg("--ro-bind").arg(&so_dir2).arg(&so_dir2);
                 }
                 c.arg("--bind").arg(&dir).arg(&dir);
+                if !allow_net {
+                    c.arg("--unshare-net");
+                }
                 c.args([
-                    "--unshare-net",
                     "--dev",
                     "/dev",
                     "--proc",
@@ -4760,7 +4781,7 @@ impl Render for Calc {
                         "find" => "Enter で次へ / Esc で取消。式の中の文字も探します",
                         "split-delim" => "選択した列の文字を割って、右の列へ並べます(右は上書き)",
                         "shape-text" => "図形を選んで Enter でいつでも書き直せます",
-                        "py" => "b=ブック s=シート / @list 一覧 @名前 実行(檻の中) @save 名前 で載せる @del 名前",
+                        "py" => "b=ブック s=シート / @名前 実行(網なし檻) @名前 net(網あり檻) @save @list @del",
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         _ => "Enter で決定 / Esc で取消",
