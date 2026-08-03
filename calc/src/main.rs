@@ -302,8 +302,10 @@ struct Calc {
     menu_at: Option<(f32, f32)>,
     /// 開いている子メニュー(挿入▸ など)
     menu_sub: Option<&'static str>,
-    /// 「ドロップダウンリストから選択」の一覧(候補, 出す場所)
+    /// 「ドロップダウンリストから選択」などの一覧(候補, 出す場所)
     pick: Option<(Vec<String>, (f32, f32))>,
+    /// pick の中身の意味: "value"=セルに入れる / "font"=書体 / "size"=文字の大きさ
+    pick_kind: &'static str,
     /// 書式の小窓(セルをフォーマットする)。範囲を選び直しながら使える
     fmt_panel: Option<(f32, f32)>,
     /// 小さな入力の板(種類, 入力欄)。"name"=名前の定義。開いている間は打鍵がここへ
@@ -382,6 +384,7 @@ impl Calc {
             menu_at: None,
             menu_sub: None,
             pick: None,
+            pick_kind: "value",
             fmt_panel: None,
             prompt: None,
             show_formulas: false,
@@ -975,6 +978,25 @@ impl Calc {
     fn a_paste_values(&mut self, _: &ui::PasteValues, _: &mut Window, cx: &mut Context<Self>) {
         self.paste_special("values", cx);
         cx.notify();
+    }
+
+    /// 一覧から選んだものを適用する(pick_kind で意味が変わる)。
+    fn apply_pick(&mut self, v: &str) {
+        match self.pick_kind {
+            "font" => {
+                let name = v.to_string();
+                self.fmt(move |f| f.font = Some(name.clone()));
+                self.status = format!("書体を「{v}」にしました").into();
+            }
+            "size" => {
+                if let Ok(pt) = v.parse::<f32>() {
+                    self.fmt(move |f| f.size_c = Some((pt * 100.0) as u32));
+                    self.status = format!("文字の大きさを {v}pt にしました").into();
+                }
+            }
+            _ => self.pick_value(v),
+        }
+        self.pick_kind = "value";
     }
 
     /// 一覧から選んだ値をセルに入れる(書式は据え置き)。
@@ -2443,6 +2465,7 @@ impl Calc {
         "data-validation", "condformat", "defname",
         "pageorient", "pagesize", "pagemargins", "printarea",
         "inschart", "insimage", "inshyperlink", "replace",
+        "changecase", "format", "cell-format", "fontname", "fontsize",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2621,6 +2644,94 @@ impl Calc {
                     self.status =
                         "印刷範囲にする範囲を Shift+矢印かドラッグで選んでください".into();
                 }
+            }
+            // 大文字小文字。選択の英字に小文字があれば大文字へ、無ければ小文字へ
+            "changecase" => {
+                self.commit();
+                self.checkpoint();
+                let (a, b) = self.sel_rect();
+                let mut has_lower = false;
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        if let Some(cell) = self.sheet().get(Pos::new(r, c)) {
+                            if let sheet::Value::Text(t) = &cell.value {
+                                if t.chars().any(|ch| ch.is_ascii_lowercase()) {
+                                    has_lower = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut n = 0usize;
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        let p = Pos::new(r, c);
+                        let Some(cell) = self.sheet().get(p).cloned() else { continue };
+                        let sheet::Value::Text(t) = &cell.value else { continue };
+                        if !t.chars().any(|ch| ch.is_ascii_alphabetic()) {
+                            continue;
+                        }
+                        let new_t = if has_lower { t.to_uppercase() } else { t.to_lowercase() };
+                        if new_t != *t {
+                            let mut cell = cell;
+                            cell.value = sheet::Value::Text(new_t);
+                            self.sheet_mut().set(p, cell);
+                            n += 1;
+                        }
+                    }
+                }
+                if n == 0 {
+                    self.undo_stack.pop();
+                    self.status = "選択の中に英字がありません".into();
+                } else {
+                    self.dirty = true;
+                    self.sync_input();
+                    self.status = format!(
+                        "{n} セルを{}にしました(もう一度で逆)",
+                        if has_lower { "大文字" } else { "小文字" }
+                    )
+                    .into();
+                }
+            }
+            // 数値の書式・セルのスタイル: 書式の小窓(道具箱)を開く
+            "format" | "cell-format" => {
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x + 16.0, y + 16.0))
+                    .unwrap_or((HEAD_W + 24.0, ROW_H + 24.0));
+                self.fmt_panel = Some(at);
+            }
+            // 書体と大きさ: 一覧から選ぶ(日本語が組める書体だけ出す)
+            "fontname" => {
+                let vals: Vec<String> = kumihan::font::list()
+                    .iter()
+                    .filter(|f| f.japanese)
+                    .map(|f| f.name.clone())
+                    .collect();
+                if vals.is_empty() {
+                    self.status = "日本語の書体が見つかりません".into();
+                } else {
+                    let at = self
+                        .cell_origin_px(self.cursor)
+                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    self.pick_kind = "font";
+                    self.pick = Some((vals.into_iter().take(16).collect(), at));
+                }
+            }
+            "fontsize" => {
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                self.pick_kind = "size";
+                self.pick = Some((
+                    ["8", "9", "10", "11", "12", "14", "16", "18", "20", "24", "28", "36", "48"]
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect(),
+                    at,
+                ));
             }
             // 検索と置換(ホーム > 置き換え)。板を2枚続けて使う
             "replace" => {
@@ -3797,7 +3908,7 @@ impl Render for Calc {
                         move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.pick = None;
-                            this.pick_value(&v);
+                            this.apply_pick(&v);
                             cx.notify();
                         })));
             }

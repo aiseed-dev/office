@@ -101,6 +101,9 @@ READY = {
         "pagemargins": "pagemargins", "printarea": "printarea",
         "inschart": "inschart", "insimage": "insimage",
         "inshyperlink": "inshyperlink", "replace": "replace",
+        "changecase": "changecase", "format": "format",
+        "cell-format": "cell-format", "fontname": "fontname",
+        "fontsize": "fontsize",
     },
 }
 
