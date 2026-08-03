@@ -17,6 +17,17 @@ use ttf_parser::Face;
 
 // ---------- 文書モデル ----------
 
+/// 相互参照(docx の REF / PAGEREF フィールド)。**run 1つが1つの参照**で、
+/// run の text は「いま見えている値」(更新で計算し直す)。
+/// 編集で参照の中を割ったら、参照は普通の文字に降りる(予測できる形で壊す)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefField {
+    /// 指す先(しおりの名前)
+    pub name: String,
+    /// true ならページ番号(PAGEREF)、false ならしおりの文字(REF)
+    pub page: bool,
+}
+
 /// 文字の書式。**docx の `w:rPr` に対応する。**
 ///
 /// 既定(全部 false・色なし)が素の本文。`Default` で作れば何も付かない。
@@ -33,6 +44,9 @@ pub struct CharFormat {
     pub highlight: Option<String>,
     /// 文字色。`RRGGBB`(docx の `w:color w:val` と同じ形)
     pub color: Option<String>,
+    /// 相互参照。ここ(書式)に持つのは、run の分割・結合・描画の
+    /// 既存の道具立てがそのまま使えるため(field が違えば繋がらない)
+    pub field: Option<RefField>,
 }
 
 impl CharFormat {
@@ -496,11 +510,11 @@ impl Document {
             .or_else(|| head_para.runs.first())
             .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
             .unwrap_or((size_pt, None, CharFormat::default()));
-        let ins_run = |t: &str| Run {
-            text: t.to_string(),
-            size_pt: ins_pt,
-            font: ins_font.clone(),
-            fmt: ins_fmt.clone(),
+        let ins_run = |t: &str| {
+            let mut fmt = ins_fmt.clone();
+            // 参照(フィールド)の直後に打った字は参照の一部ではない
+            fmt.field = None;
+            Run { text: t.to_string(), size_pt: ins_pt, font: ins_font.clone(), fmt }
         };
 
         // 新しい段落の列を組み立てる
@@ -680,6 +694,35 @@ impl Document {
         }
     }
 
+    /// 範囲に相互参照を付ける(挿した値の run を参照にする)・外す。
+    pub fn apply_field(&mut self, range: std::ops::Range<usize>, field: Option<RefField>) {
+        self.apply_runs(range, |r| r.fmt.field = field.clone());
+    }
+
+    /// 本文の中の参照を数え、値を計算し直す。`value(名前, ページか)` が
+    /// 新しい値を返す(計算できなければ None = 触らない)。
+    /// 返り値は書き換えた数。**run の text を直に書き換える**ので、
+    /// 編集中の平文を持つ側(writer)は呼んだ後に同期し直すこと。
+    pub fn refresh_fields(
+        &mut self,
+        value: impl Fn(&str, bool) -> Option<String>,
+    ) -> usize {
+        let mut n = 0usize;
+        for b in &mut self.blocks {
+            let Block::Para(p) = b else { continue };
+            for r in &mut p.runs {
+                let Some(f) = &r.fmt.field else { continue };
+                if let Some(v) = value(&f.name, f.page) {
+                    if v != r.text {
+                        r.text = v;
+                        n += 1;
+                    }
+                }
+            }
+        }
+        n
+    }
+
     /// 選択範囲(の頭)の位置にある run。書式の表示・読み取りの元。
     fn run_at(&self, pos: usize) -> Option<&Run> {
         let mut at = 0usize;
@@ -769,6 +812,10 @@ fn split_runs(runs: &[Run], byte: usize) -> (Vec<Run>, Vec<Run>) {
             a.text = r.text[..cut].to_string();
             let mut b = r.clone();
             b.text = r.text[cut..].to_string();
+            // 参照(フィールド)の中を割った = 手で書き換えた。
+            // 半分ずつが参照を名乗ると更新で二重になるので、普通の字に降ろす
+            a.fmt.field = None;
+            b.fmt.field = None;
             left.push(a);
             right.push(b);
         }
@@ -2430,6 +2477,76 @@ mod run_edit_tests {
         assert!(!d.char_format_at(0..0).bold, "頭で太字と言った");
         assert!(d.char_format_at(9..9).bold, "太字の直後で太字と言わない");
         assert!(!d.char_format_at(12..12).bold, "太字の外で太字と言った");
+    }
+}
+
+#[cfg(test)]
+mod ref_field_tests {
+    use super::*;
+
+    fn field_doc() -> Document {
+        let mut d = Document::plain("仕様は3ページを見る", 10.5);
+        let s = "仕様は".len();
+        let e = "仕様は3ページ".len();
+        d.apply_field(s..e, Some(RefField { name: "様式".into(), page: false }));
+        d
+    }
+
+    #[test]
+    fn 参照は編集で流されず前後の打鍵で消えない() {
+        let mut d = field_doc();
+        // 参照の前に打つ
+        d.set_body_text("この仕様は3ページを見る", 10.5);
+        let f: Vec<_> = d.paragraphs().flat_map(|p| p.runs.iter())
+            .filter(|r| r.fmt.field.is_some())
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(f, vec!["3ページ"], "参照が前の打鍵で壊れた");
+        // 参照の直後に打っても、参照は伸びない
+        let e = "この仕様は3ページ".len();
+        let mut t = d.body_text();
+        t.insert_str(e, "目");
+        d.set_body_text(&t, 10.5);
+        let f: Vec<_> = d.paragraphs().flat_map(|p| p.runs.iter())
+            .filter(|r| r.fmt.field.is_some())
+            .map(|r| r.text.clone())
+            .collect();
+        assert_eq!(f, vec!["3ページ"], "打った字が参照に呑まれた");
+    }
+
+    #[test]
+    fn 参照の中を触ると普通の字に降りる() {
+        let mut d = field_doc();
+        // 「3ページ」の中の「ペ」を消した
+        d.set_body_text("仕様は3ージを見る", 10.5);
+        assert!(d.paragraphs().flat_map(|p| p.runs.iter())
+            .all(|r| r.fmt.field.is_none()),
+            "壊れた参照が参照のまま残った");
+        assert_eq!(d.body_text(), "仕様は3ージを見る", "本文まで変わった");
+    }
+
+    #[test]
+    fn 参照の値を計算し直せる() {
+        let mut d = field_doc();
+        let n = d.refresh_fields(|name, page| {
+            assert_eq!(name, "様式");
+            assert!(!page);
+            Some("5ページ".into())
+        });
+        assert_eq!(n, 1);
+        assert_eq!(d.body_text(), "仕様は5ページを見る");
+        // 同じ値ならもう数えない
+        assert_eq!(d.refresh_fields(|_, _| Some("5ページ".into())), 0);
+    }
+
+    #[test]
+    fn 参照ごと太字にしても参照は残る() {
+        let mut d = field_doc();
+        d.apply_char_format(0..d.body_text().len(), |f| f.bold = true);
+        let r: Vec<_> = d.paragraphs().flat_map(|p| p.runs.iter())
+            .filter(|r| r.fmt.field.is_some()).collect();
+        assert_eq!(r.len(), 1, "太字で参照が消えた");
+        assert!(r[0].fmt.bold);
     }
 }
 

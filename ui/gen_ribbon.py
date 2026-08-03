@@ -71,7 +71,7 @@ READY = {
         "columns": "columns",
         "pen": "pen", "highlighter": "highlighter", "eraser": "eraser",
         "track-changes": "track-changes", "dropcap": "dropcap",
-        "hyphenation": "hyphenation",
+        "hyphenation": "hyphenation", "crossref": "crossref",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

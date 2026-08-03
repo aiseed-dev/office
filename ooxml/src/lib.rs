@@ -14,7 +14,7 @@
 use std::io::{Cursor, Read, Seek, Write};
 
 use kumihan::{Align, Block, Cellbox, CharFormat, Comment, Document, ListKind, ParaStyle,
-              Paragraph, Run, Stroke, Table, VMerge, PAGES_MARK, PAGE_MARK,
+              Paragraph, RefField, Run, Stroke, Table, VMerge, PAGES_MARK, PAGE_MARK,
               TRK_DEL_E, TRK_DEL_S, TRK_INS_E, TRK_INS_S};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
@@ -381,6 +381,45 @@ fn field_mark(instr: &str) -> Option<char> {
     }
 }
 
+/// 相互参照の命令(REF / PAGEREF しおり名)。
+fn ref_instr(instr: &str) -> Option<RefField> {
+    let mut it = instr.split_whitespace();
+    let kind = it.next()?;
+    let name = it.next()?.to_string();
+    match kind {
+        "REF" => Some(RefField { name, page: false }),
+        "PAGEREF" => Some(RefField { name, page: true }),
+        _ => None,
+    }
+}
+
+/// 部分木の原文から、w:t の中の文字を繋いで返す(フィールドの見えている値)。
+fn inner_texts(raw: &str) -> String {
+    let mut out = String::new();
+    let mut at = 0usize;
+    while let Some(i) = raw[at..].find("<w:t") {
+        let s = at + i;
+        let Some(gt) = raw[s..].find('>') else { break };
+        // <w:tab/> 等に引っ掛からない(<w:t か <w:t␣ だけ)
+        let head = &raw[s..s + gt];
+        if !(head == "<w:t" || head.starts_with("<w:t ")) {
+            at = s + 4;
+            continue;
+        }
+        let ts = s + gt + 1;
+        let Some(te) = raw[ts..].find("</w:t>") else { break };
+        out.push_str(
+            &raw[ts..ts + te]
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&amp;", "&"),
+        );
+        at = ts + te;
+    }
+    out
+}
+
 /// comments.xml を読む。id → コメント(書いた人・本文)。
 fn parse_comments(xml: &str) -> std::collections::BTreeMap<String, Comment> {
     let mut out: std::collections::BTreeMap<String, Comment> = Default::default();
@@ -632,6 +671,7 @@ fn fldchar(
     in_field: &mut bool,
     field_hide: &mut bool,
     field_instr: &mut String,
+    field_buf: &mut String,
     para: &mut Option<Vec<Run>>,
     rep: &mut Report,
     size_pt: f32,
@@ -643,6 +683,7 @@ fn fldchar(
             *in_field = true;
             *field_hide = false;
             field_instr.clear();
+            field_buf.clear();
         }
         Some("separate") => {
             if *in_field {
@@ -660,6 +701,18 @@ fn fldchar(
                             size_pt,
                             font: font.clone(),
                             fmt: fmt.clone(),
+                        });
+                    }
+                } else if let Some(rf) = ref_instr(field_instr) {
+                    // 相互参照。separate〜end の見えている値ごと run にする
+                    if let Some(p) = para.as_mut() {
+                        let mut f2 = fmt.clone();
+                        f2.field = Some(rf);
+                        p.push(Run {
+                            text: std::mem::take(field_buf),
+                            size_pt,
+                            font: font.clone(),
+                            fmt: f2,
                         });
                     }
                 } else if !field_instr.trim().is_empty() {
@@ -736,11 +789,12 @@ fn parse_document_full(
     let mut in_text = false;
     let mut in_rpr = false;
     let mut cur = String::new();
-    // フィールド(w:fldChar / w:instrText)。PAGE(ページ番号)だけを印として持つ
+    // フィールド(w:fldChar / w:instrText)。PAGE は印、REF は参照の run になる
     let mut in_instr = false;
     let mut in_field = false;
     let mut field_hide = false;
     let mut field_instr = String::new();
+    let mut field_buf = String::new();
     const SKIP_KNOWN: &[&str] = &["drawing", "pict", "object", "sdt"];
 
     let mut buf = Vec::new();
@@ -963,13 +1017,22 @@ fn parse_document_full(
                                 p.push(Run { text: mark.to_string(), size_pt,
                                              font: font.clone(), fmt: fmt.clone() });
                             }
+                        } else if let Some(rf) = ref_instr(&instr) {
+                            // 相互参照。見えている値ごと run にする
+                            let raw = &xml[start_pos..last_pos];
+                            if let Some(p) = para.as_mut() {
+                                let mut f2 = fmt.clone();
+                                f2.field = Some(rf);
+                                p.push(Run { text: inner_texts(raw), size_pt,
+                                             font: font.clone(), fmt: f2 });
+                            }
                         } else {
                             rep.note(&format!("フィールド({})", instr.trim()));
                         }
                     }
                     b"instrText" => in_instr = true,
                     b"fldChar" => fldchar(attr(&e, "fldCharType").as_deref(),
-                        &mut in_field, &mut field_hide, &mut field_instr,
+                        &mut in_field, &mut field_hide, &mut field_instr, &mut field_buf,
                         &mut para, &mut rep, size_pt, &font, &fmt),
                     other => {
                         let _ = other;
@@ -1132,7 +1195,7 @@ fn parse_document_full(
                     }
                     // fldChar は空要素で来るのが普通の形
                     b"fldChar" => fldchar(attr(&e, "fldCharType").as_deref(),
-                        &mut in_field, &mut field_hide, &mut field_instr,
+                        &mut in_field, &mut field_hide, &mut field_instr, &mut field_buf,
                         &mut para, &mut rep, size_pt, &font, &fmt),
                     b"fldSimple" => {
                         // 空の fldSimple(中身なし)。持てる命令なら印だけ置く
@@ -1162,8 +1225,9 @@ fn parse_document_full(
                     b"t" => {
                         in_text = false;
                         if field_hide {
-                            // フィールドの計算済みの見た目。持たない(開く側が計算し直す)
-                            cur.clear();
+                            // フィールドの計算済みの見た目。REF はここが「見えている値」
+                            // になるので控える(PAGE 等では捨てられる)
+                            field_buf.push_str(&std::mem::take(&mut cur));
                         } else if !cur.is_empty() {
                             if let Some(p) = para.as_mut() {
                                 p.push(Run { text: std::mem::take(&mut cur), size_pt, font: font.clone(), fmt: fmt.clone() });
@@ -1436,6 +1500,31 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
         }
         for run in &p.runs {
             if run.text.is_empty() { continue }
+            // 相互参照はフィールドとして書く(見えている値をキャッシュに持つ)
+            if let Some(rf) = &run.fmt.field {
+                let instr = if rf.page {
+                    format!(" PAGEREF {} \\h ", rf.name)
+                } else {
+                    format!(" REF {} \\h ", rf.name)
+                };
+                let b = if run.fmt.bold { "<w:b/>" } else { "" };
+                let color = run.fmt.color.as_deref()
+                    .map(|c| format!(r#"<w:color w:val="{c}"/>"#))
+                    .unwrap_or_default();
+                let _ = w.get_mut().write_all(format!(
+                    concat!(
+                        r#"<w:fldSimple w:instr="{instr}"><w:r><w:rPr>{b}{color}"#,
+                        r#"<w:sz w:val="{sz}"/></w:rPr>"#,
+                        r#"<w:t xml:space="preserve">{t}</w:t></w:r></w:fldSimple>"#
+                    ),
+                    instr = esc(&instr),
+                    b = b,
+                    color = color,
+                    sz = (run.size_pt * 2.0).round() as i32,
+                    t = esc(&run.text),
+                ).as_bytes());
+                continue;
+            }
             // ページ番号・ページ数の印はフィールドとして書く
             // (印の前後で run を割る)。中の「1」は開く側が計算し直す種
             // 0=普通 1=挿入(w:ins) 2=削除(w:del)。変更履歴の印で切り替える
@@ -2722,6 +2811,55 @@ mod bookmark_model_tests {
         let bs: Vec<usize> = back.paragraphs().map(|p| p.bookmarks.len()).collect();
         assert_eq!(bs, vec![0, 1, 0], "しおりの付き先がずれた");
         assert_eq!(back.paragraphs().nth(1).unwrap().bookmarks[0], "会社名");
+    }
+}
+
+#[cfg(test)]
+mod ref_field_round_tests {
+    use super::*;
+    use kumihan::{Document, RefField};
+
+    #[test]
+    fn 相互参照が往復する() {
+        let mut d = Document::plain("仕様は3ページを見る", 10.5);
+        let s0 = "仕様は".len();
+        let e0 = "仕様は3ページ".len();
+        d.apply_field(s0..e0, Some(RefField { name: "様式".into(), page: true }));
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        assert_eq!(back.body_text(), "仕様は3ページを見る", "見えている値が変わった");
+        let f: Vec<_> = back.paragraphs().flat_map(|p| p.runs.iter())
+            .filter_map(|r| r.fmt.field.clone().map(|f| (f, r.text.clone())))
+            .collect();
+        assert_eq!(f.len(), 1, "参照が往復しない");
+        assert_eq!(f[0].0, RefField { name: "様式".into(), page: true });
+        assert_eq!(f[0].1, "3ページ");
+        // XML の上では Word のフィールド
+        let out = write_document_xml(&d);
+        assert!(out.contains("PAGEREF 様式"), "PAGEREF が無い: {out}");
+    }
+
+    #[test]
+    fn wordが書く複雑な形の参照も読める() {
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p>
+            <w:r><w:t>結果は</w:t></w:r>
+            <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+            <w:r><w:instrText xml:space="preserve"> REF 結論 \h </w:instrText></w:r>
+            <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+            <w:r><w:t>別紙のとおり</w:t></w:r>
+            <w:r><w:fldChar w:fldCharType="end"/></w:r>
+            <w:r><w:t>。</w:t></w:r>
+        </w:p></w:body></w:document>"#;
+        let (doc, _) = parse_document_xml(xml);
+        assert_eq!(doc.body_text(), "結果は別紙のとおり。", "見えている値が繋がらない");
+        let f: Vec<_> = doc.paragraphs().flat_map(|p| p.runs.iter())
+            .filter(|r| r.fmt.field.is_some()).collect();
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].text, "別紙のとおり");
+        assert_eq!(f[0].fmt.field.as_ref().unwrap().name, "結論");
     }
 }
 

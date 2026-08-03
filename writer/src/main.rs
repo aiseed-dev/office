@@ -346,6 +346,8 @@ struct Writer {
     /// しおりの板(名前の入力欄つきの一覧)
     bm_open: bool,
     bm_ed: Editor,
+    /// 相互参照の板(しおり一覧から「文字」「ページ」を挿す)
+    xr_open: bool,
     /// 描画の道具(0=ペン 1=蛍光ペン 2=消しゴム)。Some の間はマウスが筆
     tool: Option<u8>,
     /// 書きかけの筆
@@ -499,6 +501,7 @@ impl Writer {
             wm_ed: Editor::new(""),
             bm_open: false,
             bm_ed: Editor::new(""),
+            xr_open: false,
             tool: None,
             ink_cur: None,
             track: false,
@@ -675,6 +678,9 @@ impl Writer {
     /// 保存のたびに増えないように、写しに差す。
     fn doc_for_save(&self) -> Document {
         let mut doc = self.doc.clone();
+        // 相互参照は保存の写しで計算し直す(docx のキャッシュを新しく保つ。
+        // 画面の平文はそのまま — 見えている値の更新は「参照を更新」で)
+        doc.refresh_fields(|name, page| self.ref_value(name, page));
         // 変更履歴: 記録開始時点との差分を印の字にする(ooxml が w:ins/w:del に)
         if self.track {
             if let Some(base) = &self.track_base {
@@ -1342,6 +1348,86 @@ impl Writer {
         (pi, b0)
     }
 
+    /// 相互参照の値。文字ならしおりの段落の本文、ページなら紙と同じ折り方の番号。
+    fn ref_value(&self, name: &str, page: bool) -> Option<String> {
+        let mut at = 0usize;
+        for p in self.doc.paragraphs() {
+            let t: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+            if p.bookmarks.iter().any(|b| b == name) {
+                if !page {
+                    return Some(t.trim().to_string());
+                }
+                let (pages, _) = paper::paginate(&self.page, paper::Paper {
+                    width_mm: self.pg.w_mm,
+                    height_mm: self.pg.h_mm,
+                    margin_mm: self.pg.left_mm,
+                });
+                let mut hit = 1usize;
+                for (l, pg2) in self.page.lines.iter().zip(&pages) {
+                    if l.from_body && l.byte0 <= at {
+                        hit = *pg2;
+                    }
+                }
+                return Some(hit.to_string());
+            }
+            at += t.len() + 1;
+        }
+        None
+    }
+
+    /// 相互参照を挿す。値を普通の字として打ってから、その範囲を参照にする。
+    fn insert_ref(&mut self, name: &str, page: bool) {
+        self.switch_target(Target::Body);
+        let Some(val) = self.ref_value(name, page) else {
+            self.status = format!("しおり「{name}」が見つかりません").into();
+            return;
+        };
+        let start = self.ed.selection().start;
+        handler::replace(self, None, &val);
+        self.doc.apply_field(
+            start..start + val.len(),
+            Some(kumihan::RefField { name: name.to_string(), page }),
+        );
+        self.relayout_keep();
+        self.status = format!(
+            "「{name}」への参照を挿しました({}。参照は編集で中を触ると普通の字に戻ります)",
+            if page { "ページ番号" } else { "しおりの文字" }
+        )
+        .into();
+    }
+
+    /// 参照を計算し直す。run の text を直に書き換えるので、編集の平文も作り直す
+    /// (**undo の控えはここで失われる** — そう言う)。
+    fn refresh_refs(&mut self) {
+        self.switch_target(Target::Body);
+        self.flush_target();
+        let vals: std::collections::BTreeMap<(String, bool), String> = self
+            .doc
+            .paragraphs()
+            .flat_map(|p| p.runs.iter())
+            .filter_map(|r| r.fmt.field.clone())
+            .map(|f| {
+                let v = self.ref_value(&f.name, f.page).unwrap_or_else(|| "?".into());
+                ((f.name, f.page), v)
+            })
+            .collect();
+        let n = self
+            .doc
+            .refresh_fields(|name, page| vals.get(&(name.to_string(), page)).cloned());
+        if n > 0 {
+            let cur = self.ed.cursor();
+            self.ed = Editor::new(&self.doc.body_text());
+            let len = self.ed.text().len();
+            self.ed.move_to(cur.min(len), false);
+            self.dirty = true;
+            self.relayout_keep();
+            self.status =
+                format!("参照を {n} 箇所更新しました(この操作は戻せません)").into();
+        } else {
+            self.status = "参照は最新です".into();
+        }
+    }
+
     /// しおりを追加する(カーソルの段落へ)。
     fn bm_add(&mut self) {
         let name = self.bm_ed.text().trim().to_string();
@@ -1821,6 +1907,7 @@ impl Writer {
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
         "caption", "tof", "tof-update", "columns",
         "pen", "highlighter", "eraser", "track-changes", "dropcap", "hyphenation",
+        "crossref",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2356,6 +2443,19 @@ impl Writer {
                 self.follow_caret();
                 self.status = format!("{label} を入れました(中央揃えの段落)").into();
             }
+            // 相互参照。しおり一覧から「文字」「ページ」を挿す板
+            "crossref" => {
+                self.xr_open = !self.xr_open;
+                if self.xr_open {
+                    self.bm_open = false;
+                    self.find_open = false;
+                    self.hf_edit = None;
+                    self.cmt_edit = false;
+                    self.wm_edit = false;
+                    self.status =
+                        "相互参照: しおりを選んで「文字」か「ページ」を挿す".into();
+                }
+            }
             // しおり。一覧の板(名前を打って追加・押して移動・✕で削除)
             "bookmarks" => {
                 self.bm_open = !self.bm_open;
@@ -2580,6 +2680,12 @@ impl Writer {
         }
         if self.bm_open {
             self.bm_open = false;
+            self.status = "".into();
+            cx.notify();
+            return;
+        }
+        if self.xr_open {
+            self.xr_open = false;
             self.status = "".into();
             cx.notify();
             return;
@@ -3307,6 +3413,14 @@ impl Render for Writer {
                 } else {
                     (spt, stop)
                 };
+                // 参照(フィールド)はうっすら網掛け(Word の作法)。
+                // 「ここは計算された値」と分かるように
+                if f.field.is_some() {
+                    paper = paper.child(div().absolute()
+                        .left(px(sx * pxmm)).top(px(stop + spt * HALF_LEADING))
+                        .w(px(w_mm * pxmm)).h(px(spt * 1.15))
+                        .bg(gpui::Rgba { r: 0.55, g: 0.6, b: 0.65, a: 0.16 }));
+                }
                 // 蛍光ペン。字の下に色を敷く
                 if let Some(h) = &f.highlight {
                     let bg = match h.as_str() {
@@ -3741,6 +3855,68 @@ impl Render for Writer {
             Some(d)
         };
 
+        // 相互参照の板(しおり一覧 → 文字/ページを挿す。更新もここ)
+        let xr_panel = if !self.xr_open {
+            None
+        } else {
+            let names: Vec<String> = self
+                .doc
+                .paragraphs()
+                .flat_map(|p| p.bookmarks.iter().cloned())
+                .collect();
+            let mut d = div().absolute().left(px(16.0)).top(px(8.0)).w(px(360.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().flex().flex_row().items_center()
+                    .child(div().flex_1().text_size(px(11.5))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(0x165E83))
+                        .child("相互参照 — しおりの文字かページ番号を挿す"))
+                    .child(div().id("xr-refresh").px_2().py_0p5().rounded_sm()
+                        .border_1().border_color(rgb(0x1B6E3C)).text_color(rgb(0x1B6E3C))
+                        .text_size(px(11.0)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .child("参照を更新")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.refresh_refs();
+                            cx.notify()
+                        }))));
+            if names.is_empty() {
+                d = d.child(div().text_size(px(11.5)).text_color(rgb(0x66707A))
+                    .child("(しおりがありません。参考資料 > ブックマークで付けてください)"));
+            }
+            for (i, name) in names.into_iter().enumerate() {
+                let n1 = name.clone();
+                let n2 = name.clone();
+                d = d.child(div().flex().flex_row().items_center().gap_2()
+                    .child(div().flex_1().text_size(px(12.5))
+                        .whitespace_nowrap().overflow_hidden()
+                        .child(SharedString::from(name)))
+                    .child(div().id(SharedString::from(format!("xrt-{i}")))
+                        .px_2().py_0p5().rounded_sm()
+                        .border_1().border_color(rgb(0x165E83)).text_color(rgb(0x165E83))
+                        .text_size(px(11.0)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF2F7)))
+                        .child("文字")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.insert_ref(&n1, false);
+                            cx.notify()
+                        })))
+                    .child(div().id(SharedString::from(format!("xrp-{i}")))
+                        .px_2().py_0p5().rounded_sm()
+                        .border_1().border_color(rgb(0x165E83)).text_color(rgb(0x165E83))
+                        .text_size(px(11.0)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF2F7)))
+                        .child("ページ")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.insert_ref(&n2, true);
+                            cx.notify()
+                        }))));
+            }
+            Some(d)
+        };
+
         // フォントの一覧。この機械にある日本語の書体だけ
         let font_panel = if !self.font_list {
             None
@@ -4042,6 +4218,7 @@ impl Render for Writer {
                     .children(cmt_panel)
                     .children(wm_panel)
                     .children(bm_panel)
+                    .children(xr_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)
