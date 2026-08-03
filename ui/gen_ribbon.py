@@ -334,6 +334,15 @@ def tabs_of(app, prefix):
 DYN_LABELS = {}
 
 
+# 独自の釦(Euro-Office に無いがこちらが足すもの)。タブの末尾に置く。
+# 並びは本家のまま、増えた分だけ後ろ — 乗り換えの人の目当ては崩さない
+EXTRA_CMDS = {
+    "calc": {
+        "データ": [("python", "Python", "python")],
+    },
+}
+
+
 def emit():
     print(HEAD)
     for app, prefix, konst, which in [
@@ -342,6 +351,7 @@ def emit():
     ]:
         tabs, loc = tabs_of(app, prefix)
         ready = READY[which]
+        extras = EXTRA_CMDS.get(which, {})
         print(f"pub const {konst}: &[Tab] = &[")
         for name, slots in tabs:
             print(f'    Tab {{ name: "{name}", cmds: &[')
@@ -351,6 +361,8 @@ def emit():
                     print(f'        c("{ready[s]}", "{lab}", "{s}"),')
                 else:
                     print(f'        x("{lab}", "{s}"),')
+            for (cid, clab, cicon) in extras.get(name, []):
+                print(f'        c("{cid}", "{clab}", "{cicon}"),')
             print("    ]},")
         print("];")
         print()

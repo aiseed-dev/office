@@ -326,10 +326,12 @@ struct Calc {
     filter: Option<(u32, String)>,
     /// 表の操作(書式・フィル・行列・結合・並べ替え)を戻すための控え。
     /// 入力欄の undo とは別 — **戻せない操作は事故のとき逃げ道が無い**。
+    /// 1手 = シートの控えの束。普通の操作は1枚、Python の実行のように
+    /// 複数シートに触るものは全部まとめて1手(どれでも1手で戻せる)。
     /// **どのシートの控えかを一緒に持つ** — シートを切り替えた後の undo が
     /// 別のシートへ他所の中身を書き戻す事故を防ぐ
-    undo_stack: Vec<(usize, sheet::Sheet)>,
-    redo_stack: Vec<(usize, sheet::Sheet)>,
+    undo_stack: Vec<Vec<(usize, sheet::Sheet)>>,
+    redo_stack: Vec<Vec<(usize, sheet::Sheet)>>,
     /// シートごとのカーソル・窓・固定(切り替えても場所を失わない)
     sheet_ui: Vec<(Pos, Pos, Option<Pos>)>,
     /// コピーの控え(起点, そのとき書いた TSV)。貼り付け時に系のクリップボードと
@@ -459,7 +461,25 @@ impl Calc {
     /// 数式バーの内容をセルに入れて再計算する。
     /// いまの表を控える(次の操作を戻せるように)。やり直しの控えは捨てる。
     fn checkpoint(&mut self) {
-        self.undo_stack.push((self.active, self.book.sheets[self.active].clone()));
+        self.undo_stack
+            .push(vec![(self.active, self.book.sheets[self.active].clone())]);
+        if self.undo_stack.len() > 100 {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    /// 全シートを1手として控える(Python の実行など、どこを変えるか
+    /// 分からない操作の前に)。
+    fn checkpoint_book(&mut self) {
+        self.undo_stack.push(
+            self.book
+                .sheets
+                .iter()
+                .cloned()
+                .enumerate()
+                .collect(),
+        );
         if self.undo_stack.len() > 100 {
             self.undo_stack.remove(0);
         }
@@ -479,28 +499,46 @@ impl Calc {
     }
 
     fn undo_sheet(&mut self) {
-        let Some((idx, prev)) = self.undo_stack.pop() else {
+        let Some(batch) = self.undo_stack.pop() else {
             self.status = "戻すものがありません".into();
             return;
         };
-        self.redo_stack.push((idx, self.book.sheets[idx].clone()));
-        self.book.sheets[idx] = prev;
-        recalc(&mut self.book.sheets[idx]);
-        self.show_sheet(idx);
+        let mut redo = Vec::new();
+        let first = batch.first().map(|(i, _)| *i);
+        for (idx, prev) in batch {
+            if idx < self.book.sheets.len() {
+                redo.push((idx, self.book.sheets[idx].clone()));
+                self.book.sheets[idx] = prev;
+                recalc(&mut self.book.sheets[idx]);
+            }
+        }
+        self.redo_stack.push(redo);
+        if let Some(i) = first {
+            self.show_sheet(i);
+        }
         self.dirty = true;
         self.sync_input();
         self.status = "戻しました".into();
     }
 
     fn redo_sheet(&mut self) {
-        let Some((idx, next)) = self.redo_stack.pop() else {
+        let Some(batch) = self.redo_stack.pop() else {
             self.status = "やり直すものがありません".into();
             return;
         };
-        self.undo_stack.push((idx, self.book.sheets[idx].clone()));
-        self.book.sheets[idx] = next;
-        recalc(&mut self.book.sheets[idx]);
-        self.show_sheet(idx);
+        let mut undo = Vec::new();
+        let first = batch.first().map(|(i, _)| *i);
+        for (idx, next) in batch {
+            if idx < self.book.sheets.len() {
+                undo.push((idx, self.book.sheets[idx].clone()));
+                self.book.sheets[idx] = next;
+                recalc(&mut self.book.sheets[idx]);
+            }
+        }
+        self.undo_stack.push(undo);
+        if let Some(i) = first {
+            self.show_sheet(i);
+        }
         self.dirty = true;
         self.sync_input();
         self.status = "やり直しました".into();
@@ -1337,7 +1375,7 @@ impl Calc {
     }
 
     /// 入力の板を確定する(Enter)。
-    fn finish_prompt(&mut self) {
+    fn finish_prompt(&mut self, cx: &mut Context<Self>) {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
@@ -1403,6 +1441,14 @@ impl Calc {
                     range.0.a1(), range.1.a1(),
                     if gt { "大きい値" } else { "小さい値" }
                 ).into();
+            }
+            "py" => {
+                if text.is_empty() {
+                    // 空 Enter = .py ファイルを選ぶ
+                    self.run_python_file_dialog(cx);
+                } else {
+                    self.run_python(text, cx);
+                }
             }
             "shape-text" => {
                 let Some(i) = self.shape_sel else { return };
@@ -2098,7 +2144,7 @@ impl Calc {
     }
     fn a_enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
         if self.prompt.is_some() {
-            self.finish_prompt();
+            self.finish_prompt(cx);
         } else if let Some(i) = self.shape_sel {
             // 図形を選んで Enter = 中の文字を書く(テキストボックス)
             let cur = self
@@ -2512,6 +2558,157 @@ impl Calc {
         .detach();
     }
 
+    /// Python in Calc(発注者提案 2026-08-04)。**コードは文書に入れない** —
+    /// マクロと違い「開く=実行」の経路が無い。いまの表を一時 xlsx に写し、
+    /// office_sheet(pysheet)で b(ブック)と s(いまのシート)を束縛して
+    /// 利用者のコードを回し、保存されたものを読み戻して**1手として**適用する。
+    fn run_python(&mut self, user_code: String, cx: &mut Context<Self>) {
+        if !self.commit() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("jo-py-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let in_x = dir.join("in.xlsx");
+        let out_x = dir.join("out.xlsx");
+        // 実行は複製の上(失敗しても表は無傷)。原本の部品も持ち越して写す
+        let original: Option<std::io::Cursor<Vec<u8>>> = self
+            .path
+            .as_ref()
+            .and_then(|old| std::fs::read(old).ok())
+            .map(std::io::Cursor::new);
+        let w = std::fs::File::create(&in_x)
+            .map_err(|e| e.to_string())
+            .and_then(|f| {
+                sheet::xlsx::write_with(&self.book, original, std::io::BufWriter::new(f))
+            });
+        if let Err(e) = w {
+            self.status = format!("Python に渡せません: {e}").into();
+            return;
+        }
+        // office_sheet.so は実行ファイルの隣(HIKITSUGI の配り方を参照)
+        let so_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_default();
+        let script = format!(
+            concat!(
+                "import sys\n",
+                "sys.path.insert(0, {so_dir:?})\n",
+                "import office_sheet\n",
+                "b = office_sheet.Book.open({in_x:?})\n",
+                "s = b[{active}]\n",
+                "# ---- 利用者のコード ----\n",
+                "{code}\n",
+                "# ----\n",
+                "b.save({out_x:?})\n"
+            ),
+            so_dir = so_dir.to_string_lossy(),
+            in_x = in_x.to_string_lossy(),
+            active = self.active,
+            out_x = out_x.to_string_lossy(),
+            code = user_code
+        );
+        self.status = "Python を実行しています…".into();
+        let task = cx.background_executor().spawn(async move {
+            let py_path = dir.join("run.py");
+            std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
+            let o = std::process::Command::new(find_python())
+                .arg(&py_path)
+                .output()
+                .map_err(|e| format!("Python が起動できません: {e}"))?;
+            let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !o.status.success() {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let last = err
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("原因不明")
+                    .to_string();
+                return Err(if err.contains("No module named 'office_sheet'") {
+                    "office_sheet.so がありません(cargo build -p pysheet --release \
+--features extension-module して、liboffice_sheet.so を office_sheet.so の名で \
+calc の隣に置いてください)"
+                        .to_string()
+                } else {
+                    last
+                });
+            }
+            std::fs::read(&out_x)
+                .map_err(|e| format!("結果が読めません: {e}"))
+                .map(|bytes| (bytes, out))
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok((bytes, out)) => {
+                        match sheet::xlsx::read(std::io::Cursor::new(bytes)) {
+                            Ok((mut book, rep)) => {
+                                for sh in &mut book.sheets {
+                                    recalc(sh);
+                                }
+                                this.checkpoint_book();
+                                this.book = book;
+                                if this.active >= this.book.sheets.len() {
+                                    this.active = 0;
+                                }
+                                this.sheet_ui.clear();
+                                this.dirty = true;
+                                this.sync_input();
+                                this.notes = rep
+                                    .unsupported
+                                    .iter()
+                                    .map(|(n, c)| SharedString::from(format!("{n} × {c}")))
+                                    .collect();
+                                this.status = if out.is_empty() {
+                                    "Python を実行しました(Ctrl+Z で1手で戻せます)".into()
+                                } else {
+                                    let last =
+                                        out.lines().last().unwrap_or_default().to_string();
+                                    format!(
+                                        "Python: {last}(出力{}行。変更は Ctrl+Z で戻せます)",
+                                        out.lines().count()
+                                    )
+                                    .into()
+                                };
+                            }
+                            Err(e) => {
+                                this.status = format!("結果が読めません: {e}").into();
+                            }
+                        }
+                    }
+                    Err(e) => this.status = format!("Python: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// .py ファイルを選んで回す(コードは利用者のファイルにある —
+    /// 文書には決して入らない)。
+    fn run_python_file_dialog(&mut self, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new()
+                .add_filter("Python", &["py"])
+                .pick_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    match std::fs::read_to_string(&p) {
+                        Ok(code) => this.run_python(code, cx),
+                        Err(e) => this.status = format!("読めません: {e}").into(),
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// CSV/TSV を選んで、いまのセルから値として流し込む(裏方 Python)。
     /// 文字コード(CP932 含む)と区切りは Python 側で判定する。
     fn import_text_dialog(&mut self, cx: &mut Context<Self>) {
@@ -2760,7 +2957,7 @@ impl Calc {
         "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
         "scale", "pagebreak", "printtitles", "print-gridlines", "print-headings",
         "data-from-text", "text-column", "goal-seek", "data-external-links",
-        "insshape", "instext", "inssparkline",
+        "insshape", "instext", "inssparkline", "python",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -3032,6 +3229,10 @@ impl Calc {
             "data-from-text" => {
                 self.commit();
                 self.import_text_dialog(cx);
+            }
+            "python" => {
+                self.commit();
+                self.prompt = Some(("py", Editor::new("")));
             }
             "text-column" => {
                 self.commit();
@@ -4408,6 +4609,7 @@ impl Render for Calc {
                 "find" => "検索と置換 — 探す言葉".to_string(),
                 "split-delim" => format!("区切り位置 — {range} を何で割る?(空 Enter = カンマ)"),
                 "shape-text" => "図形の文字(空にして Enter で消す)".to_string(),
+                "py" => "Python — 一行のコード(空 Enter = .py ファイルを選ぶ)".to_string(),
                 "goal-target" => "ゴールシーク — 目標(セル=値。例: D6=800000)".to_string(),
                 "goal-var" => format!(
                     "{} をいくつにするか探します — 変えるセルは?(例: B2)",
@@ -4440,6 +4642,7 @@ impl Render for Calc {
                         "find" => "Enter で次へ / Esc で取消。式の中の文字も探します",
                         "split-delim" => "選択した列の文字を割って、右の列へ並べます(右は上書き)",
                         "shape-text" => "図形を選んで Enter でいつでも書き直せます",
+                        "py" => "b=ブック s=いまのシート。例: s[\"A10\"]=\"合計\" / コードは文書に入りません",
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         _ => "Enter で決定 / Esc で取消",

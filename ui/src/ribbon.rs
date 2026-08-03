@@ -258,6 +258,7 @@ pub const CALC: &[Tab] = &[
         x("グループ解除", "ungroup"),
         x("詳細の表示", "show-details"),
         x("詳細の非表示", "hide-details"),
+        c("python", "Python", "python"),
     ]},
     Tab { name: "表示", cmds: &[
         c("freeze", "ウィンドウ枠の固定", "freeze"),

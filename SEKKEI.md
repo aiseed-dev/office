@@ -213,6 +213,25 @@ Python の探し方: JO_PYTHON → .venv/bin/python → python3。無ければ s
   読めない規則で利用者を閉じ込めるより、通して警告しない方を取る。
   list 以外の型は Report へ(保存で失われる、と言う))
 
+### Python in Calc(済 2026-08-04 発注者提案)
+
+データ > Python。一行のコードか .py ファイルを、**b(ブック)と s(いまの
+シート)を束縛して**回す。裏はいまの表を一時 xlsx へ写し(原本の部品ごと)、
+office_sheet(pysheet)で実行し、保存されたものを読み戻して**1手として**
+適用する(undo は束 — 複数シートに触っても Ctrl+Z 一回で戻る)。
+失敗しても表は無傷(実行は複製の上)。
+
+**マクロとの違い(なぜ禁止方針と両立するか)**:
+コードは**文書に入らない**。板に打つか、利用者の .py にある。だから
+「他人の xlsx を開いたらコードが動く」経路が**構造として存在しない**。
+Python in Excel との違い: あちらはクラウド実行(データが Azure へ出る・
+従量課金)。こちらは**手元で動き、基幹網の外に出ない**。polars・scipy・
+matplotlib など機械にある物が全部使える。
+
+配り方: `cargo build -p pysheet --release --features extension-module` の
+`liboffice_sheet.so` を **office_sheet.so の名で calc の隣に**置く。
+無ければ status がその手順を言う。
+
 ### 分業の橋 — `pysheet`(済 2026-08-03)
 
 `sheet` を Python から呼べるようにした(pyo3, crate は `pysheet`、
