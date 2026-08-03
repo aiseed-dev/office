@@ -60,6 +60,7 @@ READY = {
         "datetime": "datetime", "numpages": "numpages",
         "multilevels": "multilevels", "darkmode": "darkmode",
         "text-from-file": "text-from-file", "add-text": "add-text",
+        "line-numbers": "line-numbers",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

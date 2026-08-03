@@ -207,6 +207,8 @@ struct Writer {
     show_marks: bool,
     /// ルーラー(mm の目盛り)を見せるか
     ruler: bool,
+    /// 行番号を見せるか(見え方だけ。文書は変わらない)
+    line_numbers: bool,
     /// フォントの一覧を出しているか
     font_list: bool,
     /// 大きさの一覧を出しているか
@@ -303,6 +305,7 @@ impl Writer {
             symbols: false,
             show_marks: false,
             ruler: false,
+            line_numbers: false,
             font_list: false,
             size_list: false,
             style_list: false,
@@ -1286,7 +1289,7 @@ impl Writer {
         "pageorient", "pagesize", "pagemargins",
         "edit-header", "edit-footer", "pagenum",
         "parastyle", "toc", "toc-update", "numpages", "datetime",
-        "multilevels", "darkmode", "text-from-file", "add-text",
+        "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1669,6 +1672,8 @@ impl Writer {
             "ruler" => self.ruler = !self.ruler,
             // ダークモード。**紙は白いまま**(画面と紙の一致)。周りだけ暗くする
             "darkmode" => self.dark = !self.dark,
+            // 行番号(見え方だけ)。折り返した行も1行と数える(見た目の行)
+            "line-numbers" => self.line_numbers = !self.line_numbers,
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -2295,6 +2300,20 @@ impl Render for Writer {
                         }
                     }
                 }
+            }
+        }
+
+        // 行番号。本文の(見た目の)行を数え、左の余白に出す
+        if self.line_numbers {
+            let mut n = 0usize;
+            for line in self.page.lines.iter().filter(|l| l.from_body) {
+                n += 1;
+                paper = paper.child(div().absolute()
+                    .left(px((self.pg.left_mm - 9.0).max(1.0) * pxmm))
+                    .top(px(line.y_mm * pxmm - 8.5 * self.zoom))
+                    .text_size(px(8.5 * self.zoom))
+                    .text_color(rgb(0x9DB8C8))
+                    .child(SharedString::from(n.to_string())));
             }
         }
 

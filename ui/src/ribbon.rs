@@ -102,7 +102,7 @@ pub const WRITER: &[Tab] = &[
         c("pageorient", "印刷の向き", "pageorient"),
         c("pagesize", "ページのサイズ", "pagesize"),
         x("列の挿入", "columns"),
-        x("行番号を表示する", "line-numbers"),
+        c("line-numbers", "行番号を表示する", "line-numbers"),
         x("ハイフン設定の変更", "hyphenation"),
         x("透かしを編集する", "watermark"),
         x("ページ色の変更", "pagecolor"),
