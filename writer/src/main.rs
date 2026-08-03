@@ -387,6 +387,61 @@ impl Writer {
     }
 
     /// 文字位置 → 紙の上の座標(キャレットを出すため)
+    /// カーソルを1行、上(または下)へ。**見た目の行**単位 — 折り返した長い
+    /// 段落の中でも1段ずつ動く。横の位置(x)はなるべく保つ。
+    /// 一番上で↑なら文頭、一番下で↓なら文末へ(行の端で止まって動かないより良い)。
+    fn move_line(&mut self, down: bool, extend: bool) {
+        let pos = self.ed.cursor();
+        let want = match self.target {
+            Target::Body => None,
+            Target::Cell { table, row, col } => Some((table, row, col)),
+        };
+        let lines: Vec<&kumihan::Line> = self
+            .page
+            .lines
+            .iter()
+            .filter(|l| match want {
+                None => l.from_body,
+                Some(id) => l.cell == Some(id),
+            })
+            .collect();
+        if lines.is_empty() {
+            return;
+        }
+        // いまの行 = 頭がカーソル以前にある最後の行
+        let cur = lines.iter().rposition(|l| l.byte0 <= pos).unwrap_or(0);
+        let target = if down {
+            if cur + 1 >= lines.len() {
+                let end = self.ed.text().len();
+                self.ed.move_to(end, extend);
+                self.follow_caret();
+                return;
+            }
+            cur + 1
+        } else {
+            if cur == 0 {
+                self.ed.move_to(0, extend);
+                self.follow_caret();
+                return;
+            }
+            cur - 1
+        };
+        // いまの x(紙の座標)を保ったまま、隣の行で一番近い字の境へ
+        let (x_now, _) = self.caret_xy();
+        let ln = lines[target];
+        let base = ln.cells.iter().map(|c| c.off).min().unwrap_or(0);
+        let mut byte = ln.byte_end();
+        for c in &ln.cells {
+            let cx = self.pg.left_mm + c.x_mm;
+            if x_now < cx + c.w_mm / 2.0 {
+                byte = ln.byte0 + (c.off - base);
+                break;
+            }
+        }
+        self.ed.move_to(byte.min(self.ed.text().len()), extend);
+        self.follow_caret();
+    }
+
     fn caret_xy(&self) -> (f32, f32) {
         let cur = self.ed.cursor();
         // 行の頭のバイト位置(byte0)は組版が持っている。
@@ -996,6 +1051,22 @@ impl Writer {
     }
     fn select_all(&mut self, _: &ui::SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.editor().select_all();
+        cx.notify();
+    }
+    fn up(&mut self, _: &ui::Up, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_line(false, false);
+        cx.notify();
+    }
+    fn down(&mut self, _: &ui::Down, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_line(true, false);
+        cx.notify();
+    }
+    fn select_up(&mut self, _: &ui::SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_line(false, true);
+        cx.notify();
+    }
+    fn select_down(&mut self, _: &ui::SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_line(true, true);
         cx.notify();
     }
     fn home(&mut self, _: &ui::Home, _: &mut Window, cx: &mut Context<Self>) {
@@ -1733,6 +1804,10 @@ impl Render for Writer {
             .on_action(cx.listener(Writer::select_left))
             .on_action(cx.listener(Writer::select_right))
             .on_action(cx.listener(Writer::select_all))
+            .on_action(cx.listener(Writer::up))
+            .on_action(cx.listener(Writer::down))
+            .on_action(cx.listener(Writer::select_up))
+            .on_action(cx.listener(Writer::select_down))
             .on_action(cx.listener(Writer::home))
             .on_action(cx.listener(Writer::end))
             .on_action(cx.listener(Writer::enter))
