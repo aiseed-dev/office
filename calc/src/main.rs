@@ -1249,6 +1249,51 @@ impl Calc {
                     if gt { "大きい値" } else { "小さい値" }
                 ).into();
             }
+            "validation" => {
+                let (a, b) = self.sel_rect();
+                let overlap = |v: &sheet::model::Validation| {
+                    let (ra, rb) = v.range;
+                    ra.row <= b.row && rb.row >= a.row && ra.col <= b.col && rb.col >= a.col
+                };
+                if text.is_empty() {
+                    // 空で Enter = この範囲の規則を外す
+                    let n = self.sheet().validations.iter().filter(|v| overlap(v)).count();
+                    if n == 0 {
+                        self.status = "この範囲に入力規則はありません".into();
+                        return;
+                    }
+                    self.checkpoint();
+                    self.book.sheets[self.active].validations.retain(|v| !overlap(v));
+                    self.dirty = true;
+                    self.status = format!("{n} 本の入力規則を外しました").into();
+                    return;
+                }
+                // = 始まりは範囲の参照、それ以外は候補の直書き(, 区切り)
+                let formula = match text.strip_prefix('=') {
+                    Some(r) => r.trim().to_string(),
+                    None => format!("\"{}\"", text.replace('"', "")),
+                };
+                let v = sheet::model::Validation { range: (a, b), formula };
+                let opts = v.options(self.sheet());
+                if opts.is_empty() {
+                    // 読めない規則を作らない(できないものを、できるように見せない)
+                    self.status =
+                        "候補が読めません(例: 甲,乙,丙 または =D2:D5)".into();
+                    return;
+                }
+                self.checkpoint();
+                // 選択に重なる古い規則は入れ替える(重ね掛けは分かりにくい)
+                self.book.sheets[self.active].validations.retain(|v| !overlap(v));
+                self.book.sheets[self.active].validations.push(v);
+                self.dirty = true;
+                self.status = format!(
+                    "{}:{} に入力規則を付けました(候補: {})",
+                    a.a1(),
+                    b.a1(),
+                    opts.join(" / ")
+                )
+                .into();
+            }
             "link" => {
                 let p = self.cursor;
                 if text.is_empty() {
@@ -2043,6 +2088,7 @@ impl Calc {
         "fill-num", "freeze", "show-formulas", "show-gridlines",
         "fn-math", "fn-text", "fn-logical", "fn-recent",
         "sum", "average", "count", "max", "min",
+        "data-validation", "condformat", "defname",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2153,6 +2199,40 @@ impl Calc {
             "clear-filter" => {
                 self.filter = None;
                 self.status = "絞り込みを解きました".into();
+            }
+            // データの入力規則。選んだ範囲に候補を付ける(板で受ける)
+            "data-validation" => {
+                self.commit();
+                // 既にある規則は編集の初期値に(直書きは中身、参照は = 付き)
+                let cur = self
+                    .sheet()
+                    .validation_at(self.cursor)
+                    .map(|v| v.formula.clone())
+                    .unwrap_or_default();
+                let init = if cur.is_empty() {
+                    String::new()
+                } else if let Some(inner) =
+                    cur.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+                {
+                    inner.to_string()
+                } else {
+                    format!("={cur}")
+                };
+                self.prompt = Some(("validation", Editor::new(&init)));
+            }
+            // 条件付き書式。右クリックメニューと同じ一覧を開く(道は1本)
+            "condformat" => {
+                let (x, y) = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x + 16.0, y + 16.0))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                self.menu_at = Some((x, y));
+                self.menu_sub = Some("cond");
+            }
+            // 名前の管理。右クリックの「名前の定義」と同じ板
+            "defname" => {
+                self.commit();
+                self.prompt = Some(("name", Editor::new("")));
             }
             "freeze" => {
                 self.frozen = match self.frozen {
@@ -2997,6 +3077,7 @@ impl Render for Calc {
                 "link" => format!("ハイパーリンク — {}(空にして Enter で外す)", self.cursor.a1()),
                 "cond-gt" => format!("条件付き書式 — {range} で、いくつより大きい値を塗る?"),
                 "cond-lt" => format!("条件付き書式 — {range} で、いくつより小さい値を塗る?"),
+                "validation" => format!("入力規則 — {range} は候補から選ぶ(空にして Enter で解除)"),
                 _ => String::new(),
             };
             // キャレットは | で見せる(writer の検索欄と同じ割り切り)
@@ -3014,7 +3095,11 @@ impl Render for Calc {
                     .text_size(px(13.0)).font_family("Noto Sans JP")
                     .child(SharedString::from(text)))
                 .child(div().mt_1().text_size(px(10.5)).text_color(rgb(0x66707A))
-                    .child("Enter で決定 / Esc で取消。定義した名前は式の中で使えます(=単価*2)"))
+                    .child(match *kind {
+                        "name" => "Enter で決定 / Esc で取消。定義した名前は式の中で使えます(=単価*2)",
+                        "validation" => "候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)。Enter で決定 / Esc で取消",
+                        _ => "Enter で決定 / Esc で取消",
+                    }))
         });
 
         // ---- 書式の小窓(セルをフォーマットする) ----
