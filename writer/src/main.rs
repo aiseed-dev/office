@@ -237,6 +237,9 @@ struct Writer {
     cmt_edit: bool,
     cmt_ed: Editor,
     cmt_para: usize,
+    /// 透かしの板
+    wm_edit: bool,
+    wm_ed: Editor,
     /// 紙面に出すヘッダー・フッターの行(1ページ目の番号で組んだもの)
     header_lines: Vec<kumihan::Line>,
     footer_lines: Vec<kumihan::Line>,
@@ -257,6 +260,8 @@ impl HasEditor for Writer {
             &mut self.hf_ed
         } else if self.cmt_edit {
             &mut self.cmt_ed
+        } else if self.wm_edit {
+            &mut self.wm_ed
         } else {
             &mut self.ed
         }
@@ -268,6 +273,8 @@ impl HasEditor for Writer {
             &self.hf_ed
         } else if self.cmt_edit {
             &self.cmt_ed
+        } else if self.wm_edit {
+            &self.wm_ed
         } else {
             &self.ed
         }
@@ -284,6 +291,13 @@ impl HasEditor for Writer {
             kumihan::set_paras_text(&mut hf.paragraphs, &text, SIZE_PT);
             self.dirty = true;
             self.refresh_hf();
+            return;
+        }
+        if self.wm_edit {
+            // 透かしの板。空にすると外れる
+            let text = self.wm_ed.text().to_string();
+            self.doc.watermark = if text.is_empty() { None } else { Some(text) };
+            self.dirty = true;
             return;
         }
         if self.cmt_edit {
@@ -356,6 +370,8 @@ impl Writer {
             cmt_edit: false,
             cmt_ed: Editor::new(""),
             cmt_para: 0,
+            wm_edit: false,
+            wm_ed: Editor::new(""),
             header_lines: Vec::new(),
             footer_lines: Vec::new(),
             font_name: kumihan::font::for_document(None)
@@ -874,8 +890,11 @@ impl Writer {
         let m = Metrics::new(&self.font_bytes).expect("フォント");
         let (hdr, ftr, pg) = (self.doc.header.clone(), self.doc.footer.clone(), self.pg);
         let total = self.total_pages();
-        // ページの色は紙にも(画面と紙の一致)
-        let bg = self.doc.page_color.as_deref().map(|c| (hex(c, 0), hex(c, 1), hex(c, 2)));
+        // ページの色と透かしは紙にも(画面と紙の一致)
+        let dress = paper::PageDress {
+            bg: self.doc.page_color.as_deref().map(|c| (hex(c, 0), hex(c, 1), hex(c, 2))),
+            watermark: self.doc.watermark.clone(),
+        };
         let r = kumihan::atomic::save(p, |f| {
             paper::to_pdf_with(
                 &self.page,
@@ -885,7 +904,7 @@ impl Writer {
                     height_mm: pg.h_mm,
                     margin_mm: pg.left_mm,
                 },
-                bg,
+                &dress,
                 // ヘッダー・フッター。ページ番号はここで各頁の数字になる
                 |k| {
                     let mut v = kumihan::layout_hf(&hdr, &m, &pg, LINE_MM, k, total, false);
@@ -1331,7 +1350,7 @@ impl Writer {
         "parastyle", "toc", "toc-update", "numpages", "datetime",
         "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
-        "insequation", "instext", "pagecolor", "comment",
+        "insequation", "instext", "pagecolor", "comment", "watermark",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1747,6 +1766,25 @@ impl Writer {
             "ruler" => self.ruler = !self.ruler,
             // ダークモード。**紙は白いまま**(画面と紙の一致)。周りだけ暗くする
             "darkmode" => self.dark = !self.dark,
+            // 透かし。板で文字を打つ(空にして閉じると外れる)。
+            // 文書ではヘッダーの中の VML になり、Word でも斜めの薄い字で出る
+            "watermark" => {
+                if self.wm_edit {
+                    self.wm_edit = false;
+                    return;
+                }
+                if self.doc.header.paragraphs.is_empty() && self.doc.header.part.is_some() {
+                    self.status =
+                        "このヘッダーには表があり、透かしを差し込めません(この版の制限)".into();
+                    return;
+                }
+                self.find_open = false;
+                self.hf_edit = None;
+                self.cmt_edit = false;
+                self.wm_ed = Editor::new(self.doc.watermark.as_deref().unwrap_or(""));
+                self.wm_edit = true;
+                self.status = "透かしを編集中(空にして閉じると外れる。Esc で閉じる)".into();
+            }
             // ページの色。無し → 薄クリーム → 薄青 → 薄緑 → 無し(文書に入り、
             // 保存で残る。紙(PDF)も同じ色に塗る)
             "pagecolor" => {
@@ -1919,6 +1957,12 @@ impl Writer {
         }
         if self.cmt_edit {
             self.cmt_edit = false;
+            self.status = "".into();
+            cx.notify();
+            return;
+        }
+        if self.wm_edit {
+            self.wm_edit = false;
             self.status = "".into();
             cx.notify();
             return;
@@ -2437,6 +2481,26 @@ impl Render for Writer {
             }
         }
 
+        // 透かし。1字ずつ対角線に沿って置く(画面の近似。紙は回転した字)
+        if let Some(text) = self.doc.watermark.as_deref().filter(|t| !t.is_empty()) {
+            let n = text.chars().count().max(1) as f32;
+            let wpt = (520.0 / n).clamp(36.0, 120.0);
+            let em_mm = wpt * 25.4 / 72.0;
+            let k = std::f32::consts::FRAC_1_SQRT_2;
+            let (cx0, cy0) = (self.pg.w_mm / 2.0, self.pg.h_mm / 2.0);
+            for (i, ch) in text.chars().enumerate() {
+                let t = (i as f32 - (n - 1.0) / 2.0) * em_mm;
+                let x = cx0 + t * k - em_mm / 2.0;
+                let y = cy0 - t * k - em_mm / 2.0;
+                paper = paper.child(div().absolute()
+                    .left(px(x * pxmm)).top(px(y * pxmm))
+                    .text_size(px(wpt * 96.0 / 72.0 * self.zoom))
+                    .font_family(self.font_name.clone())
+                    .text_color(gpui::Rgba { r: 0.62, g: 0.62, b: 0.62, a: 0.5 })
+                    .child(SharedString::from(ch.to_string())));
+            }
+        }
+
         // コメントの印。付いた段落の1行目の右余白にオレンジの角を出す
         {
             let mut at = 0usize;
@@ -2820,6 +2884,38 @@ impl Render for Writer {
                         })))))
         };
 
+        // 透かしの板
+        let wm_panel = if !self.wm_edit {
+            None
+        } else {
+            let mut t = self.wm_ed.text().to_string();
+            let cur = self.wm_ed.cursor().min(t.len());
+            t.insert(cur, '|');
+            Some(div().absolute().left(px(16.0)).top(px(8.0)).w(px(360.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("透かし — 空にして閉じると外れる"))
+                .child(div().px_2().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x165E83)).bg(gpui::white())
+                    .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(t)))
+                .child(div().flex().flex_row()
+                    .child(div().flex_1())
+                    .child(div().id("wm-close").px_2p5().py_1().rounded_sm()
+                        .border_1().border_color(rgb(0x165E83)).text_color(rgb(0x165E83))
+                        .text_size(px(11.5)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF2F7)))
+                        .child("閉じる (Esc)")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.wm_edit = false;
+                            this.status = "".into();
+                            cx.notify()
+                        })))))
+        };
+
         // フォントの一覧。この機械にある日本語の書体だけ
         let font_panel = if !self.font_list {
             None
@@ -3119,6 +3215,7 @@ impl Render for Writer {
                     .children(find_panel)
                     .children(hf_panel)
                     .children(cmt_panel)
+                    .children(wm_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)

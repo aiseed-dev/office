@@ -65,7 +65,7 @@ READY = {
         "inschart": "inschart", "smartpicker": "smartpicker",
         "instextart": "instextart", "insequation": "insequation",
         "instext": "instext", "pagecolor": "pagecolor",
-        "comment": "comment",
+        "comment": "comment", "watermark": "watermark",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

@@ -272,6 +272,8 @@ pub struct Document {
     pub footer: HeadFoot,
     /// ページの色 `RRGGBB`(docx の w:background)。画面も紙も同じ色に塗る
     pub page_color: Option<String>,
+    /// 透かし(斜めの薄い字)。docx ではヘッダーの中の VML の図形になる
+    pub watermark: Option<String>,
 }
 
 /// ヘッダー・フッター(1節ぶん)。
@@ -513,7 +515,7 @@ impl Document {
         Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
             blocks: text
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
@@ -1567,7 +1569,7 @@ mod table_layout_tests {
             }],
             ..Default::default()
         };
-        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![] };
+        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![] };
         d.blocks.push(Block::Table(Table {
             col_mm: vec![],
             rows: vec![vec![cell(&"あ".repeat(30)), cell("短い")]],
@@ -1607,7 +1609,7 @@ mod merge_layout_tests {
         let data = font::load(font::for_document(None).unwrap().0).unwrap();
         let m = Metrics::new(&data).unwrap();
         let d = Document {
-            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
             blocks: vec![Block::Table(Table { col_mm: vec![], rows })],
         };
         layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 })
@@ -1684,7 +1686,7 @@ mod gridcol_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
             blocks: vec![Block::Table(Table {
                 col_mm,
                 rows: vec![vec![cell("項目"), cell("値")]],

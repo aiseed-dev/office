@@ -13,6 +13,15 @@ use std::io::{BufWriter, Write};
 use kumihan::{CharFormat, Sheet};
 use printpdf::*;
 
+/// ページ全体の飾り(色・透かし)。文書の設定から来る。
+#[derive(Debug, Clone, Default)]
+pub struct PageDress {
+    /// ページの色(0.0〜1.0 の RGB)
+    pub bg: Option<(f32, f32, f32)>,
+    /// 透かし(斜めの薄い字)
+    pub watermark: Option<String>,
+}
+
 /// 紙の大きさ(mm)。既定は A4 縦。
 #[derive(Debug, Clone, Copy)]
 pub struct Paper {
@@ -38,7 +47,7 @@ pub fn to_pdf<W: Write>(
     paper: Paper,
     out: W,
 ) -> Result<(), String> {
-    to_pdf_with(sheet, font_data, paper, None, |_| Vec::new(), out)
+    to_pdf_with(sheet, font_data, paper, &PageDress::default(), |_| Vec::new(), out)
 }
 
 /// 紙面を PDF にする(ページごとの飾りつき)。
@@ -47,12 +56,12 @@ pub fn to_pdf<W: Write>(
 /// 行の y はページ上端からの mm、x は左余白からの mm
 /// ([`kumihan::layout_hf`] がこの形で返す)。
 /// ページ番号は組む側が字にして寄越すので、ここでは**置くだけ**。
-/// `bg` はページの色(0.0〜1.0 の RGB)。画面と同じ色で紙全体を塗る。
+/// `dress` はページの色と透かし。画面と同じものを紙にも出す。
 pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
     sheet: &Sheet,
     font_data: &[u8],
     paper: Paper,
-    bg: Option<(f32, f32, f32)>,
+    dress: &PageDress,
     page_decor: F,
     out: W,
 ) -> Result<(), String> {
@@ -66,11 +75,32 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
         .add_external_font(std::io::Cursor::new(font_data))
         .map_err(|e| e.to_string())?;
     let l = doc.get_page(page).get_layer(layer);
-    // ページの色。文字より先に敷き、文字の色(fill)は黒へ戻す
+    // ページの色と透かし。文字より先に敷き、文字の色(fill)は黒へ戻す
     let paint_bg = |l: &PdfLayerReference| {
-        if let Some((r, g, b)) = bg {
+        if let Some((r, g, b)) = dress.bg {
             l.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
             l.add_rect(Rect::new(Mm(0.0), Mm(0.0), Mm(paper.width_mm), Mm(paper.height_mm)));
+            l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+        }
+        if let Some(text) = dress.watermark.as_deref().filter(|t| !t.is_empty()) {
+            // 紙の対角線に沿った薄い字。大きさは文字数から(紙に収まる程度)
+            let n = text.chars().count().max(1) as f32;
+            let pt = (520.0 / n).clamp(36.0, 120.0);
+            let em_mm = pt * 25.4 / 72.0;
+            let w_mm = em_mm * n; // 全角=1em の見積り
+            let k = std::f32::consts::FRAC_1_SQRT_2; // cos45°
+            let (cx, cy) = (paper.width_mm / 2.0, paper.height_mm / 2.0);
+            let (x0, y0) = (cx - w_mm / 2.0 * k, cy - w_mm / 2.0 * k - em_mm * 0.35);
+            l.set_fill_color(Color::Rgb(Rgb::new(0.85, 0.85, 0.85, None)));
+            l.begin_text_section();
+            l.set_font(&font, pt);
+            l.set_text_matrix(TextMatrix::TranslateRotate(
+                Mm(x0).into_pt(),
+                Mm(y0).into_pt(),
+                45.0,
+            ));
+            l.write_text(text, &font);
+            l.end_text_section();
             l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
         }
     };
@@ -387,7 +417,7 @@ mod hf_tests {
             part: None,
         };
         let mut buf = Vec::new();
-        to_pdf_with(&s, &data, Paper::default(), None,
+        to_pdf_with(&s, &data, Paper::default(), &PageDress::default(),
             |k| layout_hf(&hf, &m, &pg, 6.4, k, 9, true), &mut buf).unwrap();
         assert_eq!(&buf[..5], b"%PDF-");
         // ページ数は本文で決まる(飾りで増えない)

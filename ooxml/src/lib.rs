@@ -153,6 +153,30 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
                 }
             }
         }
+        // 透かし(ヘッダーの中の VML)。原文控えからモデルへ引き上げる
+        // (保存はモデルから作り直すので、控えは外す — 二重になるため)
+        for p in &mut doc.header.paragraphs {
+            let mut i = 0;
+            while i < p.anchors.len() {
+                let a = &p.anchors[i];
+                if a.contains("v:textpath") {
+                    if let Some(j) = a.find("string=\"") {
+                        let s0 = j + 8;
+                        if let Some(e) = a[s0..].find('"') {
+                            let raw = &a[s0..s0 + e];
+                            doc.watermark = Some(raw
+                                .replace("&quot;", "\"")
+                                .replace("&lt;", "<")
+                                .replace("&gt;", ">")
+                                .replace("&amp;", "&"));
+                            p.anchors.remove(i);
+                            continue;
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
     }
     // 文書の既定書体(styles.xml の docDefaults)。読まないと
     // 明朝の書類がこちらの既定(ゴシック)で表示される
@@ -402,6 +426,24 @@ fn comments_xml(cmts: &[Comment]) -> String {
     }
     out.push_str("</w:comments>");
     out
+}
+
+/// 透かしの図形(VML)。Word が透かしに使う形(WordArt t136)に合わせる。
+/// shapetype(字形の定義)ごと1つの w:pict に入れる。
+fn watermark_vml(text: &str) -> String {
+    format!(
+        concat!(
+            r#"<w:pict><v:shapetype id="_x0000_t136" coordsize="21600,21600" o:spt="136" adj="10800" path="m@7,l@8,m@5,21600l@6,21600e">"#,
+            r#"<v:formulas><v:f eqn="sum #0 0 10800"/><v:f eqn="prod #0 2 1"/><v:f eqn="sum 21600 0 @1"/><v:f eqn="sum 0 0 @2"/><v:f eqn="sum 21600 0 @3"/><v:f eqn="if @0 @3 0"/><v:f eqn="if @0 21600 @1"/><v:f eqn="if @0 0 @2"/><v:f eqn="if @0 @4 21600"/><v:f eqn="mid @5 @6"/><v:f eqn="mid @8 @5"/><v:f eqn="mid @7 @8"/><v:f eqn="mid @6 @7"/><v:f eqn="sum @6 0 @5"/></v:formulas>"#,
+            r#"<v:path textpathok="t" o:connecttype="custom" o:connectlocs="@9,0;@10,10800;@11,21600;@12,10800" o:connectangles="270,180,90,0"/>"#,
+            r#"<v:textpath on="t" fitshape="t"/>"#,
+            r##"<v:handles><v:h position="#0,bottommost" xrange="6629,14971"/></v:handles>"##,
+            r#"<o:lock v:ext="edit" text="t" shapetype="t"/></v:shapetype>"#,
+            r##"<v:shape id="jowatermark" type="#_x0000_t136" style="position:absolute;margin-left:0;margin-top:0;width:460pt;height:230pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin" o:allowincell="f" fillcolor="#d8d8d8" stroked="f">"##,
+            r#"<v:fill opacity=".5"/><v:textpath style="font-family:&quot;游明朝&quot;" string="{}"/></v:shape></w:pict>"#
+        ),
+        esc(text)
+    )
 }
 
 /// `w:pStyle` の val を段落の役割へ。見出しと目次の行だけを見る
@@ -1349,7 +1391,12 @@ fn write_document_full(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u8>>>,
     {
         let cur = sect.as_deref().unwrap_or("");
         let mut refs = String::new();
-        if !doc.header.paragraphs.is_empty() && hf_ref(cur, "headerReference").is_none() {
+        // 透かしはヘッダーに入るので、透かしがあればヘッダーの参照も要る
+        // (編集できないヘッダー(表入り)には差し込まないので、そこは除く)
+        let need_hdr = !doc.header.paragraphs.is_empty()
+            || (doc.watermark.as_deref().is_some_and(|t| !t.is_empty())
+                && !(doc.header.paragraphs.is_empty() && doc.header.part.is_some()));
+        if need_hdr && hf_ref(cur, "headerReference").is_none() {
             refs.push_str(r#"<w:headerReference w:type="default" r:id="rIdJOhdr"/>"#);
         }
         if !doc.footer.paragraphs.is_empty() && hf_ref(cur, "footerReference").is_none() {
@@ -1416,10 +1463,24 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         })
         .collect();
     // ヘッダー・フッター。モデルに持っているもの(編集できたもの)だけ作り直す。
-    // paragraphs が空 = 触っていない/持てなかった部品 → 原本のまま持ち越す
-    let hdr: Option<(String, String)> = (!doc.header.paragraphs.is_empty()).then(|| (
-        doc.header.part.clone().unwrap_or_else(|| "word/johdr1.xml".to_string()),
-        hf_xml(&doc.header, false),
+    // paragraphs が空 = 触っていない/持てなかった部品 → 原本のまま持ち越す。
+    // 透かしはヘッダーの1段落目に VML として差し込む(Word の作法)
+    let mut hdr_src = doc.header.clone();
+    if let Some(text) = doc.watermark.as_deref().filter(|t| !t.is_empty()) {
+        if hdr_src.paragraphs.is_empty() && hdr_src.part.is_some() {
+            // 編集できないヘッダー(表入り)には差し込まない(壊すより見送る)
+        } else {
+            if hdr_src.paragraphs.is_empty() {
+                hdr_src.paragraphs.push(Paragraph::default());
+            }
+            if let Some(wrapped) = wrap_with_ns(&watermark_vml(text), &Default::default()) {
+                hdr_src.paragraphs[0].anchors.push(wrapped);
+            }
+        }
+    }
+    let hdr: Option<(String, String)> = (!hdr_src.paragraphs.is_empty()).then(|| (
+        hdr_src.part.clone().unwrap_or_else(|| "word/johdr1.xml".to_string()),
+        hf_xml(&hdr_src, false),
     ));
     let ftr: Option<(String, String)> = (!doc.footer.paragraphs.is_empty()).then(|| (
         doc.footer.part.clone().unwrap_or_else(|| "word/joftr1.xml".to_string()),
@@ -1644,7 +1705,7 @@ mod tests {
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
-        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
+        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
     }
     fn round_trip(d: &Document) -> (Document, Report) {
         let mut buf = Cursor::new(Vec::new());
@@ -1674,7 +1735,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -1707,7 +1768,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -1723,7 +1784,7 @@ mod tests {
 
     #[test]
     fn 表が往復する() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![
             Block::Para(para("(様式3) 会社概要")),
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![cell("会　社　名"), cell("日本フネン株式会社")],
@@ -1746,7 +1807,7 @@ mod tests {
 
     #[test]
     fn 表と本文の順序が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![
             Block::Para(para("前")),
             Block::Table(Table { col_mm: vec![], rows: vec![vec![cell("表1")]] }),
             Block::Para(para("中")),
@@ -1762,7 +1823,7 @@ mod tests {
     #[test]
     fn 空セルも列として残る() {
         // 事務様式は「記入欄が空の表」が本体。空セルが消えると様式が壊れる
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
             vec![cell("氏名"), Cellbox::default()],
             vec![cell("所属"), Cellbox::default()],
         ]})]};
@@ -1802,7 +1863,7 @@ mod tests {
         vstart.v_merge = kumihan::VMerge::Start;
         let mut vcont = Cellbox::default();
         vcont.v_merge = kumihan::VMerge::Continue;
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![head],
                 vec![vstart, cell("本社")],
@@ -1859,7 +1920,7 @@ mod font_tests {
         let doc = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
             blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(),
                 align: Default::default(),
                 anchors: Vec::new(),
@@ -1915,7 +1976,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
@@ -1930,7 +1991,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
@@ -1944,7 +2005,7 @@ mod fmt_tests {
             let d = Document {
                 font: None,
                 page: None,
-                sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+                sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
                 blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(),
                     align: a,
                     anchors: Vec::new(),
@@ -2009,7 +2070,7 @@ mod para_tests {
     }
 
     fn roundtrip(p: Paragraph) -> Paragraph {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(p)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(p)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         crate::read(std::io::Cursor::new(&buf)).unwrap().0.paragraphs().next().unwrap().clone()
@@ -2039,7 +2100,7 @@ mod para_tests {
 
     #[test]
     fn 既定の段落には余計な指定を書かない() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(&buf)).unwrap();
@@ -2077,7 +2138,7 @@ mod break_round {
         para.page_break_before = true;
         para.runs.push(Run {
             text: "二頁目".into(), size_pt: 10.5, font: None, fmt: Default::default() });
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(para)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(para)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
@@ -2231,7 +2292,7 @@ mod vertalign_tests {
         Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
             blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(),
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
@@ -2313,7 +2374,7 @@ mod shade_tests {
         };
         p.shade = Some("FFF2CC".into());
         p.boxed = true;
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");
@@ -2323,6 +2384,47 @@ mod shade_tests {
         let p = back.paragraphs().next().unwrap();
         assert_eq!(p.shade.as_deref(), Some("FFF2CC"), "背景色が往復しない");
         assert!(p.boxed, "囲み枠が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::*;
+    use kumihan::Document;
+
+    #[test]
+    fn 透かしが往復し二重にならない() {
+        let mut d = Document::plain("本文", 10.5);
+        d.watermark = Some("社外秘".into());
+        let mut first = Vec::new();
+        write(&d, Cursor::new(&mut first)).expect("書けない");
+        let (back, _) = read(Cursor::new(&first)).expect("読めない");
+        assert_eq!(back.watermark.as_deref(), Some("社外秘"), "透かしが往復しない");
+        // もう一度保存しても、図形は1つのまま
+        let mut second = Vec::new();
+        write_with(&back, Some(Cursor::new(&first)), Cursor::new(&mut second)).unwrap();
+        let mut z = zip::ZipArchive::new(Cursor::new(&second)).unwrap();
+        let mut hx = String::new();
+        z.by_name("word/johdr1.xml").unwrap().read_to_string(&mut hx).unwrap();
+        assert_eq!(hx.matches("v:textpath").count(), 2,
+            "図形が二重(shapetype+shape で2つが正: {})",
+            hx.matches("v:textpath").count());
+        let (back2, _) = read(Cursor::new(&second)).unwrap();
+        assert_eq!(back2.watermark.as_deref(), Some("社外秘"));
+    }
+
+    #[test]
+    fn 透かしを消すと図形も消える() {
+        let mut d = Document::plain("本文", 10.5);
+        d.watermark = Some("下書き".into());
+        let mut first = Vec::new();
+        write(&d, Cursor::new(&mut first)).unwrap();
+        let (mut back, _) = read(Cursor::new(&first)).unwrap();
+        back.watermark = None;
+        let mut second = Vec::new();
+        write_with(&back, Some(Cursor::new(&first)), Cursor::new(&mut second)).unwrap();
+        let (back2, _) = read(Cursor::new(&second)).unwrap();
+        assert_eq!(back2.watermark, None, "消したのに残っている");
     }
 }
 
@@ -2734,7 +2836,7 @@ mod image_insert_tests {
             w_mm: 50.0,
             h_mm: 30.0,
         });
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");
