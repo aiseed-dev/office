@@ -69,6 +69,7 @@ READY = {
         "bookmarks": "bookmarks", "caption": "caption",
         "tof": "tof", "tof-update": "tof-update",
         "columns": "columns",
+        "pen": "pen", "highlighter": "highlighter", "eraser": "eraser",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

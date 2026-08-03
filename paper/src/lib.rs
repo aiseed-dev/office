@@ -20,6 +20,8 @@ pub struct PageDress {
     pub bg: Option<(f32, f32, f32)>,
     /// 透かし(斜めの薄い字)
     pub watermark: Option<String>,
+    /// 手描きの線(ページ固定)。蛍光ペンは文字の下、ペンは上に描く
+    pub ink: Vec<kumihan::Stroke>,
 }
 
 /// 紙の大きさ(mm)。既定は A4 縦。
@@ -76,7 +78,27 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
         .map_err(|e| e.to_string())?;
     let l = doc.get_page(page).get_layer(layer);
     // ページの色と透かし。文字より先に敷き、文字の色(fill)は黒へ戻す
-    let paint_bg = |l: &PdfLayerReference| {
+    let ink_polyline = |l: &PdfLayerReference, st: &kumihan::Stroke| {
+        if st.points.len() < 2 {
+            return;
+        }
+        let pts: Vec<(Point, bool)> = st
+            .points
+            .iter()
+            .map(|(x, y)| (Point::new(Mm(*x), Mm(paper.height_mm - *y)), false))
+            .collect();
+        let (w_pt, (r, g, b)) = if st.highlighter {
+            (3.0 * 72.0 / 25.4, (1.0, 0.92, 0.45))
+        } else {
+            (0.45 * 72.0 / 25.4, (0.11, 0.23, 0.32))
+        };
+        l.set_outline_color(Color::Rgb(Rgb::new(r, g, b, None)));
+        l.set_outline_thickness(w_pt);
+        l.add_line(Line { points: pts, is_closed: false });
+        l.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+        l.set_outline_thickness(1.0);
+    };
+    let paint_bg = |l: &PdfLayerReference, page: usize| {
         if let Some((r, g, b)) = dress.bg {
             l.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
             l.add_rect(Rect::new(Mm(0.0), Mm(0.0), Mm(paper.width_mm), Mm(paper.height_mm)));
@@ -103,8 +125,12 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
             l.end_text_section();
             l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
         }
+        // 蛍光ペンは文字より先(下)に敷く
+        for st in dress.ink.iter().filter(|s| s.highlighter && s.page == page) {
+            ink_polyline(l, st);
+        }
     };
-    paint_bg(&l);
+    paint_bg(&l, 0);
     // ページごとの描き先を控えておく(罫線を後から同じ頁割りで引くため)
     let mut layers: Vec<PdfLayerReference> = vec![l.clone()];
 
@@ -123,7 +149,7 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
                 format!("本文 {}", layers.len() + 1),
             );
             let nl = doc.get_page(np).get_layer(nl);
-            paint_bg(&nl);
+            paint_bg(&nl, layers.len());
             layers.push(nl);
         }
         let l = &layers[k - 1];
@@ -217,6 +243,12 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
                 ],
                 is_closed: false,
             });
+        }
+    }
+    // ペン(手描きの線)は文字の上に描く
+    for (k, l) in layers.iter().enumerate() {
+        for st in dress.ink.iter().filter(|s| !s.highlighter && s.page == k) {
+            ink_polyline(l, st);
         }
     }
     // ページごとの飾り(ヘッダー・フッター)。y はページ上端からの絶対位置

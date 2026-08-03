@@ -93,9 +93,9 @@ pub const WRITER: &[Tab] = &[
         x("コンテンツコントロールの挿入", "controls"),
     ]},
     Tab { name: "描画", cmds: &[
-        x("ペン", "pen"),
-        x("蛍光ペン", "highlighter"),
-        x("消しゴム", "eraser"),
+        c("pen", "ペン", "pen"),
+        c("highlighter", "蛍光ペン", "highlighter"),
+        c("eraser", "消しゴム", "eraser"),
     ]},
     Tab { name: "レイアウト", cmds: &[
         c("pagemargins", "余白", "pagemargins"),

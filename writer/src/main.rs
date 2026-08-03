@@ -243,6 +243,14 @@ struct Writer {
     /// しおりの板(名前の入力欄つきの一覧)
     bm_open: bool,
     bm_ed: Editor,
+    /// 描画の道具(0=ペン 1=蛍光ペン 2=消しゴム)。Some の間はマウスが筆
+    tool: Option<u8>,
+    /// 書きかけの筆
+    ink_cur: Option<kumihan::Stroke>,
+    /// 筆の取り消しの控え(1操作 = 1枚)
+    ink_undo: Vec<Vec<kumihan::Stroke>>,
+    /// ページの繰り上げ量(紙と同じ折り方)。筆のページ⇔巻物の変換に使う
+    page_offsets: Vec<f32>,
     /// 紙面に出すヘッダー・フッターの行(1ページ目の番号で組んだもの)
     header_lines: Vec<kumihan::Line>,
     footer_lines: Vec<kumihan::Line>,
@@ -385,6 +393,10 @@ impl Writer {
             wm_ed: Editor::new(""),
             bm_open: false,
             bm_ed: Editor::new(""),
+            tool: None,
+            ink_cur: None,
+            ink_undo: Vec::new(),
+            page_offsets: vec![0.0],
             header_lines: Vec::new(),
             footer_lines: Vec::new(),
             font_name: kumihan::font::for_document(None)
@@ -480,17 +492,131 @@ impl Writer {
 
     /// いまの紙面の総頁(紙と同じ折り方で数える)。
     fn total_pages(&self) -> usize {
-        paper::paginate(&self.page, paper::Paper {
+        self.page_offsets.len().max(1)
+    }
+
+    /// 巻物の y → (ページ, ページの中の y)。筆はページに固定する。
+    fn page_of_roll(&self, y: f32) -> (usize, f32) {
+        let p = self.page_offsets.iter().rposition(|o| y >= *o - 0.01).unwrap_or(0);
+        (p, y - self.page_offsets.get(p).copied().unwrap_or(0.0))
+    }
+
+    // ---- 描画(ペン・蛍光ペン・消しゴム) ----
+
+    fn ink_begin(&mut self, x: f32, y_roll: f32) {
+        let Some(tool) = self.tool else { return };
+        if tool == 2 {
+            self.ink_erase(x, y_roll);
+            return;
+        }
+        let (page, y) = self.page_of_roll(y_roll);
+        self.ink_cur = Some(kumihan::Stroke {
+            page,
+            highlighter: tool == 1,
+            points: vec![(x, y)],
+        });
+    }
+
+    fn ink_move(&mut self, x: f32, y_roll: f32) {
+        if self.tool == Some(2) {
+            self.ink_erase(x, y_roll);
+            return;
+        }
+        let oy = self
+            .ink_cur
+            .as_ref()
+            .and_then(|st| self.page_offsets.get(st.page))
+            .copied()
+            .unwrap_or(0.0);
+        let Some(st) = self.ink_cur.as_mut() else { return };
+        let y = y_roll - oy;
+        if let Some((lx, ly)) = st.points.last() {
+            if (x - lx).abs() + (y - ly).abs() < 0.4 {
+                return; // 細かすぎる点は間引く
+            }
+        }
+        st.points.push((x, y));
+    }
+
+    fn ink_end(&mut self) {
+        if let Some(st) = self.ink_cur.take() {
+            if st.points.len() >= 2 {
+                self.ink_undo.push(self.doc.ink.clone());
+                self.doc.ink.push(st);
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// 消しゴム。なぞった近く(3mm)に点を持つ筆を丸ごと消す。
+    fn ink_erase(&mut self, x: f32, y_roll: f32) {
+        let (page, y) = self.page_of_roll(y_roll);
+        let near = |st: &kumihan::Stroke| {
+            st.page == page
+                && st.points.iter().any(|(sx, sy)| (sx - x).abs() < 3.0 && (sy - y).abs() < 3.0)
+        };
+        if self.doc.ink.iter().any(near) {
+            self.ink_undo.push(self.doc.ink.clone());
+            self.doc.ink.retain(|st| !near(st));
+            self.dirty = true;
+        }
+    }
+
+    /// 保存用の写し。筆(ペン)を、そのページに載っている段落の控えへ
+    /// 図形(自由曲線)として差し込む。モデル本体は触らない —
+    /// 保存のたびに増えないように、写しに差す。
+    fn doc_for_save(&self) -> Document {
+        let mut doc = self.doc.clone();
+        if doc.ink.is_empty() {
+            return doc;
+        }
+        let (pages, _) = paper::paginate(&self.page, paper::Paper {
             width_mm: self.pg.w_mm,
             height_mm: self.pg.h_mm,
             margin_mm: self.pg.left_mm,
-        }).1.len()
+        });
+        // ページ → そのページに最初に載る段落(通し番号)
+        let mut starts: Vec<usize> = Vec::new();
+        let mut at = 0usize;
+        for p in doc.paragraphs() {
+            starts.push(at);
+            at += p.runs.iter().map(|r| r.text.len()).sum::<usize>() + 1;
+        }
+        let mut page_para: std::collections::BTreeMap<usize, usize> = Default::default();
+        for (l, pg) in self.page.lines.iter().zip(&pages) {
+            if !l.from_body {
+                continue;
+            }
+            let pi = starts.iter().rposition(|s| *s <= l.byte0).unwrap_or(0);
+            page_para.entry(pg - 1).or_insert(pi);
+        }
+        let para_block_idx: Vec<usize> = doc
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| matches!(b, kumihan::Block::Para(_)))
+            .map(|(i, _)| i)
+            .collect();
+        let ink = std::mem::take(&mut doc.ink);
+        for (i, st) in ink.iter().enumerate() {
+            let pi = page_para.get(&st.page).copied().unwrap_or(0);
+            let Some(bi) = para_block_idx.get(pi).copied() else { continue };
+            if let Some(kumihan::Block::Para(p)) = doc.blocks.get_mut(bi) {
+                p.anchors.push(ooxml::ink_anchor_run(st, 9001 + i));
+            }
+        }
+        doc
     }
 
     /// 紙面に出すヘッダー・フッターの行を組み直す(番号は1ページ目のもの。
     /// 各ページの本当の番号は PDF で入る)。
     fn refresh_hf(&mut self) {
         let m = Metrics::new(&self.font_bytes).expect("フォント");
+        self.page_offsets = paper::paginate(&self.page, paper::Paper {
+            width_mm: self.pg.w_mm,
+            height_mm: self.pg.h_mm,
+            margin_mm: self.pg.left_mm,
+        }).1;
         let total = self.total_pages();
         self.header_lines =
             kumihan::layout_hf(&self.doc.header, &m, &self.pg, LINE_MM, 1, total, false);
@@ -612,8 +738,9 @@ impl Writer {
             .as_ref()
             .and_then(|old| std::fs::read(old).ok())
             .map(std::io::Cursor::new);
+        let doc_out = self.doc_for_save();
         match kumihan::atomic::save(&p, |f| {
-            ooxml::write_with(&self.doc, original, std::io::BufWriter::new(f))
+            ooxml::write_with(&doc_out, original, std::io::BufWriter::new(f))
         }) {
             Ok(_) => {
                 let caveat = if self.notes.is_empty() {
@@ -911,6 +1038,7 @@ impl Writer {
         let dress = paper::PageDress {
             bg: self.doc.page_color.as_deref().map(|c| (hex(c, 0), hex(c, 1), hex(c, 2))),
             watermark: self.doc.watermark.clone(),
+            ink: self.doc.ink.clone(),
         };
         let r = kumihan::atomic::save(p, |f| {
             paper::to_pdf_with(
@@ -1513,6 +1641,7 @@ impl Writer {
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
         "caption", "tof", "tof-update", "columns",
+        "pen", "highlighter", "eraser",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1938,6 +2067,19 @@ impl Writer {
             "ruler" => self.ruler = !self.ruler,
             // ダークモード。**紙は白いまま**(画面と紙の一致)。周りだけ暗くする
             "darkmode" => self.dark = !self.dark,
+            // 描画。ペン・蛍光ペン・消しゴム(もう一度押すか Esc で戻る)。
+            // 筆は文書に入り、docx では自由曲線の図形になる(ページに固定)
+            "pen" | "highlighter" | "eraser" => {
+                let t = match id { "pen" => 0u8, "highlighter" => 1, _ => 2 };
+                self.tool = if self.tool == Some(t) { None } else { Some(t) };
+                self.ink_cur = None;
+                self.status = match self.tool {
+                    Some(0) => "ペン: 紙の上をドラッグで描く(もう一度押すか Esc で戻る)".into(),
+                    Some(1) => "蛍光ペン: ドラッグで引く(文字の下に薄く入る)".into(),
+                    Some(2) => "消しゴム: 線をなぞると1筆ずつ消える".into(),
+                    _ => "文字の編集に戻りました".into(),
+                };
+            }
             // 図表番号。カーソルの段落の下に「図 N」を入れる
             // (画像は段落の下に付くので、その下=図の下になる)。
             // 番号は既にある「図 n」の最大 + 1
@@ -2168,7 +2310,13 @@ impl Writer {
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        // メニュー → 検索の板 → ヘッダーの板 → 一覧の板、の順で閉じる
+        // 道具 → メニュー → 検索の板 → ヘッダーの板 → 一覧の板、の順で戻す
+        if self.tool.take().is_some() {
+            self.ink_cur = None;
+            self.status = "文字の編集に戻りました".into();
+            cx.notify();
+            return;
+        }
         if self.menu_at.take().is_some() {
             cx.notify();
             return;
@@ -2324,6 +2472,15 @@ impl Writer {
         cx.notify();
     }
     fn undo(&mut self, _: &ui::Undo, _: &mut Window, cx: &mut Context<Self>) {
+        // 道具(ペン)の間は筆の一手を戻す
+        if self.tool.is_some() {
+            if let Some(prev) = self.ink_undo.pop() {
+                self.doc.ink = prev;
+                self.dirty = true;
+            }
+            cx.notify();
+            return;
+        }
         // 板(ヘッダー等)を編集中なら、その板の一手を戻す
         if self.editor().undo() {
             self.on_edited();
@@ -2966,6 +3123,63 @@ impl Render for Writer {
                 .top(px(cy_mm * pxmm - sz * 0.88))
                 .w(px(1.5)).h(px(sz * 1.15))
                 .bg(rgb(0x165E83)));
+        }
+
+        // 手描きの線。gpui の Path は「塗り」なので、折れ線を
+        // 幅のある四角形の連なりとして塗る(画面も紙も同じ座標)
+        {
+            let mut strokes: Vec<(bool, Vec<(f32, f32)>)> = Vec::new();
+            for st in self.doc.ink.iter().chain(self.ink_cur.iter()) {
+                let oy = self
+                    .page_offsets
+                    .get(st.page)
+                    .copied()
+                    .unwrap_or(st.page as f32 * self.pg.h_mm);
+                strokes.push((
+                    st.highlighter,
+                    st.points.iter().map(|(x, y)| (x * pxmm, (y + oy) * pxmm)).collect(),
+                ));
+            }
+            if !strokes.is_empty() {
+                let pxmm2 = pxmm;
+                paper = paper.child(
+                    gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+                        for (hl, pts) in &strokes {
+                            let w_px = if *hl { 3.0 } else { 0.45 } * pxmm2;
+                            let color = if *hl {
+                                gpui::Rgba { r: 1.0, g: 0.9, b: 0.35, a: 0.35 }
+                            } else {
+                                gpui::Rgba { r: 0.11, g: 0.23, b: 0.32, a: 1.0 }
+                            };
+                            let o = bounds.origin;
+                            let mut path: Option<gpui::Path<gpui::Pixels>> = None;
+                            for seg in pts.windows(2) {
+                                let (x1, y1) = seg[0];
+                                let (x2, y2) = seg[1];
+                                let (dx, dy) = (x2 - x1, y2 - y1);
+                                let len = (dx * dx + dy * dy).sqrt().max(0.01);
+                                let (nx, ny) = (-dy / len * w_px / 2.0, dx / len * w_px / 2.0);
+                                let a = gpui::point(o.x + px(x1 + nx), o.y + px(y1 + ny));
+                                let b = gpui::point(o.x + px(x2 + nx), o.y + px(y2 + ny));
+                                let c = gpui::point(o.x + px(x2 - nx), o.y + px(y2 - ny));
+                                let d = gpui::point(o.x + px(x1 - nx), o.y + px(y1 - ny));
+                                let p = path.get_or_insert_with(|| gpui::Path::new(a));
+                                p.move_to(a);
+                                p.line_to(b);
+                                p.line_to(c);
+                                p.line_to(d);
+                            }
+                            if let Some(p) = path {
+                                window.paint_path(p, color);
+                            }
+                        }
+                    })
+                    .absolute()
+                    .left(px(0.0))
+                    .top(px(0.0))
+                    .size_full(),
+                );
+            }
         }
 
         // 置換の板
@@ -3629,6 +3843,15 @@ impl gpui::Element for InputSink {
             let shift = e.modifiers.shift;
             view.update(cx, |w, cx| {
                 w.menu_at = None;
+                if w.tool.is_some() {
+                    // 道具の間、マウスは筆になる(文字は選ばない)
+                    let pxmm = PX_PER_MM * w.zoom;
+                    let x = (f32::from(rel.x) - 28.0) / pxmm;
+                    let y = (f32::from(rel.y) - 14.0) / pxmm + w.scroll_mm;
+                    w.ink_begin(x, y);
+                    cx.notify();
+                    return;
+                }
                 match clicks {
                     // 二度押しは語、三度押しは行を選ぶ
                     2 => {
@@ -3659,6 +3882,14 @@ impl gpui::Element for InputSink {
             }
             let rel = e.position - bounds.origin;
             view.update(cx, |w, cx| {
+                if w.tool.is_some() {
+                    let pxmm = PX_PER_MM * w.zoom;
+                    let x = (f32::from(rel.x) - 28.0) / pxmm;
+                    let y = (f32::from(rel.y) - 14.0) / pxmm + w.scroll_mm;
+                    w.ink_move(x, y);
+                    cx.notify();
+                    return;
+                }
                 if w.drag_select {
                     w.click_at(f32::from(rel.x), f32::from(rel.y), true);
                     cx.notify();
@@ -3670,7 +3901,11 @@ impl gpui::Element for InputSink {
             if phase != gpui::DispatchPhase::Bubble || e.button != gpui::MouseButton::Left {
                 return;
             }
-            view.update(cx, |w, _| {
+            view.update(cx, |w, cx| {
+                if w.tool.is_some() {
+                    w.ink_end();
+                    cx.notify();
+                }
                 w.drag_select = false;
             });
         });

@@ -14,7 +14,7 @@
 use std::io::{Cursor, Read, Seek, Write};
 
 use kumihan::{Align, Block, Cellbox, CharFormat, Comment, Document, ListKind, ParaStyle,
-              Paragraph, Run, Table, VMerge, PAGES_MARK, PAGE_MARK};
+              Paragraph, Run, Stroke, Table, VMerge, PAGES_MARK, PAGE_MARK};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
@@ -121,6 +121,8 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
     }
     let cmap = parse_comments(&cxml);
     let (mut doc, mut rep) = parse_document_full(&xml, &media, &cmap);
+    // このアプリのペン(joink)は原文控えから筆へ読み戻す
+    extract_ink(&mut doc);
     // ヘッダー・フッター(全ページ同じもの = type="default")を部品から読む。
     // 表など、まだ持てないものが入っていたら**編集の対象にしない** —
     // paragraphs を空のまま残せば、保存で原文の部品がそのまま生きる
@@ -456,6 +458,142 @@ fn watermark_vml(text: &str) -> String {
         ),
         esc(text)
     )
+}
+
+/// mm → EMU(914400/インチ)
+fn emu(mm: f32) -> i64 {
+    (mm * 36000.0).round() as i64
+}
+
+/// 手描きの1筆を、ページ固定の自由曲線(DrawingML)にする。
+/// 名前 `joink…p{page}` が読み戻しの鍵(ページ番号も名前で持つ —
+/// XML の座標はページの中の位置しか持てないため)。
+/// アプリ(writer)が、そのページにある段落の anchors に差し込む。
+pub fn ink_anchor_xml(st: &Stroke, id: usize) -> String {
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for (x, y) in &st.points {
+        x0 = x0.min(*x);
+        y0 = y0.min(*y);
+        x1 = x1.max(*x);
+        y1 = y1.max(*y);
+    }
+    let (w, h) = ((x1 - x0).max(0.5), (y1 - y0).max(0.5));
+    let mut path = String::new();
+    for (i, (x, y)) in st.points.iter().enumerate() {
+        let tag = if i == 0 { "moveTo" } else { "lnTo" };
+        path.push_str(&format!(
+            r#"<a:{tag}><a:pt x="{}" y="{}"/></a:{tag}>"#,
+            emu(x - x0),
+            emu(y - y0)
+        ));
+    }
+    // 蛍光ペンは太く・薄く・文字の下(behindDoc)。ペンは細く・濃く・上
+    let (line_w, color, alpha, behind) = if st.highlighter {
+        (emu(3.0), "FFE45C", r#"<a:alpha val="45000"/>"#, "1")
+    } else {
+        (emu(0.45), "1B3A52", "", "0")
+    };
+    format!(
+        concat!(
+            r#"<w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" "#,
+            r#"relativeHeight="251658240" behindDoc="{behind}" locked="0" layoutInCell="1" allowOverlap="1">"#,
+            r#"<wp:simplePos x="0" y="0"/>"#,
+            r#"<wp:positionH relativeFrom="page"><wp:posOffset>{px}</wp:posOffset></wp:positionH>"#,
+            r#"<wp:positionV relativeFrom="page"><wp:posOffset>{py}</wp:posOffset></wp:positionV>"#,
+            r#"<wp:extent cx="{cx}" cy="{cy}"/><wp:wrapNone/>"#,
+            r#"<wp:docPr id="{id}" name="joink{id}p{page}"/>"#,
+            r#"<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">"#,
+            r#"<wps:wsp><wps:cNvSpPr/><wps:spPr>"#,
+            r#"<a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>"#,
+            r#"<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>"#,
+            r#"<a:rect l="0" t="0" r="{cx}" b="{cy}"/>"#,
+            r#"<a:pathLst><a:path w="{cx}" h="{cy}">{path}</a:path></a:pathLst></a:custGeom>"#,
+            r#"<a:noFill/>"#,
+            r#"<a:ln w="{lw}" cap="rnd"><a:solidFill><a:srgbClr val="{color}">{alpha}</a:srgbClr></a:solidFill><a:round/></a:ln>"#,
+            r#"</wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>"#
+        ),
+        behind = behind,
+        px = emu(x0),
+        py = emu(y0),
+        cx = emu(w),
+        cy = emu(h),
+        id = id,
+        page = st.page,
+        path = path,
+        lw = line_w,
+        color = color,
+        alpha = alpha,
+    )
+}
+
+/// [`ink_anchor_xml`] を、段落の控え(anchors)にそのまま置ける形
+/// (名前空間の宣言つきの `<w:r>`)で返す。writer はこれを差し込む。
+pub fn ink_anchor_run(st: &Stroke, id: usize) -> String {
+    let inner = ink_anchor_xml(st, id);
+    wrap_with_ns(&inner, &Default::default()).unwrap_or(inner)
+}
+
+/// 原文控え(anchors)の中の joink(手描きの線)を筆に読み戻す。
+/// 読めたら控えから外す(保存はモデルから作り直す)。
+fn extract_ink(doc: &mut Document) {
+    let grab = |s: &str, pat: &str| -> Option<f32> {
+        let i = s.find(pat)? + pat.len();
+        let e = s[i..].find('<')? + i;
+        s[i..e].parse::<f32>().ok()
+    };
+    let mut ink: Vec<Stroke> = Vec::new();
+    for b in &mut doc.blocks {
+        let Block::Para(p) = b else { continue };
+        let mut i = 0;
+        while i < p.anchors.len() {
+            let a = &p.anchors[i];
+            let Some(ni) = a.find("name=\"joink") else {
+                i += 1;
+                continue;
+            };
+            // 名前からページ番号(joink{id}p{page})
+            let page = a[ni..]
+                .find('p')
+                .and_then(|pi| {
+                    let s2 = &a[ni + pi + 1..];
+                    let e = s2.find('"')?;
+                    s2[..e].parse::<usize>().ok()
+                })
+                .unwrap_or(0);
+            let x0 = grab(a, "<wp:positionH relativeFrom=\"page\"><wp:posOffset>")
+                .map(|v| v / 36000.0);
+            let y0 = grab(a, "<wp:positionV relativeFrom=\"page\"><wp:posOffset>")
+                .map(|v| v / 36000.0);
+            let (Some(x0), Some(y0)) = (x0, y0) else {
+                i += 1;
+                continue;
+            };
+            // a:pt を順に拾う
+            let mut points: Vec<(f32, f32)> = Vec::new();
+            let mut at = 0usize;
+            while let Some(j) = a[at..].find("<a:pt x=\"") {
+                let s2 = at + j + 9;
+                let Some(xe) = a[s2..].find('"') else { break };
+                let Some(yj) = a[s2 + xe..].find("y=\"") else { break };
+                let ys = s2 + xe + yj + 3;
+                let Some(ye) = a[ys..].find('"') else { break };
+                if let (Ok(x), Ok(y)) =
+                    (a[s2..s2 + xe].parse::<f32>(), a[ys..ys + ye].parse::<f32>())
+                {
+                    points.push((x0 + x / 36000.0, y0 + y / 36000.0));
+                }
+                at = ys + ye;
+            }
+            if points.is_empty() {
+                i += 1;
+                continue;
+            }
+            let highlighter = a.contains("<a:alpha");
+            ink.push(Stroke { page, highlighter, points });
+            p.anchors.remove(i);
+        }
+    }
+    doc.ink.extend(ink);
 }
 
 /// `w:pStyle` の val を段落の役割へ。見出しと目次の行だけを見る
@@ -1741,7 +1879,7 @@ mod tests {
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
-        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
+        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
     }
     fn round_trip(d: &Document) -> (Document, Report) {
         let mut buf = Cursor::new(Vec::new());
@@ -1771,7 +1909,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -1804,7 +1942,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -1820,7 +1958,7 @@ mod tests {
 
     #[test]
     fn 表が往復する() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![
             Block::Para(para("(様式3) 会社概要")),
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![cell("会　社　名"), cell("日本フネン株式会社")],
@@ -1843,7 +1981,7 @@ mod tests {
 
     #[test]
     fn 表と本文の順序が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![
             Block::Para(para("前")),
             Block::Table(Table { col_mm: vec![], rows: vec![vec![cell("表1")]] }),
             Block::Para(para("中")),
@@ -1859,7 +1997,7 @@ mod tests {
     #[test]
     fn 空セルも列として残る() {
         // 事務様式は「記入欄が空の表」が本体。空セルが消えると様式が壊れる
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
             vec![cell("氏名"), Cellbox::default()],
             vec![cell("所属"), Cellbox::default()],
         ]})]};
@@ -1899,7 +2037,7 @@ mod tests {
         vstart.v_merge = kumihan::VMerge::Start;
         let mut vcont = Cellbox::default();
         vcont.v_merge = kumihan::VMerge::Continue;
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![head],
                 vec![vstart, cell("本社")],
@@ -1956,7 +2094,7 @@ mod font_tests {
         let doc = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
             blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
                 align: Default::default(),
                 anchors: Vec::new(),
@@ -2012,7 +2150,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
             blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
@@ -2027,7 +2165,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
             blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
@@ -2041,7 +2179,7 @@ mod fmt_tests {
             let d = Document {
                 font: None,
                 page: None,
-                sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
+                sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
                 blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
                     align: a,
                     anchors: Vec::new(),
@@ -2106,7 +2244,7 @@ mod para_tests {
     }
 
     fn roundtrip(p: Paragraph) -> Paragraph {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(p)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![Block::Para(p)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         crate::read(std::io::Cursor::new(&buf)).unwrap().0.paragraphs().next().unwrap().clone()
@@ -2136,7 +2274,7 @@ mod para_tests {
 
     #[test]
     fn 既定の段落には余計な指定を書かない() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(&buf)).unwrap();
@@ -2174,7 +2312,7 @@ mod break_round {
         para.page_break_before = true;
         para.runs.push(Run {
             text: "二頁目".into(), size_pt: 10.5, font: None, fmt: Default::default() });
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, blocks: vec![Block::Para(para)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![Block::Para(para)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
@@ -2328,7 +2466,7 @@ mod vertalign_tests {
         Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
             blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
@@ -2420,7 +2558,7 @@ mod shade_tests {
         };
         p.shade = Some("FFF2CC".into());
         p.boxed = true;
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");
@@ -2452,6 +2590,48 @@ mod bookmark_model_tests {
         let bs: Vec<usize> = back.paragraphs().map(|p| p.bookmarks.len()).collect();
         assert_eq!(bs, vec![0, 1, 0], "しおりの付き先がずれた");
         assert_eq!(back.paragraphs().nth(1).unwrap().bookmarks[0], "会社名");
+    }
+}
+
+#[cfg(test)]
+mod ink_tests {
+    use super::*;
+    use kumihan::{Block, Document, Stroke};
+
+    #[test]
+    fn ペンの筆が往復する() {
+        let mut d = Document::plain("本文", 10.5);
+        let st = Stroke {
+            page: 2,
+            highlighter: false,
+            points: vec![(30.0, 40.0), (50.0, 60.5), (70.0, 55.0)],
+        };
+        let hl = Stroke {
+            page: 0,
+            highlighter: true,
+            points: vec![(20.0, 25.0), (90.0, 25.0)],
+        };
+        // writer と同じ道: 図形を段落の控えに差し込んでから書く
+        if let Block::Para(p) = &mut d.blocks[0] {
+            p.anchors.push(ink_anchor_run(&st, 1));
+            p.anchors.push(ink_anchor_run(&hl, 2));
+        }
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert_eq!(back.ink.len(), 2, "筆の数が違う: {}", back.ink.len());
+        let b0 = back.ink.iter().find(|s| !s.highlighter).expect("ペンが無い");
+        assert_eq!(b0.page, 2, "ページ番号が消えた");
+        assert_eq!(b0.points.len(), 3);
+        for ((x, y), (wx, wy)) in b0.points.iter().zip(&st.points) {
+            assert!((x - wx).abs() < 0.01 && (y - wy).abs() < 0.01,
+                "座標がずれた: ({x},{y}) vs ({wx},{wy})");
+        }
+        assert!(back.ink.iter().any(|s| s.highlighter), "蛍光ペンの区別が消えた");
+        // 控えには残っていない(二重にならない)
+        assert!(back.paragraphs().next().unwrap().anchors.is_empty(),
+            "筆が控えにも残っている");
     }
 }
 
@@ -2904,7 +3084,7 @@ mod image_insert_tests {
             w_mm: 50.0,
             h_mm: 30.0,
         });
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None,
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");
