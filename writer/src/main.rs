@@ -466,11 +466,15 @@ impl Writer {
     fn relayout(&mut self) {
         self.flush_target();
         let m = Metrics::new(&self.font_bytes).expect("フォント");
+        // 段組みなら1段の行長で組み、ページの物理座標へ折る。
+        // 折った後の座標は画面もクリックも PDF もそのまま使える
+        let y0 = self.pg.top_mm + 4.0;
         self.page = layout(
             &self.doc,
             &m,
-            &Frame { measure_mm: self.pg.measure_mm(), line_height_mm: LINE_MM, y0_mm: self.pg.top_mm + 4.0 },
+            &Frame { measure_mm: self.pg.column_measure_mm(), line_height_mm: LINE_MM, y0_mm: y0 },
         );
+        kumihan::fold_columns(&mut self.page, &self.pg, y0);
         self.refresh_hf();
     }
 
@@ -954,12 +958,16 @@ impl Writer {
                     if t.starts_with("<w:sectPr") || t.starts_with("</w:sectPr") {
                         continue;
                     }
-                    if t.starts_with("<w:pgSz") || t.starts_with("<w:pgMar") {
+                    if t.starts_with("<w:pgSz") || t.starts_with("<w:pgMar")
+                        || t.starts_with("<w:cols")
+                    {
                         skip = !part.trim_end().ends_with("/>");
                         continue;
                     }
                     if skip {
-                        if t.starts_with("</w:pgSz") || t.starts_with("</w:pgMar") {
+                        if t.starts_with("</w:pgSz") || t.starts_with("</w:pgMar")
+                            || t.starts_with("</w:cols")
+                        {
                             skip = false;
                         }
                         continue;
@@ -969,9 +977,15 @@ impl Writer {
                 out
             })
             .unwrap_or_default();
+        // 段組みは Word の既定の間(425twip)で書く
+        let cols = if self.pg.cols() > 1 {
+            format!("<w:cols w:num=\"{}\" w:space=\"425\"/>", self.pg.cols())
+        } else {
+            String::new()
+        };
         self.doc.sect_raw = Some(format!(
             "<w:sectPr><w:pgSz w:w=\"{}\" w:h=\"{}\"{}/>\
-             <w:pgMar w:top=\"{}\" w:right=\"{}\" w:bottom=\"{}\" w:left=\"{}\"/>{rest}</w:sectPr>",
+             <w:pgMar w:top=\"{}\" w:right=\"{}\" w:bottom=\"{}\" w:left=\"{}\"/>{cols}{rest}</w:sectPr>",
             tw(self.pg.w_mm),
             tw(self.pg.h_mm),
             if landscape { " w:orient=\"landscape\"" } else { "" },
@@ -983,8 +997,11 @@ impl Writer {
         self.dirty = true;
         self.relayout_keep();
         self.status = format!(
-            "用紙 {:.0}×{:.0}mm / 余白 {:.0}mm",
-            self.pg.w_mm, self.pg.h_mm, self.pg.left_mm
+            "用紙 {:.0}×{:.0}mm / 余白 {:.0}mm{}",
+            self.pg.w_mm,
+            self.pg.h_mm,
+            self.pg.left_mm,
+            if self.pg.cols() > 1 { format!(" / {}段組み", self.pg.cols()) } else { String::new() }
         )
         .into();
     }
@@ -1291,11 +1308,13 @@ impl Writer {
     /// (戻すと今つけた書式が消える)。
     fn relayout_keep(&mut self) {
         let m = Metrics::new(&self.font_bytes).expect("フォント");
+        let y0 = self.pg.top_mm + 4.0;
         self.page = layout(
             &self.doc,
             &m,
-            &Frame { measure_mm: self.pg.measure_mm(), line_height_mm: LINE_MM, y0_mm: self.pg.top_mm + 4.0 },
+            &Frame { measure_mm: self.pg.column_measure_mm(), line_height_mm: LINE_MM, y0_mm: y0 },
         );
+        kumihan::fold_columns(&mut self.page, &self.pg, y0);
         self.refresh_hf();
     }
 
@@ -1493,7 +1512,7 @@ impl Writer {
         "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
-        "caption", "tof", "tof-update",
+        "caption", "tof", "tof-update", "columns",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1844,6 +1863,14 @@ impl Writer {
                     _ => (210.0, 297.0),    // → A4
                 };
                 (pg.w_mm, pg.h_mm) = if landscape { (h, w) } else { (w, h) };
+            }),
+            // 段組み。1 → 2 → 3 → 1 と回る(見た目も docx も追随)
+            "columns" => self.set_page(|pg| {
+                pg.columns = match pg.cols() {
+                    1 => 2,
+                    2 => 3,
+                    _ => 1,
+                };
             }),
             "pagemargins" => self.set_page(|pg| {
                 // 標準20 → 狭い12 → 広い30 → 標準
@@ -2687,6 +2714,22 @@ impl Render for Writer {
                         }
                     }
                 }
+            }
+        }
+
+        // ページの境の薄い線(積み上げたページの切れ目が分かるように)
+        {
+            let mut pno = 1;
+            loop {
+                let y = pno as f32 * self.pg.h_mm;
+                if y >= self.content_mm() {
+                    break;
+                }
+                paper = paper.child(div().absolute()
+                    .left(px(0.0)).top(px(y * pxmm))
+                    .w(px(self.pg.w_mm * pxmm)).h(px(1.0))
+                    .bg(rgb(0xD5DBE0)));
+                pno += 1;
             }
         }
 

@@ -233,7 +233,7 @@ pub enum Block {
     Table(Table),
 }
 
-/// 用紙の設定(mm)。docx の `w:pgSz` / `w:pgMar`。
+/// 用紙の設定(mm)。docx の `w:pgSz` / `w:pgMar` / `w:cols`。
 #[derive(Debug, Clone, Copy)]
 pub struct PageSetup {
     pub w_mm: f32,
@@ -242,20 +242,36 @@ pub struct PageSetup {
     pub right_mm: f32,
     pub top_mm: f32,
     pub bottom_mm: f32,
+    /// 段組みの段数(docx の w:cols w:num)。1 が普通の1段
+    pub columns: u8,
 }
 
 impl Default for PageSetup {
     fn default() -> Self {
         // A4 縦・余白 20mm(日本の事務の慣行に近い値)
         PageSetup { w_mm: 210.0, h_mm: 297.0, left_mm: 20.0, right_mm: 20.0,
-                    top_mm: 20.0, bottom_mm: 20.0 }
+                    top_mm: 20.0, bottom_mm: 20.0, columns: 1 }
     }
 }
+
+/// 段の間(mm)。Word の既定(425twip ≒ 7.5mm)に合わせる
+pub const COLUMN_GAP_MM: f32 = 7.5;
 
 impl PageSetup {
     /// 行長(本文の幅)
     pub fn measure_mm(&self) -> f32 {
         (self.w_mm - self.left_mm - self.right_mm).max(10.0)
+    }
+
+    /// 段数(0 が入っていても壊れない)
+    pub fn cols(&self) -> usize {
+        (self.columns as usize).clamp(1, 8)
+    }
+
+    /// 1段の行長。段組みなら段の間を除いて割る
+    pub fn column_measure_mm(&self) -> f32 {
+        let n = self.cols() as f32;
+        ((self.measure_mm() - COLUMN_GAP_MM * (n - 1.0)) / n).max(10.0)
     }
 }
 
@@ -948,6 +964,98 @@ pub fn layout_hf(
         }
     }
     out
+}
+
+/// 段組み。**細い行長(column_measure_mm)で組んだ巻物**を、
+/// ページごとに n 段へ折る。
+///
+/// 出てくる座標は「ページを縦に積み上げた物理座標」— y はページの並び、
+/// x は段の位置へずらし済み。だから画面もクリックもキャレットも PDF も、
+/// 座標を使う側は**何も変えずに**そのまま写せる。
+/// ページの頭には breaks を置くので、紙に写す側はそこで頁を割る。
+pub fn fold_columns(sheet: &mut Sheet, pg: &PageSetup, y0_mm: f32) {
+    let n = pg.cols();
+    if n <= 1 {
+        return;
+    }
+    let col_w = pg.column_measure_mm();
+    let span = (pg.h_mm - pg.bottom_mm - y0_mm).max(10.0); // 1段に入る高さ
+    // 第1走: 行を順に歩き、どの段(strip)に入るかを決める。
+    // 巻物の y の区間 → 段、の対応も控える(罫線・画像を同じ折り方にするため)
+    let mut strip = 0usize;
+    let mut strip_y0 = y0_mm; // いまの段の頭(巻物の座標)
+    let mut ranges: Vec<(f32, usize)> = vec![(strip_y0, 0)]; // (巻物のy起点, 段)
+    let mut line_strip: Vec<usize> = Vec::with_capacity(sheet.lines.len());
+    let mut breaks = std::mem::take(&mut sheet.breaks).into_iter().peekable();
+    for line in &sheet.lines {
+        // 明示の改ページ: 次のページの頭(= n の倍数の段)へ
+        let mut forced = false;
+        while let Some(&b) = breaks.peek() {
+            if line.y_mm >= b - 0.01 {
+                breaks.next();
+                forced = true;
+            } else {
+                break;
+            }
+        }
+        if forced {
+            strip = (strip / n + 1) * n;
+            strip_y0 = line.y_mm;
+            ranges.push((strip_y0, strip));
+        } else if line.y_mm - strip_y0 > span {
+            strip += 1;
+            strip_y0 = line.y_mm;
+            ranges.push((strip_y0, strip));
+        }
+        line_strip.push(strip);
+    }
+    // 巻物の y → 段(罫線・画像・当たり判定に使う)
+    let strip_of = |y: f32| -> usize {
+        let mut s = 0usize;
+        for (y0, k) in &ranges {
+            if y >= *y0 - 0.01 {
+                s = *k;
+            }
+        }
+        s
+    };
+    // その段の起点(巻物の座標)。中身の無い段は最後の起点を使う
+    let strip_start = |k: usize| -> f32 {
+        ranges.iter().filter(|(_, s)| *s <= k).map(|(y0, _)| *y0).last().unwrap_or(y0_mm)
+    };
+    // 折る: y はページの積み上げへ、x は段の位置へ
+    let place = |y: f32, k: usize| -> f32 {
+        let page = k / n;
+        page as f32 * pg.h_mm + y0_mm + (y - strip_start(k))
+    };
+    let dx = |k: usize| -> f32 { (k % n) as f32 * (col_w + COLUMN_GAP_MM) };
+    for (line, k) in sheet.lines.iter_mut().zip(&line_strip) {
+        line.y_mm = place(line.y_mm, *k);
+        for c in &mut line.cells {
+            c.x_mm += dx(*k);
+        }
+    }
+    for r in &mut sheet.rules {
+        let k = strip_of(r[1].min(r[3]));
+        let (y1, y2) = (place(r[1], k), place(r[3], k));
+        r[0] += dx(k);
+        r[2] += dx(k);
+        r[1] = y1;
+        r[3] = y2;
+    }
+    for (_, rect) in &mut sheet.images {
+        let k = strip_of(rect[1]);
+        rect[1] = place(rect[1], k);
+        rect[0] += dx(k);
+    }
+    for b in &mut sheet.cell_boxes {
+        let k = strip_of(b.top_mm);
+        b.top_mm = place(b.top_mm, k);
+        b.x_mm += dx(k);
+    }
+    // 紙に写す側のために、2ページ目からの頭に改ページを置く
+    let pages = line_strip.iter().map(|k| k / n + 1).max().unwrap_or(1);
+    sheet.breaks = (1..pages).map(|p| p as f32 * pg.h_mm + y0_mm).collect();
 }
 
 /// 表を組む。戻り値は表の下の、次のベースライン。
@@ -1803,6 +1911,76 @@ mod byte0_tests {
         assert_eq!(l.byte0, 0);
         // 印(・)ぶんが byte_end に乗っていない
         assert_eq!(l.byte_end(), "項目".len(), "印が本文のバイトに混ざった");
+    }
+}
+
+#[cfg(test)]
+mod column_tests {
+    use super::*;
+
+    fn folded(n_lines: usize, cols: u8) -> Sheet {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let text = (1..=n_lines).map(|i| format!("{i} 行目")).collect::<Vec<_>>().join("\n");
+        let d = Document::plain(&text, 10.5);
+        let pg = PageSetup { columns: cols, ..Default::default() };
+        let mut s = layout(&d, &m, &Frame {
+            measure_mm: pg.column_measure_mm(),
+            line_height_mm: 6.4,
+            y0_mm: 24.0,
+        });
+        fold_columns(&mut s, &pg, 24.0);
+        s
+    }
+
+    #[test]
+    fn 二段に折ると右の段へ続く() {
+        // A4 の1段は約40行。60行なら 1ページ目の左40行 + 右20行
+        let s = folded(60, 2);
+        let pg = PageSetup { columns: 2, ..Default::default() };
+        let left: Vec<&Line> = s.lines.iter()
+            .filter(|l| l.cells[0].x_mm < pg.column_measure_mm()).collect();
+        let right: Vec<&Line> = s.lines.iter()
+            .filter(|l| l.cells[0].x_mm >= pg.column_measure_mm()).collect();
+        assert!(!right.is_empty(), "右の段に何も行かない");
+        assert!(left.len() > right.len(), "左から詰まっていない");
+        // 右の段の頭は左の段の頭と同じ高さ(ページの頭)
+        assert!((right[0].y_mm - s.lines[0].y_mm).abs() < 0.01,
+            "右の段がページの頭から始まらない: {} vs {}", right[0].y_mm, s.lines[0].y_mm);
+        // ページは1枚に収まる(60行 = 2段ぶん以内)
+        assert!(s.breaks.is_empty(), "1ページに収まるのに頁が割れた");
+    }
+
+    #[test]
+    fn 二段でも溢れれば次のページへ() {
+        let s = folded(100, 2);
+        assert!(!s.breaks.is_empty(), "2段×1ページを超えたのに頁が割れない");
+        let pg = PageSetup::default();
+        let last = s.lines.last().unwrap();
+        assert!(last.y_mm > pg.h_mm, "2ページ目の座標が積み上がっていない");
+        // どの行も段の中に収まる(x が紙からはみ出さない)
+        for l in &s.lines {
+            let right = l.cells.last().map(|c| c.x_mm + c.w_mm).unwrap_or(0.0);
+            assert!(right <= pg.measure_mm() + 0.5, "段からはみ出した: {right}mm");
+        }
+    }
+
+    #[test]
+    fn 一段なら何も変わらない() {
+        let a = folded(30, 1);
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let text = (1..=30).map(|i| format!("{i} 行目")).collect::<Vec<_>>().join("\n");
+        let d = Document::plain(&text, 10.5);
+        let b = layout(&d, &m, &Frame {
+            measure_mm: PageSetup::default().column_measure_mm(),
+            line_height_mm: 6.4,
+            y0_mm: 24.0,
+        });
+        assert_eq!(a.lines.len(), b.lines.len());
+        for (x, y) in a.lines.iter().zip(&b.lines) {
+            assert!((x.y_mm - y.y_mm).abs() < 0.001, "1段なのに動いた");
+        }
     }
 }
 

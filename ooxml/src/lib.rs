@@ -315,6 +315,17 @@ fn parse_sect(raw: &str) -> kumihan::PageSetup {
         head[s..e].parse::<f32>().ok().map(twip_mm)
     };
     let d = kumihan::PageSetup::default();
+    // 段組み(w:cols w:num)。twip ではなく数なので g は使わない
+    let cols = raw
+        .find("<w:cols")
+        .and_then(|i| {
+            let head = &raw[i..(i + 200).min(raw.len())];
+            let k = "w:num=\"";
+            let s = head.find(k)? + k.len();
+            let e = head[s..].find('"')? + s;
+            head[s..e].parse::<u8>().ok()
+        })
+        .unwrap_or(1);
     kumihan::PageSetup {
         w_mm: g("<w:pgSz", "w:w").unwrap_or(d.w_mm),
         h_mm: g("<w:pgSz", "w:h").unwrap_or(d.h_mm),
@@ -322,6 +333,7 @@ fn parse_sect(raw: &str) -> kumihan::PageSetup {
         right_mm: g("<w:pgMar", "w:right").unwrap_or(d.right_mm),
         top_mm: g("<w:pgMar", "w:top").unwrap_or(d.top_mm),
         bottom_mm: g("<w:pgMar", "w:bottom").unwrap_or(d.bottom_mm),
+        columns: cols.clamp(1, 8),
     }
 }
 
@@ -2372,6 +2384,16 @@ mod sect_tests {
         let out = crate::write_document_xml(&doc);
         assert!(out.contains("headerReference"), "ヘッダーの参照が消えた");
         assert!(out.contains("w:pgSz"), "用紙が消えた");
+    }
+
+    #[test]
+    fn 段組みが読める() {
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p/>
+            <w:sectPr><w:pgSz w:w="11906" w:h="16838"/>
+              <w:cols w:num="2" w:space="425"/>
+            </w:sectPr></w:body></w:document>"#;
+        let (doc, _) = crate::parse_document_xml(xml);
+        assert_eq!(doc.page.expect("用紙が無い").columns, 2, "段数が読めない");
     }
 
     #[test]
