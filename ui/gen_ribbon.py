@@ -58,7 +58,7 @@ READY = {
         "styles": "parastyle",
         "contents": "toc", "contents-update": "toc-update",
         "datetime": "datetime", "numpages": "numpages",
-        "multilevels": "multilevels",
+        "multilevels": "multilevels", "darkmode": "darkmode",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

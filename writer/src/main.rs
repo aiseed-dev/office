@@ -213,6 +213,8 @@ struct Writer {
     size_list: bool,
     /// 段落のスタイルの一覧を出しているか
     style_list: bool,
+    /// ダークモード(紙以外を暗く。文書は変わらない)
+    dark: bool,
     /// 画像の実体 → gpui の画像(作り直すと毎フレーム復号されるため控える)
     image_cache: std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>,
     /// 組版に使うフォントの実体。**文書の書体に従う**(開くたびに引き直す)
@@ -304,6 +306,7 @@ impl Writer {
             font_list: false,
             size_list: false,
             style_list: false,
+            dark: false,
             image_cache: Default::default(),
             font_bytes: std::sync::Arc::new(font_data().to_vec()),
             pg: kumihan::PageSetup::default(),
@@ -1283,7 +1286,7 @@ impl Writer {
         "pageorient", "pagesize", "pagemargins",
         "edit-header", "edit-footer", "pagenum",
         "parastyle", "toc", "toc-update", "numpages", "datetime",
-        "multilevels",
+        "multilevels", "darkmode",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1580,6 +1583,8 @@ impl Writer {
                 }
             }
             "ruler" => self.ruler = !self.ruler,
+            // ダークモード。**紙は白いまま**(画面と紙の一致)。周りだけ暗くする
+            "darkmode" => self.dark = !self.dark,
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -1977,8 +1982,23 @@ impl Render for Writer {
         // 掴む場所が無くなる(踏んで直した)。釦の類いは stop_propagation で
         // 取っ手より先に効く
         let (ready, all) = ribbon::progress(ribbon::WRITER);
+        // ダークモードは**紙以外**を暗くする — 紙は白いまま(印刷と同じ)。
+        // 文書は何も変わらない(見え方だけ)
+        let dk = self.dark;
+        let th_bar = if dk { rgb(0x0F2B3C) } else { rgb(0x165E83) };
+        let th_tab_on_bg = if dk { rgb(0x22262A) } else { rgb(0xFFFFFF) };
+        let th_tab_on_fg = if dk { rgb(0xCFE0EA) } else { rgb(0x165E83) };
+        let th_tab_fg = if dk { rgb(0x9FB8C6) } else { rgb(0xCFE0EA) };
+        let th_cmd_bg = if dk { rgb(0x22262A) } else { rgb(0xFFFFFF) };
+        let th_cmd_border = if dk { rgb(0x33383D) } else { rgb(0xE1E6EA) };
+        let th_btn = if dk { rgb(0x7FB2D0) } else { rgb(0x165E83) };
+        let th_btn_hover = if dk { rgb(0x2C333A) } else { rgb(0xEAF2F7) };
+        let th_gray_border = if dk { rgb(0x2E3338) } else { rgb(0xEDEFF1) };
+        let th_gray_fg = if dk { rgb(0x565D64) } else { rgb(0xB6BDC4) };
+        let th_status = if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) };
+        let th_desk = if dk { rgb(0x191C1F) } else { rgb(0x63686D) };
         let mut tabs = div().id("titlebar").flex().flex_row().items_end().gap_1()
-            .px_3().pt_1p5().bg(rgb(0x165E83))
+            .px_3().pt_1p5().bg(th_bar)
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                 |_, e: &gpui::MouseDownEvent, window, _| {
                     if e.click_count >= 2 {
@@ -1993,8 +2013,8 @@ impl Render for Writer {
                 .id(SharedString::from(format!("tab{i}")))
                 .px_3().py_1p5()
                 .rounded_t_md()
-                .bg(if on { rgb(0xFFFFFF) } else { rgb(0x165E83) })
-                .text_color(if on { rgb(0x165E83) } else { rgb(0xCFE0EA) })
+                .bg(if on { th_tab_on_bg } else { th_bar })
+                .text_color(if on { th_tab_on_fg } else { th_tab_fg })
                 .text_size(px(12.0))
                 .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                 .cursor_pointer()
@@ -2006,7 +2026,7 @@ impl Render for Writer {
         }
         tabs = tabs
             .child(div().flex_1().h(px(28.0)))
-            .child(div().pb_1p5().pr_2().text_size(px(10.5)).text_color(rgb(0x8FB8CC))
+            .child(div().pb_1p5().pr_2().text_size(px(10.5)).text_color(rgb(0x6E93A6))
                    .child(SharedString::from(format!("writer — 実装済み {ready}/{all}"))));
         let winbtn = |id: &'static str, label: &'static str| {
             div().id(id).px_2p5().py_1().rounded_sm()
@@ -2029,23 +2049,23 @@ impl Render for Writer {
             })));
 
         let mut cmds = div().flex().flex_row().flex_wrap().gap_1().items_center()
-            .px_3().py_2().bg(gpui::white())
-            .border_b_1().border_color(rgb(0xE1E6EA));
+            .px_3().py_2().bg(th_cmd_bg)
+            .border_b_1().border_color(th_cmd_border);
         for cmd in ribbon::WRITER[self.tab].cmds {
             if cmd.ready {
                 let id = cmd.id;
                 cmds = cmds.child(div()
                     .id(SharedString::from(cmd.id))
                     .px_3().py_1().rounded_md()
-                    .border_1().border_color(rgb(0x165E83)).text_color(rgb(0x165E83))
+                    .border_1().border_color(th_btn).text_color(th_btn)
                     .text_size(px(12.0)).cursor_pointer()
-                    .hover(|s| s.bg(rgb(0xEAF2F7)))
+                    .hover(move |s| s.bg(th_btn_hover))
                     .flex().flex_row().items_center().gap_1()
                     .children(ui::icons::find(cmd.icon).map(|_| {
                         gpui::svg()
                             .path(SharedString::from(format!("icons/{}.svg", cmd.icon)))
                             .size(px(15.0))
-                            .text_color(rgb(0x165E83))
+                            .text_color(th_btn)
                     }))
                     .child(cmd.label)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -2054,20 +2074,20 @@ impl Render for Writer {
             } else {
                 // 未実装。押せるように見せない
                 cmds = cmds.child(div().px_3().py_1().rounded_md()
-                    .border_1().border_color(rgb(0xEDEFF1))
-                    .text_color(rgb(0xB6BDC4)).text_size(px(12.0))
+                    .border_1().border_color(th_gray_border)
+                    .text_color(th_gray_fg).text_size(px(12.0))
                     .flex().flex_row().items_center().gap_1()
                     .children(ui::icons::find(cmd.icon).map(|_| {
                         gpui::svg()
                             .path(SharedString::from(format!("icons/{}.svg", cmd.icon)))
                             .size(px(15.0))
-                            .text_color(rgb(0xB6BDC4))
+                            .text_color(th_gray_fg)
                     }))
                     .child(cmd.label));
             }
         }
         cmds = cmds.child(div().flex_1())
-            .child(div().text_size(px(11.0)).text_color(rgb(0x66707A))
+            .child(div().text_size(px(11.0)).text_color(th_status)
                    .child(SharedString::from(format!("{}{}",
                        if self.dirty { "● " } else { "" }, self.status))));
         let bar = div().flex().flex_col().child(tabs).child(cmds);
@@ -2716,7 +2736,7 @@ impl Render for Writer {
             Some(n)
         };
 
-        div().size_full().flex().flex_col().bg(rgb(0x63686D))
+        div().size_full().flex().flex_col().bg(th_desk)
             .key_context("jo_edit")
             .track_focus(&self.focus)
             .on_action(cx.listener(Writer::backspace))

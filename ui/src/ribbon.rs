@@ -135,7 +135,7 @@ pub const WRITER: &[Tab] = &[
         c("zoom-in", "拡大", "zoom-in"),
         c("zoom-out", "縮小", "zoom-out"),
         c("ruler", "ルーラー", "ruler"),
-        x("ダークモード", "darkmode"),
+        c("darkmode", "ダークモード", "darkmode"),
     ]},
 ];
 
