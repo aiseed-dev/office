@@ -12,7 +12,6 @@ core/
 demo.html
 index.html
 logo.svg
-sample/
 
 # 検証で出るもの
 *.pdf
