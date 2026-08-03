@@ -563,11 +563,15 @@ pub struct Book {
     /// こちらが理解できなかった definedName の原文(Print_Area など)。
     /// **理解はしないが、捨てない。** 保存でそのまま返す
     pub names_raw: Vec<String>,
+    /// ブックに載せる Python(名前, コード)。**開いても決して自動実行しない。**
+    /// 実行は明示の操作+サンドボックスのみ(SEKKEI「Python in Calc」参照)。
+    /// xlsx へは xl/joPython.xml で往復する(この形式の独自部品)
+    pub scripts: Vec<(String, String)>,
 }
 
 impl Book {
     pub fn new() -> Book {
-        Book { sheets: vec![Sheet::new("Sheet1")], names_raw: Vec::new() }
+        Book { sheets: vec![Sheet::new("Sheet1")], names_raw: Vec::new(), scripts: Vec::new() }
     }
 
 }

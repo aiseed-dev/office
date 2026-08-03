@@ -706,7 +706,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     let mut paths = paths;
     paths.sort();
 
-    let mut book = Book { sheets: Vec::new(), names_raw: defined_raw };
+    let mut book = Book { sheets: Vec::new(), names_raw: defined_raw, scripts: Vec::new() };
     for (i, path) in paths.iter().enumerate() {
         let mut s = String::new();
         if let Ok(mut f) = zip.by_name(path) { let _ = f.read_to_string(&mut s); }
@@ -980,6 +980,41 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                 esc(&nm),
                 esc(&target)
             )),
+        }
+    }
+    // ブックに載せた Python(独自部品 xl/joPython.xml)。**読むだけで実行しない**
+    {
+        let mut sx = String::new();
+        if let Ok(mut f) = zip.by_name("xl/joPython.xml") {
+            let _ = f.read_to_string(&mut sx);
+        }
+        if !sx.is_empty() {
+            let mut r = Reader::from_str(&sx);
+            let mut buf = Vec::new();
+            let mut name = None::<String>;
+            let mut code = String::new();
+            let mut in_s = false;
+            loop {
+                match r.read_event_into(&mut buf) {
+                    Ok(Event::Eof) | Err(_) => break,
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"script" => {
+                        name = attr(&e, "name");
+                        code.clear();
+                        in_s = true;
+                    }
+                    Ok(Event::Text(t)) if in_s => {
+                        code.push_str(&t.unescape().unwrap_or_default());
+                    }
+                    Ok(Event::End(e)) if local(e.name().as_ref()) == b"script" => {
+                        if let Some(n) = name.take() {
+                            book.scripts.push((n, code.clone()));
+                        }
+                        in_s = false;
+                    }
+                    _ => {}
+                }
+                buf.clear();
+            }
         }
     }
     // 印刷範囲は編集の対象なのでモデルへ(他の definedName は原文のまま)。
@@ -1518,6 +1553,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
     }
 
+    // ブックに載せた Python はモデルが正(古い部品は写さない)
+    carried.retain(|(name, _)| name != "xl/joPython.xml");
     let carry = !carried.is_empty();
     for (name, buf) in &carried {
         zip.start_file(name.as_str(), o).map_err(|e| e.to_string())?;
@@ -1571,6 +1608,16 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     }
     for (name, xml) in &fresh_parts {
         put(name, xml)?;
+    }
+    if !book.scripts.is_empty() {
+        let mut sx = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<joPython>",
+        );
+        for (n, code) in &book.scripts {
+            sx.push_str(&format!("<script name=\"{}\">{}</script>", esc(n), esc(code)));
+        }
+        sx.push_str("</joPython>");
+        put("xl/joPython.xml", &sx)?;
     }
     if !carry {
         put("_rels/.rels", RELS)?;
@@ -1865,7 +1912,7 @@ mod fmt_round {
             formula: None, value: Value::Text("品名".into()), fmt: fmt.clone() });
         s.set(Pos { row: 0, col: 1 }, Cell {
             formula: None, value: Value::Number(1200.0), fmt });
-        Book { sheets: vec![s], names_raw: Vec::new() }
+        Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new() }
     }
 
     fn roundtrip(b: &Book) -> Book {
@@ -1927,7 +1974,7 @@ mod fmt_round {
             value: Value::Empty,
             fmt: CellFormat { borders: Borders::ALL, ..Default::default() },
         });
-        let back = roundtrip(&Book { sheets: vec![sh], names_raw: Vec::new() });
+        let back = roundtrip(&Book { sheets: vec![sh], names_raw: Vec::new(), scripts: Vec::new() });
         let c = back.sheets[0].get(Pos { row: 2, col: 2 });
         assert!(c.is_some(), "値の無い罫線セルが消えた");
         assert_eq!(c.unwrap().fmt.borders, Borders::ALL);
@@ -1953,7 +2000,7 @@ mod merge_round {
             formula: None, value: Value::Text("見出し".into()), fmt: Default::default() });
         s.merges.push((Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
         s.merges.push((Pos::parse("A2").unwrap(), Pos::parse("A4").unwrap()));
-        let back = roundtrip(&Book { sheets: vec![s], names_raw: Vec::new() });
+        let back = roundtrip(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new() });
         assert_eq!(back.sheets[0].merges.len(), 2, "結合が消えた");
         assert_eq!(back.sheets[0].merges[0],
                    (Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
@@ -2003,7 +2050,7 @@ mod colwidth_round {
         s.col_width.insert(0, 3.5);
         s.col_width.insert(2, 24.0);
         let mut buf = Vec::new();
-        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
         let cw = &back.sheets[0].col_width;
         assert_eq!(cw.get(&0), Some(&3.5), "列幅が消えた: {cw:?}");
@@ -2043,7 +2090,7 @@ mod rowheight_round {
             formula: None, value: Value::Text("高い行".into()), fmt: Default::default() });
         s.row_height.insert(2, 27.5);
         let mut buf = Vec::new();
-        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
         assert_eq!(back.sheets[0].row_height.get(&2), Some(&27.5), "行の高さが消えた");
     }
@@ -2632,5 +2679,34 @@ mod textbox_spark_roundtrip_tests {
         let sk = sp.iter().find(|s| s.kind == "spark").expect("折れ線が無い");
         assert_eq!(sk.points.len(), 3);
         assert!((sk.points[1].0 - 0.5).abs() < 0.01 && sk.points[1].1.abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod script_roundtrip_tests {
+    use super::*;
+
+    #[test]
+    fn ブックに載せたpythonが往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.scripts.push((
+            "集計".into(),
+            "s[\"B5\"] = \"合計\"\nprint(1 < 2 and \"OK\")".into(),
+        ));
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf.clone()).expect("読めない");
+        assert_eq!(back.scripts.len(), 1, "控えが往復しない");
+        assert_eq!(back.scripts[0].0, "集計");
+        assert!(back.scripts[0].1.contains("1 < 2"), "コードの逃がしが壊れた");
+        // もう一往復(古い部品と二重にならない)
+        let mut buf2 = Cursor::new(Vec::new());
+        buf.set_position(0);
+        write_with(&back, Some(buf), &mut buf2).expect("書けない");
+        buf2.set_position(0);
+        let (b3, _) = read(buf2).expect("読めない");
+        assert_eq!(b3.scripts.len(), 1, "二往復で二重になった");
     }
 }

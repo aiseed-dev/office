@@ -1443,11 +1443,49 @@ impl Calc {
                 ).into();
             }
             "py" => {
-                if text.is_empty() {
+                let t = text.trim().to_string();
+                if t.is_empty() {
                     // 空 Enter = .py ファイルを選ぶ
                     self.run_python_file_dialog(cx);
+                } else if t == "@" || t == "@list" {
+                    let names: Vec<&str> =
+                        self.book.scripts.iter().map(|(n, _)| n.as_str()).collect();
+                    self.status = if names.is_empty() {
+                        "ブックに載せた Python はありません(@save 名前 で載せる)".into()
+                    } else {
+                        format!("ブックの Python: {}(@名前 で実行)", names.join(" / ")).into()
+                    };
+                } else if let Some(name) = t.strip_prefix("@save ") {
+                    let name = name.trim().to_string();
+                    if name.is_empty() {
+                        self.status = "@save 名前 の形で".into();
+                    } else {
+                        self.store_python_dialog(name, cx);
+                    }
+                } else if let Some(name) = t.strip_prefix("@del ") {
+                    let name = name.trim();
+                    let before = self.book.scripts.len();
+                    self.book.scripts.retain(|(n, _)| n != name);
+                    if self.book.scripts.len() < before {
+                        self.dirty = true;
+                        self.status = format!("「{name}」をブックから外しました").into();
+                    } else {
+                        self.status = format!("「{name}」はありません").into();
+                    }
+                } else if let Some(name) = t.strip_prefix('@') {
+                    // ブックに載ったコード = 出所が自分とは限らない。必ず檻の中
+                    match self.book.scripts.iter().find(|(n, _)| n == name.trim()) {
+                        Some((_, code)) => {
+                            let code = code.clone();
+                            self.run_python_inner(code, true, cx);
+                        }
+                        None => {
+                            self.status =
+                                format!("「{}」はありません(@list で一覧)", name.trim()).into();
+                        }
+                    }
                 } else {
-                    self.run_python(text, cx);
+                    self.run_python(t, cx);
                 }
             }
             "shape-text" => {
@@ -2563,6 +2601,15 @@ impl Calc {
     /// office_sheet(pysheet)で b(ブック)と s(いまのシート)を束縛して
     /// 利用者のコードを回し、保存されたものを読み戻して**1手として**適用する。
     fn run_python(&mut self, user_code: String, cx: &mut Context<Self>) {
+        self.run_python_inner(user_code, false, cx);
+    }
+
+    /// sandbox=true は**必ず**bubblewrap の檻の中で回す(ブックに載っていた
+    /// コード = 他人のファイル由来かもしれないもの)。檻: ネット遮断・
+    /// 実ファイルは読み取り専用・ホームは不可視・書けるのは交換用の一時領域だけ。
+    /// 檻が無い機械では載せたコードは**実行しない**(そう言う)。
+    /// 自分で打った/選んだコードも、檻があれば檻で回す(深層防御)。
+    fn run_python_inner(&mut self, user_code: String, sandbox: bool, cx: &mut Context<Self>) {
         if !self.commit() {
             return;
         }
@@ -2590,6 +2637,7 @@ impl Calc {
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_default();
+        let so_dir2 = so_dir.clone();
         let script = format!(
             concat!(
                 "import sys\n",
@@ -2612,7 +2660,46 @@ impl Calc {
         let task = cx.background_executor().spawn(async move {
             let py_path = dir.join("run.py");
             std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
-            let o = std::process::Command::new(find_python())
+            let py = find_python();
+            let have_bwrap = std::path::Path::new("/usr/bin/bwrap").exists();
+            if sandbox && !have_bwrap {
+                return Err(
+                    "檻(bubblewrap)がありません。ブックに載ったコードは檻の外では\
+実行しません(apt install bubblewrap)"
+                        .to_string(),
+                );
+            }
+            let mut cmd = if have_bwrap {
+                // 檻: / は読み取り専用、ホームは空、書けるのは作業場だけ、ネット無し
+                let venv = std::fs::canonicalize(".venv").unwrap_or_default();
+                let mut c = std::process::Command::new("/usr/bin/bwrap");
+                c.args(["--ro-bind", "/", "/", "--tmpfs", "/home", "--tmpfs", "/tmp"]);
+                if venv.exists() {
+                    c.arg("--ro-bind").arg(&venv).arg(&venv);
+                }
+                if so_dir2.exists() {
+                    c.arg("--ro-bind").arg(&so_dir2).arg(&so_dir2);
+                }
+                c.arg("--bind").arg(&dir).arg(&dir);
+                c.args([
+                    "--unshare-net",
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--die-with-parent",
+                    "--new-session",
+                    "--setenv",
+                    "HOME",
+                    "/tmp",
+                    "--",
+                ]);
+                c.arg(&py);
+                c
+            } else {
+                std::process::Command::new(&py)
+            };
+            let o = cmd
                 .arg(&py_path)
                 .output()
                 .map_err(|e| format!("Python が起動できません: {e}"))?;
@@ -2679,6 +2766,37 @@ calc の隣に置いてください)"
                         }
                     }
                     Err(e) => this.status = format!("Python: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// .py を選んで**ブックに載せる**(実行はしない)。載せたコードは
+    /// 保存で xlsx に入り、帳票と一緒に旅をする。実行は @名前 で、必ず檻の中。
+    fn store_python_dialog(&mut self, name: String, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new()
+                .add_filter("Python", &["py"])
+                .pick_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    match std::fs::read_to_string(&p) {
+                        Ok(code) => {
+                            this.book.scripts.retain(|(n, _)| *n != name);
+                            this.book.scripts.push((name.clone(), code));
+                            this.dirty = true;
+                            this.status = format!(
+                                "「{name}」をブックに載せました(保存で xlsx に入る。@{name} で実行)"
+                            )
+                            .into();
+                        }
+                        Err(e) => this.status = format!("読めません: {e}").into(),
+                    }
                 }
                 cx.notify();
             });
@@ -4642,7 +4760,7 @@ impl Render for Calc {
                         "find" => "Enter で次へ / Esc で取消。式の中の文字も探します",
                         "split-delim" => "選択した列の文字を割って、右の列へ並べます(右は上書き)",
                         "shape-text" => "図形を選んで Enter でいつでも書き直せます",
-                        "py" => "b=ブック s=いまのシート。例: s[\"A10\"]=\"合計\" / コードは文書に入りません",
+                        "py" => "b=ブック s=シート / @list 一覧 @名前 実行(檻の中) @save 名前 で載せる @del 名前",
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         _ => "Enter で決定 / Esc で取消",
