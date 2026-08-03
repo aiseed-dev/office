@@ -2,8 +2,8 @@
 
 **手元で動く Word と Excel。** Rust で書いた、docx と xlsx のための2つのアプリ。
 
-- `writer` — docx を開いて、直して、保存する。PDF にもできる
-- `calc` — xlsx を開いて、直して、保存する。式も計算する
+- `writer` — docx を開いて、直して、保存する。PDF にもできる([手引き](docs/writer-manual.md))
+- `calc` — xlsx を開いて、直して、保存する。式も計算する([手引き](docs/calc-manual.md))
 
 **別々のアプリ**です。1つの巨大なスイートにしていません。
 
