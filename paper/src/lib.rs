@@ -154,20 +154,32 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
         }
         let l = &layers[k - 1];
         let y_roll = line.y_mm - offsets[k - 1];
-        // 太字は同じ書体を少しずらして二度打つ(合成太字)。
-        // 太字の実体を別に持っていないので、**持っていないものを持っている顔をしない**
-        let bold = line.cells[0].fmt.bold;
-        let text = line.text();
-        let pt = line.cells[0].size_pt;
-        let x = paper.margin_mm + line.cells[0].x_mm;
         // PDF の原点は左下。紙面の y は上からなので裏返す
         let y = paper.height_mm - y_roll;
-
-        l.use_text(&text, pt, Mm(x), Mm(y), &font);
-        if bold {
-            l.use_text(&text, pt, Mm(x + 0.12), Mm(y), &font);
+        // **同じ書式の連なり**ごとに打つ(部分書式)。書体の実体は1つなので、
+        // 大きさと飾りだけが変わる(太字は少しずらして二度打つ合成 —
+        // 太字の実体を持っていないものを持っている顔をしない)
+        let mut i = 0usize;
+        while i < line.cells.len() {
+            let c0 = &line.cells[i];
+            let mut j = i + 1;
+            while j < line.cells.len()
+                && line.cells[j].fmt == c0.fmt
+                && line.cells[j].size_pt == c0.size_pt
+            {
+                j += 1;
+            }
+            let seg = &line.cells[i..j];
+            let text: String = seg.iter().map(|c| c.ch).collect();
+            let w: f32 = seg.iter().map(|c| c.w_mm).sum();
+            let x = paper.margin_mm + c0.x_mm;
+            l.use_text(&text, c0.size_pt, Mm(x), Mm(y), &font);
+            if c0.fmt.bold {
+                l.use_text(&text, c0.size_pt, Mm(x + 0.12), Mm(y), &font);
+            }
+            rule(l, &c0.fmt, x, y, w, c0.size_pt);
+            i = j;
         }
-        rule(l, &line.cells[0].fmt, x, y, width_mm(line), pt);
     }
 
     let bottom = paper.height_mm - paper.margin_mm;

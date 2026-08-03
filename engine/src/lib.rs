@@ -407,35 +407,155 @@ impl Document {
             .join("\n")
     }
 
-    /// 編集後のテキストを段落に戻す。**表はそのままの位置に残す**
-    /// (本文だけ差し替える。表を編集で失わせない)。
-    /// 編集中の平文を本文へ戻す。
+    /// 編集後のテキストを本文へ写す。
     ///
-    /// **段落の書式を捨てない。** 以前はここで作り直していたので、
-    /// 打鍵のたびに太字も揃えも消えていた。
-    /// 同じ位置の段落からは、揃えと文字書式を引き継ぐ。
+    /// **1回の編集は、連続した1箇所の置き換え**(打鍵・削除・貼り付け・
+    /// IME の確定・undo の1手、すべてそう)。だから頭と尻尾の共通部分を
+    /// 除けば、その1箇所が分かる。そこだけを run の構造に写すので、
+    /// **run の境(部分書式)・段落の性質・表の位置が編集で流されない**
+    /// (以前の「段落番号で写す」方式は、段落の増減で下の性質がずれ、
+    /// 表が末尾へ動いていた)。
     pub fn set_body_text(&mut self, text: &str, size_pt: f32) {
-        let tables: Vec<Block> = self.blocks.iter()
-            .filter(|b| matches!(b, Block::Table(_))).cloned().collect();
-        // 引き継ぐ元(段落だけを順に)。**段落をまるごと写す** —
-        // 性質を一つずつ数え上げる方式は、段落に性質を足すたびに
-        // 持ち越し漏れが出る(改ページや画像で一度ずつ踏んだ)
-        let old: Vec<Paragraph> = self.paragraphs().cloned().collect();
-        self.blocks = text
-            .split('\n')
-            .enumerate()
-            .map(|(i, s)| {
-                let mut p = old.get(i).cloned().unwrap_or_default();
-                let (pt, font, fmt) = p
-                    .runs
-                    .first()
-                    .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
-                    .unwrap_or((size_pt, None, CharFormat::default()));
-                p.runs = vec![Run { text: s.to_string(), size_pt: pt, font, fmt }];
-                Block::Para(p)
-            })
+        let old = self.body_text();
+        if old == text {
+            return;
+        }
+        let (ob, nb) = (old.as_bytes(), text.as_bytes());
+        // 共通の頭(文字の境に合わせる)
+        let mut pre = ob.iter().zip(nb).take_while(|(a, b)| a == b).count();
+        while pre > 0 && !(old.is_char_boundary(pre) && text.is_char_boundary(pre)) {
+            pre -= 1;
+        }
+        // 共通の尻尾(頭と重ならない範囲で)
+        let max_suf = (ob.len() - pre).min(nb.len() - pre);
+        let mut suf = ob
+            .iter()
+            .rev()
+            .zip(nb.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(max_suf);
+        while suf > 0
+            && !(old.is_char_boundary(ob.len() - suf) && text.is_char_boundary(nb.len() - suf))
+        {
+            suf -= 1;
+        }
+        self.splice_text(pre, ob.len() - suf, &text[pre..nb.len() - suf], size_pt);
+    }
+
+    /// 本文の `start..end`(バイト。段落は \n で繋いだ物差し)を `insert` で
+    /// 置き換える。run の境と段落の性質を保つ、編集モデルの心臓。
+    pub fn splice_text(&mut self, start: usize, end: usize, insert: &str, size_pt: f32) {
+        // 段落ごとの(blocks の位置, 本文での頭, 長さ)
+        let mut paras: Vec<(usize, usize, usize)> = Vec::new();
+        let mut at = 0usize;
+        for (bi, b) in self.blocks.iter().enumerate() {
+            if let Block::Para(p) = b {
+                let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+                paras.push((bi, at, len));
+                at += len + 1;
+            }
+        }
+        if paras.is_empty() {
+            self.blocks.push(Block::Para(Paragraph {
+                line_spacing: 1.0,
+                runs: vec![Run { text: insert.to_string(), size_pt, font: None,
+                                 fmt: CharFormat::default() }],
+                ..Default::default()
+            }));
+            return;
+        }
+        // 置き換えの端が入る段落。段落の末尾(= \n の位置)も、その段落に数える
+        let pi_of = |pos: usize| -> usize {
+            paras
+                .iter()
+                .rposition(|(_, s, _)| *s <= pos)
+                .unwrap_or(0)
+        };
+        let (ps, pe) = (pi_of(start), pi_of(end));
+        let (bi_s, s0, _) = paras[ps];
+        let (bi_e, e0, e_len) = paras[pe];
+        let off_s = (start - s0).min(paras[ps].2);
+        let off_e = (end - e0).min(e_len);
+
+        let head_para = match &self.blocks[bi_s] {
+            Block::Para(p) => p.clone(),
+            _ => unreachable!(),
+        };
+        let tail_para = match &self.blocks[bi_e] {
+            Block::Para(p) => p.clone(),
+            _ => unreachable!(),
+        };
+        let (head_runs, _) = split_runs(&head_para.runs, off_s);
+        let (_, tail_runs) = split_runs(&tail_para.runs, off_e);
+        // 差し込む字の書式は、置き換えの直前の字のもの(無ければ直後、無ければ既定)
+        let (ins_pt, ins_font, ins_fmt) = head_runs
+            .iter()
+            .rev()
+            .find(|r| !r.text.is_empty())
+            .or_else(|| head_para.runs.first())
+            .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
+            .unwrap_or((size_pt, None, CharFormat::default()));
+        let ins_run = |t: &str| Run {
+            text: t.to_string(),
+            size_pt: ins_pt,
+            font: ins_font.clone(),
+            fmt: ins_fmt.clone(),
+        };
+
+        // 新しい段落の列を組み立てる
+        let segs: Vec<&str> = insert.split('\n').collect();
+        let mut out: Vec<Paragraph> = Vec::new();
+        if segs.len() == 1 {
+            // 段落の増減なし(または段落の合流)。head + 差し込み + tail が1つに
+            let mut p = head_para.clone();
+            p.runs = head_runs;
+            p.runs.push(ins_run(segs[0]));
+            p.runs.extend(tail_runs);
+            // 合流したら、消えた側の性質は頭の段落に呑まれる
+            out.push(p);
+        } else {
+            let mut first = head_para.clone();
+            first.runs = head_runs;
+            first.runs.push(ins_run(segs[0]));
+            out.push(first);
+            for seg in &segs[1..segs.len() - 1] {
+                let mut mid = head_para.clone();
+                mid.anchors = Vec::new();
+                mid.images = Vec::new();
+                mid.images_new = Vec::new();
+                mid.comments = Vec::new();
+                mid.bookmarks = Vec::new();
+                mid.runs = vec![ins_run(seg)];
+                out.push(mid);
+            }
+            // 最後の段落は、置き換えの尻の段落の性質を継ぐ(Enter で割った
+            // 後ろ半分が、元の段落の性質のまま残る形)
+            let mut last = tail_para.clone();
+            last.runs = vec![ins_run(segs[segs.len() - 1])];
+            last.runs.extend(tail_runs);
+            if ps == pe {
+                // 1つの段落を割ったときは、控え(画像など)は前半にだけ残す
+                last.anchors = Vec::new();
+                last.images = Vec::new();
+                last.images_new = Vec::new();
+                last.comments = Vec::new();
+                last.bookmarks = Vec::new();
+            }
+            out.push(last);
+        }
+        for p in &mut out {
+            normalize_runs(&mut p.runs, size_pt);
+        }
+        // 置き換えの範囲に挟まっていた表などは、後ろへ避けて残す(消さない)
+        let kept: Vec<Block> = self.blocks[bi_s..=bi_e]
+            .iter()
+            .filter(|b| !matches!(b, Block::Para(_)))
+            .cloned()
             .collect();
-        self.blocks.extend(tables);
+        let mut new_blocks: Vec<Block> = out.into_iter().map(Block::Para).collect();
+        new_blocks.extend(kept);
+        self.blocks.splice(bi_s..=bi_e, new_blocks);
     }
 
     /// 平文の中の位置(バイト)から、何番目の段落かを出す。
@@ -455,16 +575,57 @@ impl Document {
         if first == usize::MAX { 0..0 } else { first..last + 1 }
     }
 
-    /// 選択範囲にかかる段落の文字書式を変える。
-    ///
-    /// **段落まるごとに掛ける。** 編集中の本文は平文で持っているので、
-    /// 段落の途中だけを太字にする仕組みがまだ無い。
-    /// できないことをできるように見せないため、粒度をそろえてある。
+    /// 選択範囲の run に手を入れる(部分書式の心臓)。
+    /// 範囲の境で run を割り、中の run にだけ f を掛ける。
+    /// 端が字の途中に掛かっていたら、その字はまるごと含める。
+    fn apply_runs(&mut self, range: std::ops::Range<usize>, f: impl Fn(&mut Run)) {
+        let body = self.body_text();
+        let mut start = range.start.min(body.len());
+        while start > 0 && !body.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut end = range.end.min(body.len());
+        while end < body.len() && !body.is_char_boundary(end) {
+            end += 1;
+        }
+        let mut at = 0usize;
+        for b in &mut self.blocks {
+            let Block::Para(p) = b else { continue };
+            let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+            let (ps, pe) = (at, at + len);
+            at = pe + 1;
+            if pe < start || ps > end {
+                continue;
+            }
+            let ls = start.saturating_sub(ps).min(len);
+            let le = end.saturating_sub(ps).min(len);
+            if ls >= le {
+                continue;
+            }
+            let (left, rest) = split_runs(&p.runs, ls);
+            let (mut mid, right) = split_runs(&rest, le - ls);
+            for r in &mut mid {
+                f(r);
+            }
+            let pt = p.runs.first().map(|r| r.size_pt).unwrap_or(10.5);
+            p.runs = left;
+            p.runs.extend(mid);
+            p.runs.extend(right);
+            normalize_runs(&mut p.runs, pt);
+        }
+    }
+
+    /// 選択範囲の文字書式を変える。**選択の字にだけ掛かる**(run を割る)。
+    /// 選択が空(カーソルだけ)のときは、その段落まるごと — 従来の作法。
     pub fn apply_char_format(
         &mut self,
         range: std::ops::Range<usize>,
         f: impl Fn(&mut CharFormat),
     ) {
+        if range.start < range.end {
+            self.apply_runs(range, |r| f(&mut r.fmt));
+            return;
+        }
         let target = self.para_range(range);
         for (i, b) in self.blocks.iter_mut().filter(|b| matches!(b, Block::Para(_))).enumerate() {
             if !target.contains(&i) {
@@ -478,11 +639,15 @@ impl Document {
         }
     }
 
-    /// 選択範囲にかかる段落の文字の大きさを変える。
+    /// 選択範囲の文字の大きさを変える(選択の字にだけ。空なら段落まるごと)。
     ///
     /// 上限と下限を持つ — **際限なく大きく/小さくできると事故になる**
     /// (0pt にすると本文が消え、原因が分からなくなる)。
     pub fn apply_size(&mut self, range: std::ops::Range<usize>, f: impl Fn(f32) -> f32) {
+        if range.start < range.end {
+            self.apply_runs(range, |r| r.size_pt = f(r.size_pt).clamp(4.0, 400.0));
+            return;
+        }
         let target = self.para_range(range);
         for (i, b) in self.blocks.iter_mut().filter(|b| matches!(b, Block::Para(_))).enumerate() {
             if !target.contains(&i) {
@@ -496,8 +661,12 @@ impl Document {
         }
     }
 
-    /// 選択範囲にかかる段落の書体を変える。
+    /// 選択範囲の書体を変える(選択の字にだけ。空なら段落まるごと)。
     pub fn apply_font(&mut self, range: std::ops::Range<usize>, name: Option<String>) {
+        if range.start < range.end {
+            self.apply_runs(range, |r| r.font = name.clone());
+            return;
+        }
         let target = self.para_range(range);
         for (i, b) in self.blocks.iter_mut().filter(|b| matches!(b, Block::Para(_))).enumerate() {
             if !target.contains(&i) {
@@ -511,10 +680,33 @@ impl Document {
         }
     }
 
+    /// 選択範囲(の頭)の位置にある run。書式の表示・読み取りの元。
+    fn run_at(&self, pos: usize) -> Option<&Run> {
+        let mut at = 0usize;
+        for p in self.paragraphs() {
+            let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+            if pos <= at + len {
+                let off = pos - at;
+                // カーソルの**直前の字**の run(打つとその書式になる、の慣習)。
+                // 段落の頭では最初の run
+                let mut racc = 0usize;
+                for r in &p.runs {
+                    let rend = racc + r.text.len();
+                    if off <= rend && (off > racc || racc == 0) {
+                        return Some(r);
+                    }
+                    racc = rend;
+                }
+                return p.runs.first();
+            }
+            at += len + 1;
+        }
+        None
+    }
+
     /// いま選択範囲の文字の大きさ。
     pub fn size_at(&self, range: std::ops::Range<usize>) -> Option<f32> {
-        let target = self.para_range(range);
-        self.paragraphs().nth(target.start).and_then(|p| p.runs.first()).map(|r| r.size_pt)
+        self.run_at(range.start).map(|r| r.size_pt)
     }
 
     /// 選択範囲にかかる段落の性質(箇条書き・インデント・行間)を変える。
@@ -548,13 +740,9 @@ impl Document {
     }
 
     /// いま選択範囲が太字か(ボタンを押した状態に見せるため)。
+    /// カーソルの位置の run の書式を返す。
     pub fn char_format_at(&self, range: std::ops::Range<usize>) -> CharFormat {
-        let target = self.para_range(range);
-        self.paragraphs()
-            .nth(target.start)
-            .and_then(|p| p.runs.first())
-            .map(|r| r.fmt.clone())
-            .unwrap_or_default()
+        self.run_at(range.start).map(|r| r.fmt.clone()).unwrap_or_default()
     }
 
     /// いま選択範囲の揃え。
@@ -562,6 +750,55 @@ impl Document {
         let target = self.para_range(range);
         self.paragraphs().nth(target.start).map(|p| p.align).unwrap_or_default()
     }
+}
+
+/// run の列を byte で二つに割る(境に掛かる run はそこで切る)。
+fn split_runs(runs: &[Run], byte: usize) -> (Vec<Run>, Vec<Run>) {
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let mut at = 0usize;
+    for r in runs {
+        let end = at + r.text.len();
+        if end <= byte {
+            left.push(r.clone());
+        } else if at >= byte {
+            right.push(r.clone());
+        } else {
+            let cut = byte - at;
+            let mut a = r.clone();
+            a.text = r.text[..cut].to_string();
+            let mut b = r.clone();
+            b.text = r.text[cut..].to_string();
+            left.push(a);
+            right.push(b);
+        }
+        at = end;
+    }
+    (left, right)
+}
+
+/// 空の run を除き、同じ書式の隣り合う run を繋ぐ(編集で際限なく増やさない)。
+/// 全部空なら、空の run を1つ残す(空の段落の形)。
+fn normalize_runs(runs: &mut Vec<Run>, size_pt: f32) {
+    let mut out: Vec<Run> = Vec::new();
+    for r in runs.drain(..) {
+        if r.text.is_empty() {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last)
+                if last.size_pt == r.size_pt && last.font == r.font && last.fmt == r.fmt =>
+            {
+                last.text.push_str(&r.text);
+            }
+            _ => out.push(r),
+        }
+    }
+    if out.is_empty() {
+        out.push(Run { text: String::new(), size_pt, font: None,
+                       fmt: CharFormat::default() });
+    }
+    *runs = out;
 }
 
 impl Document {
@@ -596,6 +833,9 @@ pub struct Cell {
     /// この字の書式。**画面も紙も同じものを見る**ので、
     /// 太字や色が片方だけ出ることが起きない
     pub fmt: CharFormat,
+    /// この字の書体(run の指定。None は文書の既定)。
+    /// 行の中で書体が混ざっても、描く側が連なりごとに切り替えられる
+    pub font: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -715,9 +955,11 @@ fn is_gyomatsu_kinsoku(c: char) -> bool {
 /// 改行の単位。CJKは1字ずつ、欧文は語ごと(語中では折らない)。
 #[derive(Debug)]
 enum Tok {
-    One(char, f32, f32, CharFormat, usize),         // (字, 幅mm, サイズpt, 書式, バイト位置)
-    Word(Vec<(char, f32, usize)>, f32, CharFormat), // (字と幅と位置の列, サイズpt, 書式)
-    Space(f32, f32, CharFormat, usize),
+    // (字, 幅mm, サイズpt, 書式, 書体, バイト位置)
+    One(char, f32, f32, CharFormat, Option<String>, usize),
+    // (字と幅と位置の列, サイズpt, 書式, 書体)
+    Word(Vec<(char, f32, usize)>, f32, CharFormat, Option<String>),
+    Space(f32, f32, CharFormat, Option<String>, usize),
 }
 
 fn is_word_char(c: char) -> bool {
@@ -737,17 +979,20 @@ fn tokenize(p: &Paragraph, m: &Metrics) -> Vec<Tok> {
                 continue;
             }
             if !word.is_empty() {
-                out.push(Tok::Word(std::mem::take(&mut word), run.size_pt, run.fmt.clone()));
+                out.push(Tok::Word(std::mem::take(&mut word), run.size_pt, run.fmt.clone(),
+                                   run.font.clone()));
             }
             if ch == ' ' || ch == '\u{3000}' {
-                out.push(Tok::Space(m.advance_mm(ch, run.size_pt), run.size_pt, run.fmt.clone(), off));
+                out.push(Tok::Space(m.advance_mm(ch, run.size_pt), run.size_pt,
+                                    run.fmt.clone(), run.font.clone(), off));
             } else {
-                out.push(Tok::One(ch, m.advance_mm(ch, run.size_pt), run.size_pt, run.fmt.clone(), off));
+                out.push(Tok::One(ch, m.advance_mm(ch, run.size_pt), run.size_pt,
+                                  run.fmt.clone(), run.font.clone(), off));
             }
             off += ch.len_utf8();
         }
         if !word.is_empty() {
-            out.push(Tok::Word(word, run.size_pt, run.fmt.clone()));
+            out.push(Tok::Word(word, run.size_pt, run.fmt.clone(), run.font.clone()));
         }
     }
     out
@@ -804,23 +1049,28 @@ fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>,
     if let Some(mk) = marker {
         let size = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5);
         let fmt = para.runs.first().map(|r| r.fmt.clone()).unwrap_or_default();
+        let font = para.runs.first().and_then(|r| r.font.clone());
         for ch in mk.chars() {
             let w = m.advance_mm(ch, size);
             // 印は本文の一部ではないので off は段落頭(0)のまま
-            cur.push(Cell { ch, x_mm: 0.0, w_mm: w, size_pt: size, fmt: fmt.clone(), off: 0 });
+            cur.push(Cell { ch, x_mm: 0.0, w_mm: w, size_pt: size, fmt: fmt.clone(),
+                            font: font.clone(), off: 0 });
             w_cur += w;
         }
     }
     for tok in tokenize(para, m) {
         let (cells, w): (Vec<Cell>, f32) = match &tok {
-            Tok::One(ch, w, s, f, o) =>
-                (vec![Cell { ch: *ch, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone(), off: *o }], *w),
-            Tok::Word(cs, s, f) => (
-                cs.iter().map(|(c, w, o)| Cell { ch: *c, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone(), off: *o })
+            Tok::One(ch, w, s, f, ft, o) =>
+                (vec![Cell { ch: *ch, x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone(),
+                             font: ft.clone(), off: *o }], *w),
+            Tok::Word(cs, s, f, ft) => (
+                cs.iter().map(|(c, w, o)| Cell { ch: *c, x_mm: 0.0, w_mm: *w, size_pt: *s,
+                                                 fmt: f.clone(), font: ft.clone(), off: *o })
                     .collect(),
                 cs.iter().map(|(_, w, _)| *w).sum()),
-            Tok::Space(w, s, f, o) =>
-                (vec![Cell { ch: ' ', x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone(), off: *o }], *w),
+            Tok::Space(w, s, f, ft, o) =>
+                (vec![Cell { ch: ' ', x_mm: 0.0, w_mm: *w, size_pt: *s, fmt: f.clone(),
+                             font: ft.clone(), off: *o }], *w),
         };
 
         if w_cur + w > measure && !cur.is_empty() {
@@ -831,11 +1081,11 @@ fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>,
             }
             // 欧文の語は、設定が入っていれば音節で折って - を付ける
             if hyphenate {
-                if let Tok::Word(cs, sz, f) = &tok {
+                if let Tok::Word(cs, sz, f, ft) = &tok {
                     if let Some(k) = hyphen_split(cs, *sz, m, measure - w_cur) {
                         for (c, wch, o) in &cs[..k] {
                             cur.push(Cell { ch: *c, x_mm: 0.0, w_mm: *wch,
-                                size_pt: *sz, fmt: f.clone(), off: *o });
+                                size_pt: *sz, fmt: f.clone(), font: ft.clone(), off: *o });
                             w_cur += *wch;
                         }
                         // ハイフンは本文の字ではない。バイト位置は直前の字に重ねる
@@ -843,12 +1093,12 @@ fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>,
                         let hw = m.advance_mm('-', *sz);
                         let off_h = cs[k - 1].2;
                         cur.push(Cell { ch: '-', x_mm: 0.0, w_mm: hw,
-                            size_pt: *sz, fmt: f.clone(), off: off_h });
+                            size_pt: *sz, fmt: f.clone(), font: ft.clone(), off: off_h });
                         w_cur += hw;
                         cur = close(&mut done, &mut cur, &mut w_cur, None);
                         for (c, wch, o) in &cs[k..] {
                             cur.push(Cell { ch: *c, x_mm: 0.0, w_mm: *wch,
-                                size_pt: *sz, fmt: f.clone(), off: *o });
+                                size_pt: *sz, fmt: f.clone(), font: ft.clone(), off: *o });
                             w_cur += *wch;
                         }
                         continue;
@@ -964,6 +1214,7 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                                 w_mm: cap_w,
                                 size_pt: cap_pt,
                                 fmt: first.map(|r| r.fmt.clone()).unwrap_or_default(),
+                                font: first.and_then(|r| r.font.clone()),
                                 off: 0,
                             }],
                             y_mm: y + frame.line_height_mm * para.spacing(),
@@ -2043,6 +2294,142 @@ mod byte0_tests {
         assert_eq!(l.byte0, 0);
         // 印(・)ぶんが byte_end に乗っていない
         assert_eq!(l.byte_end(), "項目".len(), "印が本文のバイトに混ざった");
+    }
+}
+
+#[cfg(test)]
+mod run_edit_tests {
+    use super::*;
+
+    fn bold_spans(d: &Document) -> Vec<(String, bool)> {
+        d.paragraphs()
+            .flat_map(|p| p.runs.iter())
+            .map(|r| (r.text.clone(), r.fmt.bold))
+            .collect()
+    }
+
+    #[test]
+    fn 段落の途中だけ太字にできる() {
+        let mut d = Document::plain("防火戸の仕様を確認", 10.5);
+        let s = "防火戸の".len();
+        let e = "防火戸の仕様".len();
+        d.apply_char_format(s..e, |f| f.bold = true);
+        assert_eq!(
+            bold_spans(&d),
+            vec![
+                ("防火戸の".into(), false),
+                ("仕様".into(), true),
+                ("を確認".into(), false)
+            ],
+            "選択の字だけが太字になっていない"
+        );
+    }
+
+    #[test]
+    fn 部分書式が打鍵で流されない() {
+        let mut d = Document::plain("防火戸の仕様を確認", 10.5);
+        let s = "防火戸の".len();
+        let e = "防火戸の仕様".len();
+        d.apply_char_format(s..e, |f| f.bold = true);
+        // 「仕様」の後ろに「書」を打った(1回の編集 = 1箇所の置き換え)
+        d.set_body_text("防火戸の仕様書を確認", 10.5);
+        assert_eq!(
+            bold_spans(&d),
+            vec![
+                ("防火戸の".into(), false),
+                ("仕様書".into(), true),
+                ("を確認".into(), false)
+            ],
+            "太字の中に打った字が太字にならない・境が流された"
+        );
+        // 頭に打っても境は動かない
+        d.set_body_text("この防火戸の仕様書を確認", 10.5);
+        assert_eq!(bold_spans(&d)[1], ("仕様書".into(), true), "頭への挿入で境がずれた");
+    }
+
+    #[test]
+    fn 選択の中だけ消しても境が残る() {
+        let mut d = Document::plain("あいうえお", 10.5);
+        d.apply_char_format(3..12, |f| f.bold = true); // いうえ
+        d.set_body_text("あいえお", 10.5); // 「う」を消した
+        assert_eq!(
+            bold_spans(&d),
+            vec![("あ".into(), false), ("いえ".into(), true), ("お".into(), false)],
+            "削除で境が流された"
+        );
+    }
+
+    #[test]
+    fn 途中の段落でenterしても下の性質がずれない() {
+        // 旧方式(段落番号で写す)の持病: 段落の増減で下の段落の性質がずれた
+        let mut d = Document::plain("一\n二\n三", 10.5);
+        let start = "一\n二".len();
+        d.apply_align(start + 1..start + 1, Align::Center); // 「三」を中央に
+        if let Block::Para(p) = &mut d.blocks[2] {
+            p.shade = Some("FFF2CC".into());
+        }
+        // 「二」の後ろで Enter
+        d.set_body_text("一\n二\n\n三", 10.5);
+        let ps: Vec<&Paragraph> = d.paragraphs().collect();
+        assert_eq!(ps.len(), 4);
+        assert_eq!(ps[3].align, Align::Center, "下の段落の揃えがずれた");
+        assert_eq!(ps[3].shade.as_deref(), Some("FFF2CC"), "下の段落の帯がずれた");
+        // 割った両方が段落の性質を持つ(Word と同じ)。下へ「ずれる」のとは違う
+        assert_eq!(ps[2].shade.as_deref(), Some("FFF2CC"));
+        // undo(= 逆向きの1回の編集)でも戻る
+        d.set_body_text("一\n二\n三", 10.5);
+        let ps: Vec<&Paragraph> = d.paragraphs().collect();
+        assert_eq!(ps[2].align, Align::Center, "undo で揃えが消えた");
+    }
+
+    #[test]
+    fn 編集しても表の位置が動かない() {
+        // 旧方式は打鍵のたびに表が末尾へ動いていた
+        let mut d = Document::plain("前\n後", 10.5);
+        d.blocks.insert(1, Block::Table(Table {
+            col_mm: vec![],
+            rows: vec![vec![Cellbox::default()]],
+        }));
+        d.set_body_text("前に足す\n後", 10.5);
+        let kinds: Vec<&str> = d.blocks.iter().map(|b| match b {
+            Block::Para(_) => "段落",
+            Block::Table(_) => "表",
+        }).collect();
+        assert_eq!(kinds, vec!["段落", "表", "段落"], "表が動いた: {kinds:?}");
+    }
+
+    #[test]
+    fn 段落の合流で頭の性質が残る() {
+        let mut d = Document::plain("一\n二", 10.5);
+        d.apply_align(0..0, Align::Center);
+        // 「一」と「二」の間の改行を消した
+        d.set_body_text("一二", 10.5);
+        let ps: Vec<&Paragraph> = d.paragraphs().collect();
+        assert_eq!(ps.len(), 1);
+        assert_eq!(ps[0].align, Align::Center, "合流で頭の性質が消えた");
+        assert_eq!(ps[0].runs[0].text, "一二");
+    }
+
+    #[test]
+    fn 大きさと書体も選択の字にだけ掛かる() {
+        let mut d = Document::plain("見出しと本文", 10.5);
+        d.apply_size(0.."見出し".len(), |_| 16.0);
+        d.apply_font(0.."見出し".len(), Some("ゴシック".into()));
+        let runs: Vec<&Run> = d.paragraphs().flat_map(|p| p.runs.iter()).collect();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].size_pt, 16.0);
+        assert_eq!(runs[0].font.as_deref(), Some("ゴシック"));
+        assert_eq!(runs[1].size_pt, 10.5, "選択の外まで変わった");
+        assert_eq!(runs[1].font, None);
+    }
+
+    #[test]
+    fn カーソル位置の書式が読める() {
+        let mut d = Document::plain("あ太字い", 10.5);
+        d.apply_char_format(3..9, |f| f.bold = true);
+        assert!(!d.char_format_at(0..0).bold, "頭で太字と言った");
+        assert!(d.char_format_at(9..9).bold, "太字の直後で太字と言わない");
+        assert!(!d.char_format_at(12..12).bold, "太字の外で太字と言った");
     }
 }
 

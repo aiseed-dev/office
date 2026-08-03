@@ -2726,6 +2726,36 @@ mod bookmark_model_tests {
 }
 
 #[cfg(test)]
+mod partial_fmt_tests {
+    use super::*;
+    use kumihan::Document;
+
+    #[test]
+    fn 部分書式が往復する() {
+        // 編集モデルが run 粒度になったので、段落の途中だけの太字が
+        // docx に3つの run として入り、開き直しても残る
+        let mut d = Document::plain("防火戸の仕様を確認", 10.5);
+        let s0 = "防火戸の".len();
+        let e0 = "防火戸の仕様".len();
+        d.apply_char_format(s0..e0, |f| f.bold = true);
+        d.apply_size(s0..e0, |_| 14.0);
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        let runs: Vec<_> = back.paragraphs().next().unwrap().runs.iter()
+            .map(|r| (r.text.clone(), r.fmt.bold, r.size_pt))
+            .collect();
+        assert_eq!(runs, vec![
+            ("防火戸の".into(), false, 10.5),
+            ("仕様".into(), true, 14.0),
+            ("を確認".into(), false, 10.5),
+        ], "部分書式が往復しない");
+    }
+}
+
+#[cfg(test)]
 mod hyphenate_round_tests {
     use super::*;
     use kumihan::Document;

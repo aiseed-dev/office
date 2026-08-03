@@ -3195,7 +3195,6 @@ impl Render for Writer {
             if line.cells.is_empty() {
                 continue;
             }
-            let text = line.text();
             let pt = line.cells[0].size_pt;
             let sz = pt * 96.0 / 72.0 * self.zoom;
             let x0 = self.pg.left_mm + line.cells[0].x_mm;
@@ -3228,30 +3227,6 @@ impl Render for Writer {
                 }
                 }
             }
-            // 書式は字が持っている。行の頭の字のものを行に掛ける
-            // (段落まるごとに掛ける粒度なので、行の中で混ざらない)
-            let f = &line.cells[0].fmt;
-            // 上付き・下付きは小さく描き、少し上下へずらす(段落単位の近似)
-            let (sz, top) = if f.superscript {
-                (sz * 0.7, top - sz * 0.25)
-            } else if f.subscript {
-                (sz * 0.7, top + sz * 0.25)
-            } else {
-                (sz, top)
-            };
-            // 蛍光ペン。字の下に色を敷く
-            if let Some(h) = &f.highlight {
-                let w_mm: f32 = line.cells.iter().map(|c| c.w_mm).sum();
-                let bg = match h.as_str() {
-                    "green" => rgb(0xC9F0C9),
-                    "cyan" => rgb(0xC9EEF0),
-                    _ => rgb(0xF7EFA8),
-                };
-                paper = paper.child(div().absolute()
-                    .left(px(x0 * pxmm)).top(px(top + sz * HALF_LEADING))
-                    .w(px(w_mm * pxmm)).h(px(sz * 1.15))
-                    .bg(bg));
-            }
             // 選択の色。**選択が見えないと、コピーも切り取りも信用できない**
             // (ドラッグで選べるようにしても、色が出なければ「できない」に見える)
             let selr = self.ed.selection();
@@ -3280,25 +3255,80 @@ impl Render for Writer {
                         .bg(gpui::Rgba { r: 0.40, g: 0.60, b: 0.85, a: 0.35 }));
                 }
             }
-            let mut d = div().absolute()
-                .left(px(x0 * pxmm)).top(px(top))
-                .text_size(px(sz))
-                .font_family(self.font_name.clone())
-                .whitespace_nowrap()
-                .child(SharedString::from(text.clone()));
-            if f.bold {
-                d = d.font_weight(gpui::FontWeight::BOLD);
+            // 文字は**同じ書式の連なり**ごとに描く(部分書式。太字・大きさ・
+            // 書体・色が行の中で混ざっても、その通りに出る)
+            let mut i = 0usize;
+            while i < line.cells.len() {
+                let c0 = &line.cells[i];
+                let mut j = i + 1;
+                while j < line.cells.len()
+                    && line.cells[j].fmt == c0.fmt
+                    && line.cells[j].size_pt == c0.size_pt
+                    && line.cells[j].font == c0.font
+                {
+                    j += 1;
+                }
+                let seg = &line.cells[i..j];
+                let text: String = seg.iter().map(|c| c.ch).collect();
+                let w_mm: f32 = seg.iter().map(|c| c.w_mm).sum();
+                let f = &c0.fmt;
+                let sx = self.pg.left_mm + c0.x_mm;
+                let spt = c0.size_pt * 96.0 / 72.0 * self.zoom;
+                let stop = line.y_mm * pxmm - spt * 0.88;
+                // 上付き・下付きは小さく描き、少し上下へずらす
+                let (spt, stop) = if f.superscript {
+                    (spt * 0.7, stop - spt * 0.25)
+                } else if f.subscript {
+                    (spt * 0.7, stop + spt * 0.25)
+                } else {
+                    (spt, stop)
+                };
+                // 蛍光ペン。字の下に色を敷く
+                if let Some(h) = &f.highlight {
+                    let bg = match h.as_str() {
+                        "green" => rgb(0xC9F0C9),
+                        "cyan" => rgb(0xC9EEF0),
+                        _ => rgb(0xF7EFA8),
+                    };
+                    paper = paper.child(div().absolute()
+                        .left(px(sx * pxmm)).top(px(stop + spt * HALF_LEADING))
+                        .w(px(w_mm * pxmm)).h(px(spt * 1.15))
+                        .bg(bg));
+                }
+                let mut d = div().absolute()
+                    .left(px(sx * pxmm)).top(px(stop))
+                    .text_size(px(spt))
+                    .font_family(c0.font.clone().map(SharedString::from)
+                        .unwrap_or_else(|| self.font_name.clone()))
+                    .whitespace_nowrap()
+                    .child(SharedString::from(text));
+                if f.bold {
+                    d = d.font_weight(gpui::FontWeight::BOLD);
+                }
+                if f.italic {
+                    d = d.italic();
+                }
+                d = match &f.color {
+                    Some(c) => d.text_color(gpui::Rgba {
+                        r: hex(c, 0), g: hex(c, 1), b: hex(c, 2), a: 1.0,
+                    }),
+                    None => d.text_color(rgb(0x1B1B1B)),
+                };
+                paper = paper.child(d);
+                // 下線・取り消し線は連なりごとに引く(gpui の text に無い)
+                for (on, dy) in [
+                    (f.underline, spt * (1.05 + HALF_LEADING)),
+                    (f.strike, spt * (0.35 + HALF_LEADING)),
+                ] {
+                    if on {
+                        paper = paper.child(div().absolute()
+                            .left(px(sx * pxmm)).top(px(stop + dy))
+                            .w(px(w_mm * pxmm)).h(px(1.0))
+                            .bg(rgb(0x1B1B1B)));
+                    }
+                }
+                i = j;
             }
-            if f.italic {
-                d = d.italic();
-            }
-            d = match &f.color {
-                Some(c) => d.text_color(gpui::Rgba {
-                    r: hex(c, 0), g: hex(c, 1), b: hex(c, 2), a: 1.0,
-                }),
-                None => d.text_color(rgb(0x1B1B1B)),
-            };
-            paper = paper.child(d);
             // 編集記号。空白は・、段落の終わりは ↵(見え方だけ。文書は変わらない)
             if self.show_marks && line.from_body {
                 for c in &line.cells {
@@ -3316,20 +3346,6 @@ impl Render for Writer {
                     .text_size(px(sz * 0.8)).text_color(rgb(0x9DB8C8))
                     .child("↵"));
             }
-            // 下線・取り消し線は自分で引く(gpui の text に無い)
-            let w_mm: f32 = line.cells.iter().map(|c| c.w_mm).sum();
-            for (on, dy) in [
-                (f.underline, sz * (1.05 + HALF_LEADING)),
-                (f.strike, sz * (0.35 + HALF_LEADING)),
-            ] {
-                if on {
-                    paper = paper.child(div().absolute()
-                        .left(px(x0 * pxmm)).top(px(top + dy))
-                        .w(px(w_mm * pxmm)).h(px(1.0))
-                        .bg(rgb(0x1B1B1B)));
-                }
-            }
-
         }
         // ヘッダー・フッター。画面の紙は巻物なので、ヘッダーは紙の頭、
         // フッターは紙の末尾の頁の位置に出す(番号は1ページ目のもの。
