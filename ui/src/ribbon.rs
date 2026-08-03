@@ -131,11 +131,28 @@ pub const WRITER: &[Tab] = &[
         c("track-changes", "変更履歴", "track-changes"),
         c("comment", "コメント", "comment"),
     ]},
+    Tab { name: "コラボレーション", cmds: &[
+        x("共同編集モード", "coauth-mode"),
+        x("コメントを追加", "co-addcomment"),
+        x("コメントを削除", "co-delcomment"),
+        x("コメントの表示", "co-showcomment"),
+        x("チャット", "co-chat"),
+        x("バージョン履歴", "co-history"),
+    ]},
+    Tab { name: "保護", cmds: &[
+        x("暗号化する", "prot-encrypt"),
+        x("デジタル署名を追加", "prot-sign"),
+        x("保護", "prot-doc"),
+    ]},
     Tab { name: "表示", cmds: &[
         c("zoom-in", "拡大", "zoom-in"),
         c("zoom-out", "縮小", "zoom-out"),
         c("ruler", "ルーラー", "ruler"),
         c("darkmode", "ダークモード", "darkmode"),
+    ]},
+    Tab { name: "プラグイン", cmds: &[
+        x("マクロ", "plug-macros"),
+        x("プラグインの管理", "plug-manage"),
     ]},
 ];
 
@@ -260,11 +277,28 @@ pub const CALC: &[Tab] = &[
         x("詳細の非表示", "hide-details"),
         c("python", "Python", "python"),
     ]},
+    Tab { name: "コラボレーション", cmds: &[
+        x("共同編集モード", "coauth-mode"),
+        c("addcomment", "コメントを追加", "co-addcomment"),
+        x("コメントを削除", "co-delcomment"),
+        x("コメントの表示", "co-showcomment"),
+        x("チャット", "co-chat"),
+        x("バージョン履歴", "co-history"),
+    ]},
+    Tab { name: "保護", cmds: &[
+        x("暗号化する", "prot-encrypt"),
+        x("デジタル署名を追加", "prot-sign"),
+        x("保護", "prot-doc"),
+    ]},
     Tab { name: "表示", cmds: &[
         c("freeze", "ウィンドウ枠の固定", "freeze"),
         x("シートの表示", "sheet-view"),
         c("show-gridlines", "グリッド線", "show-gridlines"),
         x("見出し", "show-headings"),
+    ]},
+    Tab { name: "プラグイン", cmds: &[
+        x("マクロ", "plug-macros"),
+        x("プラグインの管理", "plug-manage"),
     ]},
 ];
 
@@ -280,12 +314,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 除外した5つがタブに無い() {
+    fn 本家のタブが全部ある() {
+        // 発注者確定(2026-08-04): メニューは制限しない。実装しないものも
+        // 場所は本家どおり(灰色)。タブごと消すことはしない
         for tabs in [WRITER, CALC] {
-            for t in tabs {
-                for ng in ["共同編集", "保護", "プラグイン", "AI", "マクロ"] {
-                    assert!(!t.name.contains(ng), "除外のはずのタブがある: {}", t.name);
-                }
+            for want in ["コラボレーション", "保護", "プラグイン"] {
+                assert!(
+                    tabs.iter().any(|t| t.name == want),
+                    "タブが無い: {want}"
+                );
             }
         }
     }

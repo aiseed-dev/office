@@ -3294,7 +3294,7 @@ calc の隣に置いてください)"
         "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
         "scale", "pagebreak", "printtitles", "print-gridlines", "print-headings",
         "data-from-text", "text-column", "goal-seek", "data-external-links",
-        "insshape", "instext", "inssparkline", "python",
+        "insshape", "instext", "inssparkline", "python", "addcomment",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -3570,6 +3570,11 @@ calc の隣に置いてください)"
             "python" => {
                 self.commit();
                 self.prompt = Some(("py", Editor::new("")));
+            }
+            "addcomment" => {
+                self.commit();
+                let cur = self.sheet().comments.get(&self.cursor).cloned().unwrap_or_default();
+                self.prompt = Some(("comment", Editor::new(&cur)));
             }
             "text-column" => {
                 self.commit();

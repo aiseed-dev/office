@@ -52,6 +52,13 @@
   `background_executor().spawn` + `cx.spawn` で別の糸に出す。
   **calc・writer とも全ダイアログ(開く・保存・PDF・画像)を別糸化済み**
   (2026-08-03)。新しいダイアログを足すときも同じ作法で
+- この作業木で **git sparse-checkout が突然有効になっていた**事故があった
+  (2026-08-04。engine/ が作業木から消えた。`git sparse-checkout disable` で
+  復旧)。誰の操作か特定できず — 見かけたら同じ復旧を。stash/checkout 同様、
+  共有作業木では sparse-checkout も使わないこと
+- **vendor/web-apps は元の機械の版でないと再生成できない**(2026-08-04 に
+  ONLYOFFICE master を取ってみたらテンプレート構成が変わっていてタブが欠けた。
+  この機械では ribbon.rs への手反映+gen_ribbon.py の同期、の二重書きで運用)
 - リボンは生成物: `python3 ui/gen_ribbon.py ja > ui/src/ribbon.rs`。
   押せるものは同スクリプトの READY 表。テンプレートの class 注入スロット
   (pagebreak・insertimage 等)は id の正規表現に掛からないので手で差し込む
@@ -91,6 +98,9 @@ status で言う。xlsx へは custGeom の折れ線 = Excel でも見える)、
 排他ロック(.~lock.名前#。ファイルサーバーの「後勝ちで潰す」を防ぐ。
 先客が居れば名乗りを見せて上書き保存を止める。**writer にも同じものが要る** —
 lock_path_for / foreign_lock / lock_identity は calc/src/main.rs にある。共通化歓迎)、
+リボンの全部入れ(発注者確定: コラボレーション・保護・プラグインのタブを
+両アプリに追加。場所は本家どおり・当面灰色。calc のコメントを追加だけ配線済み。
+writer 側の コメント/変更履歴 の釦は相方の実装に繋げられるはず — 申し送り)、
 PY の UDF とスピル(=PY("関数",…) セル。@計算 のときだけ檻で評価、
 開く=実行なし。2次元はスピルし衝突は #SPILL!。前史は発注者の 2018 Qiita)、
 **Python in Calc**(データ > Python。板に一行 / .py 実行 / @save でブックに

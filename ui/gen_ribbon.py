@@ -112,12 +112,14 @@ READY = {
         "data-from-text": "data-from-text", "text-column": "text-column",
         "goal-seek": "goal-seek", "data-external-links": "data-external-links",
         "insshape": "insshape", "instext": "instext",
-        "inssparkline": "inssparkline",
+        "inssparkline": "inssparkline", "co-addcomment": "addcomment",
     },
 }
 
-# 除外するタブ(data-tab 名)
-DROP_TABS = {"collaboration", "protect", "plugins", "ai", "macros", "forms", "pdf"}
+# 除外するタブ — **無し**(発注者確定 2026-08-04: メニューは制限せず全部入れる。
+# 実装しない方針のもの(共同編集・保護・プラグイン等)も、場所は本家どおり
+# 灰色で見せる。「できないものを、できるように見せない」は ready で守る)
+DROP_TABS: set = set()
 
 # slot の id → ja.json の鍵の末尾(tip か cap)。
 # 現物の id と鍵名は綴りが違うので、ここだけは対応表が要る。
@@ -253,6 +255,23 @@ def label_of(app_loc, prefix, slot):
 # 並びは Euro-Office の実物: 文書 = ファイル ホーム 挿入 描画 レイアウト
 # 参考資料 ヘッダー/フッター レビュー 表示 / 表計算 = … 数式 データ 表示。
 # 除外(共同編集・保護・プラグイン)はそもそも入れない。
+# 全部入れる(発注者確定 2026-08-04): 共同編集・保護・プラグインも
+# 場所は本家どおり。実装しないものは灰色のまま(ready の嘘は無し)
+COMMON_TAIL = {
+    "collaboration": [
+        ("coauth-mode", "共同編集モード"), ("co-addcomment", "コメントを追加"),
+        ("co-delcomment", "コメントを削除"), ("co-showcomment", "コメントの表示"),
+        ("co-chat", "チャット"), ("co-history", "バージョン履歴"),
+    ],
+    "protect": [
+        ("prot-encrypt", "暗号化する"), ("prot-sign", "デジタル署名を追加"),
+        ("prot-doc", "保護"),
+    ],
+    "plugins": [
+        ("plug-macros", "マクロ"), ("plug-manage", "プラグインの管理"),
+    ],
+}
+
 DYNAMIC = {
     "documenteditor": [
         ("draw", 3, [("pen", "ペン"), ("highlighter", "蛍光ペン"), ("eraser", "消しゴム")]),
@@ -279,7 +298,9 @@ DYNAMIC = {
 }
 
 TAB_NAME_KEYS = {"draw": "Draw", "headerfooter": "HeaderFooter",
-                 "review": "Review", "view": "View"}
+                 "review": "Review", "view": "View",
+                 "collaboration": "コラボレーション", "protect": "保護",
+                 "plugins": "プラグイン"}
 
 
 def tabs_of(app, prefix):
@@ -327,6 +348,21 @@ def tabs_of(app, prefix):
             out.append(entry)
         else:
             out.insert(at, entry)
+    # 全部入れる: 共同編集・保護は表示の前、プラグインは末尾(本家の並び)
+    for key, cmds in [
+        ("collaboration", COMMON_TAIL["collaboration"]),
+        ("protect", COMMON_TAIL["protect"]),
+        ("plugins", COMMON_TAIL["plugins"]),
+    ]:
+        name = TAB_NAME_KEYS[key]
+        entry = (name, [c for c, _ in cmds])
+        for c, label in cmds:
+            DYN_LABELS[c] = label
+        view_at = next((i for i, (n, _) in enumerate(out) if n == "表示"), len(out))
+        if key == "plugins":
+            out.append(entry)
+        else:
+            out.insert(view_at, entry)
     return out, loc
 
 
@@ -422,12 +458,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 除外した5つがタブに無い() {
+    fn 本家のタブが全部ある() {
+        // 発注者確定(2026-08-04): メニューは制限しない。実装しないものも
+        // 場所は本家どおり(灰色)。タブごと消すことはしない
         for tabs in [WRITER, CALC] {
-            for t in tabs {
-                for ng in ["共同編集", "保護", "プラグイン", "AI", "マクロ"] {
-                    assert!(!t.name.contains(ng), "除外のはずのタブがある: {}", t.name);
-                }
+            for want in ["コラボレーション", "保護", "プラグイン"] {
+                assert!(
+                    tabs.iter().any(|t| t.name == want),
+                    "タブが無い: {want}"
+                );
             }
         }
     }
