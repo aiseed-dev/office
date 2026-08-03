@@ -117,6 +117,19 @@ fn grip_hit(sizes: &[(u32, f32)], start: f32, pos: f32) -> Option<u32> {
     None
 }
 
+/// `start` から `sizes` の幅で並ぶ区分のうち、`pos` がどの区分の中に
+/// 入るかを返す。見出しのクリック(列・行の選択)の当たり判定。
+fn index_at(sizes: &[(u32, f32)], start: f32, pos: f32) -> Option<u32> {
+    let mut x = start;
+    for (i, w) in sizes {
+        if pos >= x && pos < x + w {
+            return Some(*i);
+        }
+        x += w;
+    }
+    None
+}
+
 /// 見出しの境界を掴んだドラッグ(列幅・行高を変える)
 struct SizeDrag {
     /// 列か(false なら行)
@@ -276,6 +289,8 @@ struct Calc {
     drag: Option<Pos>,
     /// 見出しの境界を掴んだドラッグ(列幅・行高)。セル選択の drag とは別
     size_drag: Option<SizeDrag>,
+    /// 見出しを掴んだ選択ドラッグ(列か, 始まりの番号)。B→D と撫でて複数列
+    head_drag: Option<(bool, u32)>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 右クリックのメニュー(出ている場所。格子領域の px)
@@ -355,6 +370,7 @@ impl Calc {
             anchor: None,
             drag: None,
             size_drag: None,
+            head_drag: None,
             wheel: (0.0, 0.0),
             menu_at: None,
             menu_sub: None,
@@ -506,27 +522,53 @@ impl Calc {
         if x < HEAD_W || y < ROW_H {
             return None;
         }
-        let mut x0 = HEAD_W;
-        let mut col = None;
-        for c in grid_cols(self.frozen, self.view, COLS) {
-            let w = self.col_px(c);
-            if x < x0 + w {
-                col = Some(c);
-                break;
-            }
-            x0 += w;
-        }
-        let mut y0 = ROW_H;
-        let mut row = None;
-        for r in self.visible_rows() {
-            let h = self.row_px(r);
-            if y < y0 + h {
-                row = Some(r);
-                break;
-            }
-            y0 += h;
-        }
-        Some(Pos { row: row?, col: col? })
+        Some(Pos { row: self.row_at(y)?, col: self.col_at(x)? })
+    }
+
+    /// この x はどの列の上か(見出し・セルのどちらでも)。
+    fn col_at(&self, x: f32) -> Option<u32> {
+        let cols: Vec<(u32, f32)> = grid_cols(self.frozen, self.view, COLS)
+            .into_iter()
+            .map(|c| (c, self.col_px(c)))
+            .collect();
+        index_at(&cols, HEAD_W, x)
+    }
+
+    fn row_at(&self, y: f32) -> Option<u32> {
+        let rows: Vec<(u32, f32)> = self
+            .visible_rows()
+            .into_iter()
+            .map(|r| (r, self.row_px(r)))
+            .collect();
+        index_at(&rows, ROW_H, y)
+    }
+
+    /// 列をまるごと選ぶ(使われている高さまで)。`a` が起点、`b` が動く側。
+    fn select_cols(&mut self, a: u32, b: u32) {
+        let rows = self.sheet().extent().0.max(1);
+        self.anchor = Some(Pos::new(rows - 1, a));
+        self.cursor = Pos::new(0, b);
+        self.sync_input();
+        let (lo, hi) = (a.min(b), a.max(b));
+        self.status = if lo == hi {
+            format!("{}列を選択しました(1〜{rows}行)", col_name(lo)).into()
+        } else {
+            format!("{}〜{}列を選択しました(1〜{rows}行)", col_name(lo), col_name(hi)).into()
+        };
+    }
+
+    /// 行をまるごと選ぶ(使われている幅まで)。
+    fn select_rows(&mut self, a: u32, b: u32) {
+        let cols = self.sheet().extent().1.max(1);
+        self.anchor = Some(Pos::new(a, cols - 1));
+        self.cursor = Pos::new(b, 0);
+        self.sync_input();
+        let (lo, hi) = (a.min(b), a.max(b));
+        self.status = if lo == hi {
+            format!("{}行を選択しました", lo + 1).into()
+        } else {
+            format!("{}〜{}行を選択しました", lo + 1, hi + 1).into()
+        };
     }
 
     /// 見出しの帯の上の、列幅・行高の取っ手(境界 ±GRIP px)。Some((列か, 番号))。
@@ -597,6 +639,7 @@ impl Calc {
         // mouse-up を取り逃していても、新しい押下で必ず仕切り直す(自癒)
         self.size_drag = None;
         self.drag = None;
+        self.head_drag = None;
         if std::env::var_os("JO_MOUSE_LOG").is_some() {
             eprintln!(
                 "down x={x:.1} y={y:.1} clicks={clicks} grip={:?}",
@@ -621,6 +664,52 @@ impl Calc {
                 base: if is_col { self.col_px(idx) } else { self.row_px(idx) },
                 moved: false,
             });
+            return;
+        }
+        // 見出しのクリック = 列・行の選択(Excel の作法)。撫でれば複数列・行
+        if y < ROW_H && x >= HEAD_W {
+            if let Some(c) = self.col_at(x) {
+                if !self.commit() {
+                    return;
+                }
+                if shift {
+                    // いまの選択の起点の列から伸ばす
+                    let a = self.anchor.map(|p| p.col).unwrap_or(self.cursor.col);
+                    self.select_cols(a, c);
+                } else {
+                    self.select_cols(c, c);
+                    self.head_drag = Some((true, c));
+                }
+            }
+            return;
+        }
+        if x < HEAD_W && y >= ROW_H {
+            if let Some(r) = self.row_at(y) {
+                if !self.commit() {
+                    return;
+                }
+                if shift {
+                    let a = self.anchor.map(|p| p.row).unwrap_or(self.cursor.row);
+                    self.select_rows(a, r);
+                } else {
+                    self.select_rows(r, r);
+                    self.head_drag = Some((false, r));
+                }
+            }
+            return;
+        }
+        // 左上の角 = 使われている範囲の全選択(Ctrl+A と同じ)
+        if x < HEAD_W && y < ROW_H {
+            if !self.commit() {
+                return;
+            }
+            let (rows, cols) = self.sheet().extent();
+            if rows > 0 {
+                self.anchor = Some(Pos::new(0, 0));
+                self.cursor = Pos::new(rows - 1, cols.saturating_sub(1));
+                self.sync_input();
+                self.status = format!("A1:{} を選択しました", self.cursor.a1()).into();
+            }
             return;
         }
         let Some(p) = self.cell_at(x, y) else { return };
@@ -651,6 +740,21 @@ impl Calc {
 
     /// 押したまま動いた。通り過ぎたセルまで選択を広げる。
     fn mouse_drag_at(&mut self, x: f32, y: f32) {
+        if let Some((is_col, start)) = self.head_drag {
+            // 見出しから始めた選択は、どこを通っても列・行の選択のまま
+            if is_col {
+                if let Some(c) = self.col_at(x) {
+                    if self.cursor.col != c {
+                        self.select_cols(start, c);
+                    }
+                }
+            } else if let Some(r) = self.row_at(y) {
+                if self.cursor.row != r {
+                    self.select_rows(start, r);
+                }
+            }
+            return;
+        }
         let Some(start) = self.drag else { return };
         let Some(p) = self.cell_at(x, y) else { return };
         if self.cursor == p {
@@ -678,6 +782,9 @@ impl Calc {
             // 幅・高さの確定。status は size_drag_at が出している
             return;
         }
+        if self.head_drag.take().is_some() {
+            return; // 列・行の選択の確定。status は select_* が出している
+        }
         if self.drag.take().is_some() && self.anchor.is_some() {
             let (a, b) = self.sel_rect();
             self.status = format!("{}:{}", a.a1(), b.a1()).into();
@@ -687,6 +794,36 @@ impl Calc {
     /// 右クリック。選択の中ならその選択への操作、外ならそのセルへ移ってから
     /// メニューを出す(Excel の作法)。
     fn right_click_at(&mut self, x: f32, y: f32) {
+        // 見出しの右クリック = その列・行を選んでからメニュー(Excel の作法)。
+        // 既に選択の中なら選び直さない(複数列への操作を保つ)
+        if y < ROW_H && x >= HEAD_W {
+            if let Some(c) = self.col_at(x) {
+                let (a, b) = self.sel_rect();
+                if !(self.anchor.is_some() && (a.col..=b.col).contains(&c)) {
+                    if !self.commit() {
+                        return;
+                    }
+                    self.select_cols(c, c);
+                }
+                self.menu_at = Some((x, y));
+                self.menu_sub = None;
+            }
+            return;
+        }
+        if x < HEAD_W && y >= ROW_H {
+            if let Some(r) = self.row_at(y) {
+                let (a, b) = self.sel_rect();
+                if !(self.anchor.is_some() && (a.row..=b.row).contains(&r)) {
+                    if !self.commit() {
+                        return;
+                    }
+                    self.select_rows(r, r);
+                }
+                self.menu_at = Some((x, y));
+                self.menu_sub = None;
+            }
+            return;
+        }
         if let Some(p) = self.cell_at(x, y) {
             let (a, b) = self.sel_rect();
             let inside = self.anchor.is_some()
@@ -2540,7 +2677,7 @@ impl gpui::Element for InputSink {
                 if c.size_drag.is_some() {
                     c.size_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
-                } else if c.drag.is_some() {
+                } else if c.drag.is_some() || c.head_drag.is_some() {
                     c.mouse_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
                 }
@@ -2707,12 +2844,18 @@ impl Render for Calc {
         let mut head = div().flex().flex_row()
             .child(div().w(px(HEAD_W)).h(px(ROW_H)).bg(rgb(0xEFF2F4))
                    .border_r_1().border_b_1().border_color(rgb(0xD5DBE0)));
+        let (sel_a, sel_b) = self.sel_rect();
+        let has_sel = self.anchor.is_some();
         for c in grid_cols(self.frozen, self.view, COLS) {
+            // 選択に入っている列の見出しは色を変える(いまどこを選んでいるかの道標)
+            let on = has_sel && (sel_a.col..=sel_b.col).contains(&c) || c == self.cursor.col;
             head = head.child(div().w(px(self.col_px(c))).h(px(ROW_H))
-                .bg(rgb(0xEFF2F4)).border_r_1().border_b_1()
+                .bg(if on { rgb(0xCFE6D8) } else { rgb(0xEFF2F4) })
+                .border_r_1().border_b_1()
                 .border_color(rgb(0xD5DBE0))
                 .flex().items_center().justify_center()
-                .text_size(px(11.5)).text_color(rgb(0x66707A))
+                .text_size(px(11.5))
+                .text_color(if on { rgb(0x1B6E3C) } else { rgb(0x66707A) })
                 .child(SharedString::from(col_name(c)))
                 // 右端の帯は幅を変える取っ手(カーソル形状の誘いだけ。
                 // 当たり判定は InputSink の窓レベルで size_grip_at がやる)
@@ -2728,12 +2871,15 @@ impl Render for Calc {
         let visible: Vec<u32> = self.visible_rows();
         for r in visible {
             let rh = self.row_px(r);
+            let row_on = has_sel && (sel_a.row..=sel_b.row).contains(&r) || r == self.cursor.row;
             let mut row = div().flex().flex_row()
                 .child(div().w(px(HEAD_W)).h(px(rh))
-                    .bg(rgb(0xEFF2F4)).border_r_1().border_b_1()
+                    .bg(if row_on { rgb(0xCFE6D8) } else { rgb(0xEFF2F4) })
+                    .border_r_1().border_b_1()
                     .border_color(rgb(0xD5DBE0))
                     .flex().items_center().justify_center()
-                    .text_size(px(11.5)).text_color(rgb(0x66707A))
+                    .text_size(px(11.5))
+                    .text_color(if row_on { rgb(0x1B6E3C) } else { rgb(0x66707A) })
                     .child(SharedString::from((r + 1).to_string()))
                     // 下端の帯は高さを変える取っ手(列見出しの右端と同じ仕掛け)
                     .relative().children((std::env::var_os("JO_NO_STRIPS").is_none()).then(|| {
@@ -3706,5 +3852,21 @@ mod paper_tests {
         assert_eq!(paper_mm(9), Some((210.0, 297.0, "A4")));
         assert_eq!(paper_mm(12), Some((257.0, 364.0, "B4")), "B4 は JIS の紙");
         assert_eq!(paper_mm(99), None, "知らないコードを黙って A4 にしない");
+    }
+}
+
+#[cfg(test)]
+mod index_at_tests {
+    use super::*;
+
+    #[test]
+    fn 位置から列が引ける() {
+        let cols = [(0u32, 108.0f32), (1, 54.0), (2, 108.0)];
+        assert_eq!(index_at(&cols, HEAD_W, HEAD_W + 1.0), Some(0));
+        assert_eq!(index_at(&cols, HEAD_W, HEAD_W + 107.9), Some(0));
+        assert_eq!(index_at(&cols, HEAD_W, HEAD_W + 108.0), Some(1), "境界は次の区分");
+        assert_eq!(index_at(&cols, HEAD_W, HEAD_W + 200.0), Some(2));
+        assert_eq!(index_at(&cols, HEAD_W, HEAD_W + 400.0), None, "並びの外");
+        assert_eq!(index_at(&cols, HEAD_W, 10.0), None, "start より手前");
     }
 }
