@@ -664,7 +664,7 @@ impl Writer {
             cur - 1
         };
         // いまの x(紙の座標)を保ったまま、隣の行で一番近い字の境へ
-        let (x_now, _) = self.caret_xy();
+        let (x_now, _, _) = self.caret_xy();
         let ln = lines[target];
         let base = ln.cells.iter().map(|c| c.off).min().unwrap_or(0);
         let mut byte = ln.byte_end();
@@ -679,7 +679,10 @@ impl Writer {
         self.follow_caret();
     }
 
-    fn caret_xy(&self) -> (f32, f32) {
+    /// カーソルの紙面上の位置と、そこの文字の大きさ(pt)。
+    /// キャレットは**その場の文字の大きさで**描く — 見出しの中で
+    /// 小さいままだと、どこに立っているのか分からない。
+    fn caret_xy(&self) -> (f32, f32, f32) {
         let cur = self.ed.cursor();
         // 行の頭のバイト位置(byte0)は組版が持っている。
         // 行の文字数で数え直すと、折り返しで落ちた空白や空行でずれる。
@@ -688,7 +691,7 @@ impl Writer {
             Target::Body => None,
             Target::Cell { table, row, col } => Some((table, row, col)),
         };
-        let mut hit: Option<(f32, f32)> = None;
+        let mut hit: Option<(f32, f32, f32)> = None;
         for line in self.page.lines.iter().filter(|l| match want {
             None => l.from_body,
             Some(id) => l.cell == Some(id),
@@ -701,18 +704,21 @@ impl Writer {
             }
             let within = cur.saturating_sub(line.byte0);
             let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
-            let x = line
-                .cells
-                .iter()
-                .find(|c| c.off - base >= within)
+            let at = line.cells.iter().find(|c| c.off - base >= within);
+            let x = at
                 .map(|c| c.x_mm)
                 .or_else(|| line.cells.last().map(|c| c.x_mm + c.w_mm))
                 .unwrap_or(0.0);
-            hit = Some((self.pg.left_mm + x, line.y_mm));
+            let pt = at
+                .or_else(|| line.cells.last())
+                .map(|c| c.size_pt)
+                .unwrap_or(SIZE_PT);
+            hit = Some((self.pg.left_mm + x, line.y_mm, pt));
         }
         hit.unwrap_or((
             self.pg.left_mm,
             self.page.lines.last().map(|l| l.y_mm).unwrap_or(self.pg.top_mm),
+            SIZE_PT,
         ))
     }
 
@@ -1091,7 +1097,7 @@ impl Writer {
     /// キャレットが窓から出ていたら、見える所まで紙を送る。
     fn follow_caret(&mut self) {
         let pxmm = PX_PER_MM * self.zoom;
-        let (_, cy) = self.caret_xy();
+        let (_, cy, _) = self.caret_xy();
         let view_mm = (self.view_h_px / pxmm).max(20.0);
         if cy > self.scroll_mm + view_mm - 15.0 {
             self.scroll_mm = cy - (view_mm - 15.0);
@@ -1644,7 +1650,7 @@ impl Writer {
     fn a_context_menu(&mut self, _: &ui::ContextMenu, _: &mut Window, cx: &mut Context<Self>) {
         // キーボードから: キャレットのそばに出す
         let pxmm = PX_PER_MM * self.zoom;
-        let (x, y) = self.caret_xy();
+        let (x, y, _) = self.caret_xy();
         self.menu_at = Some((
             28.0 + x * pxmm + 8.0,
             14.0 + (y - self.scroll_mm) * pxmm + 8.0,
@@ -1889,13 +1895,13 @@ impl EntityInputHandler for Writer {
     ) -> Option<Bounds<gpui::Pixels>> {
         // IME の候補窓をキャレットの下に出す(スクロールと倍率を織り込む)
         let pxmm = PX_PER_MM * self.zoom;
-        let (x, y) = self.caret_xy();
+        let (x, y, pt) = self.caret_xy();
         Some(Bounds::new(
             gpui::point(
                 bounds.origin.x + px(28.0 + x * pxmm),
                 bounds.origin.y + px(14.0 + (y - self.scroll_mm) * pxmm),
             ),
-            size(px(2.0), px(SIZE_PT * 96.0 / 72.0)),
+            size(px(2.0), px(pt * 96.0 / 72.0 * self.zoom)),
         ))
     }
     fn character_index_for_point(
@@ -1920,7 +1926,7 @@ impl Render for Writer {
         // リボンのぶん(約110px)を引いた近似で足りる
         self.view_h_px = (f32::from(window.viewport_size().height) - 110.0).max(100.0);
         let marked = self.ed.marked_range();
-        let (cx_mm, cy_mm) = self.caret_xy();
+        let (cx_mm, cy_mm, caret_pt) = self.caret_xy();
 
         // ---- リボン(Euro-Office に名前と並びを合わせる) ----
         // **タブの行そのものが窓の取っ手**(掴んで移動・二度押しで最大化)。
@@ -2311,12 +2317,15 @@ impl Render for Writer {
                     .child(SharedString::from(line.text())));
             }
         }
-        // キャレット
-        paper = paper.child(div().absolute()
-            .left(px(cx_mm * pxmm))
-            .top(px(cy_mm * pxmm - SIZE_PT * 96.0 / 72.0 * self.zoom * 0.88))
-            .w(px(1.5)).h(px(SIZE_PT * 96.0 / 72.0 * self.zoom * 1.15))
-            .bg(rgb(0x165E83)));
+        // キャレット。その場の文字の大きさに合わせて描く
+        {
+            let sz = caret_pt * 96.0 / 72.0 * self.zoom;
+            paper = paper.child(div().absolute()
+                .left(px(cx_mm * pxmm))
+                .top(px(cy_mm * pxmm - sz * 0.88))
+                .w(px(1.5)).h(px(sz * 1.15))
+                .bg(rgb(0x165E83)));
+        }
 
         // 置換の板
         let find_panel = if !self.find_open {
