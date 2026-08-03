@@ -663,8 +663,45 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
         }
         "LEN" => Value::Number(a.first().map(|v| v.display().chars().count())
             .unwrap_or(0) as f64),
+        "PY" => Value::Error("#PY単独".into()), // =PY(…) はセル単独でだけ使える
         _ => Value::Error("#NAME?".into()),
     })
+}
+
+/// PY セルの呼び出しを解く: (関数名, 引数)。引数は式をいま評価した値
+/// (範囲は列数つきの2次元)。**Python は動かさない** — 材料を出すだけ。
+pub enum PyArg {
+    One(Value),
+    /// (列数, 行優先の値)
+    Rect(u32, Vec<Value>),
+}
+
+pub fn eval_py_call(sheet: &Sheet, formula: &str) -> Option<(String, Vec<PyArg>)> {
+    if !is_py_formula(formula) {
+        return None;
+    }
+    let expanded = expand_names(formula, &sheet.names);
+    let toks = lex(&expanded).ok()?;
+    // PY ( の中の引数を、通常の引数解析(範囲は形つき)で読む
+    let resolved = HashMap::new();
+    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved };
+    match (p.next(), p.next()) {
+        (Some(Tok::Name(n)), Some(Tok::LParen)) if n == "PY" => {}
+        _ => return None,
+    }
+    let args = p.args().ok()?;
+    let mut it = args.into_iter();
+    let name = match it.next()? {
+        Arg::One(Value::Text(t)) => t,
+        _ => return None, // 1つ目は関数名の文字でなければならない
+    };
+    let rest = it
+        .map(|a| match a {
+            Arg::One(v) => PyArg::One(v),
+            Arg::Rect(c, vs) => PyArg::Rect(c, vs),
+        })
+        .collect();
+    Some((name, rest))
 }
 
 // ---------- 再計算 ----------
@@ -744,12 +781,60 @@ fn expand_names(f: &str, names: &[(String, String)]) -> String {
 }
 
 /// シート全体を再計算する。循環参照は #CIRC! にする(黙って0にしない)。
+/// この式は PY セルか(=PY("関数", …) が**単独で**立っている)。
+/// PY は普通の再計算では**実行しない** — 「開く=実行」を持たないため。
+/// 「PY(…)+1」のような複合式は PY セルではない(そちらは #PY単独 になる)。
+pub fn is_py_formula(f: &str) -> bool {
+    let Ok(toks) = lex(f) else { return false };
+    let mut it = toks.iter();
+    if !matches!(it.next(), Some(Tok::Name(n)) if n == "PY") {
+        return false;
+    }
+    if !matches!(it.next(), Some(Tok::LParen)) {
+        return false;
+    }
+    // 括弧の釣り合いが最後のトークンでちょうど閉じること
+    let mut depth = 1i32;
+    for (i, t) in it.enumerate() {
+        match t {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 3 == toks.len(); // これが末尾でなければ複合式
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 pub fn recalc(sheet: &mut Sheet) {
+    // PY セルはここでは計算しない(最後に計算した値を保つ)。
+    // まだ一度も計算していなければ「#PY?」の印を置く(空白で誤魔化さない)
+    let py_cells: Vec<Pos> = sheet
+        .cells
+        .iter()
+        .filter_map(|(p, c)| {
+            c.formula.as_ref().filter(|f| is_py_formula(f)).map(|_| *p)
+        })
+        .collect();
+    for p in &py_cells {
+        if let Some(c) = sheet.cells.get_mut(p) {
+            if c.value.is_empty() {
+                c.value = Value::Error("#PY?".into());
+            }
+        }
+    }
     let formulas: Vec<(Pos, String)> = sheet
         .cells
         .iter()
         .filter_map(|(p, c)| {
-            c.formula.as_ref().map(|f| (*p, expand_names(f, &sheet.names)))
+            c.formula
+                .as_ref()
+                .filter(|f| !is_py_formula(f))
+                .map(|f| (*p, expand_names(f, &sheet.names)))
         })
         .collect();
 
@@ -1127,5 +1212,60 @@ mod fn_ext_tests {
             v => panic!("数でない: {v:?}"),
         };
         assert!((fv - 123355.62).abs() < 1.0, "FV がずれる: {fv}");
+    }
+}
+
+#[cfg(test)]
+mod py_cell_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    #[test]
+    fn pyセルは再計算で実行されず値を保つ() {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::parse("A1").unwrap(), Cell::input("10"));
+        let mut py = Cell::input("=PY(\"倍\",A1)");
+        py.value = Value::Number(20.0); // 前に計算した値
+        s.set(Pos::parse("B1").unwrap(), py);
+        s.set(Pos::parse("C1").unwrap(), Cell::input("=B1+5"));
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("B1").unwrap()), Value::Number(20.0), "PY の値が流された");
+        assert_eq!(s.value(Pos::parse("C1").unwrap()), Value::Number(25.0), "下流が古い値を見ない");
+        // 一度も計算していない PY は #PY? の印
+        s.set(Pos::parse("D1").unwrap(), Cell::input("=PY(\"倍\",A1)"));
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("D1").unwrap()), Value::Error("#PY?".into()));
+        // 式の途中の PY は正直に断る
+        s.set(Pos::parse("E1").unwrap(), Cell::input("=PY(\"倍\",A1)+1"));
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("E1").unwrap()), Value::Error("#PY単独".into()));
+    }
+
+    #[test]
+    fn pyの呼び出しが材料に解ける() {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::parse("A1").unwrap(), Cell::input("1"));
+        s.set(Pos::parse("A2").unwrap(), Cell::input("2"));
+        s.set(Pos::parse("B1").unwrap(), Cell::input("3"));
+        s.set(Pos::parse("B2").unwrap(), Cell::input("4"));
+        recalc(&mut s);
+        let (name, args) =
+            eval_py_call(&s, "PY(\"集計\", A1:B2, 10, \"甲\")").expect("解けない");
+        assert_eq!(name, "集計");
+        assert_eq!(args.len(), 3);
+        match &args[0] {
+            PyArg::Rect(cols, vs) => {
+                assert_eq!(*cols, 2);
+                assert_eq!(vs.len(), 4, "2x2 のはず");
+            }
+            _ => panic!("範囲が形を失った"),
+        }
+        match (&args[1], &args[2]) {
+            (PyArg::One(Value::Number(n)), PyArg::One(Value::Text(t))) => {
+                assert_eq!(*n, 10.0);
+                assert_eq!(t, "甲");
+            }
+            _ => panic!("引数の型が違う"),
+        }
     }
 }

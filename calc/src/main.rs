@@ -298,6 +298,8 @@ struct Calc {
     find_term: Option<String>,
     /// ゴールシークの途中の控え(目標セル, 目標値)
     goal: Option<(Pos, f64)>,
+    /// PY のスピルの台帳(シート番号, 錨 → 行×列)。次の @計算 で前の面を消す
+    py_spills: std::collections::HashMap<(usize, Pos), (u32, u32)>,
     /// 自分が置いた排他ロック(閉じるとき・別のファイルを開くときに外す)
     my_lock: Option<PathBuf>,
     /// 先客の名乗り(このファイルは誰かが開いている)。上書き保存を止める
@@ -393,6 +395,7 @@ impl Calc {
             img_cache: Default::default(),
             find_term: None,
             goal: None,
+            py_spills: Default::default(),
             my_lock: None,
             locked_by: None,
             shape_sel: None,
@@ -1453,6 +1456,8 @@ impl Calc {
                 if t.is_empty() {
                     // 空 Enter = .py ファイルを選ぶ
                     self.run_python_file_dialog(cx);
+                } else if t == "@計算" || t == "@calc" {
+                    self.run_py_calc(cx);
                 } else if t == "@" || t == "@list" {
                     let names: Vec<&str> =
                         self.book.scripts.iter().map(|(n, _)| n.as_str()).collect();
@@ -2838,6 +2843,155 @@ calc の隣に置いてください)"
         .detach();
     }
 
+    /// =PY(…) のセルを全部、檻の中で計算する(@計算)。
+    /// 関数の定義はブックの「関数」で始まる名前のスクリプトから読む。
+    /// **これ以外の道で PY セルが計算されることはない**(開く=実行を持たない)。
+    fn run_py_calc(&mut self, cx: &mut Context<Self>) {
+        if !self.commit() {
+            return;
+        }
+        let defs: String = self
+            .book
+            .scripts
+            .iter()
+            .filter(|(n, _)| n.starts_with("関数"))
+            .map(|(_, c)| c.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut per_sheet: Vec<(usize, Vec<(String, String, Vec<sheet::calc::PyArg>)>)> =
+            Vec::new();
+        for (i, sh) in self.book.sheets.iter().enumerate() {
+            let mut calls = Vec::new();
+            for (p, c) in &sh.cells {
+                let Some(f) = &c.formula else { continue };
+                if !sheet::calc::is_py_formula(f) {
+                    continue;
+                }
+                if let Some((name, args)) = sheet::calc::eval_py_call(sh, f) {
+                    calls.push((p.a1(), name, args));
+                }
+            }
+            if !calls.is_empty() {
+                per_sheet.push((i, calls));
+            }
+        }
+        if per_sheet.is_empty() {
+            self.status = "=PY(\"関数名\", 引数…) のセルがありません".into();
+            return;
+        }
+        if defs.trim().is_empty() {
+            self.status =
+                "関数の定義がありません(@save 関数 で def の入った .py をブックに載せる)"
+                    .into();
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("jo-udf-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut scripts = Vec::new();
+        for (i, calls) in &per_sheet {
+            let out = dir.join(format!("out{i}.txt"));
+            scripts.push((
+                *i,
+                dir.join(format!("udf{i}.py")),
+                out.clone(),
+                build_udf_script(&defs, calls, &out),
+            ));
+        }
+        self.status = "PY を計算しています…(檻の中)".into();
+        let task = cx.background_executor().spawn(async move {
+            if !std::path::Path::new("/usr/bin/bwrap").exists() {
+                return Err(
+                    "檻(bubblewrap)がありません。ブックの関数は檻の外では計算しません"
+                        .to_string(),
+                );
+            }
+            let py = find_python();
+            let venv = std::fs::canonicalize(".venv").unwrap_or_default();
+            let mut results = Vec::new();
+            for (i, py_path, out_path, script) in scripts {
+                std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
+                let mut c = std::process::Command::new("/usr/bin/bwrap");
+                c.args(["--ro-bind", "/", "/", "--tmpfs", "/home", "--tmpfs", "/tmp"]);
+                if venv.exists() {
+                    c.arg("--ro-bind").arg(&venv).arg(&venv);
+                }
+                c.arg("--bind").arg(&dir).arg(&dir);
+                c.args([
+                    "--unshare-net",
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--die-with-parent",
+                    "--new-session",
+                    "--setenv",
+                    "HOME",
+                    "/tmp",
+                    "--",
+                ]);
+                let o = c
+                    .arg(&py)
+                    .arg(&py_path)
+                    .output()
+                    .map_err(|e| format!("Python が起動できません: {e}"))?;
+                if !o.status.success() {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    let last = err
+                        .lines()
+                        .rev()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("原因不明");
+                    return Err(format!("PY の計算に失敗: {last}"));
+                }
+                let raw = std::fs::read_to_string(&out_path).unwrap_or_default();
+                results.push((i, raw));
+            }
+            Ok(results)
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok(outs) => {
+                        this.checkpoint_book();
+                        let (mut total, mut conflicts) = (0usize, 0usize);
+                        for (i, raw) in outs {
+                            let results = parse_udf_output(&raw);
+                            let prev: std::collections::HashMap<Pos, (u32, u32)> = this
+                                .py_spills
+                                .iter()
+                                .filter(|((si, _), _)| *si == i)
+                                .map(|((_, p), d)| (*p, *d))
+                                .collect();
+                            let (spills, n, c) =
+                                apply_py_results(&mut this.book.sheets[i], &results, &prev);
+                            this.py_spills.retain(|(si, _), _| *si != i);
+                            for (p, d) in spills {
+                                this.py_spills.insert((i, p), d);
+                            }
+                            recalc(&mut this.book.sheets[i]);
+                            total += n;
+                            conflicts += c;
+                        }
+                        this.dirty = true;
+                        this.sync_input();
+                        this.status = if conflicts > 0 {
+                            format!(
+                                "PY: {total} セルを計算、{conflicts} 件は #SPILL!(展開先に他のデータ)。Ctrl+Z で戻せます"
+                            )
+                            .into()
+                        } else {
+                            format!("PY: {total} セルを計算しました(Ctrl+Z で戻せます)").into()
+                        };
+                    }
+                    Err(e) => this.status = e.into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// .py を選んで**ブックに載せる**(実行はしない)。載せたコードは
     /// 保存で xlsx に入り、帳票と一緒に旅をする。実行は @名前 で、必ず檻の中。
     fn store_python_dialog(&mut self, name: String, cx: &mut Context<Self>) {
@@ -4068,6 +4222,171 @@ impl gpui::Element for InputSink {
     }
 }
 
+/// PY の引数を Python の書き方(リテラル)にする。
+fn py_literal(v: &sheet::Value) -> String {
+    match v {
+        sheet::Value::Number(n) => format!("{n}"),
+        sheet::Value::Bool(b) => (if *b { "True" } else { "False" }).into(),
+        sheet::Value::Empty => "None".into(),
+        v => format!("{:?}", v.display()), // Rust の {:?} は Python でも読める逃がし
+    }
+}
+
+/// @計算 の台本。「関数」スクリプトの def を読み、各 PY セルを評価して
+/// 区切りの印(\x1c セル / \x1e 行 / \x1f 欄)で吐く。
+fn build_udf_script(
+    defs: &str,
+    calls: &[(String, String, Vec<sheet::calc::PyArg>)], // (セルA1, 関数名, 引数)
+    out_path: &std::path::Path,
+) -> String {
+    let mut body = String::new();
+    for (cell, fname, args) in calls {
+        let mut lit_args = Vec::new();
+        for a in args {
+            match a {
+                sheet::calc::PyArg::One(v) => lit_args.push(py_literal(v)),
+                sheet::calc::PyArg::Rect(cols, vs) => {
+                    let cols = (*cols as usize).max(1);
+                    let rows: Vec<String> = vs
+                        .chunks(cols)
+                        .map(|row| {
+                            format!(
+                                "[{}]",
+                                row.iter().map(py_literal).collect::<Vec<_>>().join(",")
+                            )
+                        })
+                        .collect();
+                    lit_args.push(format!("[{}]", rows.join(",")));
+                }
+            }
+        }
+        body.push_str(&format!(
+            "_jo_emit({cell:?}, {fname}({args}))\n",
+            cell = cell,
+            fname = fname,
+            args = lit_args.join(", ")
+        ));
+    }
+    format!(
+        concat!(
+            "# aiseed calc の PY(UDF)評価。関数の定義はブックの「関数」スクリプト\n",
+            "{defs}\n",
+            "_jo_out = []\n",
+            "def _jo_emit(cell, r):\n",
+            "    if not isinstance(r, (list, tuple)):\n",
+            "        r = [[r]]\n",
+            "    elif r and not isinstance(r[0], (list, tuple)):\n",
+            "        r = [[v] for v in r]  # 1次元は縦に広げる\n",
+            "    rows = ['\\x1f'.join('' if v is None else str(v) for v in row) for row in r]\n",
+            "    _jo_out.append(cell + '\\x1e' + '\\x1e'.join(rows))\n",
+            "{body}\n",
+            "open({out:?}, 'w', encoding='utf-8').write('\\x1c'.join(_jo_out))\n"
+        ),
+        defs = defs,
+        body = body,
+        out = out_path.to_string_lossy()
+    )
+}
+
+/// 台本の出力を (セル, 行×欄の文字) に戻す。
+fn parse_udf_output(raw: &str) -> Vec<(Pos, Vec<Vec<String>>)> {
+    raw.split('\u{1c}')
+        .filter_map(|rec| {
+            let mut it = rec.split('\u{1e}');
+            let cell = Pos::parse(it.next()?)?;
+            let rows: Vec<Vec<String>> = it
+                .map(|r| r.split('\u{1f}').map(|v| v.to_string()).collect())
+                .collect();
+            (!rows.is_empty()).then_some((cell, rows))
+        })
+        .collect()
+}
+
+/// PY の結果をシートへ。錨のセルは**式を保ったまま**値を差し替え、
+/// 2次元はスピル(右下へ展開)。他人のデータを潰しそうなら #SPILL! で止まる。
+/// 返すのは (新しいスピルの台帳, 適用した数, 衝突した数)。
+fn apply_py_results(
+    sh: &mut sheet::Sheet,
+    results: &[(Pos, Vec<Vec<String>>)],
+    prev: &std::collections::HashMap<Pos, (u32, u32)>,
+) -> (std::collections::HashMap<Pos, (u32, u32)>, usize, usize) {
+    // 前回のスピル面(錨以外)をまず消す(小さくなったとき古い値を残さない)
+    for (anchor, (rows, cols)) in prev {
+        for dr in 0..*rows {
+            for dc in 0..*cols {
+                if dr == 0 && dc == 0 {
+                    continue;
+                }
+                let p = Pos::new(anchor.row + dr, anchor.col + dc);
+                if let Some(c) = sh.cells.get_mut(&p) {
+                    if c.formula.is_none() {
+                        c.value = sheet::Value::Empty;
+                    }
+                }
+            }
+        }
+    }
+    let mut spills = std::collections::HashMap::new();
+    let (mut applied, mut conflicts) = (0usize, 0usize);
+    for (anchor, rows) in results {
+        let (nr, nc) = (rows.len() as u32, rows.iter().map(|r| r.len()).max().unwrap_or(1) as u32);
+        // 衝突検査(錨以外に、中身か式のあるセルが居ないか)
+        let mut blocked = false;
+        for dr in 0..nr {
+            for dc in 0..nc {
+                if dr == 0 && dc == 0 {
+                    continue;
+                }
+                let p = Pos::new(anchor.row + dr, anchor.col + dc);
+                if let Some(c) = sh.cells.get(&p) {
+                    let was_prev_spill = prev
+                        .get(anchor)
+                        .is_some_and(|(pr, pc)| dr < *pr && dc < *pc);
+                    if c.formula.is_some() || (!c.value.is_empty() && !was_prev_spill) {
+                        blocked = true;
+                    }
+                }
+            }
+        }
+        let put = |sh: &mut sheet::Sheet, p: Pos, text: &str| {
+            let fmt = sh.get(p).map(|c| c.fmt.clone()).unwrap_or_default();
+            let formula = sh.get(p).and_then(|c| c.formula.clone());
+            let value = if text.is_empty() {
+                sheet::Value::Empty
+            } else if let Ok(n) = text.parse::<f64>() {
+                sheet::Value::Number(n)
+            } else {
+                sheet::Value::Text(text.to_string())
+            };
+            sh.set(p, sheet::Cell { formula, value, fmt });
+        };
+        if blocked {
+            let fmt = sh.get(*anchor).map(|c| c.fmt.clone()).unwrap_or_default();
+            let formula = sh.get(*anchor).and_then(|c| c.formula.clone());
+            sh.set(
+                *anchor,
+                sheet::Cell {
+                    formula,
+                    value: sheet::Value::Error("#SPILL!".into()),
+                    fmt,
+                },
+            );
+            conflicts += 1;
+            continue;
+        }
+        for (dr, row) in rows.iter().enumerate() {
+            for (dc, text) in row.iter().enumerate() {
+                put(sh, Pos::new(anchor.row + dr as u32, anchor.col + dc as u32), text);
+            }
+        }
+        if nr > 1 || nc > 1 {
+            spills.insert(*anchor, (nr, nc));
+        }
+        applied += 1;
+    }
+    (spills, applied, conflicts)
+}
+
 /// 排他ロックの置き場(LibreOffice と同じ `.~lock.<名前>#`)。
 /// ファイルサーバーの共有フォルダで「同時に開いて後勝ちで潰す」を防ぐ。
 fn lock_path_for(p: &std::path::Path) -> std::path::PathBuf {
@@ -4875,7 +5194,7 @@ impl Render for Calc {
                         "find" => "Enter で次へ / Esc で取消。式の中の文字も探します",
                         "split-delim" => "選択した列の文字を割って、右の列へ並べます(右は上書き)",
                         "shape-text" => "図形を選んで Enter でいつでも書き直せます",
-                        "py" => "b=ブック s=シート / @名前 実行(網なし檻) @名前 net(網あり檻) @save @list @del",
+                        "py" => "b=ブック s=シート / @計算 =PY(…)セルを評価 / @名前 実行 @名前 net @save @list @del",
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         _ => "Enter で決定 / Esc で取消",
@@ -5581,6 +5900,117 @@ mod lock_tests {
         // 自分のロックは先客ではない
         std::fs::write(&lp, format!("{},;", lock_identity())).unwrap();
         assert!(foreign_lock(&book).is_none(), "自分を先客と間違えた");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod udf_tests {
+    use super::*;
+
+    #[test]
+    fn 台本の出力が解けてスピルが効く() {
+        // 出力形式: セル \x1e 行 \x1e 行 … / 行の中は \x1f
+        let raw = "B2\u{1e}10\u{1f}20\u{1e}30\u{1f}40\u{1c}D1\u{1e}こんにちは";
+        let results = parse_udf_output(raw);
+        assert_eq!(results.len(), 2);
+        let mut sh = sheet::Sheet { name: "表".into(), ..Default::default() };
+        let mut py = Cell::input("=PY(\"f\",A1)");
+        py.value = sheet::Value::Error("#PY?".into());
+        sh.set(Pos::parse("B2").unwrap(), py);
+        let (spills, n, c) = apply_py_results(&mut sh, &results, &Default::default());
+        assert_eq!((n, c), (2, 0));
+        // 錨は式を保ったまま値が入る
+        let b2 = sh.get(Pos::parse("B2").unwrap()).unwrap();
+        assert!(b2.formula.is_some(), "式が消えた");
+        assert_eq!(b2.value, sheet::Value::Number(10.0));
+        // スピル面
+        assert_eq!(sh.value(Pos::parse("C3").unwrap()), sheet::Value::Number(40.0));
+        assert_eq!(spills.get(&Pos::parse("B2").unwrap()), Some(&(2, 2)));
+        assert_eq!(sh.value(Pos::parse("D1").unwrap()), sheet::Value::Text("こんにちは".into()));
+    }
+
+    #[test]
+    fn スピル先に他人のデータがあれば止まる() {
+        let mut sh = sheet::Sheet { name: "表".into(), ..Default::default() };
+        sh.set(Pos::parse("B2").unwrap(), Cell::input("=PY(\"f\")"));
+        sh.set(Pos::parse("C3").unwrap(), Cell::input("大事なメモ"));
+        let raw = "B2\u{1e}1\u{1f}2\u{1e}3\u{1f}4";
+        let (spills, n, c) =
+            apply_py_results(&mut sh, &parse_udf_output(raw), &Default::default());
+        assert_eq!((n, c), (0, 1));
+        assert_eq!(
+            sh.value(Pos::parse("B2").unwrap()),
+            sheet::Value::Error("#SPILL!".into())
+        );
+        assert_eq!(
+            sh.value(Pos::parse("C3").unwrap()),
+            sheet::Value::Text("大事なメモ".into()),
+            "他人のデータを潰した"
+        );
+        assert!(spills.is_empty());
+    }
+
+    #[test]
+    fn 縮んだスピルの残骸は消える() {
+        let mut sh = sheet::Sheet { name: "表".into(), ..Default::default() };
+        sh.set(Pos::parse("A1").unwrap(), Cell::input("=PY(\"f\")"));
+        // 前回 1x3 で展開していた
+        sh.set(Pos::parse("B1").unwrap(), Cell::input("古い"));
+        sh.set(Pos::parse("C1").unwrap(), Cell::input("残骸"));
+        let mut prev = std::collections::HashMap::new();
+        prev.insert(Pos::parse("A1").unwrap(), (1u32, 3u32));
+        // 今回はスカラー
+        let raw = "A1\u{1e}9";
+        let (_, n, c) = apply_py_results(&mut sh, &parse_udf_output(raw), &prev);
+        assert_eq!((n, c), (1, 0));
+        assert_eq!(sh.value(Pos::parse("A1").unwrap()), sheet::Value::Number(9.0));
+        assert!(sh.value(Pos::parse("C1").unwrap()).is_empty(), "残骸が残った");
+    }
+
+    #[test]
+    fn 台本が実際にpythonで回る() {
+        // .venv が無い機械では黙って飛ぶ(HIKITSUGI の作法)。
+        // cargo test の cwd は calc/ なので、リポジトリ直下の .venv も見る
+        let py = ["../.venv/bin/python", ".venv/bin/python"]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .find(|p| p.exists());
+        let Some(py) = py else { return };
+        let dir = std::env::temp_dir().join(format!("jo-udf-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let out = dir.join("out.txt");
+        let defs = "def 倍(x):\n    return x * 2\ndef 表(r):\n    return [[v * 10 for v in row] for row in r]";
+        let calls = vec![
+            (
+                "B1".to_string(),
+                "倍".to_string(),
+                vec![sheet::calc::PyArg::One(sheet::Value::Number(21.0))],
+            ),
+            (
+                "D1".to_string(),
+                "表".to_string(),
+                vec![sheet::calc::PyArg::Rect(
+                    2,
+                    vec![
+                        sheet::Value::Number(1.0),
+                        sheet::Value::Number(2.0),
+                        sheet::Value::Number(3.0),
+                        sheet::Value::Number(4.0),
+                    ],
+                )],
+            ),
+        ];
+        let script = build_udf_script(defs, &calls, &out);
+        let py_path = dir.join("t.py");
+        std::fs::write(&py_path, script).unwrap();
+        let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let raw = std::fs::read_to_string(&out).unwrap();
+        let results = parse_udf_output(&raw);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].1[0][0], "42", "倍(21) が違う: {raw:?}");
+        assert_eq!(results[1].1[1][1], "40", "表の2x2が違う");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
