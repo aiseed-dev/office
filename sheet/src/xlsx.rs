@@ -189,8 +189,14 @@ fn parse_rels(xml: &str) -> Vec<(String, String, String, bool)> {
 enum DrawKind {
     /// 画像(r:embed)
     Image(String),
-    /// 図形(prstGeom の名前, 塗り, 線)
-    Shape(String, Option<String>, Option<String>),
+    /// 図形(prstGeom の名前, 塗り, 線, 中の文字, 折れ線の点)
+    Shape(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Vec<(f32, f32)>,
+    ),
 }
 
 /// drawing(xl/drawings/drawingN.xml)から、画像と図形の錨を拾う。
@@ -205,6 +211,12 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
     let mut prst = None::<String>;
     // 図形の色: solidFill の1つ目が塗り、a:ln の中のものが線
     let (mut fill, mut line) = (None::<String>, None::<String>);
+    // 図形の中の文字(a:t)と、custGeom の折れ線
+    let mut text = String::new();
+    let mut in_t = false;
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    let (mut path_w, mut path_h) = (1000.0f32, 1000.0f32);
+    let mut has_custom = false;
     let mut in_from = false;
     let mut in_ln = false;
     let mut in_sp = false;
@@ -216,6 +228,10 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                 b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
                     (col, row, cx, cy, embed, prst, fill, line) =
                         (None, None, None, None, None, None, None, None);
+                    text.clear();
+                    pts.clear();
+                    has_custom = false;
+                    (path_w, path_h) = (1000.0, 1000.0);
                     in_sp = false;
                     in_ln = false;
                 }
@@ -233,6 +249,12 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                         prst = attr(&e, "prst");
                     }
                 }
+                b"custGeom" => has_custom = true,
+                b"path" if has_custom => {
+                    path_w = attr(&e, "w").and_then(|v| v.parse().ok()).unwrap_or(1000.0);
+                    path_h = attr(&e, "h").and_then(|v| v.parse().ok()).unwrap_or(1000.0);
+                }
+                b"t" if in_sp => in_t = true,
                 _ => cur.clear(),
             },
             Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
@@ -247,6 +269,11 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                         embed = attr(&e, "embed");
                     }
                 }
+                b"pt" if has_custom => {
+                    let x = attr(&e, "x").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+                    let y = attr(&e, "y").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+                    pts.push((x / path_w.max(1.0), y / path_h.max(1.0)));
+                }
                 b"srgbClr" if in_sp => {
                     let v = attr(&e, "val");
                     if in_ln {
@@ -259,6 +286,9 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                 }
                 _ => {}
             },
+            Ok(Event::Text(t)) if in_t => {
+                text.push_str(&t.unescape().unwrap_or_default());
+            }
             Ok(Event::Text(t)) if !cur.is_empty() => {
                 let v: u32 = t.unescape().unwrap_or_default().trim().parse().unwrap_or(0);
                 if cur == b"col" {
@@ -274,12 +304,21 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                 }
                 b"col" | b"row" => cur.clear(),
                 b"ln" => in_ln = false,
+                b"t" => in_t = false,
                 b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
-                    let kind = match (embed.take(), prst.take()) {
-                        (Some(em), _) => Some(DrawKind::Image(em)),
-                        (None, Some(pr)) => {
-                            Some(DrawKind::Shape(pr, fill.take(), line.take()))
+                    let tx = (!text.is_empty()).then(|| text.clone());
+                    let kind = match (embed.take(), prst.take(), has_custom) {
+                        (Some(em), _, _) => Some(DrawKind::Image(em)),
+                        (None, Some(pr), _) => {
+                            Some(DrawKind::Shape(pr, fill.take(), line.take(), tx, Vec::new()))
                         }
+                        (None, None, true) if !pts.is_empty() => Some(DrawKind::Shape(
+                            "spark".into(),
+                            fill.take(),
+                            line.take(),
+                            tx,
+                            std::mem::take(&mut pts),
+                        )),
                         _ => None,
                     };
                     if let (Some(c), Some(rr), Some(k)) = (col, row, kind) {
@@ -288,80 +327,6 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                             cx.unwrap_or(300 * 9525),
                             cy.unwrap_or(200 * 9525),
                             k,
-                        ));
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        buf.clear();
-    }
-    out
-}
-
-/// (古い名前の互換。画像だけを拾う)
-#[allow(dead_code)]
-fn parse_drawing_images(xml: &str) -> Vec<(Pos, i64, i64, String)> {
-    let mut r = Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut out = Vec::new();
-    let (mut col, mut row) = (None::<u32>, None::<u32>);
-    let (mut cx, mut cy) = (None::<i64>, None::<i64>);
-    let mut embed = None::<String>;
-    let mut in_from = false;
-    let mut cur: Vec<u8> = Vec::new();
-    loop {
-        match r.read_event_into(&mut buf) {
-            Ok(Event::Eof) | Err(_) => break,
-            Ok(Event::Start(e)) => match local(e.name().as_ref()) {
-                b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
-                    (col, row, cx, cy, embed) = (None, None, None, None, None);
-                }
-                b"from" => in_from = true,
-                t @ (b"col" | b"row") if in_from => cur = t.to_vec(),
-                b"blip" => {
-                    if embed.is_none() {
-                        embed = attr(&e, "embed");
-                    }
-                }
-                _ => cur.clear(),
-            },
-            Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
-                b"ext" => {
-                    if cx.is_none() {
-                        cx = attr(&e, "cx").and_then(|v| v.parse().ok());
-                        cy = attr(&e, "cy").and_then(|v| v.parse().ok());
-                    }
-                }
-                b"blip" => {
-                    if embed.is_none() {
-                        embed = attr(&e, "embed");
-                    }
-                }
-                _ => {}
-            },
-            Ok(Event::Text(t)) if !cur.is_empty() => {
-                let v: u32 = t.unescape().unwrap_or_default().trim().parse().unwrap_or(0);
-                if cur == b"col" {
-                    col = Some(v);
-                } else {
-                    row = Some(v);
-                }
-            }
-            Ok(Event::End(e)) => match local(e.name().as_ref()) {
-                b"from" => {
-                    in_from = false;
-                    cur.clear();
-                }
-                b"col" | b"row" => cur.clear(),
-                b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
-                    if let (Some(c), Some(rr), Some(em)) = (col, row, embed.take()) {
-                        out.push((
-                            Pos::new(rr, c),
-                            cx.unwrap_or(300 * 9525),
-                            cy.unwrap_or(200 * 9525),
-                            em,
                         ));
                     }
                 }
@@ -387,6 +352,45 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
         ),
         None => String::new(),
     };
+    // 形: 折れ線(spark)は custGeom、他は prstGeom
+    let geom = if sp.kind == "spark" && !sp.points.is_empty() {
+        let mut path = String::new();
+        for (i, (x, y)) in sp.points.iter().enumerate() {
+            let (px_, py_) = ((x * 10000.0) as i64, (y * 10000.0) as i64);
+            if i == 0 {
+                path.push_str(&format!(
+                    "<a:moveTo><a:pt x=\"{px_}\" y=\"{py_}\"/></a:moveTo>"
+                ));
+            } else {
+                path.push_str(&format!(
+                    "<a:lnTo><a:pt x=\"{px_}\" y=\"{py_}\"/></a:lnTo>"
+                ));
+            }
+        }
+        format!(
+            concat!(
+                "<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>",
+                "<a:rect l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>",
+                "<a:pathLst><a:path w=\"10000\" h=\"10000\" fill=\"none\">{}</a:path></a:pathLst>",
+                "</a:custGeom>"
+            ),
+            path
+        )
+    } else {
+        format!("<a:prstGeom prst=\"{}\"><a:avLst/></a:prstGeom>", sp.kind)
+    };
+    // 中の文字(テキストボックス)
+    let txt = match &sp.text {
+        Some(t) => format!(
+            concat!(
+                "<xdr:txBody><a:bodyPr wrap=\"square\"/><a:lstStyle/>",
+                "<a:p><a:r><a:rPr lang=\"ja-JP\" sz=\"1100\"/><a:t>{}</a:t></a:r></a:p>",
+                "</xdr:txBody>"
+            ),
+            esc(t)
+        ),
+        None => String::new(),
+    };
     format!(
         concat!(
             "<xdr:oneCellAnchor>",
@@ -396,7 +400,7 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
             "<xdr:sp macro=\"\" textlink=\"\">",
             "<xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"図形 {id}\"/><xdr:cNvSpPr/></xdr:nvSpPr>",
             "<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>",
-            "<a:prstGeom prst=\"{kind}\"><a:avLst/></a:prstGeom>{fill}{line}</xdr:spPr>",
+            "{geom}{fill}{line}</xdr:spPr>{txt}",
             "</xdr:sp><xdr:clientData/></xdr:oneCellAnchor>"
         ),
         col = sp.at.col,
@@ -404,9 +408,10 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
         cx = cx,
         cy = cy,
         id = id,
-        kind = sp.kind,
+        geom = geom,
         fill = fill,
-        line = line
+        line = line,
+        txt = txt
     )
 }
 
@@ -935,7 +940,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             data,
                         });
                     }
-                    DrawKind::Shape(prst, fill, line) => {
+                    DrawKind::Shape(prst, fill, line, text, points) => {
                         sh.shapes.push(crate::model::SheetShape {
                             at,
                             width_px,
@@ -943,6 +948,8 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             kind: prst,
                             fill,
                             line,
+                            text,
+                            points,
                         });
                     }
                 }
@@ -2570,6 +2577,7 @@ mod shape_roundtrip_tests {
             kind: "rightArrow".into(),
             fill: Some("FFF2CC".into()),
             line: Some("1B6E3C".into()),
+            ..Default::default()
         });
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
@@ -2583,5 +2591,46 @@ mod shape_roundtrip_tests {
         assert_eq!(sp[0].line.as_deref(), Some("1B6E3C"), "線の色が塗りと混ざった");
         assert!((sp[0].width_px - 160.0).abs() < 1.0);
         assert!(back.sheets[0].shapes_new.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod textbox_spark_roundtrip_tests {
+    use super::*;
+    use crate::model::SheetShape;
+
+    #[test]
+    fn 文字入りの図形と折れ線が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].shapes_new.push(SheetShape {
+            at: Pos::new(0, 5),
+            width_px: 200.0,
+            height_px: 80.0,
+            kind: "rect".into(),
+            line: Some("7F7F7F".into()),
+            text: Some("注意: 締切は8/10 <厳守>".into()),
+            ..Default::default()
+        });
+        b.sheets[0].shapes_new.push(SheetShape {
+            at: Pos::new(3, 5),
+            width_px: 108.0,
+            height_px: 24.0,
+            kind: "spark".into(),
+            line: Some("1B6E3C".into()),
+            points: vec![(0.0, 1.0), (0.5, 0.0), (1.0, 0.6)],
+            ..Default::default()
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let sp = &back.sheets[0].shapes;
+        assert_eq!(sp.len(), 2, "図形が往復しない: {sp:?}");
+        let tb = sp.iter().find(|s| s.kind == "rect").expect("文字箱が無い");
+        assert_eq!(tb.text.as_deref(), Some("注意: 締切は8/10 <厳守>"), "文字が化けた");
+        let sk = sp.iter().find(|s| s.kind == "spark").expect("折れ線が無い");
+        assert_eq!(sk.points.len(), 3);
+        assert!((sk.points[1].0 - 0.5).abs() < 0.01 && sk.points[1].1.abs() < 0.01);
     }
 }

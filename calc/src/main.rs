@@ -1041,6 +1041,7 @@ impl Calc {
                     kind: kind.into(),
                     fill: None,
                     line: Some("1B6E3C".into()),
+                    ..Default::default()
                 });
                 self.shape_sel = Some(self.sheet().shapes_new.len() - 1);
                 self.dirty = true;
@@ -1402,6 +1403,21 @@ impl Calc {
                     range.0.a1(), range.1.a1(),
                     if gt { "大きい値" } else { "小さい値" }
                 ).into();
+            }
+            "shape-text" => {
+                let Some(i) = self.shape_sel else { return };
+                if self.sheet().shapes_new.len() <= i {
+                    return;
+                }
+                self.checkpoint();
+                self.sheet_mut().shapes_new[i].text =
+                    (!text.is_empty()).then(|| text.clone());
+                self.dirty = true;
+                self.status = if text.is_empty() {
+                    "文字を消しました".into()
+                } else {
+                    "図形に文字を入れました(保存で xlsx に入ります)".into()
+                };
             }
             "split-delim" => {
                 let delim = if text.is_empty() { ",".to_string() } else { text };
@@ -2083,6 +2099,15 @@ impl Calc {
     fn a_enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
         if self.prompt.is_some() {
             self.finish_prompt();
+        } else if let Some(i) = self.shape_sel {
+            // 図形を選んで Enter = 中の文字を書く(テキストボックス)
+            let cur = self
+                .sheet()
+                .shapes_new
+                .get(i)
+                .and_then(|sp| sp.text.clone())
+                .unwrap_or_default();
+            self.prompt = Some(("shape-text", Editor::new(&cur)));
         } else {
             self.move_cursor(1, 0);
         }
@@ -2735,7 +2760,7 @@ impl Calc {
         "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
         "scale", "pagebreak", "printtitles", "print-gridlines", "print-headings",
         "data-from-text", "text-column", "goal-seek", "data-external-links",
-        "insshape",
+        "insshape", "instext", "inssparkline",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -3189,6 +3214,88 @@ impl Calc {
             "insimage" => {
                 self.commit();
                 self.insert_image_dialog(cx);
+            }
+            "instext" => {
+                // テキストボックス = 枠の図形 + 文字。すぐ文字の板を開く
+                self.checkpoint();
+                let at = self.cursor;
+                self.sheet_mut().shapes_new.push(sheet::model::SheetShape {
+                    at,
+                    width_px: 200.0,
+                    height_px: 80.0,
+                    kind: "rect".into(),
+                    fill: None,
+                    line: Some("7F7F7F".into()),
+                    ..Default::default()
+                });
+                self.shape_sel = Some(self.sheet().shapes_new.len() - 1);
+                self.dirty = true;
+                self.prompt = Some(("shape-text", Editor::new("")));
+            }
+            "inssparkline" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status =
+                        "折れ線にする数の範囲を選んでください(置き場所はいまのセル)".into();
+                } else {
+                    let (a, b) = self.sel_rect();
+                    let mut vals: Vec<f64> = Vec::new();
+                    for r in a.row..=b.row {
+                        for c in a.col..=b.col {
+                            if let Some(cell) = self.sheet().get(Pos::new(r, c)) {
+                                if let sheet::Value::Number(n) = cell.value {
+                                    vals.push(n);
+                                }
+                            }
+                        }
+                    }
+                    if vals.len() < 2 {
+                        self.status = "数が2つ以上要ります".into();
+                    } else {
+                        let (lo, hi) = vals
+                            .iter()
+                            .fold((f64::MAX, f64::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+                        let span = (hi - lo).max(1e-9);
+                        let n = vals.len();
+                        let points: Vec<(f32, f32)> = vals
+                            .iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                (
+                                    i as f32 / (n - 1) as f32,
+                                    (1.0 - ((v - lo) / span)) as f32,
+                                )
+                            })
+                            .collect();
+                        // 置き場所はいまのセル(選択の中なら右のセル)、大きさはそのセル
+                        let at = if (a.row..=b.row).contains(&self.cursor.row)
+                            && (a.col..=b.col).contains(&self.cursor.col)
+                        {
+                            Pos::new(a.row, b.col + 1)
+                        } else {
+                            self.cursor
+                        };
+                        self.checkpoint();
+                        let (w, h) = (self.col_px(at.col) - 2.0, self.row_px(at.row) - 2.0);
+                        self.sheet_mut().shapes_new.push(sheet::model::SheetShape {
+                            at,
+                            width_px: w,
+                            height_px: h,
+                            kind: "spark".into(),
+                            fill: None,
+                            line: Some("1B6E3C".into()),
+                            points,
+                            ..Default::default()
+                        });
+                        self.dirty = true;
+                        self.status = format!(
+                            "スパークラインを {} に置きました(その時の値で描く固定の線。\
+データを変えたら作り直してください)",
+                            at.a1()
+                        )
+                        .into();
+                    }
+                }
             }
             "insshape" => {
                 let at = self
@@ -4300,6 +4407,7 @@ impl Render for Calc {
                 "validation" => format!("入力規則 — {range} は候補から選ぶ(空にして Enter で解除)"),
                 "find" => "検索と置換 — 探す言葉".to_string(),
                 "split-delim" => format!("区切り位置 — {range} を何で割る?(空 Enter = カンマ)"),
+                "shape-text" => "図形の文字(空にして Enter で消す)".to_string(),
                 "goal-target" => "ゴールシーク — 目標(セル=値。例: D6=800000)".to_string(),
                 "goal-var" => format!(
                     "{} をいくつにするか探します — 変えるセルは?(例: B2)",
@@ -4331,6 +4439,7 @@ impl Render for Calc {
                         "validation" => "候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)。Enter で決定 / Esc で取消",
                         "find" => "Enter で次へ / Esc で取消。式の中の文字も探します",
                         "split-delim" => "選択した列の文字を割って、右の列へ並べます(右は上書き)",
+                        "shape-text" => "図形を選んで Enter でいつでも書き直せます",
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         _ => "Enter で決定 / Esc で取消",
@@ -4538,7 +4647,7 @@ impl Render for Calc {
                    .children({
                        // 浮かぶ画像(グラフ)。錨のセルが見えている間だけ描く。
                        // マウスは受けない(セルの操作を遮らない)
-                       let mut layer = Vec::new();
+                       let mut layer: Vec<gpui::AnyElement> = Vec::new();
                        for im in self.sheet().images.iter().chain(self.sheet().images_new.iter()) {
                            let Some((x, y)) = self.cell_origin_px(im.at) else { continue };
                            let key = im.data.as_ptr() as usize;
@@ -4564,7 +4673,8 @@ impl Render for Calc {
                                    .left(px(x))
                                    .top(px(y))
                                    .w(px(im.width_px))
-                                   .h(px(im.height_px)),
+                                   .h(px(im.height_px))
+                                   .into_any_element(),
                            );
                        }
                        // 図形(SVG)。大きさを織り込んで作るので、伸ばしても鮮明
@@ -4600,8 +4710,26 @@ impl Render for Calc {
                                    .left(px(x))
                                    .top(px(y))
                                    .w(px(sp.width_px))
-                                   .h(px(sp.height_px)),
+                                   .h(px(sp.height_px))
+                                   .into_any_element(),
                            );
+                           if let Some(t) = &sp.text {
+                               layer.push(
+                                   div()
+                                       .absolute()
+                                       .left(px(x + 6.0))
+                                       .top(px(y + 4.0))
+                                       .w(px((sp.width_px - 12.0).max(8.0)))
+                                       .h(px((sp.height_px - 8.0).max(8.0)))
+                                       .overflow_hidden()
+                                       .text_size(px(12.5))
+                                       .font_family("Noto Sans JP")
+                                       .text_color(rgb(0x1B1B1B))
+                                       .whitespace_normal()
+                                       .child(SharedString::from(t.clone()))
+                                       .into_any_element(),
+                               );
+                           }
                            let _ = i;
                        }
                        // 控えが育ちすぎたら捨てる(undo のクローンで鍵が増えるため)

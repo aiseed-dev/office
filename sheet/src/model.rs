@@ -305,19 +305,31 @@ pub struct Sheet {
 /// シートに浮かぶ図形。**中身はベクタ**(発注者案 2026-08-04: SVG で作る —
 /// 拡大縮小で崩れない)。画面へは to_svg が SVG を作り、xlsx へは DrawingML の
 /// 図形(prstGeom)として書く — Excel でも図形として開ける。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SheetShape {
     /// 左上を留めるセル
     pub at: Pos,
     pub width_px: f32,
     pub height_px: f32,
     /// 図形の種類(xlsx の prstGeom の名前):
-    /// rect / roundRect / ellipse / rightArrow / diamond / line
+    /// rect / roundRect / ellipse / rightArrow / diamond / line。
+    /// "spark" は折れ線(points を使う。xlsx へは custGeom で書く)
     pub kind: String,
     /// 塗り RRGGBB(無ければ塗らない)
     pub fill: Option<String>,
     /// 線 RRGGBB(無ければ引かない)
     pub line: Option<String>,
+    /// 図形の中の文字(テキストボックス)。xlsx の txBody と往復する。
+    /// 画面へは SVG でなく重ね描き(組版の質と日本語のため)
+    pub text: Option<String>,
+    /// 折れ線の点(0..1 に正規化した x, y)。kind="spark" が使う
+    pub points: Vec<(f32, f32)>,
+}
+
+impl Default for Pos {
+    fn default() -> Self {
+        Pos::new(0, 0)
+    }
 }
 
 impl SheetShape {
@@ -372,6 +384,18 @@ impl SheetShape {
                 h / 2.0
             ),
             "line" => format!(r#"<line x1="{x0}" y1="{y0}" x2="{x1}" y2="{y1}" {style}/>"#),
+            "spark" => {
+                // 正規化した点を大きさに展開した折れ線(塗らない)
+                let pts = self
+                    .points
+                    .iter()
+                    .map(|(px_, py_)| {
+                        format!("{:.1},{:.1}", x0 + px_ * (x1 - x0), y0 + py_ * (y1 - y0))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(r#"<polyline points="{pts}" fill="none" stroke="{line}" stroke-width="1.5"/>"#)
+            }
             _ => format!(
                 r#"<rect x="{x0}" y="{y0}" width="{}" height="{}" {style}/>"#,
                 x1 - x0,
@@ -1766,6 +1790,7 @@ mod shape_tests {
             kind: "ellipse".into(),
             fill: Some("FFF2CC".into()),
             line: Some("1B6E3C".into()),
+            ..Default::default()
         };
         let svg = sh.to_svg();
         assert!(svg.contains(r#"width="200""#), "{svg}");

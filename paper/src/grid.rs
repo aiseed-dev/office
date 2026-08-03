@@ -329,6 +329,11 @@ pub fn sheet_to_pdf<W: Write>(
                     (x, y_top - h / 2.0),
                 ],
                 "line" => vec![(x, y_top), (x + w, y_top - h)],
+                "spark" => sp
+                    .points
+                    .iter()
+                    .map(|(px_, py_)| (x + px_ * w, y_top - py_ * h))
+                    .collect(),
                 _ => vec![
                     (x, y_top),
                     (x + w, y_top),
@@ -336,7 +341,7 @@ pub fn sheet_to_pdf<W: Write>(
                     (x, y_top - h),
                 ],
             };
-            let closed = sp.kind != "line";
+            let closed = sp.kind != "line" && sp.kind != "spark";
             l1.add_line(Line {
                 points: pts
                     .into_iter()
@@ -345,6 +350,10 @@ pub fn sheet_to_pdf<W: Write>(
                 is_closed: closed,
             });
             l1.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+            // 図形の中の文字(テキストボックス)。左上から素直に
+            if let Some(t) = &sp.text {
+                l1.use_text(t, 9.0 * scale, Mm(x + 1.5), Mm(y_top - 4.5), &font);
+            }
         }
     }
     doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())?;
