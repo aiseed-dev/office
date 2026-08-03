@@ -240,6 +240,9 @@ struct Writer {
     /// 透かしの板
     wm_edit: bool,
     wm_ed: Editor,
+    /// しおりの板(名前の入力欄つきの一覧)
+    bm_open: bool,
+    bm_ed: Editor,
     /// 紙面に出すヘッダー・フッターの行(1ページ目の番号で組んだもの)
     header_lines: Vec<kumihan::Line>,
     footer_lines: Vec<kumihan::Line>,
@@ -262,6 +265,8 @@ impl HasEditor for Writer {
             &mut self.cmt_ed
         } else if self.wm_edit {
             &mut self.wm_ed
+        } else if self.bm_open {
+            &mut self.bm_ed
         } else {
             &mut self.ed
         }
@@ -275,6 +280,8 @@ impl HasEditor for Writer {
             &self.cmt_ed
         } else if self.wm_edit {
             &self.wm_ed
+        } else if self.bm_open {
+            &self.bm_ed
         } else {
             &self.ed
         }
@@ -291,6 +298,10 @@ impl HasEditor for Writer {
             kumihan::set_paras_text(&mut hf.paragraphs, &text, SIZE_PT);
             self.dirty = true;
             self.refresh_hf();
+            return;
+        }
+        if self.bm_open {
+            // しおりの板は名前の入力欄。打鍵は文書を変えない
             return;
         }
         if self.wm_edit {
@@ -372,6 +383,8 @@ impl Writer {
             cmt_para: 0,
             wm_edit: false,
             wm_ed: Editor::new(""),
+            bm_open: false,
+            bm_ed: Editor::new(""),
             header_lines: Vec::new(),
             footer_lines: Vec::new(),
             font_name: kumihan::font::for_document(None)
@@ -989,6 +1002,50 @@ impl Writer {
         self.relayout_keep();
     }
 
+    /// カーソルの段落(通し番号)と、その頭のバイト位置。
+    fn cursor_para(&self) -> (usize, usize) {
+        let cur = self.ed.cursor();
+        let (mut pi, mut b0) = (0usize, 0usize);
+        let mut at = 0usize;
+        for (i, p) in self.doc.paragraphs().enumerate() {
+            let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+            if at <= cur {
+                pi = i;
+                b0 = at;
+            }
+            at += len + 1;
+        }
+        (pi, b0)
+    }
+
+    /// しおりを追加する(カーソルの段落へ)。
+    fn bm_add(&mut self) {
+        let name = self.bm_ed.text().trim().to_string();
+        if name.is_empty() {
+            self.status = "しおりの名前を打ってから追加してください".into();
+            return;
+        }
+        if self.doc.paragraphs().any(|p| p.bookmarks.iter().any(|b| *b == name)) {
+            self.status = format!("しおり「{name}」は既にあります").into();
+            return;
+        }
+        self.switch_target(Target::Body);
+        let (pi, _) = self.cursor_para();
+        let mut i = 0usize;
+        for b in &mut self.doc.blocks {
+            if let kumihan::Block::Para(p) = b {
+                if i == pi {
+                    p.bookmarks.push(name.clone());
+                    break;
+                }
+                i += 1;
+            }
+        }
+        self.bm_ed = Editor::new("");
+        self.dirty = true;
+        self.status = format!("しおり「{name}」を付けました(保存で docx に入ります)").into();
+    }
+
     /// 段落のスタイル。0 = 標準、1〜3 = 見出し。
     /// スタイル定義(styles.xml)を持たないので、見た目は直接書式で付ける。
     fn set_para_style(&mut self, n: u8) {
@@ -1350,7 +1407,7 @@ impl Writer {
         "parastyle", "toc", "toc-update", "numpages", "datetime",
         "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
-        "insequation", "instext", "pagecolor", "comment", "watermark",
+        "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1766,6 +1823,19 @@ impl Writer {
             "ruler" => self.ruler = !self.ruler,
             // ダークモード。**紙は白いまま**(画面と紙の一致)。周りだけ暗くする
             "darkmode" => self.dark = !self.dark,
+            // しおり。一覧の板(名前を打って追加・押して移動・✕で削除)
+            "bookmarks" => {
+                self.bm_open = !self.bm_open;
+                if self.bm_open {
+                    self.find_open = false;
+                    self.hf_edit = None;
+                    self.cmt_edit = false;
+                    self.wm_edit = false;
+                    self.bm_ed = Editor::new("");
+                    self.status =
+                        "しおり: 名前を打って「追加」。一覧を押すとそこへ移る".into();
+                }
+            }
             // 透かし。板で文字を打つ(空にして閉じると外れる)。
             // 文書ではヘッダーの中の VML になり、Word でも斜めの薄い字で出る
             "watermark" => {
@@ -1809,17 +1879,7 @@ impl Writer {
                     return;
                 }
                 self.switch_target(Target::Body);
-                let cur = self.ed.cursor();
-                // カーソルの段落番号(頭のバイトで探す)
-                let mut pi = 0usize;
-                let mut at = 0usize;
-                for (i, p) in self.doc.paragraphs().enumerate() {
-                    let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
-                    if at <= cur {
-                        pi = i;
-                    }
-                    at += len + 1;
-                }
+                let (pi, _) = self.cursor_para();
                 self.cmt_para = pi;
                 let text = self
                     .doc
@@ -1967,6 +2027,12 @@ impl Writer {
             cx.notify();
             return;
         }
+        if self.bm_open {
+            self.bm_open = false;
+            self.status = "".into();
+            cx.notify();
+            return;
+        }
         if self.font_list || self.size_list || self.symbols || self.style_list {
             self.font_list = false;
             self.size_list = false;
@@ -2046,6 +2112,8 @@ impl Writer {
     fn enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
         if self.find_open {
             self.find_next();
+        } else if self.bm_open {
+            self.bm_add();
         } else {
             self.editor().insert("\n");
             self.on_edited();
@@ -2916,6 +2984,84 @@ impl Render for Writer {
                         })))))
         };
 
+        // しおりの板(名前の入力欄+一覧)
+        let bm_panel = if !self.bm_open {
+            None
+        } else {
+            let mut t = self.bm_ed.text().to_string();
+            let cur = self.bm_ed.cursor().min(t.len());
+            t.insert(cur, '|');
+            // 一覧(名前と、その段落の頭のバイト位置)
+            let mut items: Vec<(String, usize)> = Vec::new();
+            let mut at = 0usize;
+            for p in self.doc.paragraphs() {
+                let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+                for b in &p.bookmarks {
+                    items.push((b.clone(), at));
+                }
+                at += len + 1;
+            }
+            let mut d = div().absolute().left(px(16.0)).top(px(8.0)).w(px(340.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("しおり — 名前を打って追加。押すとそこへ移る"))
+                .child(div().flex().flex_row().gap_2().items_center()
+                    .child(div().flex_1().px_2().py_1().rounded_sm()
+                        .border_1().border_color(rgb(0x1B6E3C)).bg(gpui::white())
+                        .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                        .child(SharedString::from(t)))
+                    .child(div().id("bm-add").px_2p5().py_1().rounded_sm()
+                        .border_1().border_color(rgb(0x1B6E3C)).text_color(rgb(0x1B6E3C))
+                        .text_size(px(11.5)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .child("追加 (Enter)")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.bm_add();
+                            cx.notify()
+                        }))));
+            if items.is_empty() {
+                d = d.child(div().text_size(px(11.5)).text_color(rgb(0x66707A))
+                    .child("(まだしおりはありません)"));
+            }
+            for (i, (name, b0)) in items.into_iter().enumerate() {
+                let name2 = name.clone();
+                d = d.child(div().flex().flex_row().items_center().gap_2()
+                    .child(div()
+                        .id(SharedString::from(format!("bm-{i}")))
+                        .flex_1().px_2().py_0p5().rounded_sm()
+                        .text_size(px(12.5)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF2F7)))
+                        .child(SharedString::from(name.clone()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.switch_target(Target::Body);
+                            this.ed.move_to(b0, false);
+                            this.follow_caret();
+                            this.status = format!("しおり「{name}」へ移りました").into();
+                            cx.notify()
+                        })))
+                    .child(div()
+                        .id(SharedString::from(format!("bmx-{i}")))
+                        .px_1p5().py_0p5().rounded_sm()
+                        .text_size(px(11.5)).text_color(rgb(0x9AA5AE)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xF6E5E2)).text_color(rgb(0xC0392B)))
+                        .child("✕")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            for b in &mut this.doc.blocks {
+                                if let kumihan::Block::Para(p) = b {
+                                    p.bookmarks.retain(|x| *x != name2);
+                                }
+                            }
+                            this.dirty = true;
+                            this.status = "しおりを外しました".into();
+                            cx.notify()
+                        }))));
+            }
+            Some(d)
+        };
+
         // フォントの一覧。この機械にある日本語の書体だけ
         let font_panel = if !self.font_list {
             None
@@ -3216,6 +3362,7 @@ impl Render for Writer {
                     .children(hf_panel)
                     .children(cmt_panel)
                     .children(wm_panel)
+                    .children(bm_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)

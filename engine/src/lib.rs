@@ -132,6 +132,9 @@ pub struct Paragraph {
     pub style: ParaStyle,
     /// この段落に付いたコメント
     pub comments: Vec<Comment>,
+    /// この段落に付いたしおり(docx の bookmarkStart の名前)。
+    /// 段落単位で持つ(範囲は段落まるごと — コメントと同じ粒度)
+    pub bookmarks: Vec<String>,
     /// 読めなかった要素(画像など)の原文。**理解はしないが、捨てない。**
     /// 保存でそのまま返す
     pub anchors: Vec<String>,
