@@ -268,6 +268,21 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
                     pos = None;
                 }
                 b"mergeCell" => merge(&e, &mut sh),
+                // 印刷の設定。読むだけ(保存は原文持ち越しが正)— PDF が従う
+                b"pageSetup" => {
+                    sh.landscape = attr(&e, "orientation").as_deref() == Some("landscape");
+                    sh.paper_size = attr(&e, "paperSize").and_then(|v| v.parse().ok());
+                }
+                b"pageMargins" => {
+                    let g = |k: &str| {
+                        attr(&e, k).and_then(|v| v.parse::<f32>().ok()).map(|inch| inch * 25.4)
+                    };
+                    if let (Some(l), Some(r), Some(t), Some(b)) =
+                        (g("left"), g("right"), g("top"), g("bottom"))
+                    {
+                        sh.margins_mm = Some((l, r, t, b));
+                    }
+                }
                 _ => {}
             },
             Ok(Event::Text(t)) if in_v || in_f || in_is => {
@@ -1673,5 +1688,44 @@ mod validation_roundtrip_tests {
             "落としたのに報告が無い: {:?}",
             rep.unsupported
         );
+    }
+}
+
+#[cfg(test)]
+mod page_setup_tests {
+    use super::*;
+
+    #[test]
+    fn 印刷の設定が読める() {
+        // 最小の xlsx を書き、sheet1.xml に pageSetup / pageMargins を差して読み直す
+        let b = Book::new();
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        let mut z = zip::ZipArchive::new(Cursor::new(buf.get_ref().clone())).unwrap();
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        use std::io::{Read as _, Write as _};
+        for i in 0..z.len() {
+            let mut f = z.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut s = Vec::new();
+            f.read_to_end(&mut s).unwrap();
+            if name.ends_with("sheet1.xml") {
+                let t = String::from_utf8(s).unwrap().replace(
+                    "</worksheet>",
+                    r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="8" orientation="landscape"/></worksheet>"#,
+                );
+                s = t.into_bytes();
+            }
+            w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(&s).unwrap();
+        }
+        let out = w.finish().unwrap();
+        let (back, _) = read(Cursor::new(out.into_inner())).expect("読めない");
+        let sh = &back.sheets[0];
+        assert!(sh.landscape, "横向きが読めない");
+        assert_eq!(sh.paper_size, Some(8), "用紙コードが読めない");
+        let (l, _, t, _) = sh.margins_mm.expect("余白が読めない");
+        assert!((l - 17.78).abs() < 0.01, "0.7インチ = 17.78mm でない: {l}");
+        assert!((t - 19.05).abs() < 0.01, "{t}");
     }
 }

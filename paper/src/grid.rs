@@ -30,15 +30,34 @@ fn hex_rgb(s: &str) -> Option<(f32, f32, f32)> {
     Some((g(0)?, g(1)?, g(2)?))
 }
 
+/// 印刷の指定(帳票が持っているもの)。Paper(紙の大きさ)とは別 —
+/// こちらは「どこを・どんな余白で」。
+#[derive(Debug, Clone, Default)]
+pub struct PrintSetup {
+    /// 印刷範囲(左上, 右下)。None なら使われている全域
+    pub area: Option<(sheet::Pos, sheet::Pos)>,
+    /// 余白 mm(左, 右, 上, 下)。None なら paper.margin_mm を四辺に
+    pub margins_mm: Option<(f32, f32, f32, f32)>,
+}
+
 /// 1つの表を PDF にする。行が紙に収まらなければ次のページへ。
 /// 返すのは**右にはみ出して切れた列の数**(0 なら全部紙に入っている)。
 pub fn sheet_to_pdf<W: Write>(
     grid: &Grid,
     font_data: &[u8],
     paper: Paper,
+    setup: &PrintSetup,
     out: W,
 ) -> Result<u32, String> {
-    let (rows, cols) = grid.extent();
+    let (ext_rows, ext_cols) = grid.extent();
+    // 印刷範囲があればそこだけ(行も列も)
+    let (r0, r1, c0, c1) = match setup.area {
+        Some((a, b)) => (a.row, b.row + 1, a.col, b.col + 1),
+        None => (0, ext_rows, 0, ext_cols),
+    };
+    let (ml, mr, mt, mb) = setup
+        .margins_mm
+        .unwrap_or((paper.margin_mm, paper.margin_mm, paper.margin_mm, paper.margin_mm));
     let (doc, page, layer) = PdfDocument::new(
         &grid.name,
         Mm(paper.width_mm),
@@ -50,8 +69,9 @@ pub fn sheet_to_pdf<W: Write>(
         .map_err(|e| e.to_string())?;
     let mut l = doc.get_page(page).get_layer(layer);
 
-    // 列の幅と左端(文書の指定に従う)
-    let col_mm: Vec<f32> = (0..cols.max(1))
+    // 列の幅と左端(文書の指定に従う)。印刷範囲の左端が原点
+    let ncols = (c1 - c0).max(1);
+    let col_mm: Vec<f32> = (c0..c0 + ncols)
         .map(|c| grid.col_width.get(&c).copied().or(grid.default_col_width)
             .map(|w| w * MM_PER_CHW).unwrap_or(COL_MM))
         .collect();
@@ -60,20 +80,20 @@ pub fn sheet_to_pdf<W: Write>(
         col_x.push(col_x.last().unwrap() + w);
     }
     // 右にはみ出して切れる列(右端が紙の使える幅を超えるもの)
-    let usable_w = paper.width_mm - 2.0 * paper.margin_mm;
-    let clipped = (0..cols)
-        .filter(|c| col_x[*c as usize + 1] > usable_w + 0.1)
+    let usable_w = paper.width_mm - ml - mr;
+    let clipped = (0..ncols)
+        .filter(|i| col_x[*i as usize + 1] > usable_w + 0.1)
         .count() as u32;
 
     // 行の高さ(pt → mm)。指定のない行は既定
     let row_mm = |r: u32| -> f32 {
         grid.row_height.get(&r).map(|pt| pt * 25.4 / 72.0).unwrap_or(ROW_MM)
     };
-    let usable = paper.height_mm - 2.0 * paper.margin_mm;
+    let usable = paper.height_mm - mt - mb;
 
     let mut y_used = 0.0f32; // このページで使った高さ
     let mut page_no = 1u32;
-    for r in 0..rows.max(1) {
+    for r in r0..r1.max(r0 + 1) {
         let rh = row_mm(r);
         if y_used + rh > usable && y_used > 0.0 {
             page_no += 1;
@@ -85,12 +105,12 @@ pub fn sheet_to_pdf<W: Write>(
             );
             l = doc.get_page(np).get_layer(nl);
         }
-        let y_top = paper.height_mm - paper.margin_mm - y_used;
+        let y_top = paper.height_mm - mt - y_used;
         y_used += rh;
-        for c in 0..cols.max(1) {
+        for c in c0..c0 + ncols {
             let p = sheet::Pos::new(r, c);
-            let x = paper.margin_mm + col_x[c as usize];
-            let cw = col_mm[c as usize];
+            let x = ml + col_x[(c - c0) as usize];
+            let cw = col_mm[(c - c0) as usize];
             let Some(cell) = grid.cells.get(&p) else { continue };
 
             // 塗りと文字色。条件付き書式は画面と同じ規則で上書きする
@@ -213,7 +233,7 @@ mod tests {
         let (fam, _) = kumihan::font::for_document(None).unwrap();
         let data = kumihan::font::load(fam).unwrap();
         let mut buf = Vec::new();
-        sheet_to_pdf(&grid(), &data, Paper::default(), &mut buf).unwrap();
+        sheet_to_pdf(&grid(), &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap();
         assert_eq!(&buf[..5], b"%PDF-");
         assert!(buf.len() > 1000);
     }
@@ -228,7 +248,7 @@ mod tests {
                 formula: None, value: Value::Number(r as f64), fmt: Default::default() });
         }
         let mut buf = Vec::new();
-        sheet_to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap();
         let hay = String::from_utf8_lossy(&buf).to_string();
         let i = hay.find("/Count ").unwrap() + 7;
         let n: usize = hay[i..].chars().take_while(|c| c.is_ascii_digit())
@@ -243,7 +263,7 @@ mod tests {
         let mut s = grid();
         // 塗りが無ければ長方形(re)は1つも描かれない
         let mut plain = Vec::new();
-        sheet_to_pdf(&s, &data, Paper::default(), &mut plain).unwrap();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut plain).unwrap();
         assert!(!String::from_utf8_lossy(&plain).contains(" re\n"), "塗りが無いのに長方形がある");
         s.set(Pos::parse("A2").unwrap(), Cell {
             formula: None,
@@ -255,7 +275,7 @@ mod tests {
             },
         });
         let mut buf = Vec::new();
-        sheet_to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap();
         let hay = String::from_utf8_lossy(&buf).to_string();
         assert!(hay.contains(" re\n"), "塗りの長方形が無い");
         assert!(hay.contains(" rg\n"), "色の指定が無い");
@@ -274,7 +294,7 @@ mod tests {
             fill: Some("E2EFDA".into()),
         });
         let mut buf = Vec::new();
-        sheet_to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap();
         assert!(
             String::from_utf8_lossy(&buf).contains(" re\n"),
             "条件に合う値の塗りが紙に出ない"
@@ -293,10 +313,10 @@ mod tests {
             s.col_width.insert(c, 20.0); // 20字 ≒ 40mm
         }
         let mut buf = Vec::new();
-        let clipped = sheet_to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        let clipped = sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap();
         assert!(clipped > 0, "切れた列が報告されない");
         let mut buf = Vec::new();
-        assert_eq!(sheet_to_pdf(&grid(), &data, Paper::default(), &mut buf).unwrap(), 0,
+        assert_eq!(sheet_to_pdf(&grid(), &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap(), 0,
                    "入り切っているのに切れたと言った");
     }
 
@@ -306,7 +326,64 @@ mod tests {
         let data = kumihan::font::load(fam).unwrap();
         let mut buf = Vec::new();
         sheet_to_pdf(&Grid { name: "空".into(), ..Default::default() },
-                     &data, Paper::default(), &mut buf).unwrap();
+                     &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap();
         assert_eq!(&buf[..5], b"%PDF-");
+    }
+}
+
+#[cfg(test)]
+mod print_setup_tests {
+    use sheet::model::{Cell, Pos, Value};
+
+    use super::*;
+
+    fn long_sheet() -> Grid {
+        let mut s = Grid { name: "長い".into(), ..Default::default() };
+        for r in 0..80 {
+            s.set(Pos::new(r, 0), Cell {
+                formula: None, value: Value::Number(r as f64), fmt: Default::default() });
+        }
+        s
+    }
+
+    fn pages(buf: &[u8]) -> usize {
+        let hay = String::from_utf8_lossy(buf).to_string();
+        let i = hay.find("/Count ").unwrap() + 7;
+        hay[i..].chars().take_while(|c| c.is_ascii_digit())
+            .collect::<String>().parse().unwrap()
+    }
+
+    #[test]
+    fn 印刷範囲だけが紙に出る() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let s = long_sheet();
+        // 全域は複数ページ、先頭5行の印刷範囲なら1ページ
+        let mut all = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut all).unwrap();
+        assert!(pages(&all) >= 2);
+        let setup = PrintSetup {
+            area: Some((Pos::new(0, 0), Pos::new(4, 0))),
+            margins_mm: None,
+        };
+        let mut part = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &setup, &mut part).unwrap();
+        assert_eq!(pages(&part), 1, "印刷範囲が効いていない");
+    }
+
+    #[test]
+    fn 余白が広いほど紙が増える() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let s = long_sheet();
+        let mut narrow = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(),
+            &PrintSetup { area: None, margins_mm: Some((10.0, 10.0, 10.0, 10.0)) },
+            &mut narrow).unwrap();
+        let mut wide = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(),
+            &PrintSetup { area: None, margins_mm: Some((10.0, 10.0, 100.0, 100.0)) },
+            &mut wide).unwrap();
+        assert!(pages(&wide) > pages(&narrow), "余白が紙の枚数に効いていない");
     }
 }

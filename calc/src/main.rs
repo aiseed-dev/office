@@ -2036,12 +2036,45 @@ impl Calc {
                 return;
             }
         };
+        // 帳票の印刷設定(pageSetup / pageMargins / Print_Area)に従う。
+        // 効かせたものは status に言う(黙って既定で出さない)
+        let sh = &self.book.sheets[self.active];
+        let mut paper = paper::Paper::default();
+        let mut desc: Vec<String> = Vec::new();
+        if let Some(code) = sh.paper_size {
+            match paper_mm(code) {
+                Some((w, h, name)) => {
+                    paper.width_mm = w;
+                    paper.height_mm = h;
+                    if code != 9 {
+                        desc.push(name.into());
+                    }
+                }
+                None => desc.push(format!("用紙コード{code}は未対応・A4で出します")),
+            }
+        }
+        if sh.landscape {
+            std::mem::swap(&mut paper.width_mm, &mut paper.height_mm);
+            desc.push("横向き".into());
+        }
+        let areas = self.book.print_areas(self.active);
+        let setup = paper::grid::PrintSetup {
+            area: areas.first().copied(),
+            margins_mm: sh.margins_mm,
+        };
+        if let Some((a, b)) = setup.area {
+            desc.push(format!("印刷範囲 {}:{}", a.a1(), b.a1()));
+        }
+        if areas.len() > 1 {
+            desc.push(format!("残り {} 域の印刷範囲はまだ出せません", areas.len() - 1));
+        }
         let mut clipped = 0u32;
-        let r = kumihan::atomic::save(&p, |f| {
+        let r = kumihan::atomic::save(p, |f| {
             paper::grid::sheet_to_pdf(
                 &self.book.sheets[self.active],
                 &data,
-                paper::Paper::default(),
+                paper,
+                &setup,
                 std::io::BufWriter::new(f),
             )
             .map(|n| clipped = n)
@@ -2049,8 +2082,13 @@ impl Calc {
         self.status = match r {
             // 紙に入り切らなかった列は黙らない
             Ok(_) => format!(
-                "PDF にしました — {}{}{}",
+                "PDF にしました — {}{}{}{}",
                 p.file_name().unwrap_or_default().to_string_lossy(),
+                if desc.is_empty() {
+                    String::new()
+                } else {
+                    format!("({})", desc.join("・"))
+                },
                 if exact { "" } else { " ※代替フォント" },
                 if clipped > 0 {
                     format!("(右の {clipped} 列は紙に入り切らず切れています)")
@@ -2534,6 +2572,19 @@ impl gpui::Element for InputSink {
 
 fn col_name(c: u32) -> String {
     Pos::new(0, c).a1().trim_end_matches('1').to_string()
+}
+
+/// xlsx の paperSize → mm と名前。**B は JIS**(ECMA-376 の表は ISO だが、
+/// 日本の事務様式と日本語版の印刷ドライバの実情は JIS。ここは日本のソフト)。
+fn paper_mm(code: u32) -> Option<(f32, f32, &'static str)> {
+    Some(match code {
+        8 => (297.0, 420.0, "A3"),
+        9 => (210.0, 297.0, "A4"),
+        11 => (148.0, 210.0, "A5"),
+        12 => (257.0, 364.0, "B4"),
+        13 => (182.0, 257.0, "B5"),
+        _ => return None,
+    })
 }
 
 impl Render for Calc {
@@ -3658,5 +3709,17 @@ mod wiring_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod paper_tests {
+    use super::*;
+
+    #[test]
+    fn 用紙コードはjisのbで引く() {
+        assert_eq!(paper_mm(9), Some((210.0, 297.0, "A4")));
+        assert_eq!(paper_mm(12), Some((257.0, 364.0, "B4")), "B4 は JIS の紙");
+        assert_eq!(paper_mm(99), None, "知らないコードを黙って A4 にしない");
     }
 }

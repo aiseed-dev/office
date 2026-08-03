@@ -269,6 +269,13 @@ pub struct Sheet {
     pub cond: Vec<CondRule>,
     /// データの入力規則(list だけ)。xlsx の dataValidations と往復する
     pub validations: Vec<Validation>,
+    /// 印刷の向き(xlsx の pageSetup orientation="landscape")。
+    /// **読むだけ** — 保存は原文持ち越しが正。PDF がこれに従う
+    pub landscape: bool,
+    /// 用紙(xlsx の pageSetup paperSize。9=A4, 8=A3, 11=A5, 12=B4, 13=B5)
+    pub paper_size: Option<u32>,
+    /// 印刷の余白 mm(左, 右, 上, 下)。xlsx の pageMargins(インチ)から換算
+    pub margins_mm: Option<(f32, f32, f32, f32)>,
 }
 
 /// データの入力規則(list だけ)。「この範囲は、この候補から選ぶ」。
@@ -419,6 +426,41 @@ pub struct Book {
 impl Book {
     pub fn new() -> Book {
         Book { sheets: vec![Sheet::new("Sheet1")], names_raw: Vec::new() }
+    }
+
+    /// 印刷範囲(definedName `_xlnm.Print_Area`)。持ち越した原文から読む。
+    /// 1つの定義に `,` 区切りで複数の域があれば全部返す(呼ぶ側が扱いを決める)。
+    pub fn print_areas(&self, sheet: usize) -> Vec<(Pos, Pos)> {
+        let mut out = Vec::new();
+        for raw in &self.names_raw {
+            if !raw.contains("_xlnm.Print_Area") {
+                continue;
+            }
+            // localSheetId がこのシートのものだけ(Print_Area はシート毎)
+            let sid = raw
+                .split(r#"localSheetId=""#)
+                .nth(1)
+                .and_then(|r| r.split('"').next())
+                .and_then(|v| v.parse::<usize>().ok());
+            if sid != Some(sheet) {
+                continue;
+            }
+            // 中身は Sheet1!$A$1:$G$30 の形(名前つきシートは 'Sheet 1'! も)
+            let Some(body) = raw.split('>').nth(1).and_then(|r| r.split('<').next()) else {
+                continue;
+            };
+            for part in body.split(',') {
+                let range = part.rsplit('!').next().unwrap_or(part);
+                let parsed = match range.split_once(':') {
+                    Some((x, y)) => Pos::parse(x).zip(Pos::parse(y)),
+                    None => Pos::parse(range).map(|p| (p, p)),
+                };
+                if let Some(r) = parsed {
+                    out.push(r);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -1623,5 +1665,33 @@ mod validation_tests {
         });
         assert!(s.validation_at(Pos::new(2, 1)).is_some());
         assert!(s.validation_at(Pos::new(2, 2)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod print_area_tests {
+    use super::*;
+
+    #[test]
+    fn 持ち越したprint_areaが読める() {
+        let mut b = Book::new();
+        b.names_raw.push(
+            r#"<definedName name="_xlnm.Print_Area" localSheetId="0">Sheet1!$A$1:$G$30</definedName>"#.into(),
+        );
+        assert_eq!(
+            b.print_areas(0),
+            vec![(Pos::new(0, 0), Pos::new(29, 6))],
+            "範囲が読めない"
+        );
+        assert!(b.print_areas(1).is_empty(), "別のシートに漏れた");
+    }
+
+    #[test]
+    fn 複数の域は全部返る() {
+        let mut b = Book::new();
+        b.names_raw.push(
+            r#"<definedName name="_xlnm.Print_Area" localSheetId="0">Sheet1!$A$1:$B$2,Sheet1!$D$1:$E$2</definedName>"#.into(),
+        );
+        assert_eq!(b.print_areas(0).len(), 2);
     }
 }
