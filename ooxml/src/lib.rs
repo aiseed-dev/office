@@ -626,6 +626,11 @@ pub fn parse_document_with(
                         }
                     }
                     b"sdt" => rep.note("w:sdt"),
+                    // ページの色(w:background。root 直下)
+                    b"background" => {
+                        doc.page_color = attr(&e, "color")
+                            .filter(|v| !v.is_empty() && v != "auto");
+                    }
                     // 単純なフィールド。PAGE は印として持ち、それ以外は報告する
                     b"fldSimple" => {
                         let instr = attr(&e, "instr").unwrap_or_default();
@@ -757,6 +762,11 @@ pub fn parse_document_with(
                     },
                     b"drawing" | b"pict" | b"object" =>
                         rep.note(&format!("w:{}", String::from_utf8_lossy(&n))),
+                    // ページの色(空要素で来るのが普通の形)
+                    b"background" => {
+                        doc.page_color = attr(&e, "color")
+                            .filter(|v| !v.is_empty() && v != "auto");
+                    }
                     // しおり(bookmark)とコメントの印。**理解はしないが捨てない** —
                     // 捨てると保存でしおり・コメント・相互参照の錨が壊れる。
                     // 原文を段落の頭に控える(位置は段落の頭に寄る、と言う)
@@ -1117,6 +1127,13 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
     root.push_attribute(("xmlns:pic",
         "http://schemas.openxmlformats.org/drawingml/2006/picture"));
     w.write_event(Event::Start(root)).unwrap();
+    // ページの色。w:body の前に置く(スキーマの並び)。
+    // 見せるには settings.xml の displayBackgroundShape も要る(write_with が足す)
+    if let Some(c) = &doc.page_color {
+        let mut bg = BS::new("w:background");
+        bg.push_attribute(("w:color", c.as_str()));
+        w.write_event(Event::Empty(bg)).unwrap();
+    }
     w.write_event(Event::Start(BS::new("w:body"))).unwrap();
 
     let mut imgn = 0usize;
@@ -1282,6 +1299,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     let mut copied = false;
     let mut orig_ct: Option<String> = None;
     let mut orig_rels: Option<String> = None;
+    let mut orig_settings: Option<String> = None;
     if let Some(src) = original {
         if let Ok(mut z) = zip::ZipArchive::new(src) {
             for i in 0..z.len() {
@@ -1305,6 +1323,11 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 }
                 if name == "word/_rels/document.xml.rels" {
                     orig_rels = Some(String::from_utf8_lossy(&buf).to_string());
+                    continue;
+                }
+                // ページの色を見せる設定は settings.xml に入る。捕まえて後で書く
+                if name == "word/settings.xml" && doc.page_color.is_some() {
+                    orig_settings = Some(String::from_utf8_lossy(&buf).to_string());
                     continue;
                 }
                 // 今回作り直す画像の実体だけは持ち越さない(二重に持たない)。
@@ -1341,6 +1364,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
              "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"),
             (ftr.as_ref().map(|(n, _)| n.as_str()),
              "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"),
+            (doc.page_color.as_ref().map(|_| "word/settings.xml"),
+             "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"),
         ] {
             let Some(name) = name else { continue };
             if !ct.contains(&format!("PartName=\"/{name}\"")) {
@@ -1363,7 +1388,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
 
     // 本文の rels。原本の関係(既存の画像・ヘッダー等)は残し、
     // 挿した画像のぶん(rIdJO1〜)と、新しく作るヘッダー・フッターを足す
-    if orig_rels.is_some() || !new_media.is_empty() || hdr.is_some() || ftr.is_some() {
+    if orig_rels.is_some() || !new_media.is_empty() || hdr.is_some() || ftr.is_some()
+        || doc.page_color.is_some()
+    {
         let mut rels = orig_rels.unwrap_or_else(|| {
             concat!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
@@ -1386,6 +1413,12 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             let (ext, _) = image_kind(m);
             add.push_str(&format!(
                 r#"<Relationship Id="rIdJO{n}" Type="{RNS_DOC}/image" Target="media/joimg{n}.{ext}"/>"#
+            ));
+        }
+        // 設定(settings.xml)への関係。素の文書に色を塗ったときだけ要る
+        if doc.page_color.is_some() && !rels.contains("Target=\"settings.xml\"") {
+            add.push_str(&format!(
+                r#"<Relationship Id="rIdJOset" Type="{RNS_DOC}/settings" Target="settings.xml"/>"#
             ));
         }
         // このアプリで作るヘッダー・フッター(johdr/joftr)の関係。
@@ -1428,6 +1461,21 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         zip.start_file(name.clone(), opts).map_err(|e| e.to_string())?;
         zip.write_all(xml.as_bytes()).map_err(|e| e.to_string())?;
     }
+    // ページの色を見せる設定(w:displayBackgroundShape)。無ければ足す。
+    // 原本の settings は他の設定ごと生かす(丸ごと作り直さない)
+    if doc.page_color.is_some() {
+        let mut st = orig_settings.unwrap_or_else(|| concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+            "<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"></w:settings>"
+        ).to_string());
+        if !st.contains("displayBackgroundShape") {
+            if let Some(i) = st.rfind("</w:settings>") {
+                st.insert_str(i, "<w:displayBackgroundShape/>");
+            }
+        }
+        zip.start_file("word/settings.xml", opts).map_err(|e| e.to_string())?;
+        zip.write_all(st.as_bytes()).map_err(|e| e.to_string())?;
+    }
 
     zip.start_file("word/document.xml", opts).map_err(|e| e.to_string())?;
     zip.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
@@ -1448,7 +1496,7 @@ mod tests {
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
-        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
+        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
     }
     fn round_trip(d: &Document) -> (Document, Report) {
         let mut buf = Cursor::new(Vec::new());
@@ -1478,7 +1526,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -1511,7 +1559,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -1527,7 +1575,7 @@ mod tests {
 
     #[test]
     fn 表が往復する() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![
             Block::Para(para("(様式3) 会社概要")),
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![cell("会　社　名"), cell("日本フネン株式会社")],
@@ -1550,7 +1598,7 @@ mod tests {
 
     #[test]
     fn 表と本文の順序が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![
             Block::Para(para("前")),
             Block::Table(Table { col_mm: vec![], rows: vec![vec![cell("表1")]] }),
             Block::Para(para("中")),
@@ -1566,7 +1614,7 @@ mod tests {
     #[test]
     fn 空セルも列として残る() {
         // 事務様式は「記入欄が空の表」が本体。空セルが消えると様式が壊れる
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
             vec![cell("氏名"), Cellbox::default()],
             vec![cell("所属"), Cellbox::default()],
         ]})]};
@@ -1606,7 +1654,7 @@ mod tests {
         vstart.v_merge = kumihan::VMerge::Start;
         let mut vcont = Cellbox::default();
         vcont.v_merge = kumihan::VMerge::Continue;
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![head],
                 vec![vstart, cell("本社")],
@@ -1663,7 +1711,7 @@ mod font_tests {
         let doc = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(),
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
             blocks: vec![Block::Para(Paragraph { style: Default::default(),
                 align: Default::default(),
                 anchors: Vec::new(),
@@ -1719,7 +1767,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(),
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
@@ -1734,7 +1782,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(),
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
@@ -1748,7 +1796,7 @@ mod fmt_tests {
             let d = Document {
                 font: None,
                 page: None,
-                sect_raw: None, header: Default::default(), footer: Default::default(),
+                sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
                 blocks: vec![Block::Para(Paragraph { style: Default::default(),
                     align: a,
                     anchors: Vec::new(),
@@ -1813,7 +1861,7 @@ mod para_tests {
     }
 
     fn roundtrip(p: Paragraph) -> Paragraph {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(p)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(p)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         crate::read(std::io::Cursor::new(&buf)).unwrap().0.paragraphs().next().unwrap().clone()
@@ -1843,7 +1891,7 @@ mod para_tests {
 
     #[test]
     fn 既定の段落には余計な指定を書かない() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(&buf)).unwrap();
@@ -1881,7 +1929,7 @@ mod break_round {
         para.page_break_before = true;
         para.runs.push(Run {
             text: "二頁目".into(), size_pt: 10.5, font: None, fmt: Default::default() });
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(para)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(para)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
@@ -2035,7 +2083,7 @@ mod vertalign_tests {
         Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(),
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
             blocks: vec![Block::Para(Paragraph { style: Default::default(),
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
@@ -2117,7 +2165,7 @@ mod shade_tests {
         };
         p.shade = Some("FFF2CC".into());
         p.boxed = true;
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");
@@ -2127,6 +2175,59 @@ mod shade_tests {
         let p = back.paragraphs().next().unwrap();
         assert_eq!(p.shade.as_deref(), Some("FFF2CC"), "背景色が往復しない");
         assert!(p.boxed, "囲み枠が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod page_color_tests {
+    use super::*;
+    use kumihan::Document;
+
+    #[test]
+    fn ページの色が往復し設定も付く() {
+        let mut d = Document::plain("本文", 10.5);
+        d.page_color = Some("E8F1F8".into());
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        assert_eq!(back.page_color.as_deref(), Some("E8F1F8"), "色が往復しない");
+        // 見せる設定(displayBackgroundShape)が settings に入っている
+        let mut buf2 = Cursor::new(Vec::new());
+        write(&back, &mut buf2).expect("書けない");
+        buf2.set_position(0);
+        let mut z = zip::ZipArchive::new(buf2).unwrap();
+        let mut st = String::new();
+        z.by_name("word/settings.xml").unwrap().read_to_string(&mut st).unwrap();
+        assert_eq!(st.matches("displayBackgroundShape").count(), 1,
+            "設定が無いか二重: {st}");
+    }
+
+    #[test]
+    fn 原本の設定は他の項目ごと生きる() {
+        // settings を丸ごと作り直すと、原本の設定(既定のタブ幅など)が消える
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o: zip::write::FileOptions<'_, ()> = Default::default();
+        let mut put = |n: &str, d: &[u8]| {
+            zip.start_file(n, o).unwrap();
+            zip.write_all(d).unwrap();
+        };
+        put("[Content_Types].xml", br#"<Types xmlns="ct"><Default Extension="xml" ContentType="application/xml"/></Types>"#);
+        put("_rels/.rels", br#"<Relationships xmlns="r"/>"#);
+        put("word/_rels/document.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>"#);
+        put("word/document.xml", r#"<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>本文</w:t></w:r></w:p></w:body></w:document>"#.as_bytes());
+        put("word/settings.xml", r#"<w:settings xmlns:w="x"><w:defaultTabStop w:val="840"/></w:settings>"#.as_bytes());
+        let src = zip.finish().unwrap().into_inner();
+        let (mut doc, _) = crate::read(Cursor::new(&src)).unwrap();
+        doc.page_color = Some("FFF7DC".into());
+        let mut out = Vec::new();
+        crate::write_with(&doc, Some(Cursor::new(&src)), Cursor::new(&mut out)).unwrap();
+        let mut z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+        let mut st = String::new();
+        z.by_name("word/settings.xml").unwrap().read_to_string(&mut st).unwrap();
+        assert!(st.contains("defaultTabStop"), "原本の設定が消えた: {st}");
+        assert!(st.contains("displayBackgroundShape"), "見せる設定が付かない: {st}");
     }
 }
 
@@ -2438,7 +2539,7 @@ mod image_insert_tests {
             w_mm: 50.0,
             h_mm: 30.0,
         });
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");

@@ -38,7 +38,7 @@ pub fn to_pdf<W: Write>(
     paper: Paper,
     out: W,
 ) -> Result<(), String> {
-    to_pdf_with(sheet, font_data, paper, |_| Vec::new(), out)
+    to_pdf_with(sheet, font_data, paper, None, |_| Vec::new(), out)
 }
 
 /// 紙面を PDF にする(ページごとの飾りつき)。
@@ -47,10 +47,12 @@ pub fn to_pdf<W: Write>(
 /// 行の y はページ上端からの mm、x は左余白からの mm
 /// ([`kumihan::layout_hf`] がこの形で返す)。
 /// ページ番号は組む側が字にして寄越すので、ここでは**置くだけ**。
+/// `bg` はページの色(0.0〜1.0 の RGB)。画面と同じ色で紙全体を塗る。
 pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
     sheet: &Sheet,
     font_data: &[u8],
     paper: Paper,
+    bg: Option<(f32, f32, f32)>,
     page_decor: F,
     out: W,
 ) -> Result<(), String> {
@@ -64,6 +66,15 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
         .add_external_font(std::io::Cursor::new(font_data))
         .map_err(|e| e.to_string())?;
     let l = doc.get_page(page).get_layer(layer);
+    // ページの色。文字より先に敷き、文字の色(fill)は黒へ戻す
+    let paint_bg = |l: &PdfLayerReference| {
+        if let Some((r, g, b)) = bg {
+            l.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
+            l.add_rect(Rect::new(Mm(0.0), Mm(0.0), Mm(paper.width_mm), Mm(paper.height_mm)));
+            l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+        }
+    };
+    paint_bg(&l);
     // ページごとの描き先を控えておく(罫線を後から同じ頁割りで引くため)
     let mut layers: Vec<PdfLayerReference> = vec![l.clone()];
 
@@ -81,7 +92,9 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
                 Mm(paper.height_mm),
                 format!("本文 {}", layers.len() + 1),
             );
-            layers.push(doc.get_page(np).get_layer(nl));
+            let nl = doc.get_page(np).get_layer(nl);
+            paint_bg(&nl);
+            layers.push(nl);
         }
         let l = &layers[k - 1];
         let y_roll = line.y_mm - offsets[k - 1];
@@ -374,7 +387,7 @@ mod hf_tests {
             part: None,
         };
         let mut buf = Vec::new();
-        to_pdf_with(&s, &data, Paper::default(),
+        to_pdf_with(&s, &data, Paper::default(), None,
             |k| layout_hf(&hf, &m, &pg, 6.4, k, 9, true), &mut buf).unwrap();
         assert_eq!(&buf[..5], b"%PDF-");
         // ページ数は本文で決まる(飾りで増えない)

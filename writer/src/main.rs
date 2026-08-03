@@ -837,6 +837,8 @@ impl Writer {
         let m = Metrics::new(&self.font_bytes).expect("フォント");
         let (hdr, ftr, pg) = (self.doc.header.clone(), self.doc.footer.clone(), self.pg);
         let total = self.total_pages();
+        // ページの色は紙にも(画面と紙の一致)
+        let bg = self.doc.page_color.as_deref().map(|c| (hex(c, 0), hex(c, 1), hex(c, 2)));
         let r = kumihan::atomic::save(p, |f| {
             paper::to_pdf_with(
                 &self.page,
@@ -846,6 +848,7 @@ impl Writer {
                     height_mm: pg.h_mm,
                     margin_mm: pg.left_mm,
                 },
+                bg,
                 // ヘッダー・フッター。ページ番号はここで各頁の数字になる
                 |k| {
                     let mut v = kumihan::layout_hf(&hdr, &m, &pg, LINE_MM, k, total, false);
@@ -1291,7 +1294,7 @@ impl Writer {
         "parastyle", "toc", "toc-update", "numpages", "datetime",
         "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
-        "insequation", "instext",
+        "insequation", "instext", "pagecolor",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1707,6 +1710,21 @@ impl Writer {
             "ruler" => self.ruler = !self.ruler,
             // ダークモード。**紙は白いまま**(画面と紙の一致)。周りだけ暗くする
             "darkmode" => self.dark = !self.dark,
+            // ページの色。無し → 薄クリーム → 薄青 → 薄緑 → 無し(文書に入り、
+            // 保存で残る。紙(PDF)も同じ色に塗る)
+            "pagecolor" => {
+                self.doc.page_color = match self.doc.page_color.as_deref() {
+                    None => Some("FFF7DC".into()),
+                    Some("FFF7DC") => Some("E8F1F8".into()),
+                    Some("E8F1F8") => Some("EAF5EE".into()),
+                    _ => None,
+                };
+                self.dirty = true;
+                self.status = match &self.doc.page_color {
+                    Some(c) => format!("ページの色: #{c}").into(),
+                    None => "ページの色: 無し".into(),
+                };
+            }
             // 行番号(見え方だけ)。折り返した行も1行と数える(見た目の行)
             "line-numbers" => self.line_numbers = !self.line_numbers,
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
@@ -2216,11 +2234,16 @@ impl Render for Writer {
                        if self.dirty { "● " } else { "" }, self.status))));
         let bar = div().flex().flex_col().child(tabs).child(cmds);
 
-        // 紙。スクロールは紙ごと上へずらすだけ(中身は全部この容器の子)
+        // 紙。スクロールは紙ごと上へずらすだけ(中身は全部この容器の子)。
+        // ページの色は文書の設定(紙も同じ色に塗られる)
+        let paper_bg = match self.doc.page_color.as_deref() {
+            Some(c) => gpui::Rgba { r: hex(c, 0), g: hex(c, 1), b: hex(c, 2), a: 1.0 },
+            None => gpui::Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+        };
         let mut paper = div().absolute()
             .left(px(28.0)).top(px(14.0 - self.scroll_mm * pxmm))
             .w(px(self.pg.w_mm * pxmm)).h(px(self.content_mm() * pxmm))
-            .bg(gpui::white()).shadow_lg();
+            .bg(paper_bg).shadow_lg();
 
         // ルーラー(10mm ごとの目盛り。余白の位置が分かる)
         if self.ruler {

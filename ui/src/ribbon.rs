@@ -105,7 +105,7 @@ pub const WRITER: &[Tab] = &[
         c("line-numbers", "行番号を表示する", "line-numbers"),
         x("ハイフン設定の変更", "hyphenation"),
         x("透かしを編集する", "watermark"),
-        x("ページ色の変更", "pagecolor"),
+        c("pagecolor", "ページ色の変更", "pagecolor"),
         x("配色の変更", "colorschemas"),
     ]},
     Tab { name: "参考資料", cmds: &[

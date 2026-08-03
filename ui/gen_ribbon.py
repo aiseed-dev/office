@@ -61,6 +61,10 @@ READY = {
         "multilevels": "multilevels", "darkmode": "darkmode",
         "text-from-file": "text-from-file", "add-text": "add-text",
         "line-numbers": "line-numbers",
+        "insshape": "insshape", "inssmartart": "inssmartart",
+        "inschart": "inschart", "smartpicker": "smartpicker",
+        "instextart": "instextart", "insequation": "insequation",
+        "instext": "instext", "pagecolor": "pagecolor",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
