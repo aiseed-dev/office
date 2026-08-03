@@ -25,6 +25,7 @@ hunspell が macOS・Chrome・Adobe に入れたのは、もっと緩い免許�
 | もの | 免許 | どこ |
 |---|---|---|
 | **GPUI**(zed-industries) | Apache-2.0 | `vendor/zed/crates/gpui` |
+| **hyphenation**(crate)+ TeX の分綴パターン(hyph-en-us) | コードは Apache-2.0/MIT。パターンは各言語の自由なライセンス(crate の patterns/ に原文) | `engine` の依存。英語のハイフネーションに使う |
 
 Apache-2.0 は GPLv3 系へ一方向に両立するので、AGPL-3.0 の本体に取り込める
 (逆はできない)。

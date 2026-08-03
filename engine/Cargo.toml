@@ -6,6 +6,7 @@ license.workspace = true
 description = "日本語の行組み(JIS X 4051 の禁則)を実フォントの字幅で行う組版エンジン"
 
 [dependencies]
+hyphenation = { version = "0.8", features = ["embed_en-us"] }
 ttf-parser = "0.20"
 
 [dev-dependencies]

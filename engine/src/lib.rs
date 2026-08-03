@@ -303,6 +303,9 @@ pub struct Document {
     /// 変更履歴の書き手(w:ins / w:del の author)。
     /// 保存用の写しにだけ入る — 印([`TRK_INS_S`] 等)と対で使う
     pub track_author: Option<String>,
+    /// 欧文のハイフネーション(docx の settings の autoHyphenation)。
+    /// 日本語には掛からない(禁則で折る)。英語の語を音節で折って - を付ける
+    pub hyphenate: bool,
 }
 
 /// 変更履歴の印。保存用の写しの本文に埋め、docx の w:ins / w:del になる。
@@ -566,7 +569,7 @@ impl Document {
         Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
             blocks: text
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
@@ -765,7 +768,8 @@ pub struct Frame {
 ///   2. 前の行の末尾に行末禁則(開き括弧)が残っていれば、それも引き取る
 /// 引き取った分だけ前の行は短くなる — 行長を超える方向には決して動かない。
 /// 段落を行長で折る。x はまだ置かない(呼ぶ側が揃え・字下げを決める)。
-fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>) -> Vec<Vec<Cell>> {
+fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>,
+              hyphenate: bool) -> Vec<Vec<Cell>> {
     let mut done: Vec<Vec<Cell>> = Vec::new();
     let mut cur: Vec<Cell> = Vec::new();
     let mut w_cur = 0.0f32;
@@ -825,6 +829,32 @@ fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>)
                 cur = close(&mut done, &mut cur, &mut w_cur, None);
                 continue;
             }
+            // 欧文の語は、設定が入っていれば音節で折って - を付ける
+            if hyphenate {
+                if let Tok::Word(cs, sz, f) = &tok {
+                    if let Some(k) = hyphen_split(cs, *sz, m, measure - w_cur) {
+                        for (c, wch, o) in &cs[..k] {
+                            cur.push(Cell { ch: *c, x_mm: 0.0, w_mm: *wch,
+                                size_pt: *sz, fmt: f.clone(), off: *o });
+                            w_cur += *wch;
+                        }
+                        // ハイフンは本文の字ではない。バイト位置は直前の字に重ねる
+                        // (欧文の字は1バイトなので、行末の勘定が壊れない)
+                        let hw = m.advance_mm('-', *sz);
+                        let off_h = cs[k - 1].2;
+                        cur.push(Cell { ch: '-', x_mm: 0.0, w_mm: hw,
+                            size_pt: *sz, fmt: f.clone(), off: off_h });
+                        w_cur += hw;
+                        cur = close(&mut done, &mut cur, &mut w_cur, None);
+                        for (c, wch, o) in &cs[k..] {
+                            cur.push(Cell { ch: *c, x_mm: 0.0, w_mm: *wch,
+                                size_pt: *sz, fmt: f.clone(), off: *o });
+                            w_cur += *wch;
+                        }
+                        continue;
+                    }
+                }
+            }
             let head = cells.first().map(|c| c.ch);
             cur = close(&mut done, &mut cur, &mut w_cur, head);
         }
@@ -840,6 +870,33 @@ fn break_para(para: &Paragraph, m: &Metrics, measure: f32, marker: Option<&str>)
         done.push(cur);
     }
     done
+}
+
+/// 欧文の語の分割点(Knuth-Liang のパターン。TeX と同じ方式)。
+/// 前半の字数を返す。avail(残りの幅)に「前半 + '-'」が収まる最長の点を選ぶ。
+fn hyphen_split(cs: &[(char, f32, usize)], size_pt: f32, m: &Metrics, avail: f32) -> Option<usize> {
+    use hyphenation::{Hyphenator, Load};
+    static DICT: std::sync::OnceLock<Option<hyphenation::Standard>> = std::sync::OnceLock::new();
+    let dict = DICT
+        .get_or_init(|| {
+            hyphenation::Standard::from_embedded(hyphenation::Language::EnglishUS).ok()
+        })
+        .as_ref()?;
+    let word: String = cs.iter().map(|(c, _, _)| *c).collect();
+    // 数字入りの語(型番など)は折らない
+    if word.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let hyphen_w = m.advance_mm('-', size_pt);
+    let mut best = None;
+    for b in dict.hyphenate(&word).breaks {
+        // 語は ASCII なのでバイト位置 = 字数
+        let w: f32 = cs[..b].iter().map(|(_, w, _)| *w).sum();
+        if w + hyphen_w <= avail {
+            best = Some(b);
+        }
+    }
+    best
 }
 
 /// セルの中の余白(mm)
@@ -923,7 +980,8 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                 }
                 let para_eff: &Paragraph = owned_rest.as_ref().unwrap_or(para);
                 let measure = (measure - cap_shift).max(em);
-                for mut cells in break_para(para_eff, m, measure, marker.as_deref()) {
+                for mut cells in break_para(para_eff, m, measure, marker.as_deref(),
+                                            doc.hyphenate) {
                     // 頭の1字を除いたぶん、バイト位置を戻す
                     if cap_len > 0 {
                         for c in &mut cells {
@@ -971,7 +1029,7 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                 para_byte0 += plen + 1;
             }
             Block::Table(table) => {
-                y = layout_table(table, m, frame, y, &mut sheet, table_no);
+                y = layout_table(table, m, frame, y, &mut sheet, table_no, doc.hyphenate);
                 table_no += 1;
             }
         }
@@ -1017,7 +1075,7 @@ pub fn layout_hf(
                 r.text = r.text.replace(PAGES_MARK, &tot);
             }
         }
-        for cells in break_para(&para, m, measure, None) {
+        for cells in break_para(&para, m, measure, None, false) {
             let w: f32 = cells.iter().map(|c| c.w_mm).sum();
             let slack = (measure - w).max(0.0);
             let mut x = match para.align {
@@ -1141,7 +1199,7 @@ pub fn fold_columns(sheet: &mut Sheet, pg: &PageSetup, y0_mm: f32) {
 /// 罫線は「格子」ではなく**結合後のセルの縁**に引く — 結合の中を
 /// 線が横切ると、様式の枠が壊れて見える。
 fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mut Sheet,
-                table_no: usize) -> f32 {
+                table_no: usize, hyphenate: bool) -> f32 {
     // 列数は「セルの数」ではなく「セルが占める格子の数」
     let ncols = table
         .rows
@@ -1202,7 +1260,7 @@ fn layout_table(table: &Table, m: &Metrics, frame: &Frame, y_in: f32, sheet: &mu
                 let inner = (w - 2.0 * CELL_PAD).max(2.0);
                 let mut para0 = 0usize;
                 for para in &cell.paragraphs {
-                    for cs in break_para(para, m, inner, None) {
+                    for cs in break_para(para, m, inner, None, hyphenate) {
                         let b0 = para0 + cs.iter().map(|c| c.off).min().unwrap_or(0);
                         ls.push((cs, b0));
                     }
@@ -1756,7 +1814,7 @@ mod table_layout_tests {
             }],
             ..Default::default()
         };
-        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, blocks: vec![] };
+        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![] };
         d.blocks.push(Block::Table(Table {
             col_mm: vec![],
             rows: vec![vec![cell(&"あ".repeat(30)), cell("短い")]],
@@ -1796,7 +1854,7 @@ mod merge_layout_tests {
         let data = font::load(font::for_document(None).unwrap().0).unwrap();
         let m = Metrics::new(&data).unwrap();
         let d = Document {
-            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
+            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
             blocks: vec![Block::Table(Table { col_mm: vec![], rows })],
         };
         layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 })
@@ -1873,7 +1931,7 @@ mod gridcol_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
             blocks: vec![Block::Table(Table {
                 col_mm,
                 rows: vec![vec![cell("項目"), cell("値")]],
@@ -1985,6 +2043,42 @@ mod byte0_tests {
         assert_eq!(l.byte0, 0);
         // 印(・)ぶんが byte_end に乗っていない
         assert_eq!(l.byte_end(), "項目".len(), "印が本文のバイトに混ざった");
+    }
+}
+
+#[cfg(test)]
+mod hyphen_tests {
+    use super::*;
+
+    #[test]
+    fn 英語の語が音節で折れてハイフンが付く() {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let text = "The quick information hyphenation representation communication demonstration";
+        let mut d = Document::plain(text, 10.5);
+        d.hyphenate = true;
+        let s = layout(&d, &m, &Frame { measure_mm: 45.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        let joined: Vec<String> = s.lines.iter().map(|l| l.text()).collect();
+        assert!(joined.iter().any(|l| l.ends_with('-')),
+            "どの行末にもハイフンが無い: {joined:?}");
+        for l in &s.lines {
+            assert!(l.width_mm() <= 45.1, "行長を超えた: {}", l.width_mm());
+        }
+        // ハイフンを除けば、文字は一つも失われない
+        let got: String = s.lines.iter().flat_map(|l| l.cells.iter())
+            .map(|c| c.ch).filter(|c| *c != '-' && *c != ' ').collect();
+        let want: String = text.chars().filter(|c| *c != ' ').collect();
+        assert_eq!(got, want, "ハイフネーションで字が消えた");
+    }
+
+    #[test]
+    fn 切らなければ何も変わらない() {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let d = Document::plain("The quick information hyphenation", 10.5);
+        let s = layout(&d, &m, &Frame { measure_mm: 45.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        assert!(s.lines.iter().all(|l| !l.text().ends_with('-')),
+            "設定していないのに折った");
     }
 }
 

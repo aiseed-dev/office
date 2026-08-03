@@ -1820,7 +1820,7 @@ impl Writer {
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
         "caption", "tof", "tof-update", "columns",
-        "pen", "highlighter", "eraser", "track-changes", "dropcap",
+        "pen", "highlighter", "eraser", "track-changes", "dropcap", "hyphenation",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2382,6 +2382,17 @@ impl Writer {
             }
             // 行番号(見え方だけ)。折り返した行も1行と数える(見た目の行)
             "line-numbers" => self.line_numbers = !self.line_numbers,
+            // 欧文のハイフネーション(入切)。日本語は禁則で折るので変わらない
+            "hyphenation" => {
+                self.doc.hyphenate = !self.doc.hyphenate;
+                self.dirty = true;
+                self.relayout_keep();
+                self.status = if self.doc.hyphenate {
+                    "ハイフネーション: 入(英語の語を音節で折って - を付けます)".into()
+                } else {
+                    "ハイフネーション: 切".into()
+                };
+            }
             // コメント(段落単位)。カーソルの段落に付ける
             "comment" => {
                 if self.cmt_edit {
