@@ -1820,7 +1820,7 @@ impl Writer {
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
         "caption", "tof", "tof-update", "columns",
-        "pen", "highlighter", "eraser", "track-changes",
+        "pen", "highlighter", "eraser", "track-changes", "dropcap",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2008,6 +2008,12 @@ impl Writer {
             }),
             // 段落の囲み枠(入切)
             "borders" => self.para(|p| p.boxed = !p.boxed),
+            // ドロップキャップ(頭の1字を大きく。押すたびに入切)
+            "dropcap" => {
+                self.para(|p| p.dropcap = !p.dropcap);
+                self.status =
+                    "ドロップキャップを切り替えました(docx では Word の枠になります)".into();
+            }
             // 画像の挿入。段落の下に付く(選択も**別の糸**)。
             // 図形・グラフ・SmartArt・テキストアート・方程式も同じ道 —
             // **絵は Python で描いて画像として貼る**(SEKKEI「writer の挿入系」)。

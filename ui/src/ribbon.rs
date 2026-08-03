@@ -86,7 +86,7 @@ pub const WRITER: &[Tab] = &[
         c("smartpicker", "グラフを挿入", "smartpicker"),
         c("instext", "テキストボックスの挿入", "instext"),
         c("instextart", "テキストアートの挿入", "instextart"),
-        x("ドロップキャップの挿入", "dropcap"),
+        c("dropcap", "ドロップキャップの挿入", "dropcap"),
         c("text-from-file", "ファイルからのテキスト", "text-from-file"),
         c("insequation", "方程式を挿入", "insequation"),
         c("inssymbol", "記号を挿入", "inssymbol"),

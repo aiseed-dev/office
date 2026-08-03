@@ -713,6 +713,10 @@ fn parse_document_full(
     let mut para_comments: Vec<Comment> = Vec::new();
     // この段落に付いたしおり(bookmarkStart の名前)
     let mut para_bookmarks: Vec<String> = Vec::new();
+    // ドロップキャップ。Word は「枠の段落(頭の1字)+本文の段落」に割るので、
+    // 枠の段落を控えて次の段落の頭に合流させる
+    let mut dropcap = false;
+    let mut pending_cap: Option<Vec<Run>> = None;
     // 読めなかった要素の原文(画像など)。段落ごとに集めて持ち越す
     let mut anchors: Vec<String> = Vec::new();
     // 表示できる画像(r:embed と wp:extent が読めたもの)
@@ -739,7 +743,18 @@ fn parse_document_full(
         last_pos = r.buffer_position() as usize;
         match ev {
             Err(e) => { rep.note(&format!("XML解析エラー: {e}")); break }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                // 枠の段落だけで終わった文書。段落として残す(黙って捨てない)
+                if let Some(cap) = pending_cap.take() {
+                    doc.push_para(Paragraph {
+                        dropcap: true,
+                        line_spacing: 1.0,
+                        runs: cap,
+                        ..Default::default()
+                    });
+                }
+                break;
+            }
             Ok(Event::Start(e)) => {
                 let n = local(e.name().as_ref()).to_vec();
                 match n.as_slice() {
@@ -772,7 +787,8 @@ fn parse_document_full(
                               list = ListKind::default(); indent = 0; line_spacing = 1.0;
                               page_break_before = false; shade = None; boxed = false;
                               pstyle = ParaStyle::Body; ilvl = 0;
-                              para_comments.clear(); para_bookmarks.clear(); }
+                              para_comments.clear(); para_bookmarks.clear();
+                              dropcap = false; }
                     b"rPr" => { in_rpr = true; fmt = CharFormat::default(); }
                     b"pPr" => in_ppr = true,
                     b"sz" if in_rpr => {
@@ -829,6 +845,10 @@ fn parse_document_full(
                                 if n < 3 { pstyle = ParaStyle::Heading(n + 1); }
                             }
                         }
+                    }
+                    b"framePr" if in_ppr => {
+                        dropcap = matches!(attr(&e, "dropCap").as_deref(),
+                            Some("drop") | Some("margin"));
                     }
                     b"pageBreakBefore" if in_ppr => {
                         page_break_before = on(&e);
@@ -1014,6 +1034,10 @@ fn parse_document_full(
                             }
                         }
                     }
+                    b"framePr" if in_ppr => {
+                        dropcap = matches!(attr(&e, "dropCap").as_deref(),
+                            Some("drop") | Some("margin"));
+                    }
                     b"pageBreakBefore" if in_ppr => {
                         page_break_before = on(&e);
                     }
@@ -1144,7 +1168,7 @@ fn parse_document_full(
                         if let Some(runs) = para.take() {
                             rep.runs += runs.len();
                             rep.paragraphs += 1;
-                            let p = Paragraph { align, anchors: std::mem::take(&mut anchors),
+                            let mut p = Paragraph { align, anchors: std::mem::take(&mut anchors),
                                 images: std::mem::take(&mut images),
                                 comments: std::mem::take(&mut para_comments),
                                 bookmarks: std::mem::take(&mut para_bookmarks),
@@ -1154,18 +1178,45 @@ fn parse_document_full(
                                 line_spacing,
                                 style: pstyle,
                                 shade: shade.take(), boxed,
+                                dropcap: false,
                                 images_new: Vec::new(),
                                 runs: if runs.is_empty() {
                                 vec![Run { text: String::new(), size_pt: DEFAULT_PT, font: None, fmt: Default::default() }]
                             } else { runs } };
-                            // 表のセルの中なら、そのセルへ。外なら本文へ
-                            match stack.last_mut() {
-                                Some(b) => b.cell.push(p),
-                                None => doc.push_para(p),
+                            // ドロップキャップの枠の段落は、次の段落の頭に合流する
+                            if dropcap && !p.runs.iter().all(|r| r.text.is_empty()) {
+                                pending_cap = Some(p.runs);
+                            } else {
+                                if let Some(mut cap) = pending_cap.take() {
+                                    // 頭の字の大きさは本文に合わせる(2.8倍は組むとき掛かる。
+                                    // 読んだ大きさのまま持つと保存のたびに育つ)
+                                    let body_pt = p.runs.first().map(|r| r.size_pt)
+                                        .unwrap_or(DEFAULT_PT);
+                                    for r in &mut cap {
+                                        r.size_pt = body_pt;
+                                    }
+                                    cap.extend(p.runs);
+                                    p.runs = cap;
+                                    p.dropcap = true;
+                                }
+                                // 表のセルの中なら、そのセルへ。外なら本文へ
+                                match stack.last_mut() {
+                                    Some(b) => b.cell.push(p),
+                                    None => doc.push_para(p),
+                                }
                             }
                         }
                     }
                     b"tc" => if let Some(b) = stack.last_mut() {
+                        // 枠の段落だけで終わったセルは、そのまま段落として置く
+                        if let Some(cap) = pending_cap.take() {
+                            b.cell.push(Paragraph {
+                                dropcap: true,
+                                line_spacing: 1.0,
+                                runs: cap,
+                                ..Default::default()
+                            });
+                        }
                         let paras = std::mem::take(&mut b.cell);
                         b.row.push(Cellbox {
                             paragraphs: paras,
@@ -1231,6 +1282,33 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
         cmts: &mut Vec<Comment>, bmn: &mut usize,
         trkn: &mut usize, author: &str) {
         use quick_xml::events::{BytesEnd, BytesStart as BS, BytesText};
+        // ドロップキャップは Word の作法どおり
+        // 「枠の段落(頭の1字・大きめ)+本文の段落」に割って書く
+        if p.dropcap {
+            if let Some(ch) = p.runs.first().and_then(|r| r.text.chars().next()) {
+                let r0 = p.runs.first().unwrap();
+                let cap_pt = ((r0.size_pt * 2.8 * 2.0).round() as i32).to_string();
+                let font_xml = r0.font.as_deref().map(|f| format!(
+                    r#"<w:rFonts w:ascii="{f}" w:hAnsi="{f}" w:eastAsia="{f}"/>"#,
+                    f = esc(f))).unwrap_or_default();
+                let _ = w.get_mut().write_all(format!(
+                    concat!(
+                        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="2" "#,
+                        r#"w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr>"#,
+                        r#"<w:r><w:rPr>{font}<w:sz w:val="{sz}"/></w:rPr>"#,
+                        r#"<w:t xml:space="preserve">{t}</w:t></w:r></w:p>"#
+                    ),
+                    font = font_xml, sz = cap_pt, t = esc(&ch.to_string())
+                ).as_bytes());
+                let mut rest = p.clone();
+                rest.dropcap = false;
+                if let Some(r) = rest.runs.first_mut() {
+                    r.text = r.text[ch.len_utf8()..].to_string();
+                }
+                write_para(w, &rest, imgn, media, cmts, bmn, trkn, author);
+                return;
+            }
+        }
         w.write_event(Event::Start(BS::new("w:p"))).unwrap();
         // 段落の性質。既定のものは書かない — 余計な指定を増やさない
         let has_ppr = p.align != Align::Left
@@ -1906,7 +1984,7 @@ mod tests {
     use kumihan::{Align, CharFormat, ListKind, Block, Cellbox, Document, Paragraph, Run, Table};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
+        Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
@@ -1941,7 +2019,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -1974,7 +2052,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -2127,7 +2205,7 @@ mod font_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
-            blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
+            blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
                 align: Default::default(),
                 anchors: Vec::new(),
                     images: Vec::new(),
@@ -2183,7 +2261,7 @@ mod fmt_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
         };
@@ -2198,7 +2276,7 @@ mod fmt_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), anchors: Vec::new(),
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
         };
@@ -2212,7 +2290,7 @@ mod fmt_tests {
                 font: None,
                 page: None,
                 sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
-                blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
+                blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
                     align: a,
                     anchors: Vec::new(),
                     images: Vec::new(),
@@ -2260,7 +2338,7 @@ mod para_tests {
     use kumihan::{Align, Block, Document, ListKind, Paragraph, Run};
 
     fn para(list: ListKind, indent: u8, spacing: f32) -> Paragraph {
-        Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
+        Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
             align: Align::Left,
             anchors: Vec::new(),
                     images: Vec::new(),
@@ -2499,7 +2577,7 @@ mod vertalign_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
-            blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
+            blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
                 ..Default::default()
@@ -2582,7 +2660,7 @@ mod shade_tests {
 
     #[test]
     fn 段落の背景色と囲み枠が往復する() {
-        let mut p = Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
+        let mut p = Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
             line_spacing: 1.0,
             runs: vec![Run { text: "注意".into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],
@@ -2622,6 +2700,37 @@ mod bookmark_model_tests {
         let bs: Vec<usize> = back.paragraphs().map(|p| p.bookmarks.len()).collect();
         assert_eq!(bs, vec![0, 1, 0], "しおりの付き先がずれた");
         assert_eq!(back.paragraphs().nth(1).unwrap().bookmarks[0], "会社名");
+    }
+}
+
+#[cfg(test)]
+mod dropcap_round_tests {
+    use super::*;
+    use kumihan::{Block, Document};
+
+    #[test]
+    fn ドロップキャップが往復する() {
+        let mut d = Document::plain("春はあけぼの。やうやう白くなりゆく山際。\n次の段落", 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] {
+            p.dropcap = true;
+        }
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        // 枠の段落と本文の段落は、読みで1つに合流する
+        let ps: Vec<_> = back.paragraphs().collect();
+        assert_eq!(ps.len(), 2, "段落の数が変わった");
+        assert!(ps[0].dropcap, "ドロップキャップが消えた");
+        let t: String = ps[0].runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(t, "春はあけぼの。やうやう白くなりゆく山際。", "本文が欠けた");
+        // 頭の字の大きさは本文と同じに戻る(保存のたびに育たない)
+        assert_eq!(ps[0].runs[0].size_pt, 10.5, "頭の字の大きさが育った");
+        assert!(!ps[1].dropcap);
+        // XML の上では Word の作法(framePr の枠の段落)になっている
+        let out = write_document_xml(&d);
+        assert!(out.contains(r#"w:dropCap="drop""#), "framePr が無い: {out}");
     }
 }
 
@@ -2956,7 +3065,7 @@ mod hf_tests {
     use kumihan::{Align, Document, Paragraph, Run, PAGE_MARK};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
+        Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
             line_spacing: 1.0,
             runs: vec![Run { text: s.into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],
@@ -3129,7 +3238,7 @@ mod image_insert_tests {
 
     #[test]
     fn 挿した画像が部品ごと保存され読み直せる() {
-        let mut p = Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(),
+        let mut p = Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
             line_spacing: 1.0,
             runs: vec![Run { text: "ロゴの下".into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],

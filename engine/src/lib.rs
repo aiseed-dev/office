@@ -158,6 +158,9 @@ pub struct Paragraph {
     pub shade: Option<String>,
     /// 段落を枠で囲む(docx の w:pBdr)。囲みの注意書きに使われる
     pub boxed: bool,
+    /// ドロップキャップ(頭の1字を大きく)。docx では w:framePr の
+    /// 「枠の段落+本文の段落」に割れるが、モデルでは1つの段落で持つ
+    pub dropcap: bool,
 }
 
 impl Paragraph {
@@ -882,20 +885,64 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                         para.marker(counters[l] - 1)
                     }
                 };
-                for cells in break_para(para, m, measure, marker.as_deref()) {
+                // ドロップキャップ: 頭の1字を大きな1行として先に置き、
+                // 残りは行長をその幅ぶん狭めて組む(Word は数行だけ回り込むが、
+                // この版は段落まるごと狭める近似)
+                let mut cap_shift = 0.0f32;
+                let mut cap_len = 0usize;
+                let mut owned_rest: Option<Paragraph> = None;
+                if para.dropcap {
+                    let first = para.runs.first();
+                    if let Some(ch) = first.and_then(|r| r.text.chars().next()) {
+                        let size0 = first.map(|r| r.size_pt).unwrap_or(10.5);
+                        let cap_pt = size0 * 2.8;
+                        let cap_w = m.advance_mm(ch, cap_pt) + 1.0;
+                        cap_len = ch.len_utf8();
+                        cap_shift = cap_w;
+                        // 1行下のベースラインに置く = 2行に掛かる見た目
+                        sheet.lines.push(Line {
+                            cells: vec![Cell {
+                                ch,
+                                x_mm: indent_mm,
+                                w_mm: cap_w,
+                                size_pt: cap_pt,
+                                fmt: first.map(|r| r.fmt.clone()).unwrap_or_default(),
+                                off: 0,
+                            }],
+                            y_mm: y + frame.line_height_mm * para.spacing(),
+                            from_body: true,
+                            byte0: para_byte0,
+                            cell: None,
+                        });
+                        let mut rest = para.clone();
+                        if let Some(r0) = rest.runs.first_mut() {
+                            r0.text = r0.text[cap_len..].to_string();
+                        }
+                        owned_rest = Some(rest);
+                    }
+                }
+                let para_eff: &Paragraph = owned_rest.as_ref().unwrap_or(para);
+                let measure = (measure - cap_shift).max(em);
+                for mut cells in break_para(para_eff, m, measure, marker.as_deref()) {
+                    // 頭の1字を除いたぶん、バイト位置を戻す
+                    if cap_len > 0 {
+                        for c in &mut cells {
+                            c.off += cap_len;
+                        }
+                    }
                     if cells.is_empty() {
                         // 空の段落も**行として持つ**。持たないと、後ろの行の
                         // バイト勘定が1つずつずれて、カーソルが本文とずれる
                         sheet.lines.push(Line {
                             cells: Vec::new(), y_mm: y, from_body: true,
-                            byte0: para_byte0, cell: None });
+                            byte0: para_byte0 + cap_len, cell: None });
                         y += frame.line_height_mm * para.spacing();
                         continue;
                     }
                     // 揃え。**行の幅と行長の差を、どこに置くか**の話でしかない
                     let w: f32 = cells.iter().map(|c| c.w_mm).sum();
                     let slack = (measure - w).max(0.0);
-                    let mut x = indent_mm + match para.align {
+                    let mut x = indent_mm + cap_shift + match para.align {
                         Align::Left | Align::Justify => 0.0,
                         Align::Center => slack / 2.0,
                         Align::Right => slack,
@@ -1938,6 +1985,32 @@ mod byte0_tests {
         assert_eq!(l.byte0, 0);
         // 印(・)ぶんが byte_end に乗っていない
         assert_eq!(l.byte_end(), "項目".len(), "印が本文のバイトに混ざった");
+    }
+}
+
+#[cfg(test)]
+mod dropcap_tests {
+    use super::*;
+
+    #[test]
+    fn 頭の1字が大きく残りは狭く組まれる() {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain(&format!("春{}", "はあけぼの。".repeat(8)), 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] {
+            p.dropcap = true;
+        }
+        let s = layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        let cap = &s.lines[0];
+        assert_eq!(cap.text(), "春");
+        assert!(cap.cells[0].size_pt > 25.0, "頭の字が大きくない: {}", cap.cells[0].size_pt);
+        // 本文は頭の字の右から始まり、バイト位置は「春」の後ろから
+        let body = &s.lines[1];
+        assert!(body.cells[0].x_mm > cap.cells[0].w_mm - 0.5, "本文が頭の字に重なる");
+        assert_eq!(body.byte0, "春".len(), "バイト勘定がずれた");
+        // 文字は一つも失われない
+        let got: String = s.lines.iter().flat_map(|l| l.cells.iter()).map(|c| c.ch).collect();
+        assert_eq!(got.chars().count(), format!("春{}", "はあけぼの。".repeat(8)).chars().count());
     }
 }
 
