@@ -1290,6 +1290,8 @@ impl Writer {
         "edit-header", "edit-footer", "pagenum",
         "parastyle", "toc", "toc-update", "numpages", "datetime",
         "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
+        "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
+        "insequation", "instext",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1477,8 +1479,16 @@ impl Writer {
             }),
             // 段落の囲み枠(入切)
             "borders" => self.para(|p| p.boxed = !p.boxed),
-            // 画像の挿入。段落の下に付く(選択も**別の糸**)
-            "insimage" => {
+            // 画像の挿入。段落の下に付く(選択も**別の糸**)。
+            // 図形・グラフ・SmartArt・テキストアート・方程式も同じ道 —
+            // **絵は Python で描いて画像として貼る**(SEKKEI「writer の挿入系」)。
+            // 灰色で残すより、方針どおりに動く釦にする(発注者判断)
+            "insimage" | "insshape" | "inssmartart" | "inschart" | "smartpicker"
+            | "instextart" | "insequation" => {
+                if id != "insimage" {
+                    self.status =
+                        "図は Python(matplotlib 等)で描いて、画像として貼ります".into();
+                }
                 let ask = cx.background_executor().spawn(async {
                     rfd::FileDialog::new()
                         .add_filter("画像", &["png", "jpg", "jpeg"])
@@ -1494,6 +1504,31 @@ impl Writer {
                     });
                 })
                 .detach();
+            }
+            // テキストボックス = 1×1 の表。枠の中に文字が要る様式は
+            // 表で組むのが日本の事務の通り相場(SEKKEI)
+            "instext" => {
+                let empty = kumihan::Cellbox {
+                    paragraphs: vec![kumihan::Paragraph {
+                        runs: vec![kumihan::Run {
+                            text: String::new(),
+                            size_pt: SIZE_PT,
+                            font: None,
+                            fmt: Default::default(),
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                self.flush_target();
+                self.doc.blocks.push(kumihan::Block::Table(kumihan::Table {
+                    col_mm: vec![80.0],
+                    rows: vec![vec![empty]],
+                }));
+                self.dirty = true;
+                self.relayout_keep();
+                self.status =
+                    "1×1 の枠を末尾に入れました(クリックして中に書けます)".into();
             }
             // 大文字小文字。選択の英字を 全部大文字 ⇄ 全部小文字 で切り替える
             // (小文字が混ざっていれば大文字へ。1手で戻せる)
