@@ -1286,7 +1286,7 @@ impl Writer {
         "pageorient", "pagesize", "pagemargins",
         "edit-header", "edit-footer", "pagenum",
         "parastyle", "toc", "toc-update", "numpages", "datetime",
-        "multilevels", "darkmode",
+        "multilevels", "darkmode", "text-from-file", "add-text",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1323,6 +1323,57 @@ impl Writer {
             }
             Err(e) => self.status = format!("読めません: {e}").into(),
         }
+    }
+
+    /// テキスト(または docx の本文)をカーソルの位置に差し込む。
+    fn insert_text_from(&mut self, path: &std::path::Path) {
+        let is_docx = path.extension().and_then(|e| e.to_str()) == Some("docx");
+        let text = if is_docx {
+            match std::fs::File::open(path).map_err(|e| e.to_string()).and_then(ooxml::read) {
+                Ok((d, rep)) => {
+                    if !rep.is_lossless() {
+                        // 本文だけを差し込む。落ちたもの(画像・表の外の要素)は言う
+                        self.notes = rep
+                            .unsupported
+                            .iter()
+                            .map(|(n, c)| SharedString::from(format!("{n} × {c}")))
+                            .collect();
+                    }
+                    d.body_text()
+                }
+                Err(e) => {
+                    self.status = format!("読めません: {e}").into();
+                    return;
+                }
+            }
+        } else {
+            match std::fs::read(path) {
+                Ok(b) => match String::from_utf8(b) {
+                    Ok(t) => t,
+                    Err(_) => {
+                        // 文字コードの推測はしない(化けた本文を黙って挿すより断る)
+                        self.status = "UTF-8 のテキストだけ読めます".into();
+                        return;
+                    }
+                },
+                Err(e) => {
+                    self.status = format!("読めません: {e}").into();
+                    return;
+                }
+            }
+        };
+        if text.is_empty() {
+            self.status = "空のファイルです".into();
+            return;
+        }
+        self.switch_target(Target::Body);
+        handler::replace(self, None, &text);
+        self.status = format!(
+            "{} を差し込みました({} 文字)",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            text.chars().count()
+        )
+        .into();
     }
 
     /// 開くファイルを選ぶ(**ダイアログは別の糸**)。
@@ -1491,6 +1542,39 @@ impl Writer {
             }
             // 記号の一覧(押すと出る/消える)
             "inssymbol" => self.symbols = !self.symbols,
+            // ファイルからのテキスト。カーソルの位置に差し込む(undo の1手)
+            "text-from-file" => {
+                let ask = cx.background_executor().spawn(async {
+                    rfd::FileDialog::new()
+                        .add_filter("テキスト / Word文書", &["txt", "md", "docx"])
+                        .pick_file()
+                });
+                cx.spawn(async move |this, cx| {
+                    let r = ask.await;
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(p) = r {
+                            this.insert_text_from(&p);
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            // テキストの追加(参考資料)= この段落を目次の材料にする。
+            // 押すたびに 標準 → 見出し1 → 2 → 3 → 標準 と回る
+            "add-text" => {
+                let sel = self.ed.selection();
+                let now = match self.target {
+                    Target::Body => self.doc.para_at(sel).map(|p| p.style).unwrap_or_default(),
+                    Target::Cell { .. } => Default::default(),
+                };
+                let next = match now {
+                    kumihan::ParaStyle::Heading(n) if n < 3 => n + 1,
+                    kumihan::ParaStyle::Heading(_) => 0,
+                    _ => 1,
+                };
+                self.set_para_style(next);
+            }
             // 置換の板。開いている間、打鍵は検索欄に入る
             "replace" => {
                 self.find_open = !self.find_open;

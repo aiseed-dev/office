@@ -59,6 +59,7 @@ READY = {
         "contents": "toc", "contents-update": "toc-update",
         "datetime": "datetime", "numpages": "numpages",
         "multilevels": "multilevels", "darkmode": "darkmode",
+        "text-from-file": "text-from-file", "add-text": "add-text",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
@@ -84,6 +85,8 @@ READY = {
         "print": "pdf",
         "data-validation": "data-validation", "condformat": "condformat",
         "named-range": "defname", "named-range-huge": "defname",
+        "pageorient": "pageorient", "pagesize": "pagesize",
+        "pagemargins": "pagemargins", "printarea": "printarea",
     },
 }
 
