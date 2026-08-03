@@ -296,6 +296,8 @@ struct Calc {
     img_cache: std::cell::RefCell<std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>>,
     /// 検索と置換の検索語(板を2枚続けて使う間の控え。次回の初期値にもなる)
     find_term: Option<String>,
+    /// ゴールシークの途中の控え(目標セル, 目標値)
+    goal: Option<(Pos, f64)>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 右クリックのメニュー(出ている場所。格子領域の px)
@@ -380,6 +382,7 @@ impl Calc {
             head_drag: None,
             img_cache: Default::default(),
             find_term: None,
+            goal: None,
             wheel: (0.0, 0.0),
             menu_at: None,
             menu_sub: None,
@@ -1345,6 +1348,72 @@ impl Calc {
                     range.0.a1(), range.1.a1(),
                     if gt { "大きい値" } else { "小さい値" }
                 ).into();
+            }
+            "split-delim" => {
+                let delim = if text.is_empty() { ",".to_string() } else { text };
+                let (a, b) = self.sel_rect();
+                let col = a.col;
+                let targets: Vec<(Pos, String)> = (a.row..=b.row)
+                    .filter_map(|r| {
+                        let p = Pos::new(r, col);
+                        match self.sheet().get(p).map(|c| &c.value) {
+                            Some(sheet::Value::Text(t)) if t.contains(&delim) => {
+                                Some((p, t.clone()))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                if targets.is_empty() {
+                    self.status = format!("「{delim}」で割れるセルが選択にありません").into();
+                    return;
+                }
+                self.checkpoint();
+                let mut n = 0usize;
+                for (p, t) in targets {
+                    for (k, part) in t.split(&delim).enumerate() {
+                        let q = Pos::new(p.row, p.col + k as u32);
+                        let fmt = self.sheet().get(q).map(|c| c.fmt.clone()).unwrap_or_default();
+                        let mut cell = if part.starts_with('=') {
+                            Cell {
+                                formula: None,
+                                value: sheet::Value::Text(part.to_string()),
+                                fmt: Default::default(),
+                            }
+                        } else {
+                            Cell::input(part)
+                        };
+                        cell.fmt = fmt;
+                        self.sheet_mut().set(q, cell);
+                        n += 1;
+                    }
+                }
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.sync_input();
+                self.status =
+                    format!("{n} 欄に割りました(右のセルは上書き。Ctrl+Z で戻せます)").into();
+            }
+            "goal-target" => {
+                // 「D6=765600」の形
+                let Some((cell_s, val_s)) = text.split_once('=') else {
+                    self.status = "「セル=目標値」の形で(例: D6=800000)".into();
+                    return;
+                };
+                let (Some(p), Ok(v)) = (Pos::parse(cell_s), val_s.trim().parse::<f64>()) else {
+                    self.status = "読めません(例: D6=800000)".into();
+                    return;
+                };
+                self.goal = Some((p, v));
+                self.prompt = Some(("goal-var", Editor::new("")));
+            }
+            "goal-var" => {
+                let Some((target, goal)) = self.goal.take() else { return };
+                let Some(var) = Pos::parse(&text) else {
+                    self.status = "変えるセルが読めません(例: B2)".into();
+                    return;
+                };
+                self.goal_seek(target, goal, var);
             }
             "find" => {
                 if text.is_empty() {
@@ -2313,6 +2382,98 @@ impl Calc {
         .detach();
     }
 
+    /// CSV/TSV を選んで、いまのセルから値として流し込む(裏方 Python)。
+    /// 文字コード(CP932 含む)と区切りは Python 側で判定する。
+    fn import_text_dialog(&mut self, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            let p = rfd::FileDialog::new()
+                .add_filter("テキストのデータ", &["csv", "tsv", "txt"])
+                .pick_file()?;
+            let dir = std::env::temp_dir().join(format!("jo-csv-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            // csv.py という名前は標準ライブラリの csv を隠してしまう(踏んだ)
+            let py_path = dir.join("jo_csv.py");
+            if std::fs::write(&py_path, CSV_PY).is_err() {
+                return Some(Err("一時ファイルが書けません".to_string()));
+            }
+            let o = std::process::Command::new(find_python())
+                .arg(&py_path)
+                .arg(&p)
+                .output();
+            Some(match o {
+                Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).to_string()),
+                Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+                Err(e) => Err(format!("Python が起動できません: {e}")),
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    None => {}
+                    Some(Ok(data)) => {
+                        let grid: Vec<Vec<String>> = data
+                            .split('\u{1e}')
+                            .map(|row| row.split('\u{1f}').map(|f| f.to_string()).collect())
+                            .collect();
+                        let n_rows = grid.len();
+                        this.checkpoint();
+                        let at = this.cursor;
+                        let n = paste_values_text(&mut this.book.sheets[this.active], at, &grid);
+                        recalc(&mut this.book.sheets[this.active]);
+                        this.dirty = true;
+                        this.sync_input();
+                        this.status = format!(
+                            "{n_rows} 行 {n} 欄を {} から流し込みました(値として)",
+                            at.a1()
+                        )
+                        .into();
+                    }
+                    Some(Err(e)) => this.status = format!("読み込めません: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// ゴールシーク。変えるセルの値を割線法で探す(表の複製の上で試す)。
+    fn goal_seek(&mut self, target: Pos, goal: f64, var: Pos) {
+        let base = self.sheet().clone();
+        if base.get(target).and_then(|c| c.formula.as_ref()).is_none() {
+            self.status = format!("{} は式のセルではありません", target.a1()).into();
+            return;
+        }
+        let found = solve_goal(&base, target, goal, var);
+        match found {
+            Some(x) => {
+                let x = (x * 1e9).round() / 1e9;
+                self.checkpoint();
+                let fmt = self.sheet().get(var).map(|c| c.fmt.clone()).unwrap_or_default();
+                let mut cell = Cell::input(&format!("{x}"));
+                cell.fmt = fmt;
+                self.sheet_mut().set(var, cell);
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.sync_input();
+                self.status = format!(
+                    "{} = {x} で {} が {goal} になります(Ctrl+Z で戻せます)",
+                    var.a1(),
+                    target.a1()
+                )
+                .into();
+            }
+            None => {
+                self.status = format!(
+                    "見つかりません({} が {} に効いていないかもしれません)",
+                    var.a1(),
+                    target.a1()
+                )
+                .into();
+            }
+        }
+    }
+
     /// 画像ファイルを選んで、いまのセルに浮かべる(選択は別の糸)。
     fn insert_image_dialog(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
@@ -2468,6 +2629,7 @@ impl Calc {
         "changecase", "format", "cell-format", "fontname", "fontsize",
         "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
         "scale", "pagebreak", "printtitles", "print-gridlines", "print-headings",
+        "data-from-text", "text-column", "goal-seek", "data-external-links",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2734,6 +2896,85 @@ impl Calc {
                         .collect(),
                     at,
                 ));
+            }
+            // データタブ: Python 裏方と道具
+            "data-from-text" => {
+                self.commit();
+                self.import_text_dialog(cx);
+            }
+            "text-column" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status =
+                        "割りたいセルを選んでください(選択した列の文字を右へ割ります)".into();
+                } else {
+                    self.prompt = Some(("split-delim", Editor::new("")));
+                }
+            }
+            "goal-seek" => {
+                self.commit();
+                // 目標セルの初期値はいまのセル(式のセルの上で押すのが自然)
+                let init = if self.sheet().get(self.cursor).and_then(|c| c.formula.as_ref()).is_some()
+                {
+                    format!("{}=", self.cursor.a1())
+                } else {
+                    String::new()
+                };
+                self.goal = None;
+                self.prompt = Some(("goal-target", Editor::new(&init)));
+            }
+            "data-external-links" => {
+                // 他のブックを**値として**取り込む(リンクは張らない —
+                // リンク切れの帳票を作らない。SEKKEI の分業どおり)
+                self.commit();
+                let ask = cx.background_executor().spawn(async {
+                    let p = rfd::FileDialog::new()
+                        .add_filter("Excelブック", &["xlsx"])
+                        .pick_file()?;
+                    Some(
+                        std::fs::File::open(&p)
+                            .map_err(|e| e.to_string())
+                            .and_then(sheet::xlsx::read)
+                            .map(|(b, _)| (p, b)),
+                    )
+                });
+                cx.spawn(async move |this, cx| {
+                    let r = ask.await;
+                    let _ = this.update(cx, |this, cx| {
+                        match r {
+                            None => {}
+                            Some(Ok((p, mut other))) => {
+                                this.checkpoint();
+                                let mut n = 0usize;
+                                for mut sh in other.sheets.drain(..) {
+                                    recalc(&mut sh);
+                                    // 式は計算結果の値に(他所の参照を持ち込まない)
+                                    for c in sh.cells.values_mut() {
+                                        c.formula = None;
+                                    }
+                                    sh.name = format!(
+                                        "{}({})",
+                                        sh.name,
+                                        p.file_stem().unwrap_or_default().to_string_lossy()
+                                    );
+                                    while this.book.sheets.iter().any(|x| x.name == sh.name) {
+                                        sh.name.push('+');
+                                    }
+                                    this.book.sheets.push(sh);
+                                    n += 1;
+                                }
+                                this.dirty = true;
+                                this.status = format!(
+                                    "{n} シートを値として取り込みました(リンクは張りません)"
+                                )
+                                .into();
+                            }
+                            Some(Err(e)) => this.status = format!("取り込めません: {e}").into(),
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
             }
             // 拡大縮小印刷: 100→90→80→70→50→100
             "scale" => {
@@ -3191,6 +3432,39 @@ impl gpui::Element for InputSink {
     }
 }
 
+/// ゴールシークの解探索(割線法)。表の複製の上で var を動かし、
+/// target が goal になる値を探す。見つからなければ None。
+fn solve_goal(base: &sheet::Sheet, target: Pos, goal: f64, var: Pos) -> Option<f64> {
+    let probe = |x: f64| -> f64 {
+        let mut s = base.clone();
+        let fmt = s.get(var).map(|c| c.fmt.clone()).unwrap_or_default();
+        let mut cell = Cell::input(&format!("{x}"));
+        cell.fmt = fmt;
+        s.set(var, cell);
+        recalc(&mut s);
+        s.value(target).as_number() - goal
+    };
+    let x0 = base.get(var).map(|c| c.value.as_number()).unwrap_or(0.0);
+    let (mut a, mut b) = (x0, if x0 == 0.0 { 1.0 } else { x0 * 1.1 });
+    let (mut fa, mut fb) = (probe(a), probe(b));
+    let tol = 1e-7 * goal.abs().max(1.0);
+    for _ in 0..200 {
+        if fb.abs() < tol {
+            return Some(b);
+        }
+        if (fb - fa).abs() < f64::EPSILON {
+            return None;
+        }
+        let c = b - fb * (b - a) / (fb - fa);
+        if !c.is_finite() {
+            return None;
+        }
+        (a, fa) = (b, fb);
+        (b, fb) = (c, probe(c));
+    }
+    None
+}
+
 /// 画像の寸法(px)。PNG は IHDR、JPEG は SOF から(writer と同じ読み方)。
 fn image_px(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
@@ -3266,6 +3540,31 @@ if n > 1:
     ax.legend()
 fig.tight_layout()
 fig.savefig(spec["out"], dpi=100)
+"#;
+
+/// CSV/TSV 読みの台本。文字コード(UTF-8 → CP932 → Latin-1)と区切りを判定し、
+/// 区切りに使えない印(US=\x1F, RS=\x1E)で吐く — タブや改行入りの欄でも壊れない。
+const CSV_PY: &str = r#"
+import csv, sys
+
+path = sys.argv[1]
+raw = open(path, "rb").read()
+text = None
+for enc in ("utf-8-sig", "cp932", "latin-1"):
+    try:
+        text = raw.decode(enc)
+        break
+    except UnicodeDecodeError:
+        continue
+if text is None:
+    sys.exit("文字コードが判定できません")
+try:
+    dialect = csv.Sniffer().sniff(text[:4096], delimiters=",\t;")
+except csv.Error:
+    dialect = csv.excel_tab if "\t" in text[:4096] else csv.excel
+rows = list(csv.reader(text.splitlines(), dialect))
+out = "\x1e".join("\x1f".join(row) for row in rows)
+sys.stdout.buffer.write(out.encode("utf-8"))
 "#;
 
 fn col_name(c: u32) -> String {
@@ -3847,6 +4146,12 @@ impl Render for Calc {
                 "cond-lt" => format!("条件付き書式 — {range} で、いくつより小さい値を塗る?"),
                 "validation" => format!("入力規則 — {range} は候補から選ぶ(空にして Enter で解除)"),
                 "find" => "検索と置換 — 探す言葉".to_string(),
+                "split-delim" => format!("区切り位置 — {range} を何で割る?(空 Enter = カンマ)"),
+                "goal-target" => "ゴールシーク — 目標(セル=値。例: D6=800000)".to_string(),
+                "goal-var" => format!(
+                    "{} をいくつにするか探します — 変えるセルは?(例: B2)",
+                    self.goal.map(|(p, v)| format!("{}={v}", p.a1())).unwrap_or_default()
+                ),
                 "replace-with" => format!(
                     "「{}」を何に置き換える?",
                     self.find_term.as_deref().unwrap_or("")
@@ -3872,6 +4177,8 @@ impl Render for Calc {
                         "name" => "Enter で決定 / Esc で取消。定義した名前は式の中で使えます(=単価*2)",
                         "validation" => "候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)。Enter で決定 / Esc で取消",
                         "find" => "Enter で次へ / Esc で取消。式の中の文字も探します",
+                        "split-delim" => "選択した列の文字を割って、右の列へ並べます(右は上書き)",
+                        "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         _ => "Enter で決定 / Esc で取消",
                     }))
@@ -4470,5 +4777,30 @@ mod index_at_tests {
         assert_eq!(index_at(&cols, HEAD_W, HEAD_W + 200.0), Some(2));
         assert_eq!(index_at(&cols, HEAD_W, HEAD_W + 400.0), None, "並びの外");
         assert_eq!(index_at(&cols, HEAD_W, 10.0), None, "start より手前");
+    }
+}
+
+#[cfg(test)]
+mod goal_seek_tests {
+    use super::*;
+
+    #[test]
+    fn 合計を目標に数量が逆算できる() {
+        // 見本の表: D2=B2*C2, D4=SUM, D6=D4+D5(消費税は固定にして単純化)
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::parse("B2").unwrap(), Cell::input("4"));
+        s.set(Pos::parse("C2").unwrap(), Cell::input("125000"));
+        s.set(Pos::parse("D2").unwrap(), Cell::input("=B2*C2"));
+        recalc(&mut s);
+        // D2 を 800000 にする B2 は 6.4
+        let x = solve_goal(&s, Pos::parse("D2").unwrap(), 800000.0, Pos::parse("B2").unwrap())
+            .expect("見つからない");
+        assert!((x - 6.4).abs() < 1e-6, "6.4 のはず: {x}");
+        // 効かないセルでは正直に None
+        assert!(
+            solve_goal(&s, Pos::parse("D2").unwrap(), 800000.0, Pos::parse("F9").unwrap())
+                .is_none(),
+            "効かないセルで見つかったことにした"
+        );
     }
 }

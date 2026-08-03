@@ -109,6 +109,8 @@ READY = {
         "scale": "scale", "pagebreak": "pagebreak",
         "printtitles": "printtitles", "print-gridlines": "print-gridlines",
         "print-headings": "print-headings",
+        "data-from-text": "data-from-text", "text-column": "text-column",
+        "goal-seek": "goal-seek", "data-external-links": "data-external-links",
     },
 }
 
