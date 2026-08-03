@@ -1271,6 +1271,7 @@ impl Writer {
         "pageorient", "pagesize", "pagemargins",
         "edit-header", "edit-footer", "pagenum",
         "parastyle", "toc", "toc-update", "numpages", "datetime",
+        "multilevels",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1375,6 +1376,19 @@ impl Writer {
             "markers" => self.para(|p| {
                 p.list = if p.list == ListKind::Bullet { ListKind::None } else { ListKind::Bullet }
             }),
+            // 複数レベルのリスト。箇条書きにして1段深く(印はレベルで変わる)。
+            // 深さは Tab / Shift+Tab でも動かせる
+            "multilevels" => {
+                self.para(|p| {
+                    if p.list == ListKind::None {
+                        p.list = ListKind::Bullet;
+                    } else {
+                        p.indent = (p.indent + 1).min(8);
+                    }
+                });
+                self.status =
+                    "レベル付きのリストです(Tab / Shift+Tab で深さ。印はレベルで変わる)".into();
+            }
             "numbering" => self.para(|p| {
                 p.list = if p.list == ListKind::Number { ListKind::None } else { ListKind::Number }
             }),
@@ -1700,6 +1714,23 @@ impl Writer {
         self.follow_caret();
         cx.notify();
     }
+    /// Tab で段落を1段深く、Shift+Tab で1段浅く。
+    /// リストではレベル(印も変わる)、普通の段落ではインデントとして効く。
+    fn a_tab(&mut self, _: &ui::Tab, _: &mut Window, cx: &mut Context<Self>) {
+        if self.find_open || self.hf_edit.is_some() {
+            return; // 板の中では使わない
+        }
+        self.para(|p| p.indent = (p.indent + 1).min(8));
+        cx.notify();
+    }
+    fn a_shift_tab(&mut self, _: &ui::ShiftTab, _: &mut Window, cx: &mut Context<Self>) {
+        if self.find_open || self.hf_edit.is_some() {
+            return;
+        }
+        self.para(|p| p.indent = p.indent.saturating_sub(1));
+        cx.notify();
+    }
+
     fn page_up(&mut self, _: &ui::PageUp, _: &mut Window, cx: &mut Context<Self>) {
         self.page_move(false);
         cx.notify();
@@ -2691,6 +2722,8 @@ impl Render for Writer {
             .on_action(cx.listener(Writer::word_right))
             .on_action(cx.listener(Writer::select_word_left))
             .on_action(cx.listener(Writer::select_word_right))
+            .on_action(cx.listener(Writer::a_tab))
+            .on_action(cx.listener(Writer::a_shift_tab))
             .on_action(cx.listener(Writer::page_up))
             .on_action(cx.listener(Writer::page_down))
             .on_action(cx.listener(Writer::do_find))

@@ -427,6 +427,8 @@ pub fn parse_document_with(
     let mut boxed = false;
     // 段落の役割(w:pStyle / w:outlineLvl)
     let mut pstyle = ParaStyle::Body;
+    // リストの深さ(w:ilvl)。w:ind が無い文書ではこれがインデントになる
+    let mut ilvl = 0u8;
     // 読めなかった要素の原文(画像など)。段落ごとに集めて持ち越す
     let mut anchors: Vec<String> = Vec::new();
     // 表示できる画像(r:embed と wp:extent が読めたもの)
@@ -485,7 +487,7 @@ pub fn parse_document_with(
                               fmt = CharFormat::default(); align = Align::default();
                               list = ListKind::default(); indent = 0; line_spacing = 1.0;
                               page_break_before = false; shade = None; boxed = false;
-                              pstyle = ParaStyle::Body; }
+                              pstyle = ParaStyle::Body; ilvl = 0; }
                     b"rPr" => { in_rpr = true; fmt = CharFormat::default(); }
                     b"pPr" => in_ppr = true,
                     b"sz" if in_rpr => {
@@ -521,6 +523,9 @@ pub fn parse_document_with(
 
                     // 箇条書きは numId で決まる。1 を中黒、2 を段落番号として扱う
                     // (numbering.xml を持たないので、往復できる最小の約束にしてある)
+                    b"ilvl" if in_ppr => {
+                        ilvl = attr(&e, "val").and_then(|v| v.parse().ok()).unwrap_or(0).min(8);
+                    }
                     b"numId" if in_ppr => {
                         list = match attr(&e, "val").as_deref() {
                             Some("2") => ListKind::Number,
@@ -691,6 +696,9 @@ pub fn parse_document_with(
 
                     // 箇条書きは numId で決まる。1 を中黒、2 を段落番号として扱う
                     // (numbering.xml を持たないので、往復できる最小の約束にしてある)
+                    b"ilvl" if in_ppr => {
+                        ilvl = attr(&e, "val").and_then(|v| v.parse().ok()).unwrap_or(0).min(8);
+                    }
                     b"numId" if in_ppr => {
                         list = match attr(&e, "val").as_deref() {
                             Some("2") => ListKind::Number,
@@ -798,7 +806,10 @@ pub fn parse_document_with(
                             rep.paragraphs += 1;
                             let p = Paragraph { align, anchors: std::mem::take(&mut anchors),
                                 images: std::mem::take(&mut images),
-                                page_break_before, list, indent, line_spacing,
+                                page_break_before, list,
+                                // 深さ: w:ind(直接指定)が無ければ w:ilvl から
+                                indent: indent.max(ilvl),
+                                line_spacing,
                                 style: pstyle,
                                 shade: shade.take(), boxed,
                                 images_new: Vec::new(),
@@ -924,7 +935,7 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
             if p.list != ListKind::None {
                 w.write_event(Event::Start(BS::new("w:numPr"))).unwrap();
                 let mut lv = BS::new("w:ilvl");
-                lv.push_attribute(("w:val", "0"));
+                lv.push_attribute(("w:val", p.indent.min(8).to_string().as_str()));
                 w.write_event(Event::Empty(lv)).unwrap();
                 let mut id = BS::new("w:numId");
                 id.push_attribute(("w:val", if p.list == ListKind::Number { "2" } else { "1" }));
@@ -1026,12 +1037,16 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
             w.write_event(Event::End(BytesEnd::new("w:rPr"))).unwrap();
             for (i, seg) in chunk.split('\n').enumerate() {
                 if i > 0 { w.write_event(Event::Empty(BS::new("w:br"))).unwrap(); }
-                if seg.is_empty() { continue }
-                let mut t = BS::new("w:t");
-                t.push_attribute(("xml:space", "preserve"));
-                w.write_event(Event::Start(t)).unwrap();
-                w.write_event(Event::Text(BytesText::new(seg))).unwrap();
-                w.write_event(Event::End(BytesEnd::new("w:t"))).unwrap();
+                // タブは要素(w:tab)。w:t の中に生のタブを書くと Word が潰す
+                for (j, part) in seg.split('\t').enumerate() {
+                    if j > 0 { w.write_event(Event::Empty(BS::new("w:tab"))).unwrap(); }
+                    if part.is_empty() { continue }
+                    let mut t = BS::new("w:t");
+                    t.push_attribute(("xml:space", "preserve"));
+                    w.write_event(Event::Start(t)).unwrap();
+                    w.write_event(Event::Text(BytesText::new(part))).unwrap();
+                    w.write_event(Event::End(BytesEnd::new("w:t"))).unwrap();
+                }
             }
             w.write_event(Event::End(BytesEnd::new("w:r"))).unwrap();
             }
@@ -2092,6 +2107,61 @@ mod shade_tests {
         let p = back.paragraphs().next().unwrap();
         assert_eq!(p.shade.as_deref(), Some("FFF2CC"), "背景色が往復しない");
         assert!(p.boxed, "囲み枠が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod list_level_tests {
+    use super::*;
+    use kumihan::{Block, Document, ListKind};
+
+    #[test]
+    fn リストの深さが往復する() {
+        let mut d = Document::plain("親\n子", 10.5);
+        for (i, ind) in [(0usize, 0u8), (1, 2)] {
+            if let Block::Para(p) = &mut d.blocks[i] {
+                p.list = ListKind::Bullet;
+                p.indent = ind;
+            }
+        }
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let inds: Vec<u8> = back.paragraphs().map(|p| p.indent).collect();
+        assert_eq!(inds, vec![0, 2], "深さが往復しない");
+    }
+
+    #[test]
+    fn indの無いリストはilvlが深さになる() {
+        // Word のリストは w:ind を numbering.xml に置くので、段落側は ilvl だけのことが多い
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p><w:pPr>
+            <w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr>
+            </w:pPr><w:r><w:t>子の項目</w:t></w:r></w:p></w:body></w:document>"#;
+        let (doc, _) = parse_document_xml(xml);
+        let p = doc.paragraphs().next().unwrap();
+        assert_eq!(p.list, ListKind::Bullet);
+        assert_eq!(p.indent, 1, "ilvl が深さに入らない");
+    }
+
+    #[test]
+    fn タブが往復する() {
+        // w:t の中に生のタブを書くと Word が潰す。要素(w:tab)で書く
+        let d = Document::plain("項目\t値", 10.5);
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert_eq!(back.body_text(), "項目\t値", "タブが消えた");
+        // XML の上でも w:tab 要素になっている
+        let mut buf2 = Cursor::new(Vec::new());
+        write(&back, &mut buf2).expect("書けない");
+        buf2.set_position(0);
+        let mut z = zip::ZipArchive::new(buf2).unwrap();
+        let mut s = String::new();
+        z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
+        assert!(s.contains("<w:tab/>"), "タブが要素になっていない");
+        assert!(!s.contains("項目\t"), "w:t に生のタブが残った");
     }
 }
 

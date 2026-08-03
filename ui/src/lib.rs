@@ -45,7 +45,7 @@ actions!(
     [
         Backspace, Delete, Left, Right, SelectLeft, SelectRight, SelectAll,
         SelectUp, SelectDown,
-        Home, End, Enter, Undo, Redo, Save, Open, Up, Down, Tab,
+        Home, End, Enter, Undo, Redo, Save, Open, Up, Down, Tab, ShiftTab,
         Copy, Cut, Paste, PasteValues, Quit, ContextMenu, Cancel,
         WordLeft, WordRight, SelectWordLeft, SelectWordRight, PageUp, PageDown,
         Find, DocHome, DocEnd,
@@ -80,6 +80,7 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("up", Up, Some(context)),
         KeyBinding::new("down", Down, Some(context)),
         KeyBinding::new("tab", Tab, Some(context)),
+        KeyBinding::new("shift-tab", ShiftTab, Some(context)),
         KeyBinding::new("ctrl-z", Undo, Some(context)),
         KeyBinding::new("ctrl-shift-z", Redo, Some(context)),
         KeyBinding::new("ctrl-y", Redo, Some(context)),

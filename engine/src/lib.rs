@@ -152,11 +152,23 @@ impl Paragraph {
     }
 
     /// 箇条書きの頭に付く印。組版のときに本文の前へ置く。
+    /// **レベル(インデント)で印が変わる**(Word の複数レベルのリストの慣習)。
     pub fn marker(&self, nth: usize) -> Option<String> {
         match self.list {
             ListKind::None => None,
-            ListKind::Bullet => Some("・".into()),
-            ListKind::Number => Some(format!("{}. ", nth + 1)),
+            ListKind::Bullet => Some(
+                match self.indent % 3 {
+                    0 => "・",
+                    1 => "○",
+                    _ => "■",
+                }
+                .into(),
+            ),
+            ListKind::Number => Some(match self.indent {
+                0 => format!("{}. ", nth + 1),
+                1 => format!("({}) ", nth + 1),
+                _ => format!("{}) ", nth + 1),
+            }),
         }
     }
 }
@@ -776,8 +788,9 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
     let mut sheet = Sheet::default();
     let mut y = frame.y0_mm;
 
-    // 段落番号は「何番目の箇条書きか」で決まる。段落の位置ではない
-    let mut nth = 0usize;
+    // 段落番号は「何番目の箇条書きか」で決まる。段落の位置ではない。
+    // レベル(インデント)ごとに数え、浅い番号が進んだら深い数えは振り出しへ
+    let mut counters: Vec<usize> = Vec::new();
     // 本文(段落を \n で繋いだもの)における、いまの段落の頭のバイト位置
     let mut para_byte0 = 0usize;
     let mut table_no = 0usize;
@@ -792,11 +805,21 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                 let em = para.runs.first().map(|r| r.size_pt).unwrap_or(10.5) * 25.4 / 72.0;
                 let indent_mm = para.indent as f32 * em * 2.0;
                 let measure = (frame.measure_mm - indent_mm).max(em);
-                let marker = para.marker(nth);
-                match para.list {
-                    ListKind::None => nth = 0,
-                    _ => nth += 1,
-                }
+                let marker = match para.list {
+                    ListKind::None => {
+                        counters.clear();
+                        None
+                    }
+                    _ => {
+                        let l = para.indent as usize;
+                        counters.truncate(l + 1);
+                        while counters.len() <= l {
+                            counters.push(0);
+                        }
+                        counters[l] += 1;
+                        para.marker(counters[l] - 1)
+                    }
+                };
                 for cells in break_para(para, m, measure, marker.as_deref()) {
                     if cells.is_empty() {
                         // 空の段落も**行として持つ**。持たないと、後ろの行の
@@ -1382,6 +1405,35 @@ mod list_tests {
         assert!(text(&s, 0).starts_with("1."), "{:?}", text(&s, 0));
         assert!(text(&s, 1).starts_with("2."), "{:?}", text(&s, 1));
         assert!(text(&s, 2).starts_with("3."), "{:?}", text(&s, 2));
+    }
+
+    #[test]
+    fn レベルで印と番号の形が変わる() {
+        let mut p = Paragraph { list: ListKind::Bullet, ..Default::default() };
+        assert_eq!(p.marker(0).as_deref(), Some("・"));
+        p.indent = 1;
+        assert_eq!(p.marker(0).as_deref(), Some("○"), "レベル2の印が変わらない");
+        p.list = ListKind::Number;
+        assert_eq!(p.marker(2).as_deref(), Some("(3) "), "レベル2の番号の形が違う");
+    }
+
+    #[test]
+    fn 深い番号は浅い番号が進むと振り出しに戻る() {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("一\n一の一\n一の二\n二\n二の一", 10.5);
+        for (i, ind) in [(0usize, 0u8), (1, 1), (2, 1), (3, 0), (4, 1)] {
+            if let Block::Para(p) = &mut d.blocks[i] {
+                p.list = ListKind::Number;
+                p.indent = ind;
+            }
+        }
+        let s = layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        let texts: Vec<String> = s.lines.iter().map(|l| l.text()).collect();
+        assert!(texts[1].starts_with("(1) "), "{:?}", texts[1]);
+        assert!(texts[2].starts_with("(2) "), "{:?}", texts[2]);
+        assert!(texts[3].starts_with("2. "), "{:?}", texts[3]);
+        assert!(texts[4].starts_with("(1) "), "深い数えが振り出しに戻らない: {:?}", texts[4]);
     }
 
     #[test]

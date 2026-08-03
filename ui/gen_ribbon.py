@@ -58,6 +58,7 @@ READY = {
         "styles": "parastyle",
         "contents": "toc", "contents-update": "toc-update",
         "datetime": "datetime", "numpages": "numpages",
+        "multilevels": "multilevels",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

@@ -61,7 +61,7 @@ pub const WRITER: &[Tab] = &[
         c("clearstyle", "スタイルのクリア", "clearstyle"),
         c("markers", "箇条書き", "markers"),
         c("numbering", "ナンバリング", "numbering"),
-        x("複数レベルのリスト", "multilevels"),
+        c("multilevels", "複数レベルのリスト", "multilevels"),
         c("decoffset", "インデントを減らす", "decoffset"),
         c("incoffset", "インデントを増やす", "incoffset"),
         c("linespace", "段落の行間", "linespace"),
