@@ -757,6 +757,26 @@ pub fn parse_document_with(
                     },
                     b"drawing" | b"pict" | b"object" =>
                         rep.note(&format!("w:{}", String::from_utf8_lossy(&n))),
+                    // しおり(bookmark)とコメントの印。**理解はしないが捨てない** —
+                    // 捨てると保存でしおり・コメント・相互参照の錨が壊れる。
+                    // 原文を段落の頭に控える(位置は段落の頭に寄る、と言う)
+                    b"bookmarkStart" | b"bookmarkEnd"
+                    | b"commentRangeStart" | b"commentRangeEnd"
+                    | b"commentReference" => {
+                        let raw = &xml[start_pos..last_pos];
+                        if para.is_some() {
+                            // commentReference は run の中の要素なので包み直す
+                            let a = if n.as_slice() == b"commentReference" {
+                                format!("<w:r>{}</w:r>", raw.trim())
+                            } else {
+                                raw.trim().to_string()
+                            };
+                            anchors.push(a);
+                            rep.note("しおり・コメントの印(段落の頭に寄るが、保存で残る)");
+                        } else {
+                            rep.note("しおり(段落の外。保存で失われる)");
+                        }
+                    }
                     // fldChar は空要素で来るのが普通の形
                     b"fldChar" => fldchar(attr(&e, "fldCharType").as_deref(),
                         &mut in_field, &mut field_hide, &mut field_instr,
@@ -2107,6 +2127,35 @@ mod shade_tests {
         let p = back.paragraphs().next().unwrap();
         assert_eq!(p.shade.as_deref(), Some("FFF2CC"), "背景色が往復しない");
         assert!(p.boxed, "囲み枠が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod bookmark_tests {
+    use super::*;
+
+    #[test]
+    fn しおりとコメントの印は保存で残る() {
+        // 実物の様式はしおりで記入欄を指すものがある。黙って捨てると
+        // 相互参照・コメントの錨が壊れる
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p>
+            <w:bookmarkStart w:id="0" w:name="会社名"/>
+            <w:r><w:t>日本フネン</w:t></w:r>
+            <w:bookmarkEnd w:id="0"/>
+            <w:commentRangeStart w:id="3"/>
+            <w:r><w:t>要確認の箇所</w:t></w:r>
+            <w:commentRangeEnd w:id="3"/>
+            <w:r><w:commentReference w:id="3"/></w:r>
+        </w:p></w:body></w:document>"#;
+        let (doc, rep) = parse_document_xml(xml);
+        assert!(rep.unsupported.iter().any(|(n, _)| n.contains("しおり・コメント")),
+            "黙って扱った: {:?}", rep.unsupported);
+        let out = write_document_xml(&doc);
+        assert!(out.contains(r#"w:name="会社名""#), "しおりが消えた: {out}");
+        assert!(out.contains("bookmarkEnd"), "しおりの終わりが消えた");
+        assert!(out.contains("commentRangeStart"), "コメントの範囲が消えた");
+        assert!(out.contains("commentReference"), "コメントの錨が消えた");
+        assert!(out.contains("日本フネン") && out.contains("要確認の箇所"), "本文が消えた");
     }
 }
 
