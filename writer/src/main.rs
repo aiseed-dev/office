@@ -1127,12 +1127,51 @@ impl Writer {
             })
             .collect();
 
-        // 段落ごとの (頭のバイト, 長さ, 目次の行か) と、blocks の中の位置
+        let toc_paras: Vec<kumihan::Paragraph> = lines
+            .iter()
+            .map(|(n, t)| kumihan::Paragraph {
+                style: kumihan::ParaStyle::Toc(*n),
+                line_spacing: 1.0,
+                runs: vec![kumihan::Run {
+                    text: t.clone(),
+                    size_pt: SIZE_PT,
+                    font: None,
+                    fmt: Default::default(),
+                }],
+                ..Default::default()
+            })
+            .collect();
+        let replaced =
+            self.splice_marked(|st| matches!(st, kumihan::ParaStyle::Toc(_)), toc_paras);
+        self.status = if replaced {
+            format!("目次を更新しました({} 項目)", lines.len()).into()
+        } else {
+            format!("目次を入れました({} 項目。見出しを変えたら「目次の更新」)", lines.len())
+                .into()
+        };
+    }
+
+    /// 印の付いた段落の連続を、新しい段落の列で置き換える(無ければ
+    /// カーソルの段落の前に挿す)。**編集(undo の1手)と blocks を
+    /// 同じ形に揃える** — 揃えないと set_body_text の性質の持ち越し
+    /// (段落番号ベース)がずれる。返り値: 置き換えたか。
+    fn splice_marked(
+        &mut self,
+        is_mark: impl Fn(kumihan::ParaStyle) -> bool,
+        paras: Vec<kumihan::Paragraph>,
+    ) -> bool {
+        let text: String = paras
+            .iter()
+            .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let blocks: Vec<kumihan::Block> =
+            paras.into_iter().map(kumihan::Block::Para).collect();
         let mut para_meta: Vec<(usize, usize, bool)> = Vec::new();
         let mut at = 0usize;
         for p in self.doc.paragraphs() {
             let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
-            para_meta.push((at, len, matches!(p.style, kumihan::ParaStyle::Toc(_))));
+            para_meta.push((at, len, is_mark(p.style)));
             at += len + 1;
         }
         let para_block_idx: Vec<usize> = self
@@ -1143,27 +1182,6 @@ impl Writer {
             .filter(|(_, b)| matches!(b, kumihan::Block::Para(_)))
             .map(|(i, _)| i)
             .collect();
-        let toc_text: String =
-            lines.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n");
-        let toc_paras: Vec<kumihan::Block> = lines
-            .iter()
-            .map(|(n, t)| {
-                kumihan::Block::Para(kumihan::Paragraph {
-                    style: kumihan::ParaStyle::Toc(*n),
-                    line_spacing: 1.0,
-                    runs: vec![kumihan::Run {
-                        text: t.clone(),
-                        size_pt: SIZE_PT,
-                        font: None,
-                        fmt: Default::default(),
-                    }],
-                    ..Default::default()
-                })
-            })
-            .collect();
-        // 置き場所: 既にある目次(Toc の連続)を置き換える。無ければカーソルの段落の前。
-        // **編集(undo の1手)と blocks を同じ形に揃える** — 揃えないと
-        // set_body_text の性質の持ち越し(段落番号ベース)がずれる
         let old = para_meta.iter().position(|(_, _, t)| *t).map(|st| {
             let mut e = st;
             while e + 1 < para_meta.len() && para_meta[e + 1].2 {
@@ -1171,15 +1189,15 @@ impl Writer {
             }
             (st, e)
         });
-        match old {
+        let replaced = match old {
             Some((st, e)) => {
                 let (b0, _, _) = para_meta[st];
                 let (b1, l1, _) = para_meta[e];
                 self.ed.move_to(b0, false);
                 self.ed.move_to(b1 + l1, true);
-                self.ed.insert(&toc_text);
-                self.doc.blocks.splice(para_block_idx[st]..=para_block_idx[e], toc_paras);
-                self.status = format!("目次を更新しました({} 項目)", lines.len()).into();
+                self.ed.insert(&text);
+                self.doc.blocks.splice(para_block_idx[st]..=para_block_idx[e], blocks);
+                true
             }
             None => {
                 let cur = self.ed.cursor();
@@ -1187,19 +1205,86 @@ impl Writer {
                 let (b0, _, _) = para_meta[pi];
                 self.ed.move_to(b0, false);
                 self.ed.move_to(b0, true);
-                self.ed.insert(&format!("{toc_text}\n"));
+                self.ed.insert(&format!("{text}\n"));
                 let bi = para_block_idx[pi];
-                self.doc.blocks.splice(bi..bi, toc_paras);
-                self.status = format!(
-                    "目次を入れました({} 項目。見出しを変えたら「目次の更新」)",
-                    lines.len()
-                )
-                .into();
+                self.doc.blocks.splice(bi..bi, blocks);
+                false
             }
-        }
+        };
         self.dirty = true;
         self.relayout();
         self.follow_caret();
+        replaced
+    }
+
+    /// 図表目次。図表番号(「図 n」で始まる段落)を集めて一覧にする。
+    /// 行は ParaStyle::Tof の印を持ち、「図表目次の更新」で丸ごと作り直す。
+    fn make_tof(&mut self) {
+        self.switch_target(Target::Body);
+        self.flush_target();
+        let mut items: Vec<(String, usize)> = Vec::new();
+        let mut at = 0usize;
+        for p in self.doc.paragraphs() {
+            let t: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+            let tt = t.trim();
+            if p.style != kumihan::ParaStyle::Tof {
+                if let Some(rest) = tt.strip_prefix("図 ") {
+                    if rest.split_whitespace().next().is_some_and(|w| w.parse::<usize>().is_ok()) {
+                        items.push((tt.to_string(), at));
+                    }
+                }
+            }
+            at += t.len() + 1;
+        }
+        if items.is_empty() {
+            self.status =
+                "図表番号がありません(参考資料 > 図表番号で付けてください)".into();
+            return;
+        }
+        let (pages, _) = paper::paginate(&self.page, paper::Paper {
+            width_mm: self.pg.w_mm,
+            height_mm: self.pg.h_mm,
+            margin_mm: self.pg.left_mm,
+        });
+        let page_of = |byte: usize| -> usize {
+            let mut hit = 1usize;
+            for (l, pg) in self.page.lines.iter().zip(&pages) {
+                if l.from_body && l.byte0 <= byte {
+                    hit = *pg;
+                }
+            }
+            hit
+        };
+        let m = Metrics::new(&self.font_bytes).expect("フォント");
+        let measure = self.pg.measure_mm();
+        let w_of = |s: &str| -> f32 { s.chars().map(|c| m.advance_mm(c, SIZE_PT)).sum() };
+        let (dot_w, sp_w) = (m.advance_mm('…', SIZE_PT), m.advance_mm('　', SIZE_PT));
+        let paras: Vec<kumihan::Paragraph> = items
+            .iter()
+            .map(|(t, b)| {
+                let num = page_of(*b).to_string();
+                let avail = measure - w_of(t) - w_of(&num) - 2.0 * sp_w - 1.0;
+                let dots = (avail / dot_w).floor().max(0.0) as usize;
+                kumihan::Paragraph {
+                    style: kumihan::ParaStyle::Tof,
+                    line_spacing: 1.0,
+                    runs: vec![kumihan::Run {
+                        text: format!("{t}　{}　{num}", "…".repeat(dots)),
+                        size_pt: SIZE_PT,
+                        font: None,
+                        fmt: Default::default(),
+                    }],
+                    ..Default::default()
+                }
+            })
+            .collect();
+        let n = paras.len();
+        let replaced = self.splice_marked(|st| st == kumihan::ParaStyle::Tof, paras);
+        self.status = if replaced {
+            format!("図表目次を更新しました({n} 項目)").into()
+        } else {
+            format!("図表目次を入れました({n} 項目)").into()
+        };
     }
 
     /// 書式を触ったあとの組み直し。**本文を戻さない**
@@ -1408,7 +1493,7 @@ impl Writer {
         "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
-        "caption",
+        "caption", "tof", "tof-update",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1779,6 +1864,8 @@ impl Writer {
                              self.font_list = false; self.size_list = false; }
             // 目次。挿す・挿し直すは同じ道(Toc の印の連続を置き換える)
             "toc" | "toc-update" => self.make_toc(),
+            // 図表目次も同じ作法(Tof の印)
+            "tof" | "tof-update" => self.make_tof(),
             // ヘッダー・フッターの編集(板。開いている間、打鍵はそこへ)
             "edit-header" => self.open_hf(false),
             "edit-footer" => self.open_hf(true),

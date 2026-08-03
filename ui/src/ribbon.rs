@@ -115,8 +115,8 @@ pub const WRITER: &[Tab] = &[
         c("bookmarks", "ブックマーク", "bookmarks"),
         c("caption", "図表番号", "caption"),
         x("相互参照", "crossref"),
-        x("図表目次", "tof"),
-        x("図表目次の更新", "tof-update"),
+        c("tof", "図表目次", "tof"),
+        c("tof-update", "図表目次の更新", "tof-update"),
     ]},
     Tab { name: "ヘッダー/フッター", cmds: &[
         c("edit-header", "ヘッダーの編集", "edit-header"),

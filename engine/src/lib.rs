@@ -115,6 +115,8 @@ pub enum ParaStyle {
     Heading(u8),
     /// 目次の行(1〜3)。docx の TOC1〜3(このアプリが目次を作った印)
     Toc(u8),
+    /// 図表目次の行(docx の TableofFigures。「図表目次の更新」の印)
+    Tof,
 }
 
 /// 段落に付くコメント(docx の comments.xml)。**段落単位**で持つ

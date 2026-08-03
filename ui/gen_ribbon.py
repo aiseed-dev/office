@@ -67,6 +67,7 @@ READY = {
         "instext": "instext", "pagecolor": "pagecolor",
         "comment": "comment", "watermark": "watermark",
         "bookmarks": "bookmarks", "caption": "caption",
+        "tof": "tof", "tof-update": "tof-update",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

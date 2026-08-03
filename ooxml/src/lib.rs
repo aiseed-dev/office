@@ -455,6 +455,7 @@ fn style_of(val: &str) -> ParaStyle {
         "1" | "heading1" | "見出し1" => ParaStyle::Heading(1),
         "2" | "heading2" | "見出し2" => ParaStyle::Heading(2),
         "3" | "heading3" | "見出し3" => ParaStyle::Heading(3),
+        "tableoffigures" => ParaStyle::Tof,
         "toc1" => ParaStyle::Toc(1),
         "toc2" => ParaStyle::Toc(2),
         "toc3" => ParaStyle::Toc(3),
@@ -1094,6 +1095,11 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
                 ParaStyle::Toc(n) => {
                     let mut st = BS::new("w:pStyle");
                     st.push_attribute(("w:val", format!("TOC{n}").as_str()));
+                    w.write_event(Event::Empty(st)).unwrap();
+                }
+                ParaStyle::Tof => {
+                    let mut st = BS::new("w:pStyle");
+                    st.push_attribute(("w:val", "TableofFigures"));
                     w.write_event(Event::Empty(st)).unwrap();
                 }
                 ParaStyle::Body => {}
