@@ -88,6 +88,9 @@ printOptions は今まで持ち越しから漏れていた — 直した)、
 xlsx へは txBody 往復。図形を選んで Enter でいつでも書き直し)、
 スパークライン(選択の数を折れ線に。**その時の値で描く固定の線**と
 status で言う。xlsx へは custGeom の折れ線 = Excel でも見える)、
+排他ロック(.~lock.名前#。ファイルサーバーの「後勝ちで潰す」を防ぐ。
+先客が居れば名乗りを見せて上書き保存を止める。**writer にも同じものが要る** —
+lock_path_for / foreign_lock / lock_identity は calc/src/main.rs にある。共通化歓迎)、
 **Python in Calc**(データ > Python。板に一行 / .py 実行 / @save でブックに
 コードを載せて持ち運ぶ。載ったコードは**必ず bubblewrap の檻**で実行、
 開いても自動実行しない。設計は SEKKEI 参照。office_sheet.so を calc の隣に)、

@@ -298,6 +298,10 @@ struct Calc {
     find_term: Option<String>,
     /// ゴールシークの途中の控え(目標セル, 目標値)
     goal: Option<(Pos, f64)>,
+    /// 自分が置いた排他ロック(閉じるとき・別のファイルを開くときに外す)
+    my_lock: Option<PathBuf>,
+    /// 先客の名乗り(このファイルは誰かが開いている)。上書き保存を止める
+    locked_by: Option<String>,
     /// 選択中の図形(shapes_new の番号)。Esc/他クリックで解除、Del で削除
     shape_sel: Option<usize>,
     /// 図形のドラッグ(番号, 掴んだ格子px, 掴んだ時の錨の格子px, 大きさ変更か)
@@ -389,6 +393,8 @@ impl Calc {
             img_cache: Default::default(),
             find_term: None,
             goal: None,
+            my_lock: None,
+            locked_by: None,
             shape_sel: None,
             shape_drag: None,
             wheel: (0.0, 0.0),
@@ -1933,6 +1939,32 @@ impl Calc {
         self.sync_input();
     }
 
+    /// 自分のロックを外す(閉じる・別のファイルへ移るとき)。
+    fn release_lock(&mut self) {
+        if let Some(lp) = self.my_lock.take() {
+            let _ = std::fs::remove_file(lp);
+        }
+    }
+
+    /// このファイルのロックを見て、先客が居れば警告、居なければ自分が取る。
+    fn acquire_lock(&mut self, p: &std::path::Path) {
+        self.release_lock();
+        match foreign_lock(p) {
+            Some(who) => {
+                self.locked_by = Some(who);
+                // ロックは取らない(先客の邪魔をしない)
+            }
+            None => {
+                self.locked_by = None;
+                let lp = lock_path_for(p);
+                // LibreOffice と同じ気持ちの中身(名乗りだけ。厳密な書式は要らない)
+                if std::fs::write(&lp, format!("{},;", lock_identity())).is_ok() {
+                    self.my_lock = Some(lp);
+                }
+            }
+        }
+    }
+
     fn open(&mut self, p: PathBuf) {
         match std::fs::File::open(&p)
             .map_err(|e| e.to_string())
@@ -1965,6 +1997,14 @@ impl Calc {
                 self.undo_stack.clear();
                 self.redo_stack.clear();
                 self.clip_range = None;
+                self.acquire_lock(&p);
+                if let Some(who) = self.locked_by.clone() {
+                    self.status = format!(
+                        "{} — **{who} が開いています**。上書き保存はできません(名前を付けて保存へ)",
+                        self.status
+                    )
+                    .into();
+                }
                 self.path = Some(p);
                 self.sync_input();
             }
@@ -2290,6 +2330,7 @@ impl Calc {
         // 名前も付けていない試し打ちにまで確認を出すと、確認が煩さで
         // 押し流される — 本当に守るべき場面で効かなくなる
         if !self.dirty || self.path.is_none() {
+            self.release_lock();
             cx.quit();
             return;
         }
@@ -2307,7 +2348,10 @@ impl Calc {
                 match r {
                     // 保存先が未定なら別の糸で選ばせ、済んだときだけ終了する
                     rfd::MessageDialogResult::Yes => this.save(true, cx),
-                    rfd::MessageDialogResult::No => cx.quit(),
+                    rfd::MessageDialogResult::No => {
+                        this.release_lock();
+                        cx.quit();
+                    }
                     _ => this.status = "終了をやめました".into(),
                 }
                 cx.notify();
@@ -3786,11 +3830,21 @@ calc の隣に置いてください)"
     fn save(&mut self, then_quit: bool, cx: &mut Context<Self>) {
         self.commit();
         if let Some(p) = self.path.clone() {
-            self.save_to(p);
-            if then_quit && !self.dirty {
-                cx.quit();
+            if self.locked_by.is_some() {
+                // 先客の作業を後勝ちで潰さない。別の名前でなら保存できる
+                self.status = format!(
+                    "{} が開いているため上書きしません。名前を付けて保存してください",
+                    self.locked_by.as_deref().unwrap_or("誰か")
+                )
+                .into();
+            } else {
+                self.save_to(p);
+                if then_quit && !self.dirty {
+                    self.release_lock();
+                    cx.quit();
+                }
+                return;
             }
-            return;
         }
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new()
@@ -3804,6 +3858,7 @@ calc の隣に置いてください)"
                     Some(p) => {
                         this.save_to(p);
                         if then_quit && !this.dirty {
+                            this.release_lock();
                             cx.quit();
                         }
                     }
@@ -3832,6 +3887,7 @@ calc の隣に置いてください)"
                     p.file_name().unwrap_or_default().to_string_lossy()
                 )
                 .into();
+                self.acquire_lock(&p);
                 self.path = Some(p);
                 self.dirty = false;
                 // 挿した絵はもう原本(いま書いたファイル)にある。次の保存で
@@ -3846,6 +3902,13 @@ calc の隣に置いてください)"
             }
             Err(e) => self.status = format!("保存できません: {e}").into(),
         }
+    }
+}
+
+impl Drop for Calc {
+    fn drop(&mut self) {
+        // 置きっぱなしのロックは他の人の警告になってしまう。最後の保険
+        self.release_lock();
     }
 }
 
@@ -4003,6 +4066,37 @@ impl gpui::Element for InputSink {
             });
         });
     }
+}
+
+/// 排他ロックの置き場(LibreOffice と同じ `.~lock.<名前>#`)。
+/// ファイルサーバーの共有フォルダで「同時に開いて後勝ちで潰す」を防ぐ。
+fn lock_path_for(p: &std::path::Path) -> std::path::PathBuf {
+    let name = p.file_name().unwrap_or_default().to_string_lossy();
+    p.with_file_name(format!(".~lock.{name}#"))
+}
+
+/// 自分の名乗り(誰が開いているか)。user@host。
+fn lock_identity() -> String {
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "?".into());
+    let host = std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "?".into());
+    format!("{user}@{host}")
+}
+
+/// 先客のロックを読む(あれば名乗りを返す)。自分自身のロックは先客と見ない。
+fn foreign_lock(p: &std::path::Path) -> Option<String> {
+    let lp = lock_path_for(p);
+    let raw = std::fs::read_to_string(lp).ok()?;
+    let who = raw
+        .split(',')
+        .map(str::trim)
+        .find(|t| !t.is_empty())
+        .unwrap_or("誰か")
+        .to_string();
+    (who != lock_identity()).then_some(who)
 }
 
 /// ゴールシークの解探索(割線法)。表の複製の上で var を動かし、
@@ -5120,6 +5214,7 @@ fn main() {
                             this.request_quit(cx);
                             false
                         } else {
+                            this.release_lock();
                             true
                         }
                     });
@@ -5463,5 +5558,29 @@ mod goal_seek_tests {
                 .is_none(),
             "効かないセルで見つかったことにした"
         );
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn 先客のロックが見え_自分のは先客に数えない() {
+        let dir = std::env::temp_dir().join(format!("jo-lock-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let book = dir.join("台帳.xlsx");
+        std::fs::write(&book, b"x").unwrap();
+        let lp = lock_path_for(&book);
+        assert!(lp.file_name().unwrap().to_string_lossy().starts_with(".~lock.台帳"));
+        // 誰も居ない
+        assert!(foreign_lock(&book).is_none());
+        // 先客
+        std::fs::write(&lp, "yamada@jimusho,;").unwrap();
+        assert_eq!(foreign_lock(&book).as_deref(), Some("yamada@jimusho"));
+        // 自分のロックは先客ではない
+        std::fs::write(&lp, format!("{},;", lock_identity())).unwrap();
+        assert!(foreign_lock(&book).is_none(), "自分を先客と間違えた");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
