@@ -1408,6 +1408,7 @@ impl Writer {
         "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
+        "caption",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1823,6 +1824,59 @@ impl Writer {
             "ruler" => self.ruler = !self.ruler,
             // ダークモード。**紙は白いまま**(画面と紙の一致)。周りだけ暗くする
             "darkmode" => self.dark = !self.dark,
+            // 図表番号。カーソルの段落の下に「図 N」を入れる
+            // (画像は段落の下に付くので、その下=図の下になる)。
+            // 番号は既にある「図 n」の最大 + 1
+            "caption" => {
+                self.switch_target(Target::Body);
+                self.flush_target();
+                let mut n = 0usize;
+                for p in self.doc.paragraphs() {
+                    let t: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+                    if let Some(rest) = t.trim().strip_prefix("図 ") {
+                        if let Ok(k) = rest.trim().parse::<usize>() {
+                            n = n.max(k);
+                        }
+                    }
+                }
+                let label = format!("図 {}", n + 1);
+                let (pi, b0) = self.cursor_para();
+                let plen: usize = self
+                    .doc
+                    .paragraphs()
+                    .nth(pi)
+                    .map(|p| p.runs.iter().map(|r| r.text.len()).sum())
+                    .unwrap_or(0);
+                // 編集(undo の1手)と blocks を同じ形で揃える(目次と同じ作法)
+                let end = b0 + plen;
+                self.ed.move_to(end, false);
+                self.ed.move_to(end, true);
+                self.ed.insert(&format!("\n{label}"));
+                let para_block_idx: Vec<usize> = self
+                    .doc
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| matches!(b, kumihan::Block::Para(_)))
+                    .map(|(i, _)| i)
+                    .collect();
+                let cap = kumihan::Paragraph {
+                    align: Align::Center,
+                    line_spacing: 1.0,
+                    runs: vec![kumihan::Run {
+                        text: label.clone(),
+                        size_pt: SIZE_PT,
+                        font: None,
+                        fmt: Default::default(),
+                    }],
+                    ..Default::default()
+                };
+                self.doc.blocks.insert(para_block_idx[pi] + 1, kumihan::Block::Para(cap));
+                self.dirty = true;
+                self.relayout();
+                self.follow_caret();
+                self.status = format!("{label} を入れました(中央揃えの段落)").into();
+            }
             // しおり。一覧の板(名前を打って追加・押して移動・✕で削除)
             "bookmarks" => {
                 self.bm_open = !self.bm_open;

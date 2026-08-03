@@ -113,7 +113,7 @@ pub const WRITER: &[Tab] = &[
         c("add-text", "テキストの追加", "add-text"),
         c("toc-update", "目次の更新", "contents-update"),
         c("bookmarks", "ブックマーク", "bookmarks"),
-        x("図表番号", "caption"),
+        c("caption", "図表番号", "caption"),
         x("相互参照", "crossref"),
         x("図表目次", "tof"),
         x("図表目次の更新", "tof-update"),

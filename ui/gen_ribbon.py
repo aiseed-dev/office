@@ -66,7 +66,7 @@ READY = {
         "instextart": "instextart", "insequation": "insequation",
         "instext": "instext", "pagecolor": "pagecolor",
         "comment": "comment", "watermark": "watermark",
-        "bookmarks": "bookmarks",
+        "bookmarks": "bookmarks", "caption": "caption",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
