@@ -496,6 +496,61 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                 buf.clear();
             }
         }
+        // データの入力規則。list(候補から選ぶ)だけ理解し、他は報告
+        {
+            let mut r = Reader::from_str(&s);
+            let mut buf = Vec::new();
+            // (sqref の原文, list か)。formula1 は子要素なので End まで貯める
+            let mut dv: Option<(String, bool)> = None;
+            let mut in_f1 = false;
+            let mut f1 = String::new();
+            loop {
+                match r.read_event_into(&mut buf) {
+                    Ok(Event::Eof) | Err(_) => break,
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"dataValidation" => {
+                        let is_list = attr(&e, "type").as_deref() == Some("list");
+                        if !is_list {
+                            rep.note("入力規則(list 以外。保存で失われる)");
+                        }
+                        dv = attr(&e, "sqref").map(|sq| (sq, is_list));
+                        f1.clear();
+                    }
+                    // 自己閉じは formula1 を持てない = list として成立しない
+                    Ok(Event::Empty(e)) if local(e.name().as_ref()) == b"dataValidation" => {
+                        rep.note("入力規則(候補が無い。保存で失われる)");
+                    }
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"formula1" => {
+                        in_f1 = true;
+                    }
+                    Ok(Event::Text(t)) if in_f1 => {
+                        f1.push_str(&t.unescape().unwrap_or_default());
+                    }
+                    Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                        b"formula1" => in_f1 = false,
+                        b"dataValidation" => {
+                            if let Some((sq, true)) = dv.take() {
+                                // sqref は空白区切りで複数の範囲を持てる
+                                for part in sq.split_whitespace() {
+                                    let range = match part.split_once(':') {
+                                        Some((a, b)) => Pos::parse(a).zip(Pos::parse(b)),
+                                        None => Pos::parse(part).map(|p| (p, p)),
+                                    };
+                                    if let Some(range) = range {
+                                        sh.validations.push(crate::model::Validation {
+                                            range,
+                                            formula: f1.trim().to_string(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                buf.clear();
+            }
+        }
         // ハイパーリンク。r:id の付いた外部URLだけ理解し、文書内の場所は報告
         {
             let mut r = Reader::from_str(&s);
@@ -1006,6 +1061,23 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             }
             if let Some(pos) = body.rfind("</worksheet>") {
                 body.insert_str(pos, &cf);
+            }
+        }
+        // データの入力規則(schema では conditionalFormatting の後・hyperlinks の前)
+        if !sh.validations.is_empty() {
+            let mut dv = format!(r#"<dataValidations count="{}">"#, sh.validations.len());
+            for v in &sh.validations {
+                let (a, b) = v.range;
+                let sq = if a == b { a.a1() } else { format!("{}:{}", a.a1(), b.a1()) };
+                // formula1 の中の & と < だけ字面を守る(" は本文では素のまま合法)
+                let f = v.formula.replace('&', "&amp;").replace('<', "&lt;");
+                dv.push_str(&format!(
+                    r#"<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="{sq}"><formula1>{f}</formula1></dataValidation>"#,
+                ));
+            }
+            dv.push_str("</dataValidations>");
+            if let Some(pos) = body.rfind("</worksheet>") {
+                body.insert_str(pos, &dv);
             }
         }
         // ハイパーリンク(schema では mergeCells の後・印刷まわりの前)
@@ -1529,5 +1601,77 @@ mod cond_tests {
         assert!(r[0].hits(Pos::parse("A1").unwrap(), &Value::Number(-5.0)));
         assert!(!r[0].hits(Pos::parse("A1").unwrap(), &Value::Number(5.0)));
         assert!(!r[0].hits(Pos::parse("B1").unwrap(), &Value::Number(-5.0)), "範囲の外に効いた");
+    }
+}
+
+#[cfg(test)]
+mod validation_roundtrip_tests {
+    use super::*;
+    use crate::model::{Cell, Validation};
+
+    #[test]
+    fn 入力規則が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("D2").unwrap(), Cell::input("東京"));
+        b.sheets[0].set(Pos::parse("D3").unwrap(), Cell::input("大阪"));
+        b.sheets[0].validations.push(Validation {
+            range: (Pos::parse("B2").unwrap(), Pos::parse("B10").unwrap()),
+            formula: r#""甲,乙,丙""#.into(),
+        });
+        b.sheets[0].validations.push(Validation {
+            range: (Pos::parse("C2").unwrap(), Pos::parse("C2").unwrap()),
+            formula: "$D$2:$D$3".into(),
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        let v = &back.sheets[0].validations;
+        assert_eq!(v.len(), 2, "規則が往復しない: {v:?}");
+        assert_eq!(v[0].formula, r#""甲,乙,丙""#, "直書きの原文が変わった");
+        assert_eq!(v[0].range, (Pos::parse("B2").unwrap(), Pos::parse("B10").unwrap()));
+        assert_eq!(v[1].formula, "$D$2:$D$3", "範囲参照の原文が変わった");
+        // 候補も引ける
+        assert_eq!(v[0].options(&back.sheets[0]), vec!["甲", "乙", "丙"]);
+        assert_eq!(v[1].options(&back.sheets[0]), vec!["東京", "大阪"]);
+        assert!(rep.unsupported.is_empty(), "全部読めるのに報告が出た: {:?}", rep.unsupported);
+    }
+
+    #[test]
+    fn list以外の規則は報告して落とす() {
+        // 手書きの最小 xlsx を作るのは大掛かりなので、書いた xlsx の
+        // dataValidation の type を書き換えて読み直す
+        let mut b = Book::new();
+        b.sheets[0].validations.push(Validation {
+            range: (Pos::parse("A1").unwrap(), Pos::parse("A1").unwrap()),
+            formula: r#""x""#.into(),
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        // zip の中の sheet1.xml を直に書き換える
+        let mut z = zip::ZipArchive::new(Cursor::new(buf.get_ref().clone())).unwrap();
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        use std::io::{Read as _, Write as _};
+        for i in 0..z.len() {
+            let mut f = z.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut s = Vec::new();
+            f.read_to_end(&mut s).unwrap();
+            if name.ends_with("sheet1.xml") {
+                let t = String::from_utf8(s).unwrap()
+                    .replace(r#"type="list""#, r#"type="whole""#);
+                s = t.into_bytes();
+            }
+            w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(&s).unwrap();
+        }
+        let out = w.finish().unwrap();
+        let (back, rep) = read(Cursor::new(out.into_inner())).expect("読めない");
+        assert!(back.sheets[0].validations.is_empty(), "list 以外を黙って読んだ");
+        assert!(
+            rep.unsupported.iter().any(|(n, _)| n.contains("入力規則")),
+            "落としたのに報告が無い: {:?}",
+            rep.unsupported
+        );
     }
 }

@@ -708,7 +708,10 @@ impl Calc {
                 return;
             }
         }
-        self.commit();
+        if !self.commit() {
+            // 入力規則で戻された。移動すると打った文字が黙って消えるので留まる
+            return;
+        }
         if shift {
             // いまのセルから伸ばす
             if self.anchor.is_none() {
@@ -759,7 +762,10 @@ impl Calc {
                 && (a.row..=b.row).contains(&p.row)
                 && (a.col..=b.col).contains(&p.col);
             if !inside && p != self.cursor {
-                self.commit();
+                if !self.commit() {
+                    // 入力規則で戻された。移動せずメニューも出さない
+                    return;
+                }
                 self.anchor = None;
                 self.cursor = p;
                 self.sync_input();
@@ -1166,6 +1172,12 @@ impl Calc {
             || self.clip_range.take().is_some()
         {
             cx.notify();
+        } else if self.editing() {
+            // 打ちかけを捨てて、セルの保存内容に戻す
+            // (入力規則で堰き止められたときの逃げ道でもある)
+            self.sync_input();
+            self.status = "打ちかけを取り消しました".into();
+            cx.notify();
         }
     }
 
@@ -1315,29 +1327,42 @@ impl Calc {
     /// 「ドロップダウンリストから選択」。同じ列に既にある値の一覧を出す
     /// (Excel の Alt+↓ と同じ発想。入力規則が無くても、列の値は候補になる)。
     fn open_pick_list(&mut self) {
-        let col = self.cursor.col;
-        let (rows, _) = self.sheet().extent();
-        let mut vals: Vec<String> = Vec::new();
-        for r in 0..rows {
-            if r == self.cursor.row {
-                continue;
-            }
-            if let Some(c) = self.sheet().get(Pos::new(r, col)) {
-                // 式の結果ではなく「打つもの」を候補にする(文字の値だけ)
-                if c.formula.is_none() {
-                    let v = c.value.display();
-                    if !v.is_empty() && !vals.contains(&v) {
-                        vals.push(v);
+        // 入力規則があればその候補(規則に書かれた順のまま)。無ければ同じ列の値
+        let from_rule = self
+            .sheet()
+            .validation_at(self.cursor)
+            .map(|v| v.options(self.sheet()))
+            .filter(|o| !o.is_empty());
+        let mut vals: Vec<String> = from_rule.clone().unwrap_or_default();
+        if vals.is_empty() {
+            let col = self.cursor.col;
+            let (rows, _) = self.sheet().extent();
+            for r in 0..rows {
+                if r == self.cursor.row {
+                    continue;
+                }
+                if let Some(c) = self.sheet().get(Pos::new(r, col)) {
+                    // 式の結果ではなく「打つもの」を候補にする(文字の値だけ)
+                    if c.formula.is_none() {
+                        let v = c.value.display();
+                        if !v.is_empty() && !vals.contains(&v) {
+                            vals.push(v);
+                        }
                     }
                 }
             }
+            if vals.is_empty() {
+                self.status = "この列にはまだ値がありません".into();
+                return;
+            }
+            vals.sort();
         }
-        if vals.is_empty() {
-            self.status = "この列にはまだ値がありません".into();
-            return;
+        let total = vals.len();
+        vals.truncate(16);
+        if total > 16 {
+            // 切ったことを黙らない
+            self.status = format!("候補 {total} 件のうち先頭 16 件を出しています").into();
         }
-        vals.sort();
-        vals.truncate(12);
         let at = self
             .cell_origin_px(self.cursor)
             .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
@@ -1351,7 +1376,9 @@ impl Calc {
         if i >= self.book.sheets.len() || i == self.active {
             return;
         }
-        self.commit();
+        if !self.commit() {
+            return; // 入力規則で戻された。切り替えると打った文字が消える
+        }
         self.remember_ui();
         self.active = i;
         self.restore_ui();
@@ -1369,12 +1396,31 @@ impl Calc {
         self.switch_sheet(self.book.sheets.len() - 1);
     }
 
-    fn commit(&mut self) {
+    /// 数式バーの内容をセルへ。**入力規則(list)に合わない値は入れない**
+    /// (Excel と同じ)。false を返したら呼び側は移動しないこと —
+    /// 打った文字が黙って消える。Esc でセルの保存内容に戻せる。
+    fn commit(&mut self) -> bool {
         let (cur, text) = (self.cursor, self.input.text().to_string());
         // 変わっていなければ何もしない(移動のたびに履歴が積まれるのを防ぐ)
         let now = self.sheet().get(cur).map(|c| c.editable()).unwrap_or_default();
         if now == text {
-            return;
+            return true;
+        }
+        // 空にするのは常に許す(allowBlank の既定)。式は結果が変わり得るので通す
+        if !text.trim().is_empty() && !text.starts_with('=') {
+            if let Some(v) = self.sheet().validation_at(cur) {
+                let opts = v.options(self.sheet());
+                // 候補が解決できない規則(別のシートへの参照等)では堰き止めない
+                if !opts.is_empty() && !opts.iter().any(|o| *o == text.trim()) {
+                    self.status = format!(
+                        "「{}」は入力規則に合いません(候補: {} / Esc で戻す)",
+                        text.trim(),
+                        opts.join(" / ")
+                    )
+                    .into();
+                    return false;
+                }
+            }
         }
         self.checkpoint();
         // **書式は据え置く。** 打ち直しただけで罫線や塗りが消えるのは帳票の事故
@@ -1387,6 +1433,7 @@ impl Calc {
         self.dirty = true;
         // 中身を変えたらコピーの破線は消す(Excel と同じ)
         self.clip_range = None;
+        true
     }
 
     /// カーソルを動かす(動かす前に編集中の内容を確定する)。
@@ -1424,7 +1471,9 @@ impl Calc {
         if self.anchor.is_none() {
             self.anchor = Some(self.cursor);
         }
-        self.commit();
+        if !self.commit() {
+            return;
+        }
         let r = (self.cursor.row as i32 + dr).max(0) as u32;
         let c = (self.cursor.col as i32 + dc).max(0) as u32;
         self.cursor = Pos::new(r.min(9999), c.min(255));
@@ -1453,7 +1502,9 @@ impl Calc {
     fn move_cursor(&mut self, dr: i32, dc: i32) {
         // 普通の移動は選択を解く
         self.anchor = None;
-        self.commit();
+        if !self.commit() {
+            return; // 入力規則で戻された(status に候補が出ている)
+        }
         let r = (self.cursor.row as i32 + dr).max(0) as u32;
         let c = (self.cursor.col as i32 + dc).max(0) as u32;
         self.cursor = Pos::new(r.min(9999), c.min(255));
@@ -1667,7 +1718,10 @@ impl Calc {
     fn a_doc_home(&mut self, _: &ui::DocHome, _: &mut Window, cx: &mut Context<Self>) {
         // Ctrl+Home は A1 へ(表計算の作法)
         self.anchor = None;
-        self.commit();
+        if !self.commit() {
+            cx.notify();
+            return;
+        }
         self.cursor = Pos::new(0, 0);
         self.follow();
         self.sync_input();
@@ -1676,7 +1730,10 @@ impl Calc {
     fn a_doc_end(&mut self, _: &ui::DocEnd, _: &mut Window, cx: &mut Context<Self>) {
         // Ctrl+End は使われている範囲の右下へ
         self.anchor = None;
-        self.commit();
+        if !self.commit() {
+            cx.notify();
+            return;
+        }
         let (rows, cols) = self.sheet().extent();
         if rows > 0 {
             self.cursor = Pos::new(rows - 1, cols.saturating_sub(1));
@@ -2675,6 +2732,14 @@ impl Render for Calc {
                     d = d.relative().child(div().absolute()
                         .top(px(1.0)).right(px(1.0))
                         .w(px(6.0)).h(px(6.0)).rounded_sm().bg(rgb(0xC00000)));
+                }
+                // 入力規則のあるセルを選ぶと右下に ▾
+                // (右クリック → ドロップダウンリストから選択、の目印)
+                if sel && self.sheet().validation_at(p).is_some() {
+                    d = d.relative().child(div().absolute()
+                        .bottom(px(-1.0)).right(px(1.0))
+                        .text_size(px(8.5)).text_color(rgb(0x1B6E3C))
+                        .child("▾"));
                 }
                 // 選択中のセルは、確定前の入力をその場に見せる
                 let shown = if sel { self.input.text().to_string() } else { shown };

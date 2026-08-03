@@ -267,6 +267,64 @@ pub struct Sheet {
     pub comments: BTreeMap<Pos, String>,
     /// 条件付き書式(cellIs だけ)。xlsx の conditionalFormatting と往復する
     pub cond: Vec<CondRule>,
+    /// データの入力規則(list だけ)。xlsx の dataValidations と往復する
+    pub validations: Vec<Validation>,
+}
+
+/// データの入力規則(list だけ)。「この範囲は、この候補から選ぶ」。
+///
+/// `formula` は xlsx の formula1 の**原文**で持つ — `"甲,乙,丙"`(引用符つきの
+/// 直書き)か `$D$2:$D$5`(同じシートの範囲参照)。候補は使うときに解決する
+/// (範囲参照の中身が変われば候補も変わる — 原文を持てば追従できる)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Validation {
+    pub range: (Pos, Pos),
+    pub formula: String,
+}
+
+impl Validation {
+    pub fn contains(&self, p: Pos) -> bool {
+        let (a, b) = self.range;
+        (a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col)
+    }
+
+    /// 候補の一覧。直書きは `,` で割り、範囲参照はそのシートの値を集める。
+    /// 解決できない参照(別のシート等)は空 — 空の候補は「制限なし」と扱うこと
+    /// (読めない規則で入力を堰き止めない)。
+    pub fn options(&self, sheet: &Sheet) -> Vec<String> {
+        let f = self.formula.trim();
+        if let Some(inner) = f.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            return inner
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        // 範囲参照。$ は絶対参照の印なので剥がして読む
+        let clean: String = f.chars().filter(|c| *c != '$').collect();
+        let (a, b) = match clean.split_once(':') {
+            Some((x, y)) => match (Pos::parse(x), Pos::parse(y)) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return Vec::new(),
+            },
+            None => match Pos::parse(&clean) {
+                Some(p) => (p, p),
+                None => return Vec::new(),
+            },
+        };
+        let mut out = Vec::new();
+        for r in a.row..=b.row {
+            for c in a.col..=b.col {
+                if let Some(cell) = sheet.cells.get(&Pos::new(r, c)) {
+                    let v = cell.value.display();
+                    if !v.is_empty() && !out.contains(&v) {
+                        out.push(v);
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 /// 条件付き書式の1本。「範囲の値が◯◯なら、この見た目」。
@@ -507,6 +565,11 @@ impl Sheet {
         }
         // 1セルに潰れた・裏返った結合は結合ではない
         self.merges.retain(|(a, b)| a <= b && (a.row != b.row || a.col != b.col));
+    }
+
+    /// この位置に効く入力規則(最初に見つかったもの)。
+    pub fn validation_at(&self, p: Pos) -> Option<&Validation> {
+        self.validations.iter().find(|v| v.contains(p))
     }
 
     /// この位置は結合に呑まれているか(左上を除く)。
@@ -1513,5 +1576,52 @@ mod offset_tests {
     fn 文字列と関数名は触らない() {
         assert_eq!(offset_refs(r#"="A1"&A1"#, 1, 0), r#"="A1"&A2"#);
         assert_eq!(offset_refs("=SUM(A1)", 1, 0), "=SUM(A2)");
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn 直書きの候補が割れる() {
+        let v = Validation {
+            range: (Pos::new(1, 1), Pos::new(9, 1)),
+            formula: r#""甲, 乙,丙""#.into(),
+        };
+        let s = Sheet::default();
+        assert_eq!(v.options(&s), vec!["甲", "乙", "丙"], "空白ごと候補にした");
+        assert!(v.contains(Pos::new(5, 1)));
+        assert!(!v.contains(Pos::new(5, 2)));
+    }
+
+    #[test]
+    fn 範囲参照の候補はシートの値から集まる() {
+        let mut s = Sheet::default();
+        for (r, t) in [(1, "東京"), (2, "大阪"), (3, "東京"), (4, "")] {
+            s.set(Pos::new(r, 3), Cell::input(t));
+        }
+        let v = Validation {
+            range: (Pos::new(0, 0), Pos::new(0, 0)),
+            formula: "$D$2:$D$5".into(),
+        };
+        assert_eq!(v.options(&s), vec!["東京", "大阪"], "重複と空欄が候補に入った");
+        // 解決できない参照は空(制限なしと扱う側の約束)
+        let alien = Validation {
+            range: (Pos::new(0, 0), Pos::new(0, 0)),
+            formula: "Sheet2!$A$1:$A$3".into(),
+        };
+        assert!(alien.options(&s).is_empty());
+    }
+
+    #[test]
+    fn 位置に効く規則が引ける() {
+        let mut s = Sheet::default();
+        s.validations.push(Validation {
+            range: (Pos::new(1, 1), Pos::new(3, 1)),
+            formula: r#""a,b""#.into(),
+        });
+        assert!(s.validation_at(Pos::new(2, 1)).is_some());
+        assert!(s.validation_at(Pos::new(2, 2)).is_none());
     }
 }
