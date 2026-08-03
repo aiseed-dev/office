@@ -1461,6 +1461,14 @@ impl Calc {
         else { self.move_cursor(0, 1) }
         cx.notify();
     }
+    fn a_page_up(&mut self, _: &ui::PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(-(ROWS as i32 - 1), 0);
+        cx.notify();
+    }
+    fn a_page_down(&mut self, _: &ui::PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_cursor(ROWS as i32 - 1, 0);
+        cx.notify();
+    }
     fn a_up(&mut self, _: &ui::Up, _: &mut Window, cx: &mut Context<Self>) {
         self.move_cursor(-1, 0); cx.notify();
     }
@@ -2807,6 +2815,8 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_right))
             .on_action(cx.listener(Calc::a_up))
             .on_action(cx.listener(Calc::a_down))
+            .on_action(cx.listener(Calc::a_page_up))
+            .on_action(cx.listener(Calc::a_page_down))
             .on_action(cx.listener(Calc::a_tab))
             .on_action(cx.listener(Calc::a_enter))
             .on_action(cx.listener(Calc::a_select_all))

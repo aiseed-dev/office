@@ -83,6 +83,63 @@ fn set_cell_text(c: &mut kumihan::Cellbox, text: &str) {
         .collect();
 }
 
+/// 文字の種類。**日本語の「語」は文字種の変わり目で切る**(分かち書きが無いので、
+/// 英数の連なり・ひらがな・カタカナ・漢字・記号の境を語の境とみなす。IME や
+/// エディタの通り相場)。
+fn char_class(c: char) -> u8 {
+    if c.is_whitespace() {
+        0
+    } else if c.is_ascii_alphanumeric() || c == '_' {
+        1
+    } else if ('ぁ'..='ゖ').contains(&c) {
+        2
+    } else if ('ァ'..='ヶ').contains(&c) || c == 'ー' {
+        3
+    } else if c.is_alphabetic() {
+        4 // 漢字ほか
+    } else {
+        5 // 記号
+    }
+}
+
+/// 語の境へ(forward なら次の語の頭、そうでなければ前の語の頭)。バイト位置。
+fn word_boundary(text: &str, pos: usize, forward: bool) -> usize {
+    if forward {
+        let chars: Vec<(usize, char)> = text[pos..].char_indices()
+            .map(|(i, c)| (pos + i, c)).collect();
+        let mut k = 0;
+        while k < chars.len() && char_class(chars[k].1) == 0 {
+            k += 1;
+        }
+        if k >= chars.len() {
+            return text.len();
+        }
+        let cl = char_class(chars[k].1);
+        while k < chars.len() && char_class(chars[k].1) == cl {
+            k += 1;
+        }
+        // 次の語の頭まで(語の後ろの空白も飛ばす)
+        while k < chars.len() && char_class(chars[k].1) == 0 {
+            k += 1;
+        }
+        chars.get(k).map(|(i, _)| *i).unwrap_or(text.len())
+    } else {
+        let chars: Vec<(usize, char)> = text[..pos].char_indices().collect();
+        let mut k = chars.len();
+        while k > 0 && char_class(chars[k - 1].1) == 0 {
+            k -= 1;
+        }
+        if k == 0 {
+            return 0;
+        }
+        let cl = char_class(chars[k - 1].1);
+        while k > 0 && char_class(chars[k - 1].1) == cl {
+            k -= 1;
+        }
+        chars.get(k).map(|(i, _)| *i).unwrap_or(0)
+    }
+}
+
 const PX_PER_MM: f32 = 96.0 / 25.4;
 /// gpui の文字は行の高さが既定で黄金比(1.618×文字サイズ)なので、
 /// グリフは div の頭から余白の半分ぶん下に描かれる。自前で引く線
@@ -387,6 +444,71 @@ impl Writer {
     }
 
     /// 文字位置 → 紙の上の座標(キャレットを出すため)
+    /// 語の単位でカーソルを動かす(Ctrl+←→)。
+    fn word_move(&mut self, forward: bool, extend: bool) {
+        let t = self.ed.text().to_string();
+        let np = word_boundary(&t, self.ed.cursor(), forward);
+        self.ed.move_to(np, extend);
+        self.follow_caret();
+    }
+
+    /// カーソルの下の語を選ぶ(二度クリック)。
+    fn select_word(&mut self) {
+        let t = self.ed.text().to_string();
+        if t.is_empty() {
+            return;
+        }
+        let pos = self.ed.cursor().min(t.len());
+        let chars: Vec<(usize, char)> = t.char_indices().collect();
+        // カーソルの字(末尾なら手前の字)から、同じ種類の連なりを広げる
+        let ci = chars.iter().position(|(i, _)| *i >= pos).unwrap_or(chars.len());
+        let k = ci.min(chars.len() - 1);
+        let cl = char_class(chars[k].1);
+        let mut s = k;
+        while s > 0 && char_class(chars[s - 1].1) == cl {
+            s -= 1;
+        }
+        let mut e = k + 1;
+        while e < chars.len() && char_class(chars[e].1) == cl {
+            e += 1;
+        }
+        let sb = chars[s].0;
+        let eb = chars.get(e).map(|(i, _)| *i).unwrap_or(t.len());
+        self.ed.move_to(sb, false);
+        self.ed.move_to(eb, true);
+    }
+
+    /// いまの(見た目の)行を選ぶ(三度クリック)。
+    fn select_line(&mut self) {
+        let pos = self.ed.cursor();
+        let want = match self.target {
+            Target::Body => None,
+            Target::Cell { table, row, col } => Some((table, row, col)),
+        };
+        let mut hit: Option<(usize, usize)> = None;
+        for l in self.page.lines.iter().filter(|l| match want {
+            None => l.from_body,
+            Some(id) => l.cell == Some(id),
+        }) {
+            if l.byte0 <= pos {
+                hit = Some((l.byte0, l.byte_end()));
+            }
+        }
+        if let Some((s, e)) = hit {
+            self.ed.move_to(s, false);
+            self.ed.move_to(e, true);
+        }
+    }
+
+    /// 1画面ぶん(PageUp/PageDown)。見た目の行を数えて動く。
+    fn page_move(&mut self, down: bool) {
+        let pxmm = PX_PER_MM * self.zoom;
+        let step = ((self.view_h_px / (LINE_MM * pxmm)) as i32 - 2).max(1);
+        for _ in 0..step {
+            self.move_line(down, false);
+        }
+    }
+
     /// カーソルを1行、上(または下)へ。**見た目の行**単位 — 折り返した長い
     /// 段落の中でも1段ずつ動く。横の位置(x)はなるべく保つ。
     /// 一番上で↑なら文頭、一番下で↓なら文末へ(行の端で止まって動かないより良い)。
@@ -1051,6 +1173,30 @@ impl Writer {
     }
     fn select_all(&mut self, _: &ui::SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.editor().select_all();
+        cx.notify();
+    }
+    fn word_left(&mut self, _: &ui::WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.word_move(false, false);
+        cx.notify();
+    }
+    fn word_right(&mut self, _: &ui::WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.word_move(true, false);
+        cx.notify();
+    }
+    fn select_word_left(&mut self, _: &ui::SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.word_move(false, true);
+        cx.notify();
+    }
+    fn select_word_right(&mut self, _: &ui::SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.word_move(true, true);
+        cx.notify();
+    }
+    fn page_up(&mut self, _: &ui::PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.page_move(false);
+        cx.notify();
+    }
+    fn page_down(&mut self, _: &ui::PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.page_move(true);
         cx.notify();
     }
     fn up(&mut self, _: &ui::Up, _: &mut Window, cx: &mut Context<Self>) {
@@ -1808,6 +1954,12 @@ impl Render for Writer {
             .on_action(cx.listener(Writer::down))
             .on_action(cx.listener(Writer::select_up))
             .on_action(cx.listener(Writer::select_down))
+            .on_action(cx.listener(Writer::word_left))
+            .on_action(cx.listener(Writer::word_right))
+            .on_action(cx.listener(Writer::select_word_left))
+            .on_action(cx.listener(Writer::select_word_right))
+            .on_action(cx.listener(Writer::page_up))
+            .on_action(cx.listener(Writer::page_down))
             .on_action(cx.listener(Writer::home))
             .on_action(cx.listener(Writer::end))
             .on_action(cx.listener(Writer::enter))
@@ -1910,9 +2062,26 @@ impl gpui::Element for InputSink {
                 return;
             }
             let rel = e.position - bounds.origin;
+            let clicks = e.click_count;
+            let shift = e.modifiers.shift;
             view.update(cx, |w, cx| {
-                w.click_at(f32::from(rel.x), f32::from(rel.y), e.modifiers.shift);
-                w.drag_select = true;
+                match clicks {
+                    // 二度押しは語、三度押しは行を選ぶ
+                    2 => {
+                        w.click_at(f32::from(rel.x), f32::from(rel.y), false);
+                        w.select_word();
+                        w.drag_select = false;
+                    }
+                    c if c >= 3 => {
+                        w.click_at(f32::from(rel.x), f32::from(rel.y), false);
+                        w.select_line();
+                        w.drag_select = false;
+                    }
+                    _ => {
+                        w.click_at(f32::from(rel.x), f32::from(rel.y), shift);
+                        w.drag_select = true;
+                    }
+                }
                 cx.notify();
             });
         });
@@ -2132,5 +2301,39 @@ mod page_setup_tests {
         }
         assert!(out.contains("headerReference"), "ヘッダーの参照が落ちた: {out}");
         assert!(!out.contains("pgSz"), "古い用紙が残った: {out}");
+    }
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::*;
+
+    #[test]
+    fn 英語は空白と語の境で止まる() {
+        let t = "hello world  foo";
+        assert_eq!(word_boundary(t, 0, true), 6, "次の語の頭に行かない");
+        assert_eq!(word_boundary(t, 6, true), 13);
+        assert_eq!(word_boundary(t, 13, false), 6, "前の語の頭に戻らない");
+        assert_eq!(word_boundary(t, 6, false), 0);
+        assert_eq!(word_boundary(t, t.len(), true), t.len(), "末尾で止まらない");
+    }
+
+    #[test]
+    fn 日本語は文字種の変わり目で止まる() {
+        // 漢字の連なり→ひらがな→カタカナ→英数、の境で切れる
+        let t = "防火戸のカタログをPDFで";
+        let b = |s: &str| t.find(s).unwrap();
+        assert_eq!(word_boundary(t, 0, true), b("の"), "漢字の連なりを1語にしない");
+        assert_eq!(word_boundary(t, b("の"), true), b("カタログ"));
+        assert_eq!(word_boundary(t, b("カタログ"), true), b("を"),
+            "カタカナの連なりが1語にならない");
+        assert_eq!(word_boundary(t, b("PDF"), false), b("を"));
+    }
+
+    #[test]
+    fn 端で壊れない() {
+        assert_eq!(word_boundary("", 0, true), 0);
+        assert_eq!(word_boundary("", 0, false), 0);
+        assert_eq!(word_boundary("あ", 0, false), 0);
     }
 }
