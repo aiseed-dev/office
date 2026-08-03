@@ -112,6 +112,9 @@ pub struct Paragraph {
     /// 表示できる画像(anchors のうち、絵の実体と大きさが分かったもの)。
     /// 保存には使わない — 保存は anchors の原文が担う
     pub images: Vec<InlineImage>,
+    /// **このアプリで挿した**画像。保存でこちらが部品(media・rels)ごと書き出す。
+    /// 読み込んだ画像(anchors 由来)とは持ち場が違う — 混ぜると保存で二重になる
+    pub images_new: Vec<InlineImage>,
     pub align: Align,
     /// この段落の前で改ページする(docx の w:pageBreakBefore)
     pub page_break_before: bool,
@@ -421,7 +424,7 @@ impl Document {
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
                     line_spacing: 1.0,
-                    shade: None, boxed: false, runs: vec![Run { text: p.to_string(), size_pt, font: None, fmt: Default::default() }],
+                    shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: p.to_string(), size_pt, font: None, fmt: Default::default() }],
                     ..Default::default() }))
                 .collect(),
         }
@@ -755,7 +758,7 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                     y += frame.line_height_mm * para.spacing();
                 }
                 // 画像は段落の下に置く。幅が行長を超えるなら比例で縮める
-                for im in &para.images {
+                for im in para.images.iter().chain(para.images_new.iter()) {
                     let scale = if im.w_mm > measure { measure / im.w_mm } else { 1.0 };
                     let (w, h) = (im.w_mm * scale, im.h_mm * scale);
                     sheet.images.push((im.bytes.clone(), [indent_mm, y - lh_of(para, frame) * 0.6, w, h]));

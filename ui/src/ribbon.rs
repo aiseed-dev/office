@@ -79,6 +79,7 @@ pub const WRITER: &[Tab] = &[
         c("blankpage", "空白ページの挿入", "blankpage"),
         c("pagebreak", "ページの挿入またはセクション区切り", "pagebreak"),
         c("instable", "表の挿入", "instable"),
+        c("insimage", "画像を挿入", "insertimage"),
         x("図形を挿入", "insshape"),
         x("SmartArtの挿入", "inssmartart"),
         x("グラフを挿入", "inschart"),

@@ -588,6 +588,7 @@ pub fn parse_document_with(
                                 images: std::mem::take(&mut images),
                                 page_break_before, list, indent, line_spacing,
                                 shade: shade.take(), boxed,
+                                images_new: Vec::new(),
                                 runs: if runs.is_empty() {
                                 vec![Run { text: String::new(), size_pt: DEFAULT_PT, font: None, fmt: Default::default() }]
                             } else { runs } };
@@ -644,12 +645,21 @@ const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"
 
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
+const RNS_DOC: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
 /// 文書を document.xml の本体にする。
 pub fn write_document_xml(doc: &Document) -> String {
+    write_document_parts(doc).0
+}
+
+/// 本体と、このアプリで挿した画像(出て来る順)を返す。
+/// 画像の番号(rIdJO1〜)はこの順で振られる。
+pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u8>>>) {
     use quick_xml::events::{BytesEnd, BytesStart as BS};
     let mut w = Writer::new(Cursor::new(Vec::new()));
 
-    fn para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph) {
+    fn para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
+            imgn: &mut usize, media: &mut Vec<std::sync::Arc<Vec<u8>>>) {
         use quick_xml::events::{BytesEnd, BytesStart as BS, BytesText};
         w.write_event(Event::Start(BS::new("w:p"))).unwrap();
         // 段落の性質。既定のものは書かない — 余計な指定を増やさない
@@ -776,17 +786,36 @@ pub fn write_document_xml(doc: &Document) -> String {
             }
             w.write_event(Event::End(BytesEnd::new("w:r"))).unwrap();
         }
+        // このアプリで挿した画像。部品(media・rels)は write_with が同じ番号で作る
+        for im in &p.images_new {
+            *imgn += 1;
+            let n = *imgn;
+            let (cx, cy) = ((im.w_mm * 36000.0) as i64, (im.h_mm * 36000.0) as i64);
+            let xml = format!(
+                r#"<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{n}" name="図{n}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="{n}" name="図{n}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdJO{n}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+            );
+            let _ = w.get_mut().write_all(xml.as_bytes());
+            media.push(im.bytes.clone());
+        }
         w.write_event(Event::End(BytesEnd::new("w:p"))).unwrap();
     }
 
     let mut root = BS::new("w:document");
     root.push_attribute(("xmlns:w", W_NS));
+    root.push_attribute(("xmlns:r", RNS_DOC));
+    root.push_attribute(("xmlns:wp",
+        "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"));
+    root.push_attribute(("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main"));
+    root.push_attribute(("xmlns:pic",
+        "http://schemas.openxmlformats.org/drawingml/2006/picture"));
     w.write_event(Event::Start(root)).unwrap();
     w.write_event(Event::Start(BS::new("w:body"))).unwrap();
 
+    let mut imgn = 0usize;
+    let mut media: Vec<std::sync::Arc<Vec<u8>>> = Vec::new();
     for b in &doc.blocks {
         match b {
-            Block::Para(p) => para(&mut w, p),
+            Block::Para(p) => para(&mut w, p, &mut imgn, &mut media),
             Block::Table(t) => {
                 w.write_event(Event::Start(BS::new("w:tbl"))).unwrap();
                 // 罫線(事務様式は罫線が見えないと様式にならない)
@@ -841,9 +870,12 @@ pub fn write_document_xml(doc: &Document) -> String {
                             w.write_event(Event::End(BytesEnd::new("w:tcPr"))).unwrap();
                         }
                         if cell.paragraphs.is_empty() {
-                            para(&mut w, &Paragraph { line_spacing: 1.0, ..Default::default() });
+                            para(&mut w, &Paragraph { line_spacing: 1.0, ..Default::default() },
+                                 &mut imgn, &mut media);
                         } else {
-                            for p in &cell.paragraphs { para(&mut w, p) }
+                            for p in &cell.paragraphs {
+                                para(&mut w, p, &mut imgn, &mut media)
+                            }
                         }
                         w.write_event(Event::End(BytesEnd::new("w:tc"))).unwrap();
                     }
@@ -861,7 +893,7 @@ pub fn write_document_xml(doc: &Document) -> String {
     w.write_event(Event::End(BytesEnd::new("w:body"))).unwrap();
     w.write_event(Event::End(BytesEnd::new("w:document"))).unwrap();
     let body = String::from_utf8(w.into_inner().into_inner()).unwrap();
-    format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{body}")
+    (format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{body}"), media)
 }
 
 /// docx として書き出す(最小の OPC パッケージ)。
@@ -875,6 +907,17 @@ pub fn write<W: Write + Seek>(doc: &Document, dst: W) -> Result<(), String> {
 ///
 /// 渡さないと部品ごと消える — 「開いて保存したらロゴが消えた」は
 /// 書類の事故として重いので、アプリからは必ず元を渡すこと。
+/// 画像の中身から拡張子と content type を見分ける。
+fn image_kind(bytes: &[u8]) -> (&'static str, &'static str) {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        ("png", "image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8]) {
+        ("jpeg", "image/jpeg")
+    } else {
+        ("bin", "application/octet-stream")
+    }
+}
+
 pub fn write_with<R: Read + Seek, W: Write + Seek>(
     doc: &Document,
     original: Option<R>,
@@ -884,7 +927,19 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     let opts: zip::write::FileOptions<'_, ()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
+    let (body, new_media) = write_document_parts(doc);
+    // 今回こちらが作り直す部品の名前(これ以外の joimg は既存画像として持ち越す)
+    let regen_media: Vec<String> = new_media.iter().enumerate()
+        .map(|(i, m)| {
+            let (ext, _) = image_kind(m);
+            format!("word/media/joimg{}.{ext}", i + 1)
+        })
+        .collect();
+
+    // [Content_Types] と本文の rels は、挿した画像のぶんを織り込んで作り直す
     let mut copied = false;
+    let mut orig_ct: Option<String> = None;
+    let mut orig_rels: Option<String> = None;
     if let Some(src) = original {
         if let Ok(mut z) = zip::ZipArchive::new(src) {
             for i in 0..z.len() {
@@ -901,20 +956,95 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 if f.read_to_end(&mut buf).is_err() {
                     continue;
                 }
+                if name == "[Content_Types].xml" {
+                    orig_ct = Some(String::from_utf8_lossy(&buf).to_string());
+                    copied = true;
+                    continue;
+                }
+                if name == "word/_rels/document.xml.rels" {
+                    orig_rels = Some(String::from_utf8_lossy(&buf).to_string());
+                    continue;
+                }
+                // 今回作り直す画像の実体だけは持ち越さない(二重に持たない)。
+                // 開き直した後の joimg は「既存の画像」なので、普通に持ち越す
+                if regen_media.contains(&name) {
+                    continue;
+                }
                 zip.start_file(name, opts).map_err(|e| e.to_string())?;
                 zip.write_all(&buf).map_err(|e| e.to_string())?;
                 copied = true;
             }
         }
     }
-    if !copied {
+
+    // [Content_Types]。挿した画像の拡張子の宣言が無ければ足す
+    {
+        let mut ct = orig_ct.unwrap_or_else(|| CONTENT_TYPES.to_string());
+        let mut add = String::new();
+        for m in &new_media {
+            let (ext, ty) = image_kind(m);
+            let decl = format!(r#"<Default Extension="{ext}" ContentType="{ty}"/>"#);
+            if !ct.contains(&format!("Extension=\"{ext}\"")) && !add.contains(&decl) {
+                add.push_str(&decl);
+            }
+        }
+        if !add.is_empty() {
+            if let Some(p) = ct.rfind("</Types>") {
+                ct.insert_str(p, &add);
+            }
+        }
         zip.start_file("[Content_Types].xml", opts).map_err(|e| e.to_string())?;
-        zip.write_all(CONTENT_TYPES.as_bytes()).map_err(|e| e.to_string())?;
+        zip.write_all(ct.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    if !copied {
         zip.start_file("_rels/.rels", opts).map_err(|e| e.to_string())?;
         zip.write_all(ROOT_RELS.as_bytes()).map_err(|e| e.to_string())?;
     }
+
+    // 本文の rels。原本の関係(既存の画像・ヘッダー等)は残し、
+    // 挿した画像のぶん(rIdJO1〜)を足す
+    if orig_rels.is_some() || !new_media.is_empty() {
+        let mut rels = orig_rels.unwrap_or_else(|| {
+            concat!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
+                "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>"
+            ).to_string()
+        });
+        // 今回作り直す番号(rIdJO1〜n)だけ除いておく。残すと Id が重なる。
+        // それより先の rIdJO は開き直した既存画像の参照なので触らない
+        for n in 1..=new_media.len() {
+            let needle = format!("<Relationship Id=\"rIdJO{n}\"");
+            if let Some(i) = rels.find(&needle) {
+                if let Some(j) = rels[i..].find("/>") {
+                    rels.replace_range(i..i + j + 2, "");
+                }
+            }
+        }
+        let mut add = String::new();
+        for (i, m) in new_media.iter().enumerate() {
+            let n = i + 1;
+            let (ext, _) = image_kind(m);
+            add.push_str(&format!(
+                r#"<Relationship Id="rIdJO{n}" Type="{RNS_DOC}/image" Target="media/joimg{n}.{ext}"/>"#
+            ));
+        }
+        if let Some(p) = rels.rfind("</Relationships>") {
+            rels.insert_str(p, &add);
+        }
+        zip.start_file("word/_rels/document.xml.rels", opts).map_err(|e| e.to_string())?;
+        zip.write_all(rels.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    // 画像の実体
+    for (i, m) in new_media.iter().enumerate() {
+        let n = i + 1;
+        let (ext, _) = image_kind(m);
+        zip.start_file(format!("word/media/joimg{n}.{ext}"), opts)
+            .map_err(|e| e.to_string())?;
+        zip.write_all(m).map_err(|e| e.to_string())?;
+    }
+
     zip.start_file("word/document.xml", opts).map_err(|e| e.to_string())?;
-    zip.write_all(write_document_xml(doc).as_bytes()).map_err(|e| e.to_string())?;
+    zip.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
     zip.finish().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -929,7 +1059,7 @@ mod tests {
     fn para(s: &str) -> Paragraph {
         Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
         Document { font: None, page: None, sect_raw: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
@@ -964,7 +1094,7 @@ mod tests {
     fn 文字サイズが保たれる() {
         let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
             Run { text: "本文".into(), size_pt: 10.5, font: None, fmt: Default::default() },
         ]})]};
@@ -997,7 +1127,7 @@ mod tests {
     fn 段落内の改行が保たれる() {
         let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
         let (back, _) = round_trip(&d);
         assert_eq!(texts(&back)[0], "一行目\n二行目");
@@ -1156,7 +1286,7 @@ mod font_tests {
                     list: Default::default(),
                 indent: 0,
                 line_spacing: 1.0,
-                shade: None, boxed: false, runs: vec![Run {
+                shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run {
                     text: "日本フネン".into(),
                     size_pt: 10.5,
                     font: Some("BIZ UDPゴシック".into()),
@@ -1206,7 +1336,7 @@ mod fmt_tests {
             sect_raw: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![run("見出し", f.clone())] })],
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
         };
         let back = roundtrip(&d);
         assert_eq!(back.paragraphs().next().unwrap().runs[0].fmt, f, "書式が消えた");
@@ -1221,7 +1351,7 @@ mod fmt_tests {
             sect_raw: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![run("赤", f.clone())] })],
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
         };
         assert_eq!(roundtrip(&d).paragraphs().next().unwrap().runs[0].fmt, f);
     }
@@ -1241,7 +1371,7 @@ mod fmt_tests {
                     list: Default::default(),
                     indent: 0,
                     line_spacing: 1.0,
-                    shade: None, boxed: false, runs: vec![run("表題", CharFormat::default())],
+                    shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("表題", CharFormat::default())],
                 })],
             };
             assert_eq!(roundtrip(&d).paragraphs().next().unwrap().align, a, "{a:?} が消えた");
@@ -1289,7 +1419,7 @@ mod para_tests {
             list,
             indent,
             line_spacing: spacing,
-            shade: None, boxed: false,
+            shade: None, boxed: false, images_new: Vec::new(),
             runs: vec![Run {
                 text: "項目".into(), size_pt: 10.5, font: None, fmt: Default::default(),
             }],
@@ -1611,5 +1741,53 @@ mod shade_tests {
         let p = back.paragraphs().next().unwrap();
         assert_eq!(p.shade.as_deref(), Some("FFF2CC"), "背景色が往復しない");
         assert!(p.boxed, "囲み枠が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod image_insert_tests {
+    use super::*;
+    use kumihan::{Block, Document, InlineImage, Paragraph, Run};
+
+    fn png_bytes() -> Vec<u8> {
+        // 中身は問わない(読み書きは実体を素通しする)。頭のPNG印だけ本物
+        let mut v = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        v.extend_from_slice(&[1, 2, 3, 4, 5]);
+        v
+    }
+
+    #[test]
+    fn 挿した画像が部品ごと保存され読み直せる() {
+        let mut p = Paragraph {
+            line_spacing: 1.0,
+            runs: vec![Run { text: "ロゴの下".into(), size_pt: 10.5, font: None,
+                             fmt: Default::default() }],
+            ..Default::default()
+        };
+        p.images_new.push(InlineImage {
+            bytes: std::sync::Arc::new(png_bytes()),
+            w_mm: 50.0,
+            h_mm: 30.0,
+        });
+        let d = Document { font: None, page: None, sect_raw: None,
+                           blocks: vec![Block::Para(p)] };
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        let first = buf.into_inner();
+
+        let (back, _) = read(Cursor::new(first.clone())).expect("読めない");
+        let bp = back.paragraphs().next().unwrap();
+        assert_eq!(bp.images.len(), 1, "挿した画像が読み直せない");
+        assert_eq!(*bp.images[0].bytes, png_bytes(), "画像の実体が変わった");
+        assert!((bp.images[0].w_mm - 50.0).abs() < 0.5, "大きさが変わった");
+        assert!(bp.images_new.is_empty(), "読み直しで二重の持ち場に入った");
+
+        // アプリの保存と同じ形(原本を渡す)でもう一往復しても、壊れず残る
+        let mut buf2 = Cursor::new(Vec::new());
+        write_with(&back, Some(Cursor::new(&first)), &mut buf2).expect("書けない");
+        buf2.set_position(0);
+        let (back2, _) = read(buf2).expect("読み直せない");
+        assert_eq!(back2.paragraphs().next().unwrap().images.len(), 1,
+            "二度目の保存で画像が消えた");
     }
 }

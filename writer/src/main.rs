@@ -83,6 +83,41 @@ fn set_cell_text(c: &mut kumihan::Cellbox, text: &str) {
         .collect();
 }
 
+/// PNG / JPEG の画素数 (幅, 高さ)。読めなければ None。
+/// 中身は復号しない — 大きさを知るだけなら頭を見れば足りる。
+fn image_px(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        // 署名8 + 長さ4 + "IHDR"4 の後に、幅・高さが BE で並ぶ
+        let w = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+        let h = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+        return Some((w, h));
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        let mut i = 2usize;
+        while i + 9 < bytes.len() {
+            if bytes[i] != 0xFF {
+                return None;
+            }
+            let marker = bytes[i + 1];
+            // 単独の印(長さ無し)は飛ばす
+            if marker == 0xFF || (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
+                i += 2;
+                continue;
+            }
+            let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+            // SOF0〜3 に高さ・幅
+            if matches!(marker, 0xC0..=0xC3) {
+                let h = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+                let w = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as u32;
+                return Some((w, h));
+            }
+            i += 2 + len;
+        }
+        return None;
+    }
+    None
+}
+
 /// 文字の種類。**日本語の「語」は文字種の変わり目で切る**(分かち書きが無いので、
 /// 英数の連なり・ひらがな・カタカナ・漢字・記号の境を語の境とみなす。IME や
 /// エディタの通り相場)。
@@ -981,7 +1016,7 @@ impl Writer {
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
         "instable", "inssymbol", "replace", "changecase", "blankpage",
-        "paracolor", "borders",
+        "paracolor", "borders", "insimage",
         "spell", "wordcount", "zoom-in", "zoom-out", "hidenchars", "ruler",
         "fontname", "fontsize",
         "pageorient", "pagesize", "pagemargins",
@@ -1058,6 +1093,47 @@ impl Writer {
             }),
             // 段落の囲み枠(入切)
             "borders" => self.para(|p| p.boxed = !p.boxed),
+            // 画像の挿入。段落の下に付く(kumihan の画像の置き方)
+            "insimage" => {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("画像", &["png", "jpg", "jpeg"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        let Some((pw, ph)) = image_px(&bytes) else {
+                            self.status = "PNG か JPEG だけ挿せます".into();
+                            return;
+                        };
+                        // 96dpi 相当で置き、行長に収まらなければ比例で縮める
+                        let mut w_mm = pw as f32 * 25.4 / 96.0;
+                        let mut h_mm = ph as f32 * 25.4 / 96.0;
+                        let measure = self.pg.measure_mm();
+                        if w_mm > measure {
+                            let k = measure / w_mm;
+                            w_mm *= k;
+                            h_mm *= k;
+                        }
+                        let im = kumihan::InlineImage {
+                            bytes: std::sync::Arc::new(bytes),
+                            w_mm,
+                            h_mm,
+                        };
+                        // 選択があっても、挿すのはカーソルの段落だけ
+                        let cur = self.ed.cursor();
+                        self.ed.move_to(cur, false);
+                        self.para(|p| {
+                            p.images.push(im.clone()); // 表示
+                            p.images_new.push(im.clone()); // 保存
+                        });
+                        self.status =
+                            "画像を挿しました(段落の下に付き、保存で docx に入ります)".into();
+                    }
+                    Err(e) => self.status = format!("読めません: {e}").into(),
+                }
+            }
             // 大文字小文字。選択の英字を 全部大文字 ⇄ 全部小文字 で切り替える
             // (小文字が混ざっていれば大文字へ。1手で戻せる)
             "changecase" => {
@@ -2577,5 +2653,38 @@ mod word_tests {
         assert_eq!(word_boundary("", 0, true), 0);
         assert_eq!(word_boundary("", 0, false), 0);
         assert_eq!(word_boundary("あ", 0, false), 0);
+    }
+}
+
+#[cfg(test)]
+mod image_px_tests {
+    use super::*;
+
+    #[test]
+    fn pngの画素数が読める() {
+        // 署名 + IHDR(幅640, 高さ480)
+        let mut b = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        b.extend_from_slice(&[0, 0, 0, 13]);
+        b.extend_from_slice(b"IHDR");
+        b.extend_from_slice(&640u32.to_be_bytes());
+        b.extend_from_slice(&480u32.to_be_bytes());
+        assert_eq!(image_px(&b), Some((640, 480)));
+    }
+
+    #[test]
+    fn jpegの画素数が読める() {
+        // SOI + APP0(空) + SOF0(高さ300, 幅200)
+        let mut b = vec![0xFF, 0xD8];
+        b.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x02]); // APP0 長さ2(中身なし)
+        b.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08]);
+        b.extend_from_slice(&300u16.to_be_bytes()); // 高さ
+        b.extend_from_slice(&200u16.to_be_bytes()); // 幅
+        b.extend_from_slice(&[0x03, 0x01, 0x01, 0x00]);
+        assert_eq!(image_px(&b), Some((200, 300)), "SOF0 の(幅, 高さ)が読めない");
+    }
+
+    #[test]
+    fn 画像でないものは断る() {
+        assert_eq!(image_px(b"not an image"), None);
     }
 }

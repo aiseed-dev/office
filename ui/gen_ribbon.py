@@ -52,6 +52,7 @@ READY = {
         "linespace": "linespace",
         "changecase": "changecase", "blankpage": "blankpage",
         "paracolor": "paracolor", "borders": "borders",
+        "insertimage": "insimage",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
@@ -107,6 +108,7 @@ LABEL = {
     "instext": "tipInsertText", "instextart": "tipInsertTextArt",
     "dropcap": "tipDropCap", "text-from-file": "tipTextFromFile",
     "insequation": "tipInsertEquation", "inssymbol": "tipInsertSymbol",
+    "insertimage": "tipInsertImage",
     "controls": "tipControls", "insimage": "tipInsertImage",
     "inshyperlink": "tipInsertHyperlink", "insslicer": "tipInsertSlicer",
     "inssparkline": "tipInsertSpark", "inscheckbox": "tipControls",
@@ -261,6 +263,9 @@ def tabs_of(app, prefix):
         # Euro-Office の挿入タブでは空白ページの隣にある
         if tab == "ins" and app == "documenteditor" and "blankpage" in slots:
             slots.insert(slots.index("blankpage") + 1, "pagebreak")
+        # 画像も class 注入(slot-insertimage)。Euro-Office では表の隣にある
+        if tab == "ins" and app == "documenteditor" and "instable" in slots:
+            slots.insert(slots.index("instable") + 1, "insertimage")
         # フィルターも class 注入(btn-slot.slot-btn-setfilter)
         if tab == "home" and app == "spreadsheeteditor" and "custom-sort" not in slots:
             slots.extend(["setfilter", "clear-filter"])
