@@ -57,6 +57,7 @@ READY = {
         "pagenum": "pagenum",
         "styles": "parastyle",
         "contents": "toc", "contents-update": "toc-update",
+        "datetime": "datetime", "numpages": "numpages",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

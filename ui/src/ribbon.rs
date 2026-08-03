@@ -122,8 +122,8 @@ pub const WRITER: &[Tab] = &[
         c("edit-header", "ヘッダーの編集", "edit-header"),
         c("edit-footer", "フッターの編集", "edit-footer"),
         c("pagenum", "ページ番号", "pagenum"),
-        x("日付/時刻", "datetime"),
-        x("ページ数", "numpages"),
+        c("datetime", "日付/時刻", "datetime"),
+        c("numpages", "ページ数", "numpages"),
     ]},
     Tab { name: "レビュー", cmds: &[
         c("spell", "スペルチェック", "spell"),

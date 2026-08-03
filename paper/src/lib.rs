@@ -375,7 +375,7 @@ mod hf_tests {
         };
         let mut buf = Vec::new();
         to_pdf_with(&s, &data, Paper::default(),
-            |k| layout_hf(&hf, &m, &pg, 6.4, k, true), &mut buf).unwrap();
+            |k| layout_hf(&hf, &m, &pg, 6.4, k, 9, true), &mut buf).unwrap();
         assert_eq!(&buf[..5], b"%PDF-");
         // ページ数は本文で決まる(飾りで増えない)
         let hay = String::from_utf8_lossy(&buf).to_string();

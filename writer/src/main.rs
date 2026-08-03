@@ -402,12 +402,24 @@ impl Writer {
         self.refresh_hf();
     }
 
+    /// いまの紙面の総頁(紙と同じ折り方で数える)。
+    fn total_pages(&self) -> usize {
+        paper::paginate(&self.page, paper::Paper {
+            width_mm: self.pg.w_mm,
+            height_mm: self.pg.h_mm,
+            margin_mm: self.pg.left_mm,
+        }).1.len()
+    }
+
     /// 紙面に出すヘッダー・フッターの行を組み直す(番号は1ページ目のもの。
     /// 各ページの本当の番号は PDF で入る)。
     fn refresh_hf(&mut self) {
         let m = Metrics::new(&self.font_bytes).expect("フォント");
-        self.header_lines = kumihan::layout_hf(&self.doc.header, &m, &self.pg, LINE_MM, 1, false);
-        self.footer_lines = kumihan::layout_hf(&self.doc.footer, &m, &self.pg, LINE_MM, 1, true);
+        let total = self.total_pages();
+        self.header_lines =
+            kumihan::layout_hf(&self.doc.header, &m, &self.pg, LINE_MM, 1, total, false);
+        self.footer_lines =
+            kumihan::layout_hf(&self.doc.footer, &m, &self.pg, LINE_MM, 1, total, true);
     }
 
     /// ヘッダー・フッターの編集の板を開く(もう一度で閉じる)。
@@ -812,6 +824,7 @@ impl Writer {
     fn write_pdf(&mut self, p: &std::path::Path) {
         let m = Metrics::new(&self.font_bytes).expect("フォント");
         let (hdr, ftr, pg) = (self.doc.header.clone(), self.doc.footer.clone(), self.pg);
+        let total = self.total_pages();
         let r = kumihan::atomic::save(p, |f| {
             paper::to_pdf_with(
                 &self.page,
@@ -823,8 +836,8 @@ impl Writer {
                 },
                 // ヘッダー・フッター。ページ番号はここで各頁の数字になる
                 |k| {
-                    let mut v = kumihan::layout_hf(&hdr, &m, &pg, LINE_MM, k, false);
-                    v.extend(kumihan::layout_hf(&ftr, &m, &pg, LINE_MM, k, true));
+                    let mut v = kumihan::layout_hf(&hdr, &m, &pg, LINE_MM, k, total, false);
+                    v.extend(kumihan::layout_hf(&ftr, &m, &pg, LINE_MM, k, total, true));
                     v
                 },
                 std::io::BufWriter::new(f),
@@ -1251,7 +1264,7 @@ impl Writer {
         "fontname", "fontsize",
         "pageorient", "pagesize", "pagemargins",
         "edit-header", "edit-footer", "pagenum",
-        "parastyle", "toc", "toc-update",
+        "parastyle", "toc", "toc-update", "numpages", "datetime",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1495,16 +1508,43 @@ impl Writer {
             // ヘッダー・フッターの編集(板。開いている間、打鍵はそこへ)
             "edit-header" => self.open_hf(false),
             "edit-footer" => self.open_hf(true),
-            // ページ番号。開いている板(無ければフッター)のカーソル位置に入れる
-            "pagenum" => {
+            // ページ番号・ページ数。開いている板(無ければフッター)の
+            // カーソル位置に印を入れる
+            "pagenum" | "numpages" => {
                 if self.hf_edit.is_none() {
                     self.open_hf(true);
                 }
                 if self.hf_edit.is_some() {
-                    self.hf_ed.insert(&kumihan::PAGE_MARK.to_string());
+                    let (mark, what) = if id == "pagenum" {
+                        (kumihan::PAGE_MARK, "ページ番号")
+                    } else {
+                        (kumihan::PAGES_MARK, "ページ数")
+                    };
+                    self.hf_ed.insert(&mark.to_string());
                     self.on_edited();
                     self.status =
-                        "ページ番号を入れました(docx では PAGE フィールドになります)".into();
+                        format!("{what}を入れました(docx ではフィールドになります)").into();
+                }
+            }
+            // 日付。**固定の文字**として入れる(開くたび変わるフィールドは、
+            // 事務の書類では事故のもと — 提出日が勝手に変わる)
+            "datetime" => {
+                let out = std::process::Command::new("date")
+                    .arg("+%Y年%-m月%-d日")
+                    .output();
+                match out {
+                    Ok(o) if o.status.success() => {
+                        let d = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                        if self.hf_edit.is_some() {
+                            self.hf_ed.insert(&d);
+                        } else {
+                            self.ed.insert(&d);
+                        }
+                        self.on_edited();
+                        self.status =
+                            format!("今日の日付を入れました({d}。固定の文字です)").into();
+                    }
+                    _ => self.status = "日付が取れません(date コマンド)".into(),
                 }
             }
             "ruler" => self.ruler = !self.ruler,
@@ -2340,7 +2380,9 @@ impl Render for Writer {
             let mut s = self.hf_ed.text().to_string();
             let cur = self.hf_ed.cursor().min(s.len());
             s.insert(cur, '|');
-            let shown = s.replace(kumihan::PAGE_MARK, "《ページ番号》");
+            let shown = s
+                .replace(kumihan::PAGE_MARK, "《ページ番号》")
+                .replace(kumihan::PAGES_MARK, "《ページ数》");
             let btn = |id: &str, label: &str| {
                 div().id(SharedString::from(id.to_string()))
                     .px_2p5().py_1().rounded_sm()

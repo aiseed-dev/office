@@ -14,7 +14,7 @@
 use std::io::{Cursor, Read, Seek, Write};
 
 use kumihan::{Align, Block, Cellbox, CharFormat, Document, ListKind, ParaStyle, Paragraph,
-              Run, Table, VMerge, PAGE_MARK};
+              Run, Table, VMerge, PAGES_MARK, PAGE_MARK};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
@@ -317,9 +317,14 @@ fn hf_ref(sect: &str, tag: &str) -> Option<String> {
     None
 }
 
-/// フィールドの命令が PAGE(いまのページの番号)か。NUMPAGES(総頁)は別物。
-fn is_page_instr(instr: &str) -> bool {
-    instr.split_whitespace().next() == Some("PAGE")
+/// フィールドの命令を印(1字)へ。PAGE(いまのページの番号)と
+/// NUMPAGES(総頁)だけを持つ。それ以外は None(報告して落とす)。
+fn field_mark(instr: &str) -> Option<char> {
+    match instr.split_whitespace().next() {
+        Some("PAGE") => Some(PAGE_MARK),
+        Some("NUMPAGES") => Some(PAGES_MARK),
+        _ => None,
+    }
 }
 
 /// `w:pStyle` の val を段落の役割へ。見出しと目次の行だけを見る
@@ -368,10 +373,10 @@ fn fldchar(
             if *in_field {
                 *in_field = false;
                 *field_hide = false;
-                if is_page_instr(field_instr) {
+                if let Some(mark) = field_mark(field_instr) {
                     if let Some(p) = para.as_mut() {
                         p.push(Run {
-                            text: PAGE_MARK.to_string(),
+                            text: mark.to_string(),
                             size_pt,
                             font: font.clone(),
                             fmt: fmt.clone(),
@@ -623,9 +628,9 @@ pub fn parse_document_with(
                         if r.read_to_end_into(name, &mut Vec::new()).is_ok() {
                             last_pos = r.buffer_position() as usize;
                         }
-                        if is_page_instr(&instr) {
+                        if let Some(mark) = field_mark(&instr) {
                             if let Some(p) = para.as_mut() {
-                                p.push(Run { text: PAGE_MARK.to_string(), size_pt,
+                                p.push(Run { text: mark.to_string(), size_pt,
                                              font: font.clone(), fmt: fmt.clone() });
                             }
                         } else {
@@ -749,11 +754,11 @@ pub fn parse_document_with(
                         &mut in_field, &mut field_hide, &mut field_instr,
                         &mut para, &mut rep, size_pt, &font, &fmt),
                     b"fldSimple" => {
-                        // 空の fldSimple(中身なし)。PAGE なら印だけ置く
+                        // 空の fldSimple(中身なし)。持てる命令なら印だけ置く
                         let instr = attr(&e, "instr").unwrap_or_default();
-                        if is_page_instr(&instr) {
+                        if let Some(mark) = field_mark(&instr) {
                             if let Some(p) = para.as_mut() {
-                                p.push(Run { text: PAGE_MARK.to_string(), size_pt,
+                                p.push(Run { text: mark.to_string(), size_pt,
                                              font: font.clone(), fmt: fmt.clone() });
                             }
                         } else {
@@ -959,12 +964,22 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
         }
         for run in &p.runs {
             if run.text.is_empty() { continue }
-            // ページ番号の印([`PAGE_MARK`])は PAGE フィールドとして書く
+            // ページ番号・ページ数の印はフィールドとして書く
             // (印の前後で run を割る)。中の「1」は開く側が計算し直す種
-            for (fi, chunk) in run.text.split(PAGE_MARK).enumerate() {
-            if fi > 0 {
-                let _ = w.get_mut().write_all(
-                    br#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple>"#);
+            let mut chunks: Vec<(Option<char>, String)> = vec![(None, String::new())];
+            for ch in run.text.chars() {
+                if ch == PAGE_MARK || ch == PAGES_MARK {
+                    chunks.push((Some(ch), String::new()));
+                } else {
+                    chunks.last_mut().unwrap().1.push(ch);
+                }
+            }
+            for (mark, chunk) in chunks {
+            if let Some(mk) = mark {
+                let instr = if mk == PAGE_MARK { " PAGE " } else { " NUMPAGES " };
+                let _ = w.get_mut().write_all(format!(
+                    r#"<w:fldSimple w:instr="{instr}"><w:r><w:t>1</w:t></w:r></w:fldSimple>"#
+                ).as_bytes());
             }
             if chunk.is_empty() { continue }
             w.write_event(Event::Start(BS::new("w:r"))).unwrap();
@@ -2173,14 +2188,29 @@ mod hf_tests {
     }
 
     #[test]
-    fn pageでないフィールドは報告して落とす() {
+    fn 持てないフィールドは報告して落とす() {
         let xml = r#"<w:document xmlns:w="x"><w:body><w:p>
-            <w:fldSimple w:instr=" NUMPAGES "><w:r><w:t>9</w:t></w:r></w:fldSimple>
+            <w:fldSimple w:instr=" DATE "><w:r><w:t>2026/08/03</w:t></w:r></w:fldSimple>
         </w:p></w:body></w:document>"#;
         let (doc, rep) = parse_document_xml(xml);
-        assert!(!doc.body_text().contains('9'), "計算済みの見た目が漏れた");
+        assert!(!doc.body_text().contains("2026"), "計算済みの見た目が漏れた");
         assert!(rep.unsupported.iter().any(|(n, _)| n.contains("フィールド")),
             "黙って落とした: {:?}", rep.unsupported);
+    }
+
+    #[test]
+    fn ページ数の印が往復する() {
+        use kumihan::PAGES_MARK;
+        let mut d = Document::plain("本文", 10.5);
+        d.footer.paragraphs = vec![para(&format!("{PAGE_MARK} / {PAGES_MARK}"))];
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        let t = kumihan::paras_text(&back.footer.paragraphs);
+        assert!(t.contains(PAGE_MARK) && t.contains(PAGES_MARK),
+            "印が往復しない: {t:?}");
     }
 
     /// 原本に header1.xml を持つ最小の docx

@@ -268,6 +268,9 @@ pub struct HeadFoot {
 /// 私用領域の字なので普通の本文と衝突しない。
 pub const PAGE_MARK: char = '\u{E000}';
 
+/// ページ数(総頁)の印(docx の NUMPAGES フィールド)。扱いは [`PAGE_MARK`] と同じ。
+pub const PAGES_MARK: char = '\u{E001}';
+
 /// 段落の列を編集用の平文にする(区切りは改行)。セル・ヘッダーの編集で使う。
 pub fn paras_text(paras: &[Paragraph]) -> String {
     paras
@@ -846,8 +849,8 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
 
 /// ヘッダー(footer=false)・フッター(footer=true)を**1ページぶん**組む。
 ///
-/// [`PAGE_MARK`] はそのページの番号の字に置き換わる。**表示専用** —
-/// 置き換えでバイト位置が変わるので、行の byte0 は編集と結ばない
+/// [`PAGE_MARK`] はそのページの番号、[`PAGES_MARK`] は総頁の字に置き換わる。
+/// **表示専用** — 置き換えでバイト位置が変わるので、行の byte0 は編集と結ばない
 /// (ヘッダーの編集は紙面上ではなく板で行う)。
 /// y はページ上端からの mm、x は左余白からの mm(本文の行と同じ物差し)。
 pub fn layout_hf(
@@ -856,12 +859,14 @@ pub fn layout_hf(
     pg: &PageSetup,
     line_height_mm: f32,
     page_no: usize,
+    total: usize,
     footer: bool,
 ) -> Vec<Line> {
     if hf.paragraphs.is_empty() {
         return Vec::new();
     }
     let num = page_no.to_string();
+    let tot = total.to_string();
     let measure = pg.measure_mm();
     // ヘッダーは上余白の中を上から、フッターは下余白の頭から下へ
     let mut y = if footer {
@@ -875,6 +880,9 @@ pub fn layout_hf(
         for r in &mut para.runs {
             if r.text.contains(PAGE_MARK) {
                 r.text = r.text.replace(PAGE_MARK, &num);
+            }
+            if r.text.contains(PAGES_MARK) {
+                r.text = r.text.replace(PAGES_MARK, &tot);
             }
         }
         for cells in break_para(&para, m, measure, None) {
@@ -1748,8 +1756,8 @@ mod hf_layout_tests {
         let m = Metrics::new(&data).unwrap();
         let pg = PageSetup::default();
         let f = hf(&format!("- {PAGE_MARK} -"));
-        assert_eq!(layout_hf(&f, &m, &pg, 6.4, 1, true)[0].text(), "- 1 -");
-        assert_eq!(layout_hf(&f, &m, &pg, 6.4, 12, true)[0].text(), "- 12 -");
+        assert_eq!(layout_hf(&f, &m, &pg, 6.4, 1, 9, true)[0].text(), "- 1 -");
+        assert_eq!(layout_hf(&f, &m, &pg, 6.4, 12, 9, true)[0].text(), "- 12 -");
     }
 
     #[test]
@@ -1757,10 +1765,10 @@ mod hf_layout_tests {
         let data = metrics();
         let m = Metrics::new(&data).unwrap();
         let pg = PageSetup::default();
-        let h = layout_hf(&hf("頭"), &m, &pg, 6.4, 1, false);
+        let h = layout_hf(&hf("頭"), &m, &pg, 6.4, 1, 1, false);
         assert!(h[0].y_mm < pg.top_mm, "ヘッダーが本文域に食い込む: {}", h[0].y_mm);
         assert!(h[0].y_mm > 0.0);
-        let f = layout_hf(&hf("足"), &m, &pg, 6.4, 1, true);
+        let f = layout_hf(&hf("足"), &m, &pg, 6.4, 1, 1, true);
         assert!(f[0].y_mm > pg.h_mm - pg.bottom_mm,
             "フッターが本文域に食い込む: {}", f[0].y_mm);
         assert!(f[0].y_mm < pg.h_mm, "紙の外に出た: {}", f[0].y_mm);
@@ -1773,16 +1781,25 @@ mod hf_layout_tests {
         let pg = PageSetup::default();
         let mut f = hf(&PAGE_MARK.to_string());
         f.paragraphs[0].align = Align::Center;
-        let lines = layout_hf(&f, &m, &pg, 6.4, 1, true);
+        let lines = layout_hf(&f, &m, &pg, 6.4, 1, 9, true);
         assert!(lines[0].cells[0].x_mm > pg.measure_mm() * 0.3,
             "中央に寄っていない: {}", lines[0].cells[0].x_mm);
+    }
+
+    #[test]
+    fn ページ数の印が総頁の字になる() {
+        let data = metrics();
+        let m = Metrics::new(&data).unwrap();
+        let pg = PageSetup::default();
+        let f = hf(&format!("{PAGE_MARK} / {PAGES_MARK}"));
+        assert_eq!(layout_hf(&f, &m, &pg, 6.4, 2, 7, true)[0].text(), "2 / 7");
     }
 
     #[test]
     fn 無ければ何も出ない() {
         let data = metrics();
         let m = Metrics::new(&data).unwrap();
-        assert!(layout_hf(&HeadFoot::default(), &m, &PageSetup::default(), 6.4, 1, false)
+        assert!(layout_hf(&HeadFoot::default(), &m, &PageSetup::default(), 6.4, 1, 1, false)
             .is_empty());
     }
 
