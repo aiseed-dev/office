@@ -607,6 +607,9 @@ impl Calc {
     /// 境界を掴んだまま動いた。列幅・行高をその場で変える(見ながら合わせる)。
     /// 最小幅で止める — ゼロにすると列が消えて掴み直せない。
     fn size_drag_at(&mut self, x: f32, y: f32) {
+        if std::env::var_os("JO_MOUSE_LOG").is_some() {
+            eprintln!("move x={x:.1} y={y:.1} size_drag={}", self.size_drag.is_some());
+        }
         let Some(d) = &self.size_drag else { return };
         let (col, idx, grab, base, moved) = (d.col, d.idx, d.grab, d.base, d.moved);
         if !moved {
@@ -690,6 +693,13 @@ impl Calc {
         // mouse-up を取り逃していても、新しい押下で必ず仕切り直す(自癒)
         self.size_drag = None;
         self.drag = None;
+        if std::env::var_os("JO_MOUSE_LOG").is_some() {
+            eprintln!(
+                "down x={x:.1} y={y:.1} clicks={clicks} grip={:?} moved_last={}",
+                self.size_grip_at(x, y),
+                self.grip_moved_last
+            );
+        }
         // 見出しの境界の取っ手が最優先(セルの当たり判定より先に見る)
         if let Some((is_col, idx)) = self.size_grip_at(x, y) {
             self.commit();
@@ -756,6 +766,13 @@ impl Calc {
 
     /// 離した。ドラッグ選択はここで確定する。
     fn mouse_up(&mut self) {
+        if std::env::var_os("JO_MOUSE_LOG").is_some() {
+            eprintln!(
+                "up size_drag={} moved={:?}",
+                self.size_drag.is_some(),
+                self.size_drag.as_ref().map(|d| d.moved)
+            );
+        }
         if let Some(d) = self.size_drag.take() {
             // 幅・高さの確定。status は size_drag_at が出している。
             // 動かしたかは次の押下の判定(掴み直し vs ダブルクリック)に使う
@@ -1907,7 +1924,10 @@ impl Calc {
     /// 書きかけを黙って捨てない。
     fn request_quit(&mut self, cx: &mut Context<Self>) {
         self.commit();
-        if !self.dirty {
+        // 確認は**実ファイルの未保存変更**にだけ出す(発注者の指示 2026-08-03)。
+        // 名前も付けていない試し打ちにまで確認を出すと、確認が煩さで
+        // 押し流される — 本当に守るべき場面で効かなくなる
+        if !self.dirty || self.path.is_none() {
             cx.quit();
             return;
         }
@@ -3471,7 +3491,7 @@ fn main() {
                 window.on_window_should_close(cx, move |_, cx| {
                     let quit_now = v.update(cx, |this, cx| {
                         this.commit();
-                        if this.dirty {
+                        if this.dirty && this.path.is_some() {
                             this.request_quit(cx);
                             false
                         } else {
@@ -3483,6 +3503,31 @@ fn main() {
                     }
                     quit_now
                 });
+                if std::env::var_os("JO_SELFTEST").is_some() {
+                    // 画面が実際に動くかの自己診断: B列の幅を1秒ごとに広げ狭めし、
+                    // 15秒で自動終了する。**操作は要らない** — 見ているだけで、
+                    // 「モデルは動くのに画面が止まる」疑いを切り分けられる
+                    let v = view.clone();
+                    cx.spawn(async move |cx| {
+                        for i in 0..15u32 {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(1000))
+                                .await;
+                            let _ = v.update(cx, |c, cx| {
+                                let w = if i % 2 == 0 { 20.0 } else { 5.0 };
+                                c.book.sheets[0].col_width.insert(1, w);
+                                c.status = format!(
+                                    "自己診断 {}/15: B列の幅 {w}(勝手に動けば描画は健全)",
+                                    i + 1
+                                )
+                                .into();
+                                cx.notify();
+                            });
+                        }
+                        let _ = cx.update(|cx| cx.quit());
+                    })
+                    .detach();
+                }
                 view
             },
         )
