@@ -1140,7 +1140,7 @@ impl Writer {
     ///
     /// **編集先が本文かセルかで掛け先が違う。** セル編集中に本文へ掛けると、
     /// set_body_text がセルの文章で本文を上書きしてしまう。
-    fn toggle(&mut self, f: impl Fn(&mut kumihan::CharFormat) + Copy) {
+    fn toggle(&mut self, f: impl Fn(&mut kumihan::CharFormat)) {
         match self.target {
             Target::Body => {
                 let sel = self.ed.selection();
@@ -1935,28 +1935,51 @@ impl Writer {
             "redo" => { if self.editor().redo() { self.on_edited() } }
             "selectall" => self.ed.select_all(),
             "spell" => self.run_proof(),
-            // 文字書式 — 押すたびに入切する(Word と同じ挙動)
-            "bold" => self.toggle(|f| f.bold = !f.bold),
-            "italic" => self.toggle(|f| f.italic = !f.italic),
-            "underline" => self.toggle(|f| f.underline = !f.underline),
-            "strikeout" => self.toggle(|f| f.strike = !f.strike),
+            // 文字書式 — 押すたびに入切する(Word と同じ挙動)。
+            // **先にカーソル位置の書式で入か切かを決めて、選択全体に写す** —
+            // 混ざった選択で run ごとに反転させない(Word の作法)
+            "bold" => {
+                let on = !self.doc.char_format_at(self.ed.selection()).bold;
+                self.toggle(move |f| f.bold = on);
+            }
+            "italic" => {
+                let on = !self.doc.char_format_at(self.ed.selection()).italic;
+                self.toggle(move |f| f.italic = on);
+            }
+            "underline" => {
+                let on = !self.doc.char_format_at(self.ed.selection()).underline;
+                self.toggle(move |f| f.underline = on);
+            }
+            "strikeout" => {
+                let on = !self.doc.char_format_at(self.ed.selection()).strike;
+                self.toggle(move |f| f.strike = on);
+            }
             // 上付きと下付きは同時には成らない
-            "superscript" => self.toggle(|f| {
-                f.superscript = !f.superscript;
-                if f.superscript { f.subscript = false }
-            }),
-            "subscript" => self.toggle(|f| {
-                f.subscript = !f.subscript;
-                if f.subscript { f.superscript = false }
-            }),
+            "superscript" => {
+                let on = !self.doc.char_format_at(self.ed.selection()).superscript;
+                self.toggle(move |f| {
+                    f.superscript = on;
+                    if on { f.subscript = false }
+                });
+            }
+            "subscript" => {
+                let on = !self.doc.char_format_at(self.ed.selection()).subscript;
+                self.toggle(move |f| {
+                    f.subscript = on;
+                    if on { f.superscript = false }
+                });
+            }
             // 蛍光ペン。黄 → 緑 → 解除(色を選ぶ小窓はまだ無い)
-            "highlight" => self.toggle(|f| {
-                f.highlight = match f.highlight.as_deref() {
-                    None => Some("yellow".into()),
-                    Some("yellow") => Some("green".into()),
+            "highlight" => {
+                let next = match self.doc.char_format_at(self.ed.selection())
+                    .highlight.as_deref()
+                {
+                    None => Some("yellow".to_string()),
+                    Some("yellow") => Some("green".to_string()),
                     _ => None,
-                }
-            }),
+                };
+                self.toggle(move |f| f.highlight = next.clone());
+            }
             // 書式のクリア。文字書式だけを外す(本文と段落の性質は残す)
             "clearstyle" => self.toggle(|f| *f = Default::default()),
             // 段落の揃え
@@ -2433,13 +2456,14 @@ impl Writer {
                 self.status = format!(
                     "文字数 {ink}(空白込み {all})/ 段落 {paras}").into();
             }
-            "fontcolor" => self.toggle(|f| {
-                f.color = match f.color.as_deref() {
-                    None => Some("C00000".into()),
-                    Some("C00000") => Some("1F4E79".into()),
+            "fontcolor" => {
+                let next = match self.doc.char_format_at(self.ed.selection()).color.as_deref() {
+                    None => Some("C00000".to_string()),
+                    Some("C00000") => Some("1F4E79".to_string()),
                     _ => None,
-                }
-            }),
+                };
+                self.toggle(move |f| f.color = next.clone());
+            }
             other => {
                 // ここに来たら結線漏れ。黙らず画面に出す
                 self.status = format!("未配線のコマンド: {other}(不具合です)").into();
