@@ -480,14 +480,39 @@ impl Writer {
         }
     }
 
-    fn save(&mut self) {
-        let p = match self.path.clone() {
-            Some(p) => Some(p),
-            None => rfd::FileDialog::new()
-                .add_filter("Word文書", &["docx"])
-                .save_file(),
-        };
-        let Some(p) = p else { return };
+    /// 保存。名前が無ければ選ばせる(**ダイアログは別の糸** — rfd は同期で、
+    /// 主の糸で開くと画面ごと固まる。calc と同じ作法)。
+    /// `then_quit` なら保存が済んだときだけ終了する — 書きかけを黙って捨てない。
+    fn save(&mut self, then_quit: bool, cx: &mut Context<Self>) {
+        if let Some(p) = self.path.clone() {
+            self.save_to(p);
+            if then_quit && !self.dirty {
+                cx.quit();
+            }
+            return;
+        }
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new().add_filter("Word文書", &["docx"]).save_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Some(p) => {
+                        this.save_to(p);
+                        if then_quit && !this.dirty {
+                            cx.quit();
+                        }
+                    }
+                    None => this.status = "保存をやめました(名前が決まっていません)".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn save_to(&mut self, p: PathBuf) {
         self.flush_target();
         // 元のファイルの部品(画像・スタイル・ヘッダー等)を持ち越す。
         // 上書き保存では読み終えてから書く(同じファイルを同時に開かない)
@@ -760,19 +785,31 @@ impl Writer {
         self.relayout_keep();
     }
 
-    /// PDF として保存。**画面に出しているのと同じ紙面を写す**ので、
-    /// 画面と紙が食い違わない。
-    fn save_pdf(&mut self) {
-        let Some(p) = rfd::FileDialog::new()
-            .add_filter("PDF", &["pdf"])
-            .set_file_name("文書.pdf")
-            .save_file()
-        else {
-            return;
-        };
+    /// PDF として保存。保存先の選択は**別の糸**(rfd は同期)。
+    fn save_pdf(&mut self, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .set_file_name("文書.pdf")
+                .save_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    this.write_pdf(&p);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// **画面に出しているのと同じ紙面を写す**ので、画面と紙が食い違わない。
+    fn write_pdf(&mut self, p: &std::path::Path) {
         let m = Metrics::new(&self.font_bytes).expect("フォント");
         let (hdr, ftr, pg) = (self.doc.header.clone(), self.doc.footer.clone(), self.pg);
-        let r = kumihan::atomic::save(&p, |f| {
+        let r = kumihan::atomic::save(p, |f| {
             paper::to_pdf_with(
                 &self.page,
                 &self.font_bytes,
@@ -1069,13 +1106,63 @@ impl Writer {
         "edit-header", "edit-footer", "pagenum",
     ];
 
-    fn run_cmd(&mut self, id: &str) {
-        match id {
-            "open" => {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Word文書", &["docx"]).pick_file() { self.open(p) }
+    /// 画像を読んで、カーソルの段落の下に挿す。
+    fn insert_image(&mut self, path: &std::path::Path) {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let Some((pw, ph)) = image_px(&bytes) else {
+                    self.status = "PNG か JPEG だけ挿せます".into();
+                    return;
+                };
+                // 96dpi 相当で置き、行長に収まらなければ比例で縮める
+                let mut w_mm = pw as f32 * 25.4 / 96.0;
+                let mut h_mm = ph as f32 * 25.4 / 96.0;
+                let measure = self.pg.measure_mm();
+                if w_mm > measure {
+                    let k = measure / w_mm;
+                    w_mm *= k;
+                    h_mm *= k;
+                }
+                let im = kumihan::InlineImage {
+                    bytes: std::sync::Arc::new(bytes),
+                    w_mm,
+                    h_mm,
+                };
+                // 選択があっても、挿すのはカーソルの段落だけ
+                let cur = self.ed.cursor();
+                self.ed.move_to(cur, false);
+                self.para(|p| {
+                    p.images.push(im.clone()); // 表示
+                    p.images_new.push(im.clone()); // 保存
+                });
+                self.status =
+                    "画像を挿しました(段落の下に付き、保存で docx に入ります)".into();
             }
-            "save" => self.save(),
+            Err(e) => self.status = format!("読めません: {e}").into(),
+        }
+    }
+
+    /// 開くファイルを選ぶ(**ダイアログは別の糸**)。
+    fn open_dialog(&mut self, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new().add_filter("Word文書", &["docx"]).pick_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    this.open(p);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
+        match id {
+            "open" => self.open_dialog(cx),
+            "save" => self.save(false, cx),
             "undo" => { if self.editor().undo() { self.on_edited() } }
             "redo" => { if self.editor().redo() { self.on_edited() } }
             "selectall" => self.ed.select_all(),
@@ -1113,7 +1200,7 @@ impl Writer {
             "incfont" => self.size(|s| s + 1.0),
             "decfont" => self.size(|s| s - 1.0),
             // 印刷・PDF。**組み直さない** — 画面と同じ紙面をそのまま写す
-            "pdf" => self.save_pdf(),
+            "pdf" => self.save_pdf(cx),
             // 文字色。押すたびに 赤 → 青 → 黒(解除)と回す。
             // 色を選ぶ小窓はまだ無いので、**無い機能を有るように見せず**
             // 使える範囲で回す形にしてある
@@ -1140,46 +1227,23 @@ impl Writer {
             }),
             // 段落の囲み枠(入切)
             "borders" => self.para(|p| p.boxed = !p.boxed),
-            // 画像の挿入。段落の下に付く(kumihan の画像の置き方)
+            // 画像の挿入。段落の下に付く(選択も**別の糸**)
             "insimage" => {
-                let Some(path) = rfd::FileDialog::new()
-                    .add_filter("画像", &["png", "jpg", "jpeg"])
-                    .pick_file()
-                else {
-                    return;
-                };
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        let Some((pw, ph)) = image_px(&bytes) else {
-                            self.status = "PNG か JPEG だけ挿せます".into();
-                            return;
-                        };
-                        // 96dpi 相当で置き、行長に収まらなければ比例で縮める
-                        let mut w_mm = pw as f32 * 25.4 / 96.0;
-                        let mut h_mm = ph as f32 * 25.4 / 96.0;
-                        let measure = self.pg.measure_mm();
-                        if w_mm > measure {
-                            let k = measure / w_mm;
-                            w_mm *= k;
-                            h_mm *= k;
+                let ask = cx.background_executor().spawn(async {
+                    rfd::FileDialog::new()
+                        .add_filter("画像", &["png", "jpg", "jpeg"])
+                        .pick_file()
+                });
+                cx.spawn(async move |this, cx| {
+                    let r = ask.await;
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(p) = r {
+                            this.insert_image(&p);
                         }
-                        let im = kumihan::InlineImage {
-                            bytes: std::sync::Arc::new(bytes),
-                            w_mm,
-                            h_mm,
-                        };
-                        // 選択があっても、挿すのはカーソルの段落だけ
-                        let cur = self.ed.cursor();
-                        self.ed.move_to(cur, false);
-                        self.para(|p| {
-                            p.images.push(im.clone()); // 表示
-                            p.images_new.push(im.clone()); // 保存
-                        });
-                        self.status =
-                            "画像を挿しました(段落の下に付き、保存で docx に入ります)".into();
-                    }
-                    Err(e) => self.status = format!("読めません: {e}").into(),
-                }
+                        cx.notify();
+                    });
+                })
+                .detach();
             }
             // 大文字小文字。選択の英字を 全部大文字 ⇄ 全部小文字 で切り替える
             // (小文字が混ざっていれば大文字へ。1手で戻せる)
@@ -1377,7 +1441,7 @@ impl Writer {
             "selword" => self.select_word(),
             "selline" => self.select_line(),
             "selall" => self.ed.select_all(),
-            other => self.run_cmd(other),
+            other => self.run_cmd(other, cx),
         }
         cx.notify();
     }
@@ -1419,7 +1483,7 @@ impl Writer {
 
     fn do_find(&mut self, _: &ui::Find, _: &mut Window, cx: &mut Context<Self>) {
         if !self.find_open {
-            self.run_cmd("replace"); // 検索と置換の板を開く
+            self.run_cmd("replace", cx); // 検索と置換の板を開く
         }
         cx.notify();
     }
@@ -1525,7 +1589,7 @@ impl Writer {
         cx.notify();
     }
     fn do_save(&mut self, _: &ui::Save, _: &mut Window, cx: &mut Context<Self>) {
-        self.save();
+        self.save(false, cx);
         cx.notify();
     }
     /// 終了の要求。書きかけが無ければ即終了、あれば確認を**別の糸**で出す。
@@ -1548,12 +1612,8 @@ impl Writer {
             let r = ask.await;
             let _ = this.update(cx, |this, cx| {
                 match r {
-                    rfd::MessageDialogResult::Yes => {
-                        this.save();
-                        if !this.dirty {
-                            cx.quit();
-                        }
-                    }
+                    // 保存先が未定なら別の糸で選ばせ、済んだときだけ終了する
+                    rfd::MessageDialogResult::Yes => this.save(true, cx),
                     rfd::MessageDialogResult::No => cx.quit(),
                     _ => this.status = "終了をやめました".into(),
                 }
@@ -1568,12 +1628,7 @@ impl Writer {
     }
 
     fn do_open(&mut self, _: &ui::Open, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(p) = rfd::FileDialog::new()
-            .add_filter("Word文書", &["docx"])
-            .pick_file()
-        {
-            self.open(p);
-        }
+        self.open_dialog(cx);
         cx.notify();
     }
 }
@@ -1749,7 +1804,7 @@ impl Render for Writer {
                     }))
                     .child(cmd.label)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run_cmd(id); cx.notify()
+                        this.run_cmd(id, cx); cx.notify()
                     })));
             } else {
                 // 未実装。押せるように見せない
@@ -2156,7 +2211,7 @@ impl Render for Writer {
                 .child(div().flex().flex_row().gap_2()
                     .child(btn("hf-num", "ページ番号を挿入")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.run_cmd("pagenum");
+                            this.run_cmd("pagenum", cx);
                             cx.notify()
                         })))
                     .child(div().flex_1())

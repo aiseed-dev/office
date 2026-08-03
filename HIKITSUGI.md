@@ -42,10 +42,10 @@
   `window.on_mouse_event` + move 時の `pressed_button` 確認で自癒させる
 - 文字の行の高さは既定で黄金比 → グリフは div の頭から約 0.309×サイズ下に
   描かれる(writer の `HALF_LEADING`)。自前で引く線・帯はこれを織り込む
-- rfd のダイアログは同期 = 主の糸を塞ぐ。終了確認は
-  `background_executor().spawn` + `cx.spawn` で別の糸に出してある。
-  **calc のファイル選択(開く・保存・PDF)も別の糸にした**(2026-08-03)。
-  writer の pick_file / save_file はまだ同期のまま(既知の残件)
+- rfd のダイアログは同期 = 主の糸を塞ぐ。終了確認・ファイル選択は
+  `background_executor().spawn` + `cx.spawn` で別の糸に出す。
+  **calc・writer とも全ダイアログ(開く・保存・PDF・画像)を別糸化済み**
+  (2026-08-03)。新しいダイアログを足すときも同じ作法で
 - リボンは生成物: `python3 ui/gen_ribbon.py ja > ui/src/ribbon.rs`。
   押せるものは同スクリプトの READY 表。テンプレートの class 注入スロット
   (pagebreak・insertimage 等)は id の正規表現に掛からないので手で差し込む
@@ -79,6 +79,5 @@ pysheet(Python 束縛、polars 連携)。
 ## 次の仕事(発注者と合意した順)
 
 1. 目次(見出しスタイルが前提)、writer の残りの灰色
-2. 小さい残件: writer のファイル選択の非同期化(calc は済)、
-   writer のキャレット表示の改善、変換下線の位置の実機確認、
+2. 小さい残件: writer のキャレット表示の改善、変換下線の位置の実機確認、
    ヘッダー・フッターの残り(日付/時刻・ページ数・表入りの編集)
