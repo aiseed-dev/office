@@ -116,6 +116,53 @@ fn grip_hit(sizes: &[(u32, f32)], start: f32, pos: f32) -> Option<u32> {
     None
 }
 
+/// セルの画面での文字サイズ(px)。描画と同じ式 — ずれると測り損なう。
+fn cell_text_px(fmt: &CellFormat) -> f32 {
+    fmt.size_c.map(|c| c as f32 / 100.0 * 24.0 / 15.0 * 0.8).unwrap_or(12.5)
+}
+
+/// 列の中身に要る画面幅(px)。実フォントの字幅で測る。空の列は None。
+/// 結合に掛かるセルは幅の根拠にしない(Excel と同じ — 結合は列をまたぐ)。
+fn fit_col_px(s: &sheet::Sheet, c: u32, m: &kumihan::Metrics) -> Option<f32> {
+    const PT_TO_MM: f32 = 25.4 / 72.0; // advance_mm(等倍)を px に戻す
+    let mut need: Option<f32> = None;
+    for (p, cell) in &s.cells {
+        if p.col != c {
+            continue;
+        }
+        if s.merges.iter().any(|(a, b)| {
+            (a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col)
+        }) {
+            continue;
+        }
+        let shown = sheet::model::format_value(&cell.value, cell.fmt.number_format.as_deref());
+        if shown.is_empty() {
+            continue;
+        }
+        let px = cell_text_px(&cell.fmt);
+        let w: f32 = shown.chars().map(|ch| m.advance_mm(ch, px) / PT_TO_MM).sum();
+        need = Some(need.unwrap_or(0.0).max(w));
+    }
+    need
+}
+
+/// 行の中身に要る高さ(pt)。一番大きい文字に合わせる(11pt → 既定の 15pt の比)。
+/// 空の行は None。
+fn fit_row_pt(s: &sheet::Sheet, r: u32) -> Option<f32> {
+    let mut max_pt: Option<f32> = None;
+    for (p, cell) in &s.cells {
+        if p.row != r {
+            continue;
+        }
+        if sheet::model::format_value(&cell.value, cell.fmt.number_format.as_deref()).is_empty() {
+            continue;
+        }
+        let pt = cell.fmt.size_c.map(|c| c as f32 / 100.0).unwrap_or(11.0);
+        max_pt = Some(max_pt.unwrap_or(0.0).max(pt));
+    }
+    max_pt.map(|pt| (pt * 15.0 / 11.0 * 100.0).round() / 100.0)
+}
+
 /// 見出しの境界を掴んだドラッグ(列幅・行高を変える)
 struct SizeDrag {
     /// 列か(false なら行)
@@ -585,14 +632,64 @@ impl Calc {
         self.dirty = true;
     }
 
+    /// 境界のダブルクリック: 内容に合わせる(実フォントの字幅で測る)。
+    fn auto_fit(&mut self, is_col: bool, idx: u32) {
+        if is_col {
+            let m = match kumihan::Metrics::new(font_data()) {
+                Ok(m) => m,
+                Err(e) => {
+                    self.status = format!("字幅が測れません: {e}").into();
+                    return;
+                }
+            };
+            let Some(need) = fit_col_px(self.sheet(), idx, &m) else {
+                self.status = format!("{}列は空です(幅は変えていません)", col_name(idx)).into();
+                return;
+            };
+            self.checkpoint();
+            // 内側の余白(px_1p5 × 両側)+ 罫線ぶん。xlsx の上限 255 字で止める
+            let px = need + 14.0;
+            let w = ((px / PX_PER_CHW).min(255.0) * 100.0).round() / 100.0;
+            self.sheet_mut().col_width.insert(idx, w);
+            self.dirty = true;
+            self.status = format!(
+                "{}列の幅を内容に合わせました: {w}({:.0}px)",
+                col_name(idx),
+                w * PX_PER_CHW
+            )
+            .into();
+        } else {
+            let Some(pt) = fit_row_pt(self.sheet(), idx) else {
+                self.status = format!("{}行は空です(高さは変えていません)", idx + 1).into();
+                return;
+            };
+            self.checkpoint();
+            self.sheet_mut().row_height.insert(idx, pt);
+            self.dirty = true;
+            self.status = format!(
+                "{}行の高さを文字に合わせました: {pt}pt({:.0}px)",
+                idx + 1,
+                pt * 24.0 / 15.0
+            )
+            .into();
+        }
+    }
+
     /// マウスの左を押した(格子領域の座標)。押したセルが選択の始まり。
     /// メニューが出ていたら閉じる(項目の上の押下は stop_propagation でここに来ない)。
-    fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool, ctrl: bool) {
+    fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool, ctrl: bool, clicks: usize) {
         self.menu_at = None;
         self.pick = None;
         // 見出しの境界の取っ手が最優先(セルの当たり判定より先に見る)
         if let Some((is_col, idx)) = self.size_grip_at(x, y) {
             self.commit();
+            if clicks >= 2 {
+                // ダブルクリック = 内容に合わせる(1度目のクリックで積んだ
+                // ドラッグは捨てる — 動かしていないので控えも積まれていない)
+                self.size_drag = None;
+                self.auto_fit(is_col, idx);
+                return;
+            }
             self.size_drag = Some(SizeDrag {
                 col: is_col,
                 idx,
@@ -2245,6 +2342,7 @@ impl gpui::Element for InputSink {
                     f32::from(rel.y),
                     e.modifiers.shift,
                     e.modifiers.control,
+                    e.click_count,
                 );
                 cx.notify();
             });
@@ -3165,6 +3263,61 @@ mod size_grip_tests {
         let pt = (24.0f32 * 15.0 / 24.0 * 100.0).round() / 100.0;
         assert_eq!(pt, 15.0);
         assert_eq!(pt * 24.0 / 15.0, 24.0);
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    fn metrics_data() -> Vec<u8> {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        kumihan::font::load(fam).unwrap()
+    }
+
+    #[test]
+    fn 長い中身ほど広い幅が要る() {
+        let data = metrics_data();
+        let m = kumihan::Metrics::new(&data).unwrap();
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::new(0, 0), Cell::input("短い"));
+        s.set(Pos::new(1, 0), Cell::input("ずっとずっと長い品名がここに入る"));
+        s.set(Pos::new(0, 1), Cell::input("あ"));
+        let w0 = fit_col_px(&s, 0, &m).unwrap();
+        let w1 = fit_col_px(&s, 1, &m).unwrap();
+        assert!(w0 > w1, "長い列の方が狭い: {w0} <= {w1}");
+        assert!(fit_col_px(&s, 5, &m).is_none(), "空の列に幅が出た");
+        // 一番長い中身が基準(短い行に引きずられない)
+        let long: f32 = "ずっとずっと長い品名がここに入る"
+            .chars()
+            .map(|ch| m.advance_mm(ch, 12.5) / (25.4 / 72.0))
+            .sum();
+        assert!((w0 - long).abs() < 0.5, "最長の中身と合わない: {w0} vs {long}");
+    }
+
+    #[test]
+    fn 行の高さは一番大きい文字に合う() {
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::new(0, 0), Cell::input("普通"));
+        assert_eq!(fit_row_pt(&s, 0), Some(15.0), "11pt の既定は 15pt");
+        let mut big = Cell::input("大きい");
+        big.fmt.size_c = Some(2200); // 22pt
+        s.set(Pos::new(0, 1), big);
+        assert_eq!(fit_row_pt(&s, 0), Some(30.0), "22pt なら 30pt");
+        assert_eq!(fit_row_pt(&s, 9), None, "空の行に高さが出た");
+    }
+
+    #[test]
+    fn 結合に掛かるセルは幅の根拠にしない() {
+        let data = metrics_data();
+        let m = kumihan::Metrics::new(&data).unwrap();
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::new(0, 0), Cell::input("とても長い見出しが結合の中にある"));
+        s.set(Pos::new(1, 0), Cell::input("甲"));
+        s.merges.push((Pos::new(0, 0), Pos::new(0, 3)));
+        let w = fit_col_px(&s, 0, &m).unwrap();
+        let only: f32 = "甲".chars().map(|ch| m.advance_mm(ch, 12.5) / (25.4 / 72.0)).sum();
+        assert!((w - only).abs() < 0.5, "結合の中身に引きずられた: {w} vs {only}");
     }
 }
 
