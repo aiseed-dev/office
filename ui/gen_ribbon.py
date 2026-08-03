@@ -113,6 +113,10 @@ READY = {
         "goal-seek": "goal-seek", "data-external-links": "data-external-links",
         "insshape": "insshape", "instext": "instext",
         "inssparkline": "inssparkline", "co-addcomment": "addcomment",
+        "trace-prec": "trace-prec", "trace-dep": "trace-dep",
+        "remove-arrows": "remove-arrows", "insrecommend": "insrecommend",
+        "instable": "instable", "table-tpl": "table-tpl",
+        "inssymbol": "inssymbol",
     },
 }
 

@@ -706,8 +706,8 @@ pub fn eval_py_call(sheet: &Sheet, formula: &str) -> Option<(String, Vec<PyArg>)
 
 // ---------- 再計算 ----------
 
-/// 式が参照しているセルを集める(依存関係)。
-fn deps(formula: &str) -> Vec<Pos> {
+/// 式が参照しているセルを集める(依存関係)。トレース(参照元の可視化)にも使う。
+pub fn deps(formula: &str) -> Vec<Pos> {
     let mut out = Vec::new();
     if let Ok(toks) = lex(formula) {
         for t in toks {

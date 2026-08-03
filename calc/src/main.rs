@@ -300,6 +300,8 @@ struct Calc {
     goal: Option<(Pos, f64)>,
     /// PY のスピルの台帳(シート番号, 錨 → 行×列)。次の @計算 で前の面を消す
     py_spills: std::collections::HashMap<(usize, Pos), (u32, u32)>,
+    /// トレースの光り(参照元=青緑 / 参照先=橙)。見え方だけ、保存されない
+    trace: Vec<(Pos, bool)>,
     /// 自分が置いた排他ロック(閉じるとき・別のファイルを開くときに外す)
     my_lock: Option<PathBuf>,
     /// 先客の名乗り(このファイルは誰かが開いている)。上書き保存を止める
@@ -396,6 +398,7 @@ impl Calc {
             find_term: None,
             goal: None,
             py_spills: Default::default(),
+            trace: Vec::new(),
             my_lock: None,
             locked_by: None,
             shape_sel: None,
@@ -1069,6 +1072,12 @@ impl Calc {
                     self.fmt(move |f| f.size_c = Some((pt * 100.0) as u32));
                     self.status = format!("文字の大きさを {v}pt にしました").into();
                 }
+            }
+            "symbol" => {
+                // 打ちかけの続きに差し込む(セルを置き換えない)
+                self.input.insert(v);
+                self.dirty = true;
+                self.status = format!("「{v}」を差し込みました(Enter で確定)").into();
             }
             "shape" => {
                 let kind = match v {
@@ -3295,6 +3304,8 @@ calc の隣に置いてください)"
         "scale", "pagebreak", "printtitles", "print-gridlines", "print-headings",
         "data-from-text", "text-column", "goal-seek", "data-external-links",
         "insshape", "instext", "inssparkline", "python", "addcomment",
+        "trace-prec", "trace-dep", "remove-arrows", "insrecommend",
+        "instable", "table-tpl", "inssymbol",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -3570,6 +3581,127 @@ calc の隣に置いてください)"
             "python" => {
                 self.commit();
                 self.prompt = Some(("py", Editor::new("")));
+            }
+            // 参照のトレース。矢印の代わりに**セルを光らせる**(見え方だけ)
+            "trace-prec" => {
+                self.commit();
+                let deps = self
+                    .sheet()
+                    .get(self.cursor)
+                    .and_then(|c| c.formula.as_ref())
+                    .map(|f| sheet::calc::deps(f))
+                    .unwrap_or_default();
+                if deps.is_empty() {
+                    self.status = "このセルの式は他のセルを参照していません".into();
+                } else {
+                    self.status = format!(
+                        "{} の参照元 {} セルを光らせました(トレース矢印の削除で消す)",
+                        self.cursor.a1(),
+                        deps.len()
+                    )
+                    .into();
+                    self.trace = deps.into_iter().map(|p| (p, true)).collect();
+                }
+            }
+            "trace-dep" => {
+                self.commit();
+                let me = self.cursor;
+                let dependents: Vec<Pos> = self
+                    .sheet()
+                    .cells
+                    .iter()
+                    .filter(|(_, c)| {
+                        c.formula
+                            .as_ref()
+                            .is_some_and(|f| sheet::calc::deps(f).contains(&me))
+                    })
+                    .map(|(p, _)| *p)
+                    .collect();
+                if dependents.is_empty() {
+                    self.status = format!("{} を参照している式はありません", me.a1()).into();
+                } else {
+                    self.status = format!(
+                        "{} の参照先 {} セルを光らせました(トレース矢印の削除で消す)",
+                        me.a1(),
+                        dependents.len()
+                    )
+                    .into();
+                    self.trace = dependents.into_iter().map(|p| (p, false)).collect();
+                }
+            }
+            "remove-arrows" => {
+                self.trace.clear();
+                self.status = "トレースを消しました".into();
+            }
+            // 推奨チャート = いまの一手(棒グラフ)をそのまま勧める
+            "insrecommend" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status =
+                        "グラフにする範囲を選んでください(1列目が項目名、2列目からが数)"
+                            .into();
+                } else {
+                    let (a, b) = self.sel_rect();
+                    self.insert_chart(a, b, cx);
+                }
+            }
+            // 表の挿入 = 選択に表の書式(見出しの帯+縞々+外枠)を掛ける
+            "instable" | "table-tpl" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status = "表にする範囲を選んでください".into();
+                } else {
+                    self.checkpoint();
+                    let (a, b) = self.sel_rect();
+                    for r in a.row..=b.row {
+                        for c in a.col..=b.col {
+                            let p = Pos::new(r, c);
+                            let mut cell = self.sheet().get(p).cloned().unwrap_or_default();
+                            if r == a.row {
+                                cell.fmt.bold = true;
+                                cell.fmt.fill = Some("D5E8DC".into());
+                            } else if (r - a.row) % 2 == 0 {
+                                cell.fmt.fill = Some("F1F6F3".into());
+                            }
+                            if r == a.row {
+                                cell.fmt.borders.top = true;
+                            }
+                            if r == b.row {
+                                cell.fmt.borders.bottom = true;
+                            }
+                            if c == a.col {
+                                cell.fmt.borders.left = true;
+                            }
+                            if c == b.col {
+                                cell.fmt.borders.right = true;
+                            }
+                            self.book.sheets[self.active].set(p, cell);
+                        }
+                    }
+                    self.dirty = true;
+                    self.status = format!(
+                        "{}:{} に表の書式を掛けました(見出しの帯と縞々。Ctrl+Z で戻せます)",
+                        a.a1(),
+                        b.a1()
+                    )
+                    .into();
+                }
+            }
+            // 記号を挿入: 一覧から選んで**数式バーへ**差し込む(セルは置き換えない)
+            "inssymbol" => {
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                self.pick_kind = "symbol";
+                self.pick = Some((
+                    ["〒", "℡", "№", "㈱", "〆", "※", "→", "←", "↑", "↓",
+                     "○", "●", "◎", "△", "▲", "×", "☑", "☐", "✓", "①", "②", "③"]
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect(),
+                    at,
+                ));
             }
             "addcomment" => {
                 self.commit();
@@ -4796,6 +4928,14 @@ impl Render for Calc {
                 let origin = self.anchor.unwrap_or(self.cursor);
                 if in_range && p != origin {
                     d = d.bg(tint(base, 0.20));
+                }
+                // トレースの光り(参照元=青緑、参照先=橙)。塗りは透けたまま
+                if let Some((_, prec)) = self.trace.iter().find(|(tp, _)| *tp == p) {
+                    d = d.bg(if *prec {
+                        gpui::Rgba { r: base.r * 0.55 + 0.10, g: base.g * 0.55 + 0.38, b: base.b * 0.55 + 0.38, a: 1.0 }
+                    } else {
+                        gpui::Rgba { r: base.r * 0.55 + 0.43, g: base.g * 0.55 + 0.30, b: base.b * 0.55 + 0.08, a: 1.0 }
+                    });
                 }
                 if f.bold {
                     d = d.font_weight(gpui::FontWeight::BOLD);
