@@ -50,6 +50,7 @@ READY = {
         "instable": "instable", "inssymbol": "inssymbol", "replace": "replace",
         "incoffset": "incoffset", "decoffset": "decoffset",
         "linespace": "linespace",
+        "changecase": "changecase", "blankpage": "blankpage",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

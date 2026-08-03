@@ -49,7 +49,7 @@ pub const WRITER: &[Tab] = &[
         c("fontsize", "フォントのサイズ", "fontsize"),
         c("incfont", "フォントサイズの拡大", "incfont"),
         c("decfont", "フォントサイズの縮小", "decfont"),
-        x("大文字小文字を変更", "changecase"),
+        c("changecase", "大文字小文字を変更", "changecase"),
         c("bold", "太字", "bold"),
         c("italic", "斜体", "italic"),
         c("underline", "下線", "underline"),
@@ -76,7 +76,7 @@ pub const WRITER: &[Tab] = &[
         c("selectall", "すべて選択", "select-all"),
     ]},
     Tab { name: "挿入", cmds: &[
-        x("空白ページの挿入", "blankpage"),
+        c("blankpage", "空白ページの挿入", "blankpage"),
         c("pagebreak", "ページの挿入またはセクション区切り", "pagebreak"),
         c("instable", "表の挿入", "instable"),
         x("図形を挿入", "insshape"),

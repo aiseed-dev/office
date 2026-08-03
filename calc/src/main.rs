@@ -1461,6 +1461,27 @@ impl Calc {
         else { self.move_cursor(0, 1) }
         cx.notify();
     }
+    fn a_doc_home(&mut self, _: &ui::DocHome, _: &mut Window, cx: &mut Context<Self>) {
+        // Ctrl+Home は A1 へ(表計算の作法)
+        self.anchor = None;
+        self.commit();
+        self.cursor = Pos::new(0, 0);
+        self.follow();
+        self.sync_input();
+        cx.notify();
+    }
+    fn a_doc_end(&mut self, _: &ui::DocEnd, _: &mut Window, cx: &mut Context<Self>) {
+        // Ctrl+End は使われている範囲の右下へ
+        self.anchor = None;
+        self.commit();
+        let (rows, cols) = self.sheet().extent();
+        if rows > 0 {
+            self.cursor = Pos::new(rows - 1, cols.saturating_sub(1));
+        }
+        self.follow();
+        self.sync_input();
+        cx.notify();
+    }
     fn a_page_up(&mut self, _: &ui::PageUp, _: &mut Window, cx: &mut Context<Self>) {
         self.move_cursor(-(ROWS as i32 - 1), 0);
         cx.notify();
@@ -2817,6 +2838,8 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_down))
             .on_action(cx.listener(Calc::a_page_up))
             .on_action(cx.listener(Calc::a_page_down))
+            .on_action(cx.listener(Calc::a_doc_home))
+            .on_action(cx.listener(Calc::a_doc_end))
             .on_action(cx.listener(Calc::a_tab))
             .on_action(cx.listener(Calc::a_enter))
             .on_action(cx.listener(Calc::a_select_all))

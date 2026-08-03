@@ -170,6 +170,8 @@ struct Writer {
     dirty: bool,
     /// マウスでドラッグ選択の途中か(押した位置から離すまで選択を伸ばす)
     drag_select: bool,
+    /// 右クリックのメニュー(出ている場所。編集領域の px)
+    menu_at: Option<(f32, f32)>,
     /// 選んでいるリボンのタブ
     tab: usize,
     /// 画面に使う書体名(文書の指定に従う)
@@ -251,6 +253,7 @@ impl Writer {
             notes: Vec::new(),
             dirty: false,
             drag_select: false,
+            menu_at: None,
             tab: 0,
             zoom: 1.0,
             scroll_mm: 0.0,
@@ -977,7 +980,7 @@ impl Writer {
         "align-left", "align-center", "align-right", "align-just",
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
-        "instable", "inssymbol", "replace",
+        "instable", "inssymbol", "replace", "changecase", "blankpage",
         "spell", "wordcount", "zoom-in", "zoom-out", "hidenchars", "ruler",
         "fontname", "fontsize",
         "pageorient", "pagesize", "pagemargins",
@@ -1044,6 +1047,30 @@ impl Writer {
             // 行間。1.0 → 1.5 → 2.0 → 1.0 と回す(小窓がまだ無いので)
             // この段落の前で改ページ(押すたびに入切)
             "pagebreak" => self.para(|p| p.page_break_before = !p.page_break_before),
+            // 大文字小文字。選択の英字を 全部大文字 ⇄ 全部小文字 で切り替える
+            // (小文字が混ざっていれば大文字へ。1手で戻せる)
+            "changecase" => {
+                let sel = self.ed.selection();
+                if sel.is_empty() {
+                    self.status = "変えたい文字を選んでください".into();
+                } else if let Some(t) = self.ed.text().get(sel.clone()) {
+                    let up = t.chars().any(|c| c.is_lowercase());
+                    let new = if up { t.to_uppercase() } else { t.to_lowercase() };
+                    let start = sel.start;
+                    let n = new.len();
+                    self.ed.insert(&new);
+                    // 選択を保つ(続けてもう一度押せるように)
+                    self.ed.move_to(start, false);
+                    self.ed.move_to(start + n, true);
+                    self.on_edited();
+                }
+            }
+            // 空白ページの挿入 = 段落を切って、新しい段落を次の頁の頭から
+            "blankpage" => {
+                handler::replace(self, None, "\n");
+                self.para(|p| p.page_break_before = true);
+                self.status = "ここから新しいページになります".into();
+            }
             // 表の挿入。3×3 を末尾に(大きさを選ぶ小窓はまだ無い)。
             // セル編集が入っているので、挿した表はそのまま書ける
             "instable" => {
@@ -1189,6 +1216,68 @@ impl Writer {
     }
     fn select_word_right(&mut self, _: &ui::SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
         self.word_move(true, true);
+        cx.notify();
+    }
+    /// メニューの項目を実行する。
+    fn menu_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu_at = None;
+        match id {
+            "cut" => self.cut(&ui::Cut, window, cx),
+            "copy" => self.copy(&ui::Copy, window, cx),
+            "paste" => self.paste(&ui::Paste, window, cx),
+            "selword" => self.select_word(),
+            "selline" => self.select_line(),
+            "selall" => self.ed.select_all(),
+            other => self.run_cmd(other),
+        }
+        cx.notify();
+    }
+
+    fn a_context_menu(&mut self, _: &ui::ContextMenu, _: &mut Window, cx: &mut Context<Self>) {
+        // キーボードから: キャレットのそばに出す
+        let pxmm = PX_PER_MM * self.zoom;
+        let (x, y) = self.caret_xy();
+        self.menu_at = Some((
+            28.0 + x * pxmm + 8.0,
+            14.0 + (y - self.scroll_mm) * pxmm + 8.0,
+        ));
+        cx.notify();
+    }
+
+    fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
+        // メニュー → 検索の板 → 一覧の板、の順で閉じる
+        if self.menu_at.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if self.find_open {
+            self.find_open = false;
+            cx.notify();
+            return;
+        }
+        if self.font_list || self.size_list || self.symbols {
+            self.font_list = false;
+            self.size_list = false;
+            self.symbols = false;
+            cx.notify();
+        }
+    }
+
+    fn do_find(&mut self, _: &ui::Find, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.find_open {
+            self.run_cmd("replace"); // 検索と置換の板を開く
+        }
+        cx.notify();
+    }
+    fn doc_home(&mut self, _: &ui::DocHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.ed.move_to(0, false);
+        self.follow_caret();
+        cx.notify();
+    }
+    fn doc_end(&mut self, _: &ui::DocEnd, _: &mut Window, cx: &mut Context<Self>) {
+        let n = self.ed.text().len();
+        self.ed.move_to(n, false);
+        self.follow_caret();
         cx.notify();
     }
     fn page_up(&mut self, _: &ui::PageUp, _: &mut Window, cx: &mut Context<Self>) {
@@ -1927,6 +2016,70 @@ impl Render for Writer {
             Some(d)
         };
 
+        // ---- 右クリックのメニュー ----
+        // InputSink より後に描く(bubble は後に登録した方が先に走るので、
+        // 項目の stop_propagation がクリック処理より先に効く — calc と同じ)
+        let menu = self.menu_at.map(|(mx, my)| {
+            let has_sel = self.ed.has_selection();
+            // (id, 名前, 付記, 押せるか)。"" は仕切り
+            let entries: Vec<(&'static str, &'static str, &'static str, bool)> = vec![
+                ("cut", "切り取り", "Ctrl+X", has_sel),
+                ("copy", "コピー", "Ctrl+C", has_sel),
+                ("paste", "貼り付け", "Ctrl+V", true),
+                ("", "", "", false),
+                ("selword", "語を選択", "", true),
+                ("selline", "行を選択", "", true),
+                ("selall", "すべて選択", "Ctrl+A", true),
+                ("", "", "", false),
+                ("bold", "太字", "", true),
+                ("italic", "斜体", "", true),
+                ("underline", "下線", "", true),
+                ("", "", "", false),
+                ("align-left", "左揃え", "", true),
+                ("align-center", "中央揃え", "", true),
+                ("align-right", "右揃え", "", true),
+                ("align-just", "両端揃え", "", true),
+                ("", "", "", false),
+                ("replace", "検索と置換", "Ctrl+F", true),
+                ("wordcount", "文字数を数える", "", true),
+            ];
+            let h_est = entries.len() as f32 * 25.0 + 10.0;
+            let win_w = f32::from(window.viewport_size().width);
+            let mx = mx.min((win_w - 28.0 - 230.0).max(0.0));
+            let my = my.min((self.view_h_px - h_est).max(0.0));
+            let mut m = div().absolute().left(px(mx)).top(px(my)).w(px(220.0))
+                .p_1().rounded_md().bg(rgb(0xFFFFFF))
+                .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            for (i, (id, label, hint, ready)) in entries.into_iter().enumerate() {
+                if id.is_empty() && label.is_empty() {
+                    m = m.child(div().h(px(1.0)).my_1().bg(rgb(0xE1E6EA)));
+                    continue;
+                }
+                if !ready {
+                    m = m.child(div()
+                        .flex().flex_row().items_center().justify_between().gap_4()
+                        .px_3().py_1()
+                        .child(div().text_size(px(12.5)).text_color(rgb(0xB6BDC4)).child(label))
+                        .child(div().text_size(px(10.5)).text_color(rgb(0xD5DBE0)).child(hint)));
+                    continue;
+                }
+                m = m.child(div()
+                    .id(SharedString::from(format!("wm{i}")))
+                    .flex().flex_row().items_center().justify_between().gap_4()
+                    .px_3().py_1().rounded_sm().cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF2F7)))
+                    .child(div().text_size(px(12.5)).text_color(rgb(0x1B1B1B)).child(label))
+                    .child(div().text_size(px(10.5)).text_color(rgb(0x9AA5AE)).child(hint))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                        move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.menu_action(id, window, cx);
+                        })));
+            }
+            m
+        });
+
         let notes = if self.notes.is_empty() { None } else {
             let mut n = div().absolute().right(px(16.0)).top(px(14.0)).w(px(270.0))
                 .p_3().rounded_md().bg(rgb(0xFFF6E6))
@@ -1960,6 +2113,11 @@ impl Render for Writer {
             .on_action(cx.listener(Writer::select_word_right))
             .on_action(cx.listener(Writer::page_up))
             .on_action(cx.listener(Writer::page_down))
+            .on_action(cx.listener(Writer::do_find))
+            .on_action(cx.listener(Writer::a_context_menu))
+            .on_action(cx.listener(Writer::a_cancel))
+            .on_action(cx.listener(Writer::doc_home))
+            .on_action(cx.listener(Writer::doc_end))
             .on_action(cx.listener(Writer::home))
             .on_action(cx.listener(Writer::end))
             .on_action(cx.listener(Writer::enter))
@@ -1990,7 +2148,8 @@ impl Render for Writer {
                     .children(size_panel)
                     .children(symbol_panel)
                     .children(proof_panel)
-                    .child(InputSink { view: me }),
+                    .child(InputSink { view: me })
+                    .children(menu),
             )
     }
 }
@@ -2065,6 +2224,7 @@ impl gpui::Element for InputSink {
             let clicks = e.click_count;
             let shift = e.modifiers.shift;
             view.update(cx, |w, cx| {
+                w.menu_at = None;
                 match clicks {
                     // 二度押しは語、三度押しは行を選ぶ
                     2 => {
@@ -2108,6 +2268,24 @@ impl gpui::Element for InputSink {
             }
             view.update(cx, |w, _| {
                 w.drag_select = false;
+            });
+        });
+        // 右クリックでメニュー。選択があれば選択への操作、無ければ押した所へ
+        let view = self.view.clone();
+        window.on_mouse_event(move |e: &gpui::MouseDownEvent, phase, _w, cx| {
+            if phase != gpui::DispatchPhase::Bubble
+                || e.button != gpui::MouseButton::Right
+                || !bounds.contains(&e.position)
+            {
+                return;
+            }
+            let rel = e.position - bounds.origin;
+            view.update(cx, |w, cx| {
+                if !w.ed.has_selection() {
+                    w.click_at(f32::from(rel.x), f32::from(rel.y), false);
+                }
+                w.menu_at = Some((f32::from(rel.x), f32::from(rel.y)));
+                cx.notify();
             });
         });
     }

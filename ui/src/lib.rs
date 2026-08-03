@@ -48,6 +48,7 @@ actions!(
         Home, End, Enter, Undo, Redo, Save, Open, Up, Down, Tab,
         Copy, Cut, Paste, PasteValues, Quit, ContextMenu, Cancel,
         WordLeft, WordRight, SelectWordLeft, SelectWordRight, PageUp, PageDown,
+        Find, DocHome, DocEnd,
     ]
 );
 
@@ -66,6 +67,10 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-right", SelectWordRight, Some(context)),
         KeyBinding::new("pageup", PageUp, Some(context)),
         KeyBinding::new("pagedown", PageDown, Some(context)),
+        KeyBinding::new("ctrl-f", Find, Some(context)),
+        KeyBinding::new("ctrl-h", Find, Some(context)),
+        KeyBinding::new("ctrl-home", DocHome, Some(context)),
+        KeyBinding::new("ctrl-end", DocEnd, Some(context)),
         KeyBinding::new("shift-up", SelectUp, Some(context)),
         KeyBinding::new("shift-down", SelectDown, Some(context)),
         KeyBinding::new("ctrl-a", SelectAll, Some(context)),
