@@ -127,7 +127,7 @@ python3 ui/gen_ribbon.py --list      # 使えるロケール
 python3 ui/gen_ribbon.py en > ui/src/ribbon.rs
 ```
 
-## 免許
+## ライセンス
 
 **AGPL-3.0-or-later**(`LICENSE`)。同梱・派生しているものの由来は `NOTICE.md`。
 
