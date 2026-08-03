@@ -104,6 +104,8 @@ READY = {
         "changecase": "changecase", "format": "format",
         "cell-format": "cell-format", "fontname": "fontname",
         "fontsize": "fontsize",
+        "financial": "fn-financial", "datetime": "fn-datetime",
+        "lookup": "fn-lookup", "more": "fn-more",
     },
 }
 

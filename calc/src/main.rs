@@ -2466,6 +2466,7 @@ impl Calc {
         "pageorient", "pagesize", "pagemargins", "printarea",
         "inschart", "insimage", "inshyperlink", "replace",
         "changecase", "format", "cell-format", "fontname", "fontsize",
+        "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2847,12 +2848,17 @@ impl Calc {
             "currency" => self.fmt(|f| f.number_format = Some("¥#,##0".into())),
             "percents" => self.fmt(|f| f.number_format = Some("0%".into())),
             // 関数の一覧。**使える名前だけを出す** — 無いものを並べない
-            f @ ("fn-math" | "fn-text" | "fn-logical" | "fn-recent") => {
+            f @ ("fn-math" | "fn-text" | "fn-logical" | "fn-recent" | "fn-datetime"
+            | "fn-lookup" | "fn-financial" | "fn-more") => {
                 let names: &str = match f {
                     "fn-math" => "SUM AVERAGE ROUND ROUNDUP ROUNDDOWN INT ABS MOD POWER SQRT PRODUCT",
                     "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE",
-                    "fn-logical" => "IF AND OR NOT TRUE FALSE ISBLANK ISERROR",
-                    _ => "SUM AVERAGE COUNT MAX MIN IF SUMIF COUNTIF",
+                    "fn-logical" => "IF AND OR NOT TRUE FALSE ISBLANK ISERROR IFERROR",
+                    "fn-datetime" => "TODAY NOW DATE YEAR MONTH DAY WEEKDAY(値は通し番号)",
+                    "fn-lookup" => "VLOOKUP HLOOKUP INDEX MATCH(照合は完全一致)",
+                    "fn-financial" => "PMT PV FV NPER(RATE のような反復解はまだ)",
+                    "fn-more" => "SUMIF COUNTIF COUNTA TRUNC IFERROR — 一覧は各族の釦で",
+                    _ => "SUM AVERAGE COUNT MAX MIN IF SUMIF COUNTIF VLOOKUP TODAY",
                 };
                 self.status = format!("使える関数: {names}").into();
             }

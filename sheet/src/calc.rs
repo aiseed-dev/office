@@ -245,8 +245,9 @@ impl<'a> P<'a> {
         }
     }
 
-    fn args(&mut self) -> Result<Vec<Value>, String> {
-        // 関数の引数。範囲はその場で展開する
+    fn args(&mut self) -> Result<Vec<Arg>, String> {
+        // 関数の引数。範囲は**形(列数)を残して**包む — VLOOKUP・INDEX は
+        // 表の縦横が要る。平らな値しか要らない関数は flatten で崩す
         let mut out = Vec::new();
         if let Some(Tok::RParen) = self.peek() {
             self.next();
@@ -255,9 +256,10 @@ impl<'a> P<'a> {
         loop {
             if let Some(Tok::Range(a, z)) = self.peek().cloned() {
                 self.next();
-                out.extend(self.range_values(a, z));
+                let cols = a.col.abs_diff(z.col) + 1;
+                out.push(Arg::Rect(cols, self.range_values(a, z)));
             } else {
-                out.push(self.expr()?);
+                out.push(Arg::One(self.expr()?));
             }
             match self.next() {
                 Some(Tok::Comma) => continue,
@@ -330,7 +332,139 @@ fn matches_cond(v: &Value, cond: &Value) -> bool {
     }
 }
 
-fn call(name: &str, a: Vec<Value>) -> Result<Value, String> {
+/// 暦(y,m,d)→ 1970-01-01 からの日数(Howard Hinnant の civil_from_days の逆)。
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+/// 1970-01-01 からの日数 → 暦(y,m,d)。
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Excel の日付の通し番号(1899-12-30 起点)と 1970 起点の橋。
+const EXCEL_EPOCH_DAYS: i64 = 25569;
+
+/// いまの機械の暦での「今日」の通し番号と、時刻(日の割合)。
+/// 時計は系の TZ 環境(日本なら JST)に従う — libc の localtime を使う
+/// chrono に頼らず、TZ のずれは環境変数 JO_TZ_OFF_HOURS で補える(既定 +9)。
+fn today_serial() -> (f64, f64) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let off_h: i64 = std::env::var("JO_TZ_OFF_HOURS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(9);
+    let local = secs + off_h * 3600;
+    let days = local.div_euclid(86400);
+    let frac = local.rem_euclid(86400) as f64 / 86400.0;
+    ((days + EXCEL_EPOCH_DAYS) as f64, frac)
+}
+
+/// 関数の引数。ほとんどの関数は平らな値で足りるが、表を引く関数
+/// (VLOOKUP・INDEX 等)は範囲の**形**(列数)が要る。
+#[derive(Debug, Clone)]
+enum Arg {
+    One(Value),
+    /// (列数, 行優先の値)
+    Rect(u32, Vec<Value>),
+}
+
+impl Arg {
+    fn values(&self) -> &[Value] {
+        match self {
+            Arg::One(v) => std::slice::from_ref(v),
+            Arg::Rect(_, vs) => vs,
+        }
+    }
+    fn first(&self) -> Value {
+        self.values().first().cloned().unwrap_or(Value::Empty)
+    }
+}
+
+fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
+    // 表を引く関数は形が要るので、平らにする前に受ける
+    match name {
+        "VLOOKUP" | "HLOOKUP" => {
+            let key = args.first().map(|g| g.first()).unwrap_or(Value::Empty);
+            let Some(Arg::Rect(cols, vals)) = args.get(1) else {
+                return Ok(Value::Error("#VALUE!".into()));
+            };
+            let idx = args.get(2).map(|g| g.first().as_number()).unwrap_or(0.0) as usize;
+            let (cols, vals) = (*cols as usize, vals);
+            if cols == 0 || idx == 0 {
+                return Ok(Value::Error("#VALUE!".into()));
+            }
+            let rows = vals.len() / cols;
+            let same = |v: &Value| -> bool {
+                match (v, &key) {
+                    (Value::Number(x), Value::Number(y)) => (x - y).abs() < 1e-9,
+                    _ => v.display() == key.display(),
+                }
+            };
+            let hit = if name == "VLOOKUP" {
+                // 1列目を上から探し、その行の idx 列目
+                (0..rows)
+                    .find(|r| same(&vals[r * cols]))
+                    .and_then(|r| vals.get(r * cols + (idx - 1)))
+            } else {
+                // 1行目を左から探し、その列の idx 行目
+                (0..cols)
+                    .find(|c| same(&vals[*c]))
+                    .and_then(|c| vals.get((idx - 1) * cols + c))
+            };
+            return Ok(hit.cloned().unwrap_or(Value::Error("#N/A".into())));
+        }
+        "INDEX" => {
+            let Some(Arg::Rect(cols, vals)) = args.first() else {
+                return Ok(Value::Error("#VALUE!".into()));
+            };
+            let cols = *cols as usize;
+            let r = args.get(1).map(|g| g.first().as_number()).unwrap_or(0.0) as usize;
+            let c = args.get(2).map(|g| g.first().as_number()).unwrap_or(1.0) as usize;
+            if r == 0 || c == 0 {
+                return Ok(Value::Error("#VALUE!".into()));
+            }
+            return Ok(vals
+                .get((r - 1) * cols + (c - 1))
+                .cloned()
+                .unwrap_or(Value::Error("#REF!".into())));
+        }
+        "MATCH" => {
+            let key = args.first().map(|g| g.first()).unwrap_or(Value::Empty);
+            let hay = args.get(1).map(|g| g.values()).unwrap_or(&[]);
+            // 照合の型は 0(完全一致)だけを受ける(それ以外は正直に断る)
+            if let Some(t) = args.get(2) {
+                if t.first().as_number() != 0.0 {
+                    return Ok(Value::Error("#VALUE!".into()));
+                }
+            }
+            return Ok(hay
+                .iter()
+                .position(|v| v.display() == key.display())
+                .map(|i| Value::Number((i + 1) as f64))
+                .unwrap_or(Value::Error("#N/A".into())));
+        }
+        _ => {}
+    }
+    let a: Vec<Value> = args.iter().flat_map(|g| g.values().iter().cloned()).collect();
     // 引数にエラーがあればそれを返す(黙って0として数えない)
     if let Some(e) = a.iter().find(|v| matches!(v, Value::Error(_))) {
         return Ok(e.clone());
@@ -448,6 +582,85 @@ fn call(name: &str, a: Vec<Value>) -> Result<Value, String> {
             || matches!(v, Value::Bool(true)))),
         "NOT" => Value::Bool(!(a.first().map(|v| v.as_number() != 0.0).unwrap_or(false))),
         "CONCATENATE" => Value::Text(a.iter().map(|v| v.display()).collect()),
+        // ---- 日付と時刻(値は Excel の通し番号 1899-12-30 起点)----
+        "TODAY" => Value::Number(today_serial().0),
+        "NOW" => {
+            let (d, f) = today_serial();
+            Value::Number(d + f)
+        }
+        "DATE" => {
+            let g = |i: usize| a.get(i).map(|v| v.as_number() as i64).unwrap_or(0);
+            Value::Number((days_from_civil(g(0), g(1), g(2)) + EXCEL_EPOCH_DAYS) as f64)
+        }
+        "YEAR" | "MONTH" | "DAY" => {
+            let serial = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let (y, m, d) = civil_from_days(serial - EXCEL_EPOCH_DAYS);
+            Value::Number(match name {
+                "YEAR" => y,
+                "MONTH" => m,
+                _ => d,
+            } as f64)
+        }
+        "WEEKDAY" => {
+            // Excel の既定(1=日曜)。通し番号 1(1900-01-01)は月曜
+            let serial = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let days70 = serial - EXCEL_EPOCH_DAYS; // 1970-01-01(木)起点
+            Value::Number((days70.rem_euclid(7) + 4).rem_euclid(7) as f64 + 1.0)
+        }
+        // ---- 財務(閉じた式で解けるものだけ。RATE のような反復解は持たない)----
+        "PMT" | "PV" | "FV" | "NPER" => {
+            let g = |i: usize| a.get(i).map(|v| v.as_number()).unwrap_or(0.0);
+            let rate = g(0);
+            match name {
+                "PMT" => {
+                    let (nper, pv, fv) = (g(1), g(2), g(3));
+                    if nper == 0.0 {
+                        Value::Error("#DIV/0!".into())
+                    } else if rate == 0.0 {
+                        Value::Number(-(pv + fv) / nper)
+                    } else {
+                        let k = (1.0 + rate).powf(nper);
+                        Value::Number(-(pv * k + fv) * rate / (k - 1.0))
+                    }
+                }
+                "PV" => {
+                    let (nper, pmt, fv) = (g(1), g(2), g(3));
+                    if rate == 0.0 {
+                        Value::Number(-(pmt * nper + fv))
+                    } else {
+                        let k = (1.0 + rate).powf(nper);
+                        Value::Number(-(pmt * (k - 1.0) / rate + fv) / k)
+                    }
+                }
+                "FV" => {
+                    let (nper, pmt, pv) = (g(1), g(2), g(3));
+                    if rate == 0.0 {
+                        Value::Number(-(pv + pmt * nper))
+                    } else {
+                        let k = (1.0 + rate).powf(nper);
+                        Value::Number(-(pv * k + pmt * (k - 1.0) / rate))
+                    }
+                }
+                _ => {
+                    // NPER(rate, pmt, pv, [fv])
+                    let (pmt, pv, fv) = (g(1), g(2), g(3));
+                    if rate == 0.0 {
+                        if pmt == 0.0 {
+                            Value::Error("#DIV/0!".into())
+                        } else {
+                            Value::Number(-(pv + fv) / pmt)
+                        }
+                    } else {
+                        let x = (pmt / rate - fv) / (pv + pmt / rate);
+                        if x <= 0.0 {
+                            Value::Error("#NUM!".into())
+                        } else {
+                            Value::Number(x.ln() / (1.0 + rate).ln())
+                        }
+                    }
+                }
+            }
+        }
         "LEN" => Value::Number(a.first().map(|v| v.display().chars().count())
             .unwrap_or(0) as f64),
         _ => Value::Error("#NAME?".into()),
@@ -692,7 +905,8 @@ mod tests {
 
     #[test]
     fn 知らない関数は名前エラー() {
-        let sh = s(&[("A1", "=VLOOKUP(1,B1:C9,2)")]);
+        // VLOOKUP は実装済みになった(2026-08-04)ので、本当に無い名前で確かめる
+        let sh = s(&[("A1", "=XLOOKUP(1,B1:C9,2)")]);
         assert_eq!(v(&sh, "A1"), "#NAME?", "できないものはできないと言う");
     }
 
@@ -826,5 +1040,92 @@ mod name_tests {
         // 長い名前が勝つ
         assert_eq!(expand_names("単価計", &[
             ("単価".into(), "A1".into()), ("単価計".into(), "B1".into())]), "B1");
+    }
+}
+
+#[cfg(test)]
+mod fn_ext_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn sheet_with(cells: &[(&str, &str)]) -> Sheet {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        for (a1, v) in cells {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(v));
+        }
+        s
+    }
+
+    fn value_of(s: &mut Sheet, f: &str) -> Value {
+        s.set(Pos::parse("Z99").unwrap(), Cell::input(f));
+        recalc(s);
+        s.value(Pos::parse("Z99").unwrap())
+    }
+
+    #[test]
+    fn vlookupで表が引ける() {
+        let mut s = sheet_with(&[
+            ("A1", "甲"), ("B1", "100"),
+            ("A2", "乙"), ("B2", "200"),
+            ("A3", "丙"), ("B3", "300"),
+        ]);
+        assert_eq!(value_of(&mut s, "=VLOOKUP(\"乙\",A1:B3,2)"), Value::Number(200.0));
+        assert_eq!(
+            value_of(&mut s, "=VLOOKUP(\"丁\",A1:B3,2)"),
+            Value::Error("#N/A".into()),
+            "無い鍵は正直に #N/A"
+        );
+    }
+
+    #[test]
+    fn indexとmatchが組で使える() {
+        let mut s = sheet_with(&[
+            ("A1", "品"), ("B1", "数"),
+            ("A2", "筆"), ("B2", "12"),
+            ("A3", "紙"), ("B3", "34"),
+        ]);
+        assert_eq!(value_of(&mut s, "=MATCH(\"紙\",A1:A3,0)"), Value::Number(3.0));
+        assert_eq!(value_of(&mut s, "=INDEX(A1:B3,3,2)"), Value::Number(34.0));
+        assert_eq!(
+            value_of(&mut s, "=INDEX(B1:B3,MATCH(\"筆\",A1:A3,0))"),
+            Value::Number(12.0),
+            "INDEX+MATCH の常套が動かない"
+        );
+    }
+
+    #[test]
+    fn 日付の通し番号が暦と往復する() {
+        let mut s = sheet_with(&[]);
+        // 2026-08-04 の通し番号(1899-12-30 起点)
+        let serial = match value_of(&mut s, "=DATE(2026,8,4)") {
+            Value::Number(n) => n,
+            v => panic!("数でない: {v:?}"),
+        };
+        assert_eq!(value_of(&mut s, &format!("=YEAR({serial})")), Value::Number(2026.0));
+        assert_eq!(value_of(&mut s, &format!("=MONTH({serial})")), Value::Number(8.0));
+        assert_eq!(value_of(&mut s, &format!("=DAY({serial})")), Value::Number(4.0));
+        // 2026-08-04 は火曜(Excel の既定: 日=1 → 火=3)
+        assert_eq!(value_of(&mut s, &format!("=WEEKDAY({serial})")), Value::Number(3.0));
+        // 既知の値: 1900-01-01 = 2
+        assert_eq!(value_of(&mut s, "=DATE(1900,1,1)"), Value::Number(2.0));
+    }
+
+    #[test]
+    fn 財務の式が教科書の値になる() {
+        let mut s = sheet_with(&[]);
+        // 年利12%を月利1%、60回、100万円借入 → 月々の返済(教科書値 -22244.45…)
+        let pmt = match value_of(&mut s, "=PMT(0.01,60,1000000)") {
+            Value::Number(n) => n,
+            v => panic!("数でない: {v:?}"),
+        };
+        assert!((pmt + 22244.45).abs() < 0.5, "PMT が教科書とずれる: {pmt}");
+        // 利率0なら単純割り
+        assert_eq!(value_of(&mut s, "=PMT(0,10,1000)"), Value::Number(-100.0));
+        // FV: 毎月1万円・月利0.5%・12回
+        let fv = match value_of(&mut s, "=FV(0.005,12,-10000)") {
+            Value::Number(n) => n,
+            v => panic!("数でない: {v:?}"),
+        };
+        assert!((fv - 123355.62).abs() < 1.0, "FV がずれる: {fv}");
     }
 }
