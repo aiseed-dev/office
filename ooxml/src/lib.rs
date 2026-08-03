@@ -13,8 +13,8 @@
 
 use std::io::{Cursor, Read, Seek, Write};
 
-use kumihan::{Align, Block, Cellbox, CharFormat, Document, ListKind, ParaStyle, Paragraph,
-              Run, Table, VMerge, PAGES_MARK, PAGE_MARK};
+use kumihan::{Align, Block, Cellbox, CharFormat, Comment, Document, ListKind, ParaStyle,
+              Paragraph, Run, Table, VMerge, PAGES_MARK, PAGE_MARK};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
@@ -114,7 +114,13 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
             }
         }
     }
-    let (mut doc, mut rep) = parse_document_with(&xml, &media);
+    // コメント(comments.xml)。id → 本文。本文の参照より先に読む
+    let mut cxml = String::new();
+    if let Ok(mut f) = zip.by_name("word/comments.xml") {
+        let _ = f.read_to_string(&mut cxml);
+    }
+    let cmap = parse_comments(&cxml);
+    let (mut doc, mut rep) = parse_document_full(&xml, &media, &cmap);
     // ヘッダー・フッター(全ページ同じもの = type="default")を部品から読む。
     // 表など、まだ持てないものが入っていたら**編集の対象にしない** —
     // paragraphs を空のまま残せば、保存で原文の部品がそのまま生きる
@@ -327,6 +333,77 @@ fn field_mark(instr: &str) -> Option<char> {
     }
 }
 
+/// comments.xml を読む。id → コメント(書いた人・本文)。
+fn parse_comments(xml: &str) -> std::collections::BTreeMap<String, Comment> {
+    let mut out: std::collections::BTreeMap<String, Comment> = Default::default();
+    let mut r = Reader::from_str(xml);
+    r.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    let mut cur: Option<(String, Comment)> = None;
+    let mut in_t = false;
+    loop {
+        match r.read_event_into(&mut buf) {
+            Err(_) | Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => match local(e.name().as_ref()) {
+                b"comment" => {
+                    let id = attr(&e, "id").unwrap_or_default();
+                    let author = attr(&e, "author").unwrap_or_default();
+                    cur = Some((id, Comment { author, text: String::new() }));
+                }
+                b"p" => {
+                    if let Some((_, c)) = cur.as_mut() {
+                        if !c.text.is_empty() {
+                            c.text.push('\n');
+                        }
+                    }
+                }
+                b"t" => in_t = true,
+                _ => {}
+            },
+            Ok(Event::Text(t)) if in_t => {
+                if let Some((_, c)) = cur.as_mut() {
+                    c.text.push_str(&t.unescape().unwrap_or_default());
+                }
+            }
+            Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                b"t" => in_t = false,
+                b"comment" => {
+                    if let Some((id, c)) = cur.take() {
+                        out.insert(id, c);
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// XML の属性・本文に入れる文字を逃がす。
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// comments.xml を作る。id は 1 から(document.xml 側の参照と同じ振り方)。
+fn comments_xml(cmts: &[Comment]) -> String {
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
+    out.push_str(&format!("<w:comments xmlns:w=\"{W_NS}\">"));
+    for (i, c) in cmts.iter().enumerate() {
+        out.push_str(&format!(
+            r#"<w:comment w:id="{}" w:author="{}">"#, i + 1, esc(&c.author)));
+        for line in c.text.split('\n') {
+            out.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
+            out.push_str(&esc(line));
+            out.push_str("</w:t></w:r></w:p>");
+        }
+        out.push_str("</w:comment>");
+    }
+    out.push_str("</w:comments>");
+    out
+}
+
 /// `w:pStyle` の val を段落の役割へ。見出しと目次の行だけを見る
 /// (それ以外のスタイルは今まで通り持たない)。
 /// 見出しの style id は日本語版 Word が「1」、英語版が「Heading1」。
@@ -400,6 +477,15 @@ pub fn parse_document_with(
     xml: &str,
     media: &std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
 ) -> (Document, Report) {
+    parse_document_full(xml, media, &Default::default())
+}
+
+/// cmts は comments.xml の中身(id → コメント)。参照をここで解決する。
+fn parse_document_full(
+    xml: &str,
+    media: &std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
+    cmts: &std::collections::BTreeMap<String, Comment>,
+) -> (Document, Report) {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
 
@@ -429,6 +515,8 @@ pub fn parse_document_with(
     let mut pstyle = ParaStyle::Body;
     // リストの深さ(w:ilvl)。w:ind が無い文書ではこれがインデントになる
     let mut ilvl = 0u8;
+    // この段落に付いたコメント(commentReference を解決したもの)
+    let mut para_comments: Vec<Comment> = Vec::new();
     // 読めなかった要素の原文(画像など)。段落ごとに集めて持ち越す
     let mut anchors: Vec<String> = Vec::new();
     // 表示できる画像(r:embed と wp:extent が読めたもの)
@@ -487,7 +575,8 @@ pub fn parse_document_with(
                               fmt = CharFormat::default(); align = Align::default();
                               list = ListKind::default(); indent = 0; line_spacing = 1.0;
                               page_break_before = false; shade = None; boxed = false;
-                              pstyle = ParaStyle::Body; ilvl = 0; }
+                              pstyle = ParaStyle::Body; ilvl = 0;
+                              para_comments.clear(); }
                     b"rPr" => { in_rpr = true; fmt = CharFormat::default(); }
                     b"pPr" => in_ppr = true,
                     b"sz" if in_rpr => {
@@ -767,24 +856,40 @@ pub fn parse_document_with(
                         doc.page_color = attr(&e, "color")
                             .filter(|v| !v.is_empty() && v != "auto");
                     }
-                    // しおり(bookmark)とコメントの印。**理解はしないが捨てない** —
-                    // 捨てると保存でしおり・コメント・相互参照の錨が壊れる。
+                    // しおり(bookmark)の印。**理解はしないが捨てない** —
+                    // 捨てると保存でしおり・相互参照の錨が壊れる。
                     // 原文を段落の頭に控える(位置は段落の頭に寄る、と言う)
-                    b"bookmarkStart" | b"bookmarkEnd"
-                    | b"commentRangeStart" | b"commentRangeEnd"
-                    | b"commentReference" => {
+                    b"bookmarkStart" | b"bookmarkEnd" => {
                         let raw = &xml[start_pos..last_pos];
                         if para.is_some() {
-                            // commentReference は run の中の要素なので包み直す
-                            let a = if n.as_slice() == b"commentReference" {
-                                format!("<w:r>{}</w:r>", raw.trim())
-                            } else {
-                                raw.trim().to_string()
-                            };
-                            anchors.push(a);
+                            anchors.push(raw.trim().to_string());
                             rep.note("しおり・コメントの印(段落の頭に寄るが、保存で残る)");
                         } else {
                             rep.note("しおり(段落の外。保存で失われる)");
+                        }
+                    }
+                    // コメント。id が comments.xml で引けたら**段落のコメント**として
+                    // 持つ(保存で作り直す)。引けなければ原文を控えて生かす
+                    b"commentRangeStart" | b"commentRangeEnd" => {
+                        let known = attr(&e, "id").is_some_and(|i| cmts.contains_key(&i));
+                        if !known {
+                            if para.is_some() {
+                                let raw = &xml[start_pos..last_pos];
+                                anchors.push(raw.trim().to_string());
+                                rep.note("しおり・コメントの印(段落の頭に寄るが、保存で残る)");
+                            }
+                        }
+                    }
+                    b"commentReference" => {
+                        match attr(&e, "id").and_then(|i| cmts.get(&i)) {
+                            Some(c) => para_comments.push(c.clone()),
+                            None => {
+                                if para.is_some() {
+                                    let raw = &xml[start_pos..last_pos];
+                                    anchors.push(format!("<w:r>{}</w:r>", raw.trim()));
+                                    rep.note("しおり・コメントの印(段落の頭に寄るが、保存で残る)");
+                                }
+                            }
                         }
                     }
                     // fldChar は空要素で来るのが普通の形
@@ -836,6 +941,7 @@ pub fn parse_document_with(
                             rep.paragraphs += 1;
                             let p = Paragraph { align, anchors: std::mem::take(&mut anchors),
                                 images: std::mem::take(&mut images),
+                                comments: std::mem::take(&mut para_comments),
                                 page_break_before, list,
                                 // 深さ: w:ind(直接指定)が無ければ w:ilvl から
                                 indent: indent.max(ilvl),
@@ -907,9 +1013,16 @@ pub fn write_document_xml(doc: &Document) -> String {
 }
 
 /// 本体と、このアプリで挿した画像(出て来る順)を返す。
-/// 画像の番号(rIdJO1〜)はこの順で振られる。
+pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u8>>>) {
+    let (body, media, _) = write_document_full(doc);
+    (body, media)
+}
+
+/// 本体・挿した画像・段落のコメント(参照した順)を返す。
+/// 画像の番号(rIdJO1〜)とコメントの番号(1〜)はこの順で振られる。
 fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
-        imgn: &mut usize, media: &mut Vec<std::sync::Arc<Vec<u8>>>) {
+        imgn: &mut usize, media: &mut Vec<std::sync::Arc<Vec<u8>>>,
+        cmts: &mut Vec<Comment>) {
         use quick_xml::events::{BytesEnd, BytesStart as BS, BytesText};
         w.write_event(Event::Start(BS::new("w:p"))).unwrap();
         // 段落の性質。既定のものは書かない — 余計な指定を増やさない
@@ -996,6 +1109,18 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
                 w.write_event(Event::Empty(ol)).unwrap();
             }
             w.write_event(Event::End(BytesEnd::new("w:pPr"))).unwrap();
+        }
+        // 段落のコメント。範囲は段落まるごと(段落単位の粒度)。
+        // 番号は文書を通しで振り、comments.xml 側と同じ順で並ぶ
+        let cmt_ids: Vec<usize> = p.comments.iter()
+            .map(|c| {
+                cmts.push(c.clone());
+                cmts.len()
+            })
+            .collect();
+        for id in &cmt_ids {
+            let _ = w.get_mut().write_all(
+                format!(r#"<w:commentRangeStart w:id="{id}"/>"#).as_bytes());
         }
         // 読めなかった要素(画像など)を原文のまま返す。
         // 段落の並びの中の位置は失われ、末尾に戻る(正直な限界)
@@ -1092,6 +1217,11 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
             let _ = w.get_mut().write_all(xml.as_bytes());
             media.push(im.bytes.clone());
         }
+        for id in &cmt_ids {
+            let _ = w.get_mut().write_all(format!(
+                r#"<w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r>"#
+            ).as_bytes());
+        }
         w.write_event(Event::End(BytesEnd::new("w:p"))).unwrap();
 }
 
@@ -1104,17 +1234,17 @@ fn hf_xml(hf: &kumihan::HeadFoot, footer: bool) -> String {
     root.push_attribute(("xmlns:w", W_NS));
     root.push_attribute(("xmlns:r", RNS_DOC));
     w.write_event(Event::Start(root)).unwrap();
-    // 画像の挿入はヘッダーには無い(imgn/media はここでは増えない)
-    let (mut imgn, mut media) = (0usize, Vec::new());
+    // 画像の挿入・コメントはヘッダーには無い(集め先はここでは増えない)
+    let (mut imgn, mut media, mut cmts) = (0usize, Vec::new(), Vec::new());
     for p in &hf.paragraphs {
-        write_para(&mut w, p, &mut imgn, &mut media);
+        write_para(&mut w, p, &mut imgn, &mut media, &mut cmts);
     }
     w.write_event(Event::End(BytesEnd::new(root_name))).unwrap();
     let body = String::from_utf8(w.into_inner().into_inner()).unwrap();
     format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{body}")
 }
 
-pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u8>>>) {
+fn write_document_full(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u8>>>, Vec<Comment>) {
     use quick_xml::events::{BytesEnd, BytesStart as BS};
     let mut w = Writer::new(Cursor::new(Vec::new()));
 
@@ -1138,9 +1268,10 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
 
     let mut imgn = 0usize;
     let mut media: Vec<std::sync::Arc<Vec<u8>>> = Vec::new();
+    let mut cmts: Vec<Comment> = Vec::new();
     for b in &doc.blocks {
         match b {
-            Block::Para(p) => write_para(&mut w, p, &mut imgn, &mut media),
+            Block::Para(p) => write_para(&mut w, p, &mut imgn, &mut media, &mut cmts),
             Block::Table(t) => {
                 w.write_event(Event::Start(BS::new("w:tbl"))).unwrap();
                 // 罫線(事務様式は罫線が見えないと様式にならない)
@@ -1196,10 +1327,10 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
                         }
                         if cell.paragraphs.is_empty() {
                             write_para(&mut w, &Paragraph { line_spacing: 1.0, ..Default::default() },
-                                 &mut imgn, &mut media);
+                                 &mut imgn, &mut media, &mut cmts);
                         } else {
                             for p in &cell.paragraphs {
-                                write_para(&mut w, p, &mut imgn, &mut media)
+                                write_para(&mut w, p, &mut imgn, &mut media, &mut cmts)
                             }
                         }
                         w.write_event(Event::End(BytesEnd::new("w:tc"))).unwrap();
@@ -1242,7 +1373,7 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
     w.write_event(Event::End(BytesEnd::new("w:body"))).unwrap();
     w.write_event(Event::End(BytesEnd::new("w:document"))).unwrap();
     let body = String::from_utf8(w.into_inner().into_inner()).unwrap();
-    (format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{body}"), media)
+    (format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{body}"), media, cmts)
 }
 
 /// docx として書き出す(最小の OPC パッケージ)。
@@ -1276,7 +1407,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     let opts: zip::write::FileOptions<'_, ()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    let (body, new_media) = write_document_parts(doc);
+    let (body, new_media, cmts_out) = write_document_full(doc);
     // 今回こちらが作り直す部品の名前(これ以外の joimg は既存画像として持ち越す)
     let regen_media: Vec<String> = new_media.iter().enumerate()
         .map(|(i, m)| {
@@ -1330,6 +1461,10 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     orig_settings = Some(String::from_utf8_lossy(&buf).to_string());
                     continue;
                 }
+                // コメントを持っているなら comments.xml はこちらが作り直す
+                if name == "word/comments.xml" && !cmts_out.is_empty() {
+                    continue;
+                }
                 // 今回作り直す画像の実体だけは持ち越さない(二重に持たない)。
                 // 開き直した後の joimg は「既存の画像」なので、普通に持ち越す
                 if regen_media.contains(&name) {
@@ -1366,6 +1501,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
              "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"),
             (doc.page_color.as_ref().map(|_| "word/settings.xml"),
              "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"),
+            ((!cmts_out.is_empty()).then_some("word/comments.xml"),
+             "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"),
         ] {
             let Some(name) = name else { continue };
             if !ct.contains(&format!("PartName=\"/{name}\"")) {
@@ -1389,7 +1526,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     // 本文の rels。原本の関係(既存の画像・ヘッダー等)は残し、
     // 挿した画像のぶん(rIdJO1〜)と、新しく作るヘッダー・フッターを足す
     if orig_rels.is_some() || !new_media.is_empty() || hdr.is_some() || ftr.is_some()
-        || doc.page_color.is_some()
+        || doc.page_color.is_some() || !cmts_out.is_empty()
     {
         let mut rels = orig_rels.unwrap_or_else(|| {
             concat!(
@@ -1413,6 +1550,12 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             let (ext, _) = image_kind(m);
             add.push_str(&format!(
                 r#"<Relationship Id="rIdJO{n}" Type="{RNS_DOC}/image" Target="media/joimg{n}.{ext}"/>"#
+            ));
+        }
+        // コメント(comments.xml)への関係。無いときだけ足す
+        if !cmts_out.is_empty() && !rels.contains("Target=\"comments.xml\"") {
+            add.push_str(&format!(
+                r#"<Relationship Id="rIdJOcm" Type="{RNS_DOC}/comments" Target="comments.xml"/>"#
             ));
         }
         // 設定(settings.xml)への関係。素の文書に色を塗ったときだけ要る
@@ -1461,6 +1604,11 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         zip.start_file(name.clone(), opts).map_err(|e| e.to_string())?;
         zip.write_all(xml.as_bytes()).map_err(|e| e.to_string())?;
     }
+    // コメントの部品
+    if !cmts_out.is_empty() {
+        zip.start_file("word/comments.xml", opts).map_err(|e| e.to_string())?;
+        zip.write_all(comments_xml(&cmts_out).as_bytes()).map_err(|e| e.to_string())?;
+    }
     // ページの色を見せる設定(w:displayBackgroundShape)。無ければ足す。
     // 原本の settings は他の設定ごと生かす(丸ごと作り直さない)
     if doc.page_color.is_some() {
@@ -1491,7 +1639,7 @@ mod tests {
     use kumihan::{Align, CharFormat, ListKind, Block, Cellbox, Document, Paragraph, Run, Table};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
+        Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
@@ -1526,7 +1674,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -1559,7 +1707,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -1712,7 +1860,7 @@ mod font_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
-            blocks: vec![Block::Para(Paragraph { style: Default::default(),
+            blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(),
                 align: Default::default(),
                 anchors: Vec::new(),
                     images: Vec::new(),
@@ -1768,7 +1916,7 @@ mod fmt_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), anchors: Vec::new(),
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
         };
@@ -1783,7 +1931,7 @@ mod fmt_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), anchors: Vec::new(),
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
         };
@@ -1797,7 +1945,7 @@ mod fmt_tests {
                 font: None,
                 page: None,
                 sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
-                blocks: vec![Block::Para(Paragraph { style: Default::default(),
+                blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(),
                     align: a,
                     anchors: Vec::new(),
                     images: Vec::new(),
@@ -1845,7 +1993,7 @@ mod para_tests {
     use kumihan::{Align, Block, Document, ListKind, Paragraph, Run};
 
     fn para(list: ListKind, indent: u8, spacing: f32) -> Paragraph {
-        Paragraph { style: Default::default(),
+        Paragraph { style: Default::default(), comments: Vec::new(),
             align: Align::Left,
             anchors: Vec::new(),
                     images: Vec::new(),
@@ -2084,7 +2232,7 @@ mod vertalign_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None,
-            blocks: vec![Block::Para(Paragraph { style: Default::default(),
+            blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(),
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
                 ..Default::default()
@@ -2157,7 +2305,7 @@ mod shade_tests {
 
     #[test]
     fn 段落の背景色と囲み枠が往復する() {
-        let mut p = Paragraph { style: Default::default(),
+        let mut p = Paragraph { style: Default::default(), comments: Vec::new(),
             line_spacing: 1.0,
             runs: vec![Run { text: "注意".into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],
@@ -2175,6 +2323,53 @@ mod shade_tests {
         let p = back.paragraphs().next().unwrap();
         assert_eq!(p.shade.as_deref(), Some("FFF2CC"), "背景色が往復しない");
         assert!(p.boxed, "囲み枠が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::*;
+    use kumihan::{Block, Comment, Document};
+
+    #[test]
+    fn 段落のコメントが往復する() {
+        let mut d = Document::plain("一\n二\n三", 10.5);
+        if let Block::Para(p) = &mut d.blocks[1] {
+            p.comments.push(Comment {
+                author: "検査".into(),
+                text: "ここは要確認。\n二行目の注記".into(),
+            });
+        }
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        let cs: Vec<usize> = back.paragraphs().map(|p| p.comments.len()).collect();
+        assert_eq!(cs, vec![0, 1, 0], "コメントの付き先がずれた");
+        let c = &back.paragraphs().nth(1).unwrap().comments[0];
+        assert_eq!(c.author, "検査", "書いた人が消えた");
+        assert_eq!(c.text, "ここは要確認。\n二行目の注記", "本文が変わった");
+    }
+
+    #[test]
+    fn 二度保存してもコメントは増えない() {
+        let mut d = Document::plain("本文", 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] {
+            p.comments.push(Comment { author: "私".into(), text: "注記".into() });
+        }
+        let mut first = Vec::new();
+        write(&d, Cursor::new(&mut first)).unwrap();
+        let (back, _) = read(Cursor::new(&first)).unwrap();
+        let mut second = Vec::new();
+        write_with(&back, Some(Cursor::new(&first)), Cursor::new(&mut second)).unwrap();
+        let (back2, _) = read(Cursor::new(&second)).unwrap();
+        assert_eq!(back2.paragraphs().next().unwrap().comments.len(), 1,
+            "保存のたびにコメントが増える");
+        let mut z = zip::ZipArchive::new(Cursor::new(&second)).unwrap();
+        let mut rels = String::new();
+        z.by_name("word/_rels/document.xml.rels").unwrap().read_to_string(&mut rels).unwrap();
+        assert_eq!(rels.matches("comments.xml").count(), 1, "関係が二重: {rels}");
     }
 }
 
@@ -2355,7 +2550,7 @@ mod hf_tests {
     use kumihan::{Align, Document, Paragraph, Run, PAGE_MARK};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph { style: Default::default(),
+        Paragraph { style: Default::default(), comments: Vec::new(),
             line_spacing: 1.0,
             runs: vec![Run { text: s.into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],
@@ -2528,7 +2723,7 @@ mod image_insert_tests {
 
     #[test]
     fn 挿した画像が部品ごと保存され読み直せる() {
-        let mut p = Paragraph { style: Default::default(),
+        let mut p = Paragraph { style: Default::default(), comments: Vec::new(),
             line_spacing: 1.0,
             runs: vec![Run { text: "ロゴの下".into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],

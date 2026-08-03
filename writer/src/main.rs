@@ -233,6 +233,10 @@ struct Writer {
     /// 開いている間、打鍵はここに入る(検索の板と同じ方式)
     hf_edit: Option<bool>,
     hf_ed: Editor,
+    /// コメントの板(開いている間、打鍵はここに入る)と、付け先の段落番号
+    cmt_edit: bool,
+    cmt_ed: Editor,
+    cmt_para: usize,
     /// 紙面に出すヘッダー・フッターの行(1ページ目の番号で組んだもの)
     header_lines: Vec<kumihan::Line>,
     footer_lines: Vec<kumihan::Line>,
@@ -251,6 +255,8 @@ impl HasEditor for Writer {
             if self.find_field == 0 { &mut self.find_ed } else { &mut self.repl_ed }
         } else if self.hf_edit.is_some() {
             &mut self.hf_ed
+        } else if self.cmt_edit {
+            &mut self.cmt_ed
         } else {
             &mut self.ed
         }
@@ -260,6 +266,8 @@ impl HasEditor for Writer {
             if self.find_field == 0 { &self.find_ed } else { &self.repl_ed }
         } else if self.hf_edit.is_some() {
             &self.hf_ed
+        } else if self.cmt_edit {
+            &self.cmt_ed
         } else {
             &self.ed
         }
@@ -276,6 +284,32 @@ impl HasEditor for Writer {
             kumihan::set_paras_text(&mut hf.paragraphs, &text, SIZE_PT);
             self.dirty = true;
             self.refresh_hf();
+            return;
+        }
+        if self.cmt_edit {
+            // コメントの板。空にすると外れる(1つ目のコメントを編集する)
+            let text = self.cmt_ed.text().to_string();
+            let author = std::env::var("USER").unwrap_or_else(|_| "私".into());
+            let pi = self.cmt_para;
+            let mut i = 0usize;
+            for b in &mut self.doc.blocks {
+                if let kumihan::Block::Para(p) = b {
+                    if i == pi {
+                        if text.is_empty() {
+                            if !p.comments.is_empty() {
+                                p.comments.remove(0);
+                            }
+                        } else if let Some(c) = p.comments.first_mut() {
+                            c.text = text.clone();
+                        } else {
+                            p.comments.push(kumihan::Comment { author, text: text.clone() });
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            self.dirty = true;
             return;
         }
         self.dirty = true;
@@ -319,6 +353,9 @@ impl Writer {
             repl_ed: Editor::new(""),
             hf_edit: None,
             hf_ed: Editor::new(""),
+            cmt_edit: false,
+            cmt_ed: Editor::new(""),
+            cmt_para: 0,
             header_lines: Vec::new(),
             footer_lines: Vec::new(),
             font_name: kumihan::font::for_document(None)
@@ -1294,7 +1331,7 @@ impl Writer {
         "parastyle", "toc", "toc-update", "numpages", "datetime",
         "multilevels", "darkmode", "text-from-file", "add-text", "line-numbers",
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
-        "insequation", "instext", "pagecolor",
+        "insequation", "instext", "pagecolor", "comment",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1727,6 +1764,39 @@ impl Writer {
             }
             // 行番号(見え方だけ)。折り返した行も1行と数える(見た目の行)
             "line-numbers" => self.line_numbers = !self.line_numbers,
+            // コメント(段落単位)。カーソルの段落に付ける
+            "comment" => {
+                if self.cmt_edit {
+                    self.cmt_edit = false;
+                    return;
+                }
+                self.switch_target(Target::Body);
+                let cur = self.ed.cursor();
+                // カーソルの段落番号(頭のバイトで探す)
+                let mut pi = 0usize;
+                let mut at = 0usize;
+                for (i, p) in self.doc.paragraphs().enumerate() {
+                    let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+                    if at <= cur {
+                        pi = i;
+                    }
+                    at += len + 1;
+                }
+                self.cmt_para = pi;
+                let text = self
+                    .doc
+                    .paragraphs()
+                    .nth(pi)
+                    .and_then(|p| p.comments.first())
+                    .map(|c| c.text.clone())
+                    .unwrap_or_default();
+                self.cmt_ed = Editor::new(&text);
+                self.find_open = false;
+                self.hf_edit = None;
+                self.cmt_edit = true;
+                self.status =
+                    "コメントを編集中(段落に付きます。空にして閉じると外れる)".into();
+            }
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -1843,6 +1913,12 @@ impl Writer {
             return;
         }
         if self.hf_edit.take().is_some() {
+            self.status = "".into();
+            cx.notify();
+            return;
+        }
+        if self.cmt_edit {
+            self.cmt_edit = false;
             self.status = "".into();
             cx.notify();
             return;
@@ -2361,6 +2437,31 @@ impl Render for Writer {
             }
         }
 
+        // コメントの印。付いた段落の1行目の右余白にオレンジの角を出す
+        {
+            let mut at = 0usize;
+            let mut heads: Vec<usize> = Vec::new(); // コメント付き段落の頭のバイト
+            for p in self.doc.paragraphs() {
+                let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+                if !p.comments.is_empty() {
+                    heads.push(at);
+                }
+                at += len + 1;
+            }
+            for s0 in heads {
+                if let Some(line) = self.page.lines.iter()
+                    .filter(|l| l.from_body)
+                    .find(|l| l.byte0 == s0)
+                {
+                    paper = paper.child(div().absolute()
+                        .left(px((self.pg.w_mm - self.pg.right_mm + 2.0) * pxmm))
+                        .top(px(line.y_mm * pxmm - 8.0))
+                        .w(px(6.0)).h(px(6.0)).rounded_sm()
+                        .bg(rgb(0xE08A00)));
+                }
+            }
+        }
+
         // 行番号。本文の(見た目の)行を数え、左の余白に出す
         if self.line_numbers {
             let mut n = 0usize;
@@ -2654,6 +2755,71 @@ impl Render for Writer {
                         }))))
         });
 
+        // コメントの板と、カーソルの段落のコメントの一覧
+        let cmt_panel = if !self.cmt_edit {
+            // 板が閉じていても、カーソルの段落にコメントがあれば見せる
+            let cur = self.ed.cursor();
+            let mut at = 0usize;
+            let mut found: Option<Vec<(String, String)>> = None;
+            if self.target == Target::Body {
+                for p in self.doc.paragraphs() {
+                    let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+                    if at <= cur && cur <= at + len && !p.comments.is_empty() {
+                        found = Some(p.comments.iter()
+                            .map(|c| (c.author.clone(), c.text.clone()))
+                            .collect());
+                        break;
+                    }
+                    at += len + 1;
+                }
+            }
+            found.map(|cs| {
+                let mut d = div().absolute().left(px(16.0)).bottom(px(16.0)).w(px(300.0))
+                    .p_3().rounded_md().bg(rgb(0xFFF6E6))
+                    .border_1().border_color(rgb(0xE8D5A8))
+                    .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(0x8A4B00))
+                        .child("この段落のコメント(レビュー > コメント で編集)"));
+                for (author, text) in cs {
+                    d = d.child(div().mt_1p5().text_size(px(11.5)).text_color(rgb(0x5A4A28))
+                        .child(SharedString::from(format!("{author}: {text}"))));
+                }
+                d
+            })
+        } else {
+            // 編集の板(検索の板と同じ作法。| がキャレット)
+            let mut t = self.cmt_ed.text().to_string();
+            let cur = self.cmt_ed.cursor().min(t.len());
+            t.insert(cur, '|');
+            let mut field = div().flex_1().px_2().py_1().rounded_sm()
+                .border_1().border_color(rgb(0xE08A00)).bg(gpui::white())
+                .text_size(px(12.5)).flex().flex_col();
+            for ln in t.split('\n') {
+                field = field.child(div().whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(ln.to_string())));
+            }
+            Some(div().absolute().left(px(16.0)).bottom(px(16.0)).w(px(360.0))
+                .p_3().rounded_md().bg(rgb(0xFFF6E6))
+                .border_1().border_color(rgb(0xE8D5A8))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x8A4B00))
+                    .child("コメント — 空にして閉じると外れる"))
+                .child(field)
+                .child(div().flex().flex_row()
+                    .child(div().flex_1())
+                    .child(div().id("cmt-close").px_2p5().py_1().rounded_sm()
+                        .border_1().border_color(rgb(0x8A4B00)).text_color(rgb(0x8A4B00))
+                        .text_size(px(11.5)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xF7ECD8)))
+                        .child("閉じる (Esc)")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.cmt_edit = false;
+                            this.status = "".into();
+                            cx.notify()
+                        })))))
+        };
+
         // フォントの一覧。この機械にある日本語の書体だけ
         let font_panel = if !self.font_list {
             None
@@ -2845,6 +3011,7 @@ impl Render for Writer {
                 ("align-just", "両端揃え", "", true),
                 ("", "", "", false),
                 ("replace", "検索と置換", "Ctrl+F", true),
+                ("comment", "コメント", "", true),
                 ("wordcount", "文字数を数える", "", true),
             ];
             let h_est = entries.len() as f32 * 25.0 + 10.0;
@@ -2951,6 +3118,7 @@ impl Render for Writer {
                     .children(notes)
                     .children(find_panel)
                     .children(hf_panel)
+                    .children(cmt_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)

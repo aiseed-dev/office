@@ -117,11 +117,21 @@ pub enum ParaStyle {
     Toc(u8),
 }
 
+/// 段落に付くコメント(docx の comments.xml)。**段落単位**で持つ
+/// (文中の範囲は持たない — 2026-08-03 発注者確認の粒度)。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Comment {
+    pub author: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Paragraph {
     pub runs: Vec<Run>,
     /// 段落の役割(見出し・目次の行)。既定は本文
     pub style: ParaStyle,
+    /// この段落に付いたコメント
+    pub comments: Vec<Comment>,
     /// 読めなかった要素(画像など)の原文。**理解はしないが、捨てない。**
     /// 保存でそのまま返す
     pub anchors: Vec<String>,
