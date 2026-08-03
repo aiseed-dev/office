@@ -100,8 +100,9 @@ const HEAD_W: f32 = 46.0;
 const ROWS: u32 = 30;
 const COLS: u32 = 9;
 
-/// 境界の取っ手の当たり幅(縁から前後この px 以内で掴める)
-const GRIP: f32 = 4.0;
+/// 境界の取っ手の当たり幅(縁から前後この px 以内で掴める)。
+/// 見出しのクリックに他の意味は無いので、広めに取って掴みやすくする
+const GRIP: f32 = 5.0;
 
 /// `start` から `sizes` の幅で並ぶ区分のうち、`pos` がどの区分の
 /// 右端(下端)±GRIP に掛かるかを返す。列見出し・行見出しの境界の当たり判定。
@@ -322,6 +323,11 @@ struct Calc {
     drag: Option<Pos>,
     /// 見出しの境界を掴んだドラッグ(列幅・行高)。セル選択の drag とは別
     size_drag: Option<SizeDrag>,
+    /// 直前の取っ手ドラッグで実際に動かしたか。**動かした直後の掴み直しを
+    /// ダブルクリック(自動調整)と誤認しない**ための控え — 幅の微調整は
+    /// 「短いドラッグ→すぐ掴み直す」の繰り返しで、Wayland の click_count は
+    /// 400ms・近距離なら 2 になる(gpui_linux/wayland/client.rs で裏取り)
+    grip_moved_last: bool,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 右クリックのメニュー(出ている場所。格子領域の px)
@@ -401,6 +407,7 @@ impl Calc {
             anchor: None,
             drag: None,
             size_drag: None,
+            grip_moved_last: false,
             wheel: (0.0, 0.0),
             menu_at: None,
             menu_sub: None,
@@ -680,13 +687,19 @@ impl Calc {
     fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool, ctrl: bool, clicks: usize) {
         self.menu_at = None;
         self.pick = None;
+        // mouse-up を取り逃していても、新しい押下で必ず仕切り直す(自癒)
+        self.size_drag = None;
+        self.drag = None;
         // 見出しの境界の取っ手が最優先(セルの当たり判定より先に見る)
         if let Some((is_col, idx)) = self.size_grip_at(x, y) {
             self.commit();
-            if clicks >= 2 {
-                // ダブルクリック = 内容に合わせる(1度目のクリックで積んだ
-                // ドラッグは捨てる — 動かしていないので控えも積まれていない)
-                self.size_drag = None;
+            if std::env::var_os("JO_MOUSE_LOG").is_some() {
+                eprintln!("grip: col={is_col} idx={idx} x={x:.0} y={y:.0} clicks={clicks} moved_last={}", self.grip_moved_last);
+            }
+            if clicks >= 2 && !self.grip_moved_last {
+                // ダブルクリック = 内容に合わせる。**直前に動かした掴み直しは
+                // ダブルクリック扱いにしない** — 幅の微調整(短いドラッグの
+                // 繰り返し)が自動調整に化けて、合わせた幅が飛ぶ
                 self.auto_fit(is_col, idx);
                 return;
             }
@@ -743,10 +756,13 @@ impl Calc {
 
     /// 離した。ドラッグ選択はここで確定する。
     fn mouse_up(&mut self) {
-        if self.size_drag.take().is_some() {
-            // 幅・高さの確定。status は size_drag_at が出している
+        if let Some(d) = self.size_drag.take() {
+            // 幅・高さの確定。status は size_drag_at が出している。
+            // 動かしたかは次の押下の判定(掴み直し vs ダブルクリック)に使う
+            self.grip_moved_last = d.moved;
             return;
         }
+        self.grip_moved_last = false;
         if self.drag.take().is_some() && self.anchor.is_some() {
             let (a, b) = self.sel_rect();
             self.status = format!("{}:{}", a.a1(), b.a1()).into();
