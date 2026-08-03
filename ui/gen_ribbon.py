@@ -51,6 +51,7 @@ READY = {
         "incoffset": "incoffset", "decoffset": "decoffset",
         "linespace": "linespace",
         "changecase": "changecase", "blankpage": "blankpage",
+        "paracolor": "paracolor", "borders": "borders",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

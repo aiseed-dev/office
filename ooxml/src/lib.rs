@@ -289,6 +289,9 @@ pub fn parse_document_with(
     let mut indent = 0u8;
     let mut line_spacing = 1.0f32;
     let mut page_break_before = false;
+    // 段落の背景色(w:shd)と囲み枠(w:pBdr)
+    let mut shade: Option<String> = None;
+    let mut boxed = false;
     // 読めなかった要素の原文(画像など)。段落ごとに集めて持ち越す
     let mut anchors: Vec<String> = Vec::new();
     // 表示できる画像(r:embed と wp:extent が読めたもの)
@@ -340,7 +343,7 @@ pub fn parse_document_with(
                     b"p" => { para = Some(Vec::new()); size_pt = DEFAULT_PT; font = None;
                               fmt = CharFormat::default(); align = Align::default();
                               list = ListKind::default(); indent = 0; line_spacing = 1.0;
-                              page_break_before = false; }
+                              page_break_before = false; shade = None; boxed = false; }
                     b"rPr" => { in_rpr = true; fmt = CharFormat::default(); }
                     b"pPr" => in_ppr = true,
                     b"sz" if in_rpr => {
@@ -403,6 +406,13 @@ pub fn parse_document_with(
                     b"jc" if in_ppr => {
                         if let Some(v) = attr(&e, "val") { align = Align::from_docx(&v); }
                     }
+                    // 段落の背景色。fill が色(auto 以外)のときだけ
+                    b"shd" if in_ppr => {
+                        shade = attr(&e, "fill")
+                            .filter(|v| !v.is_empty() && v != "auto");
+                    }
+                    // 段落の囲み枠。辺の別は持たない(あれば囲みとみなす)
+                    b"pBdr" if in_ppr => boxed = true,
                     b"t" => { in_text = true; cur.clear(); }
                     // セル結合。横は列数、縦は restart/continue の区別で持つ
                     b"gridSpan" => if stack.last().is_some() {
@@ -534,6 +544,13 @@ pub fn parse_document_with(
                     b"jc" if in_ppr => {
                         if let Some(v) = attr(&e, "val") { align = Align::from_docx(&v); }
                     }
+                    // 段落の背景色。fill が色(auto 以外)のときだけ
+                    b"shd" if in_ppr => {
+                        shade = attr(&e, "fill")
+                            .filter(|v| !v.is_empty() && v != "auto");
+                    }
+                    // 段落の囲み枠。辺の別は持たない(あれば囲みとみなす)
+                    b"pBdr" if in_ppr => boxed = true,
                     // セル結合(空要素で来るのが普通の形)
                     b"gridSpan" => if stack.last().is_some() {
                         cell_span = attr(&e, "val").and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -569,7 +586,9 @@ pub fn parse_document_with(
                             rep.paragraphs += 1;
                             let p = Paragraph { align, anchors: std::mem::take(&mut anchors),
                                 images: std::mem::take(&mut images),
-                                page_break_before, list, indent, line_spacing, runs: if runs.is_empty() {
+                                page_break_before, list, indent, line_spacing,
+                                shade: shade.take(), boxed,
+                                runs: if runs.is_empty() {
                                 vec![Run { text: String::new(), size_pt: DEFAULT_PT, font: None, fmt: Default::default() }]
                             } else { runs } };
                             // 表のセルの中なら、そのセルへ。外なら本文へ
@@ -638,11 +657,35 @@ pub fn write_document_xml(doc: &Document) -> String {
             || p.page_break_before
             || p.list != ListKind::None
             || p.indent > 0
-            || (p.spacing() - 1.0).abs() > 0.001;
+            || (p.spacing() - 1.0).abs() > 0.001
+            || p.shade.is_some()
+            || p.boxed;
         if has_ppr {
             w.write_event(Event::Start(BS::new("w:pPr"))).unwrap();
             if p.page_break_before {
                 w.write_event(Event::Empty(BS::new("w:pageBreakBefore"))).unwrap();
+            }
+            // 囲み枠(4辺とも同じ細線)
+            if p.boxed {
+                w.write_event(Event::Start(BS::new("w:pBdr"))).unwrap();
+                for side in ["top", "left", "bottom", "right"] {
+                    let tag = format!("w:{side}");
+                    let mut b = BS::new(tag.as_str());
+                    b.push_attribute(("w:val", "single"));
+                    b.push_attribute(("w:sz", "4"));
+                    b.push_attribute(("w:space", "4"));
+                    b.push_attribute(("w:color", "000000"));
+                    w.write_event(Event::Empty(b)).unwrap();
+                }
+                w.write_event(Event::End(BytesEnd::new("w:pBdr"))).unwrap();
+            }
+            // 背景色
+            if let Some(c) = &p.shade {
+                let mut sh = BS::new("w:shd");
+                sh.push_attribute(("w:val", "clear"));
+                sh.push_attribute(("w:color", "auto"));
+                sh.push_attribute(("w:fill", c.as_str()));
+                w.write_event(Event::Empty(sh)).unwrap();
             }
             if p.list != ListKind::None {
                 w.write_event(Event::Start(BS::new("w:numPr"))).unwrap();
@@ -798,9 +841,7 @@ pub fn write_document_xml(doc: &Document) -> String {
                             w.write_event(Event::End(BytesEnd::new("w:tcPr"))).unwrap();
                         }
                         if cell.paragraphs.is_empty() {
-                            para(&mut w, &Paragraph { align: Default::default(), anchors: Vec::new(),
-                    images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: Vec::new() });
+                            para(&mut w, &Paragraph { line_spacing: 1.0, ..Default::default() });
                         } else {
                             for p in &cell.paragraphs { para(&mut w, p) }
                         }
@@ -888,7 +929,7 @@ mod tests {
     fn para(s: &str) -> Paragraph {
         Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
         Document { font: None, page: None, sect_raw: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
@@ -923,7 +964,7 @@ mod tests {
     fn 文字サイズが保たれる() {
         let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
             Run { text: "本文".into(), size_pt: 10.5, font: None, fmt: Default::default() },
         ]})]};
@@ -956,7 +997,7 @@ mod tests {
     fn 段落内の改行が保たれる() {
         let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
         let (back, _) = round_trip(&d);
         assert_eq!(texts(&back)[0], "一行目\n二行目");
@@ -1115,7 +1156,7 @@ mod font_tests {
                     list: Default::default(),
                 indent: 0,
                 line_spacing: 1.0,
-                runs: vec![Run {
+                shade: None, boxed: false, runs: vec![Run {
                     text: "日本フネン".into(),
                     size_pt: 10.5,
                     font: Some("BIZ UDPゴシック".into()),
@@ -1165,7 +1206,7 @@ mod fmt_tests {
             sect_raw: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("見出し", f.clone())] })],
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![run("見出し", f.clone())] })],
         };
         let back = roundtrip(&d);
         assert_eq!(back.paragraphs().next().unwrap().runs[0].fmt, f, "書式が消えた");
@@ -1180,7 +1221,7 @@ mod fmt_tests {
             sect_raw: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![run("赤", f.clone())] })],
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![run("赤", f.clone())] })],
         };
         assert_eq!(roundtrip(&d).paragraphs().next().unwrap().runs[0].fmt, f);
     }
@@ -1200,7 +1241,7 @@ mod fmt_tests {
                     list: Default::default(),
                     indent: 0,
                     line_spacing: 1.0,
-                    runs: vec![run("表題", CharFormat::default())],
+                    shade: None, boxed: false, runs: vec![run("表題", CharFormat::default())],
                 })],
             };
             assert_eq!(roundtrip(&d).paragraphs().next().unwrap().align, a, "{a:?} が消えた");
@@ -1248,6 +1289,7 @@ mod para_tests {
             list,
             indent,
             line_spacing: spacing,
+            shade: None, boxed: false,
             runs: vec![Run {
                 text: "項目".into(), size_pt: 10.5, font: None, fmt: Default::default(),
             }],
@@ -1541,5 +1583,33 @@ mod sect_tests {
             r#"<w:document xmlns:w="x"><w:body><w:p/></w:body></w:document>"#);
         assert!(doc.page.is_none());
         assert!(doc.sect_raw.is_none());
+    }
+}
+
+#[cfg(test)]
+mod shade_tests {
+    use super::*;
+    use kumihan::{Block, Document, Paragraph, Run};
+
+    #[test]
+    fn 段落の背景色と囲み枠が往復する() {
+        let mut p = Paragraph {
+            line_spacing: 1.0,
+            runs: vec![Run { text: "注意".into(), size_pt: 10.5, font: None,
+                             fmt: Default::default() }],
+            ..Default::default()
+        };
+        p.shade = Some("FFF2CC".into());
+        p.boxed = true;
+        let d = Document { font: None, page: None, sect_raw: None,
+                           blocks: vec![Block::Para(p)] };
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        let p = back.paragraphs().next().unwrap();
+        assert_eq!(p.shade.as_deref(), Some("FFF2CC"), "背景色が往復しない");
+        assert!(p.boxed, "囲み枠が往復しない");
     }
 }

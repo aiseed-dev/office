@@ -30,23 +30,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         blocks: vec![
             Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run {
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![Run {
                 fmt: Default::default(),
                 font: None,
                 text: "Japanese-Office 組版エンジン(K0)".into(), size_pt: 16.0 }] }),
             Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { font: None, fmt: Default::default(), text: "".into(), size_pt: 10.5 }] }),
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![Run { font: None, fmt: Default::default(), text: "".into(), size_pt: 10.5 }] }),
             Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { font: None, fmt: Default::default(), text:
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![Run { font: None, fmt: Default::default(), text:
                 "日本の事務の実態は、文書ではなく様式です。その様式の定義をテキストにして、\
                  記入用の帳票・検証・データベースを全部そこから派生させます。\
                  「原本はテキスト。」と、私たちは Rust で書きます。".into(),
                 size_pt: 10.5 }] }),
             Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { font: None, fmt: Default::default(), text:
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![Run { font: None, fmt: Default::default(), text:
                 "この紙面は kumihan が実フォントの字幅で組んだ座標を、そのまま PDF に\
                  写したものです。行頭に句読点(、や。)や閉じ括弧が来ないこと、\
                  行末に開き括弧(「や()が残らないこと、英単語 Rust や TypeScript が\
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 size_pt: 10.5 }] }),
             Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
-                    list: Default::default(), indent: 0, line_spacing: 1.0, runs: vec![Run { font: None, fmt: Default::default(), text:
+                    list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, runs: vec![Run { font: None, fmt: Default::default(), text:
                 "禁則の検査: あいうえおかきくけこ、さしすせそ。「たちつてと」と\
                  (なにぬねの)!? 数字 2026 年 8 月 2 日、単位 25.4mm/72pt。".into(),
                 size_pt: 10.5 }] }),

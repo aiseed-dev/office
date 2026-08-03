@@ -981,6 +981,7 @@ impl Writer {
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
         "instable", "inssymbol", "replace", "changecase", "blankpage",
+        "paracolor", "borders",
         "spell", "wordcount", "zoom-in", "zoom-out", "hidenchars", "ruler",
         "fontname", "fontsize",
         "pageorient", "pagesize", "pagemargins",
@@ -1047,6 +1048,16 @@ impl Writer {
             // 行間。1.0 → 1.5 → 2.0 → 1.0 と回す(小窓がまだ無いので)
             // この段落の前で改ページ(押すたびに入切)
             "pagebreak" => self.para(|p| p.page_break_before = !p.page_break_before),
+            // 段落の背景色。無し → 薄黄 → 薄青 → 無し、で回す
+            "paracolor" => self.para(|p| {
+                p.shade = match p.shade.as_deref() {
+                    None => Some("FFF2CC".into()),
+                    Some("FFF2CC") => Some("DEEAF6".into()),
+                    _ => None,
+                }
+            }),
+            // 段落の囲み枠(入切)
+            "borders" => self.para(|p| p.boxed = !p.boxed),
             // 大文字小文字。選択の英字を 全部大文字 ⇄ 全部小文字 で切り替える
             // (小文字が混ざっていれば大文字へ。1手で戻せる)
             "changecase" => {
@@ -1682,6 +1693,59 @@ impl Render for Writer {
                 .left(px(x1.min(x2))).top(px(y1.min(y2)))
                 .w(px((x2 - x1).abs().max(1.0))).h(px((y2 - y1).abs().max(1.0)))
                 .bg(rgb(0x444B52)));
+        }
+
+        // 段落の背景色と囲み枠。行の帯として敷く(文字より下に来るよう先に描く)
+        {
+            let mut deco: Vec<(std::ops::Range<usize>, Option<String>, bool)> = Vec::new();
+            let mut at = 0usize;
+            for p in self.doc.paragraphs() {
+                let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+                if p.shade.is_some() || p.boxed {
+                    deco.push((at..at + len, p.shade.clone(), p.boxed));
+                }
+                at += len + 1;
+            }
+            if !deco.is_empty() {
+                let (bx0, bx1) = (self.pg.left_mm, self.pg.w_mm - self.pg.right_mm);
+                for line in self.page.lines.iter().filter(|l| l.from_body) {
+                    let Some((r, shade, boxed)) = deco
+                        .iter()
+                        .find(|(r, ..)| r.start <= line.byte0 && line.byte0 <= r.end)
+                        .map(|(r, sh, b)| (r.clone(), sh.clone(), *b))
+                    else {
+                        continue;
+                    };
+                    let band_top = (line.y_mm - LINE_MM * 0.75) * pxmm;
+                    let band_h = LINE_MM * pxmm;
+                    if let Some(c) = &shade {
+                        paper = paper.child(div().absolute()
+                            .left(px(bx0 * pxmm)).top(px(band_top))
+                            .w(px((bx1 - bx0) * pxmm)).h(px(band_h))
+                            .bg(gpui::Rgba {
+                                r: hex(c, 0), g: hex(c, 1), b: hex(c, 2), a: 1.0,
+                            }));
+                    }
+                    if boxed {
+                        let ink = rgb(0x444B52);
+                        for x in [bx0, bx1] {
+                            paper = paper.child(div().absolute()
+                                .left(px(x * pxmm)).top(px(band_top))
+                                .w(px(1.0)).h(px(band_h)).bg(ink));
+                        }
+                        if line.byte0 == r.start {
+                            paper = paper.child(div().absolute()
+                                .left(px(bx0 * pxmm)).top(px(band_top))
+                                .w(px((bx1 - bx0) * pxmm)).h(px(1.0)).bg(ink));
+                        }
+                        if line.byte_end() >= r.end {
+                            paper = paper.child(div().absolute()
+                                .left(px(bx0 * pxmm)).top(px(band_top + band_h))
+                                .w(px((bx1 - bx0) * pxmm)).h(px(1.0)).bg(ink));
+                        }
+                    }
+                }
+            }
         }
 
         // 未確定(変換中)の下線は、行が持つバイト位置(byte0)で結ぶ

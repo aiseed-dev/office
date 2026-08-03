@@ -120,6 +120,10 @@ pub struct Paragraph {
     pub indent: u8,
     /// 行間の倍率。1.0 が既定
     pub line_spacing: f32,
+    /// 段落の背景色 `RRGGBB`(docx の w:shd)。見出しの帯に使われる
+    pub shade: Option<String>,
+    /// 段落を枠で囲む(docx の w:pBdr)。囲みの注意書きに使われる
+    pub boxed: bool,
 }
 
 impl Paragraph {
@@ -260,47 +264,22 @@ impl Document {
     pub fn set_body_text(&mut self, text: &str, size_pt: f32) {
         let tables: Vec<Block> = self.blocks.iter()
             .filter(|b| matches!(b, Block::Table(_))).cloned().collect();
-        // 引き継ぐ元(段落だけを順に)
-        #[allow(clippy::type_complexity)]
-        let old: Vec<(Align, Option<String>, CharFormat, Option<f32>, ListKind, u8, f32,
-                      Vec<String>, bool, Vec<InlineImage>)> = self
-            .paragraphs()
-            .map(|p| {
-                let r = p.runs.first();
-                (p.align,
-                 r.and_then(|r| r.font.clone()),
-                 r.map(|r| r.fmt.clone()).unwrap_or_default(),
-                 r.map(|r| r.size_pt),
-                 p.list, p.indent, p.line_spacing, p.anchors.clone(),
-                 p.page_break_before, p.images.clone())
-            })
-            .collect();
+        // 引き継ぐ元(段落だけを順に)。**段落をまるごと写す** —
+        // 性質を一つずつ数え上げる方式は、段落に性質を足すたびに
+        // 持ち越し漏れが出る(改ページや画像で一度ずつ踏んだ)
+        let old: Vec<Paragraph> = self.paragraphs().cloned().collect();
         self.blocks = text
             .split('\n')
             .enumerate()
             .map(|(i, s)| {
-                // 段落の性質は同じ位置から引き継ぐ。**改ページも画像(anchors)も**
-                // ここで持ち越さないと、1文字打つだけで消える
-                let (align, font, fmt, old_pt, list, indent, ls, anchors, pbb, images) =
-                    old.get(i).cloned().unwrap_or((Align::default(), None,
-                        CharFormat::default(), None, ListKind::default(), 0, 1.0,
-                        Vec::new(), false, Vec::new()));
-                Block::Para(Paragraph {
-                    align,
-                    anchors,
-                    images,
-                    page_break_before: pbb,
-                    list,
-                    indent,
-                    line_spacing: ls,
-                    runs: vec![Run {
-                        text: s.to_string(),
-                        // 段落に付いていた大きさを守る。無ければ既定
-                        size_pt: old_pt.unwrap_or(size_pt),
-                        font,
-                        fmt,
-                    }],
-                })
+                let mut p = old.get(i).cloned().unwrap_or_default();
+                let (pt, font, fmt) = p
+                    .runs
+                    .first()
+                    .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
+                    .unwrap_or((size_pt, None, CharFormat::default()));
+                p.runs = vec![Run { text: s.to_string(), size_pt: pt, font, fmt }];
+                Block::Para(p)
             })
             .collect();
         self.blocks.extend(tables);
@@ -441,14 +420,9 @@ impl Document {
             blocks: text
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
-                    align: Default::default(),
-                    anchors: Vec::new(),
-                    images: Vec::new(),
-                    page_break_before: false,
-                    list: Default::default(),
-                    indent: 0,
                     line_spacing: 1.0,
-                    runs: vec![Run { text: p.to_string(), size_pt, font: None, fmt: Default::default() }] }))
+                    shade: None, boxed: false, runs: vec![Run { text: p.to_string(), size_pt, font: None, fmt: Default::default() }],
+                    ..Default::default() }))
                 .collect(),
         }
     }
@@ -1624,5 +1598,24 @@ mod byte0_tests {
         assert_eq!(l.byte0, 0);
         // 印(・)ぶんが byte_end に乗っていない
         assert_eq!(l.byte_end(), "項目".len(), "印が本文のバイトに混ざった");
+    }
+}
+
+#[cfg(test)]
+mod shade_carry_tests {
+    use super::*;
+
+    #[test]
+    fn 編集しても段落の帯と枠が残る() {
+        // set_body_text は段落をまるごと写すので、新しい性質も自動で残る
+        let mut d = Document::plain("見出し\n本文", 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] {
+            p.shade = Some("DEEAF6".into());
+            p.boxed = true;
+        }
+        d.set_body_text("見出しに追記\n本文", 10.5);
+        let p = d.paragraphs().next().unwrap();
+        assert_eq!(p.shade.as_deref(), Some("DEEAF6"), "1文字打つだけで帯が消えた");
+        assert!(p.boxed, "枠が消えた");
     }
 }
