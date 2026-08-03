@@ -118,9 +118,9 @@ pub const WRITER: &[Tab] = &[
         x("図表目次の更新", "tof-update"),
     ]},
     Tab { name: "ヘッダー/フッター", cmds: &[
-        x("ヘッダーの編集", "edit-header"),
-        x("フッターの編集", "edit-footer"),
-        x("ページ番号", "pagenum"),
+        c("edit-header", "ヘッダーの編集", "edit-header"),
+        c("edit-footer", "フッターの編集", "edit-footer"),
+        c("pagenum", "ページ番号", "pagenum"),
         x("日付/時刻", "datetime"),
         x("ページ数", "numpages"),
     ]},

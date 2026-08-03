@@ -228,6 +228,57 @@ pub struct Document {
     /// 節の設定の原文(w:sectPr)。ヘッダーの参照などが入っているので、
     /// **理解はしないが捨てない**。保存でそのまま返す
     pub sect_raw: Option<String>,
+    /// ヘッダー(docx の headerN.xml)。全ページ同じもの(type="default")だけを持つ
+    pub header: HeadFoot,
+    /// フッター(docx の footerN.xml)
+    pub footer: HeadFoot,
+}
+
+/// ヘッダー・フッター(1節ぶん)。
+///
+/// **paragraphs が空 = 持っていない(または編集できない)。**
+/// 空のヘッダーを表すときは、空のランを持つ段落を1つ置く —
+/// この区別で「触っていない部品を保存で書き潰さない」を守る。
+#[derive(Debug, Clone, Default)]
+pub struct HeadFoot {
+    pub paragraphs: Vec<Paragraph>,
+    /// 読み込んだ docx での部品名(`word/header1.xml` 等)。
+    /// 保存で同じ部品へ書き戻す。None で paragraphs があれば新しい部品を作る
+    pub part: Option<String>,
+}
+
+/// ページ番号の印(docx の PAGE フィールド)。ヘッダー・フッターの文中に
+/// この1字で置き、組むとき([`layout_hf`])にそのページの番号の字になる。
+/// 私用領域の字なので普通の本文と衝突しない。
+pub const PAGE_MARK: char = '\u{E000}';
+
+/// 段落の列を編集用の平文にする(区切りは改行)。セル・ヘッダーの編集で使う。
+pub fn paras_text(paras: &[Paragraph]) -> String {
+    paras
+        .iter()
+        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 平文を段落の列へ戻す。同じ位置の段落から書式を引き継ぐ
+/// (本文の `set_body_text` と同じ規則 — 段落をまるごと写す)。
+pub fn set_paras_text(paras: &mut Vec<Paragraph>, text: &str, size_pt: f32) {
+    let old = std::mem::take(paras);
+    *paras = text
+        .split('\n')
+        .enumerate()
+        .map(|(i, s)| {
+            let mut p = old.get(i).cloned().unwrap_or_default();
+            let (pt, font, fmt) = p
+                .runs
+                .first()
+                .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
+                .unwrap_or((size_pt, None, CharFormat::default()));
+            p.runs = vec![Run { text: s.to_string(), size_pt: pt, font, fmt }];
+            p
+        })
+        .collect();
 }
 
 impl Document {
@@ -419,7 +470,7 @@ impl Document {
         Document {
             font: None,
             page: None,
-            sect_raw: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(),
             blocks: text
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
@@ -775,6 +826,62 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
         }
     }
     sheet
+}
+
+/// ヘッダー(footer=false)・フッター(footer=true)を**1ページぶん**組む。
+///
+/// [`PAGE_MARK`] はそのページの番号の字に置き換わる。**表示専用** —
+/// 置き換えでバイト位置が変わるので、行の byte0 は編集と結ばない
+/// (ヘッダーの編集は紙面上ではなく板で行う)。
+/// y はページ上端からの mm、x は左余白からの mm(本文の行と同じ物差し)。
+pub fn layout_hf(
+    hf: &HeadFoot,
+    m: &Metrics,
+    pg: &PageSetup,
+    line_height_mm: f32,
+    page_no: usize,
+    footer: bool,
+) -> Vec<Line> {
+    if hf.paragraphs.is_empty() {
+        return Vec::new();
+    }
+    let num = page_no.to_string();
+    let measure = pg.measure_mm();
+    // ヘッダーは上余白の中を上から、フッターは下余白の頭から下へ
+    let mut y = if footer {
+        pg.h_mm - pg.bottom_mm + line_height_mm * 0.8
+    } else {
+        (pg.top_mm * 0.45).max(line_height_mm * 0.8)
+    };
+    let mut out = Vec::new();
+    for para in &hf.paragraphs {
+        let mut para = para.clone();
+        for r in &mut para.runs {
+            if r.text.contains(PAGE_MARK) {
+                r.text = r.text.replace(PAGE_MARK, &num);
+            }
+        }
+        for cells in break_para(&para, m, measure, None) {
+            let w: f32 = cells.iter().map(|c| c.w_mm).sum();
+            let slack = (measure - w).max(0.0);
+            let mut x = match para.align {
+                Align::Left | Align::Justify => 0.0,
+                Align::Center => slack / 2.0,
+                Align::Right => slack,
+            };
+            let cells: Vec<Cell> = cells
+                .into_iter()
+                .map(|mut c| {
+                    c.x_mm = x;
+                    x += c.w_mm;
+                    c
+                })
+                .collect();
+            out.push(Line { cells, y_mm: y, from_body: false, byte0: 0, cell: None });
+            y += line_height_mm;
+        }
+    }
+    out
 }
 
 /// 表を組む。戻り値は表の下の、次のベースライン。
@@ -1372,7 +1479,7 @@ mod table_layout_tests {
             }],
             ..Default::default()
         };
-        let mut d = Document { font: None, page: None, sect_raw: None, blocks: vec![] };
+        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![] };
         d.blocks.push(Block::Table(Table {
             col_mm: vec![],
             rows: vec![vec![cell(&"あ".repeat(30)), cell("短い")]],
@@ -1412,7 +1519,7 @@ mod merge_layout_tests {
         let data = font::load(font::for_document(None).unwrap().0).unwrap();
         let m = Metrics::new(&data).unwrap();
         let d = Document {
-            font: None, page: None, sect_raw: None,
+            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(),
             blocks: vec![Block::Table(Table { col_mm: vec![], rows })],
         };
         layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 })
@@ -1489,7 +1596,7 @@ mod gridcol_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(),
             blocks: vec![Block::Table(Table {
                 col_mm,
                 rows: vec![vec![cell("項目"), cell("値")]],
@@ -1601,6 +1708,79 @@ mod byte0_tests {
         assert_eq!(l.byte0, 0);
         // 印(・)ぶんが byte_end に乗っていない
         assert_eq!(l.byte_end(), "項目".len(), "印が本文のバイトに混ざった");
+    }
+}
+
+#[cfg(test)]
+mod hf_layout_tests {
+    use super::*;
+
+    fn metrics() -> Vec<u8> {
+        font::load(font::for_document(None).unwrap().0).unwrap()
+    }
+
+    fn hf(text: &str) -> HeadFoot {
+        HeadFoot {
+            paragraphs: Document::plain(text, 10.5).paragraphs().cloned().collect(),
+            part: None,
+        }
+    }
+
+    #[test]
+    fn ページ番号の印が番号の字になる() {
+        let data = metrics();
+        let m = Metrics::new(&data).unwrap();
+        let pg = PageSetup::default();
+        let f = hf(&format!("- {PAGE_MARK} -"));
+        assert_eq!(layout_hf(&f, &m, &pg, 6.4, 1, true)[0].text(), "- 1 -");
+        assert_eq!(layout_hf(&f, &m, &pg, 6.4, 12, true)[0].text(), "- 12 -");
+    }
+
+    #[test]
+    fn ヘッダーは上余白フッターは下余白に入る() {
+        let data = metrics();
+        let m = Metrics::new(&data).unwrap();
+        let pg = PageSetup::default();
+        let h = layout_hf(&hf("頭"), &m, &pg, 6.4, 1, false);
+        assert!(h[0].y_mm < pg.top_mm, "ヘッダーが本文域に食い込む: {}", h[0].y_mm);
+        assert!(h[0].y_mm > 0.0);
+        let f = layout_hf(&hf("足"), &m, &pg, 6.4, 1, true);
+        assert!(f[0].y_mm > pg.h_mm - pg.bottom_mm,
+            "フッターが本文域に食い込む: {}", f[0].y_mm);
+        assert!(f[0].y_mm < pg.h_mm, "紙の外に出た: {}", f[0].y_mm);
+    }
+
+    #[test]
+    fn フッターの中央揃えが効く() {
+        let data = metrics();
+        let m = Metrics::new(&data).unwrap();
+        let pg = PageSetup::default();
+        let mut f = hf(&PAGE_MARK.to_string());
+        f.paragraphs[0].align = Align::Center;
+        let lines = layout_hf(&f, &m, &pg, 6.4, 1, true);
+        assert!(lines[0].cells[0].x_mm > pg.measure_mm() * 0.3,
+            "中央に寄っていない: {}", lines[0].cells[0].x_mm);
+    }
+
+    #[test]
+    fn 無ければ何も出ない() {
+        let data = metrics();
+        let m = Metrics::new(&data).unwrap();
+        assert!(layout_hf(&HeadFoot::default(), &m, &PageSetup::default(), 6.4, 1, false)
+            .is_empty());
+    }
+
+    #[test]
+    fn 平文との相互変換で書式が残る() {
+        // 板での編集は paras_text / set_paras_text を通る
+        let mut ps: Vec<Paragraph> =
+            Document::plain("社外秘", 10.5).paragraphs().cloned().collect();
+        ps[0].align = Align::Right;
+        ps[0].runs[0].fmt.bold = true;
+        set_paras_text(&mut ps, "社外秘・控", 10.5);
+        assert_eq!(paras_text(&ps), "社外秘・控");
+        assert_eq!(ps[0].align, Align::Right, "揃えが消えた");
+        assert!(ps[0].runs[0].fmt.bold, "太字が消えた");
     }
 }
 

@@ -38,6 +38,22 @@ pub fn to_pdf<W: Write>(
     paper: Paper,
     out: W,
 ) -> Result<(), String> {
+    to_pdf_with(sheet, font_data, paper, |_| Vec::new(), out)
+}
+
+/// 紙面を PDF にする(ページごとの飾りつき)。
+///
+/// `page_decor(k)` は k ページ目(1始まり)に置く行 — ヘッダー・フッター。
+/// 行の y はページ上端からの mm、x は左余白からの mm
+/// ([`kumihan::layout_hf`] がこの形で返す)。
+/// ページ番号は組む側が字にして寄越すので、ここでは**置くだけ**。
+pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
+    sheet: &Sheet,
+    font_data: &[u8],
+    paper: Paper,
+    page_decor: F,
+    out: W,
+) -> Result<(), String> {
     let (doc, page, layer) = PdfDocument::new(
         "office",
         Mm(paper.width_mm),
@@ -177,6 +193,22 @@ pub fn to_pdf<W: Write>(
             });
         }
     }
+    // ページごとの飾り(ヘッダー・フッター)。y はページ上端からの絶対位置
+    for (k, l) in layers.iter().enumerate() {
+        for line in page_decor(k + 1) {
+            if line.cells.is_empty() {
+                continue;
+            }
+            let text = line.text();
+            let pt = line.cells[0].size_pt;
+            let x = paper.margin_mm + line.cells[0].x_mm;
+            let y = paper.height_mm - line.y_mm;
+            l.use_text(&text, pt, Mm(x), Mm(y), &font);
+            if line.cells[0].fmt.bold {
+                l.use_text(&text, pt, Mm(x + 0.12), Mm(y), &font);
+            }
+        }
+    }
     doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())
 }
 
@@ -299,6 +331,40 @@ mod page_tests {
         let n = pages(100);
         assert!((3..=4).contains(&n), "100行が {n} ページ(40行/頁の見当と合わない)");
         assert!(pages(300) >= 8, "300行が {} ページ", pages(300));
+    }
+}
+
+#[cfg(test)]
+mod hf_tests {
+    use kumihan::{font, layout, layout_hf, Document, Frame, HeadFoot, Metrics, PageSetup,
+                  PAGE_MARK};
+
+    use super::*;
+
+    #[test]
+    fn ページ番号が各ページに載りページ数は変わらない() {
+        let (fam, _) = font::for_document(None).unwrap();
+        let data = font::load(fam).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let text = vec!["行"; 100].join("\n");
+        let d = Document::plain(&text, 10.5);
+        let s = layout(&d, &m, &Frame { measure_mm: 170.0, line_height_mm: 6.4, y0_mm: 24.0 });
+        let pg = PageSetup::default();
+        let hf = HeadFoot {
+            paragraphs: Document::plain(&PAGE_MARK.to_string(), 10.5)
+                .paragraphs().cloned().collect(),
+            part: None,
+        };
+        let mut buf = Vec::new();
+        to_pdf_with(&s, &data, Paper::default(),
+            |k| layout_hf(&hf, &m, &pg, 6.4, k, true), &mut buf).unwrap();
+        assert_eq!(&buf[..5], b"%PDF-");
+        // ページ数は本文で決まる(飾りで増えない)
+        let hay = String::from_utf8_lossy(&buf).to_string();
+        let i = hay.find("/Count ").unwrap() + 7;
+        let n: usize = hay[i..].chars().take_while(|c| c.is_ascii_digit())
+            .collect::<String>().parse().unwrap();
+        assert!((3..=4).contains(&n), "{n} ページ");
     }
 }
 

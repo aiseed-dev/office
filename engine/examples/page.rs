@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let doc = Document {
         font: None,
         page: None,
-        sect_raw: None,
+        sect_raw: None, header: Default::default(), footer: Default::default(),
         blocks: vec![
             Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,

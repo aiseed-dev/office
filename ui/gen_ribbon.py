@@ -53,6 +53,8 @@ READY = {
         "changecase": "changecase", "blankpage": "blankpage",
         "paracolor": "paracolor", "borders": "borders",
         "insertimage": "insimage",
+        "edit-header": "edit-header", "edit-footer": "edit-footer",
+        "pagenum": "pagenum",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

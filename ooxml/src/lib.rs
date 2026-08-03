@@ -14,7 +14,7 @@
 use std::io::{Cursor, Read, Seek, Write};
 
 use kumihan::{Align, Block, Cellbox, CharFormat, Document, ListKind, Paragraph, Run, Table,
-              VMerge};
+              VMerge, PAGE_MARK};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
@@ -78,14 +78,14 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
         .read_to_string(&mut xml)
         .map_err(|e| format!("document.xml を読めません: {e}"))?;
 
-    // 画像の表示のために、関係ID → 実体 を先に引いておく。
-    // rels: <Relationship Id="rId5" Target="media/image1.png"/>
-    let mut media: std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>> =
-        Default::default();
+    // 関係ID → 部品名 を先に引いておく。
+    // rels: <Relationship Id="rId5" Target="media/image1.png"/>。
+    // 画像の実体のほか、ヘッダー・フッターの部品名もここから引く
     let mut rels = String::new();
     if let Ok(mut f) = zip.by_name("word/_rels/document.xml.rels") {
         let _ = f.read_to_string(&mut rels);
     }
+    let mut targets: std::collections::BTreeMap<String, String> = Default::default();
     let mut at = 0usize;
     while let Some(i) = rels[at..].find("Id=\"") {
         let s = at + i + 4;
@@ -96,21 +96,58 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
         if let Some(ti) = tail.find("Target=\"") {
             let ts = ti + 8;
             if let Some(te) = tail[ts..].find('"') {
-                let target = &tail[ts..ts + te];
-                if target.starts_with("media/") {
-                    let path = format!("word/{target}");
-                    if let Ok(mut mf) = zip.by_name(&path) {
-                        let mut buf = Vec::new();
-                        if mf.read_to_end(&mut buf).is_ok() {
-                            media.insert(id, std::sync::Arc::new(buf));
-                        }
-                    }
-                }
+                targets.insert(id, tail[ts..ts + te].to_string());
             }
         }
         at = s + e;
     }
-    let (mut doc, rep) = parse_document_with(&xml, &media);
+    let mut media: std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>> =
+        Default::default();
+    for (id, target) in &targets {
+        if target.starts_with("media/") {
+            let path = format!("word/{target}");
+            if let Ok(mut mf) = zip.by_name(&path) {
+                let mut buf = Vec::new();
+                if mf.read_to_end(&mut buf).is_ok() {
+                    media.insert(id.clone(), std::sync::Arc::new(buf));
+                }
+            }
+        }
+    }
+    let (mut doc, mut rep) = parse_document_with(&xml, &media);
+    // ヘッダー・フッター(全ページ同じもの = type="default")を部品から読む。
+    // 表など、まだ持てないものが入っていたら**編集の対象にしない** —
+    // paragraphs を空のまま残せば、保存で原文の部品がそのまま生きる
+    if let Some(sect) = doc.sect_raw.clone() {
+        for (tag, footer) in [("headerReference", false), ("footerReference", true)] {
+            let Some(rid) = hf_ref(&sect, tag) else { continue };
+            let Some(target) = targets.get(&rid) else { continue };
+            let part = format!("word/{}", target.trim_start_matches('/').trim_start_matches("word/"));
+            let mut hxml = String::new();
+            match zip.by_name(&part) {
+                Ok(mut f) => { let _ = f.read_to_string(&mut hxml); }
+                Err(_) => continue,
+            }
+            let (hdoc, hrep) = parse_document_with(&hxml, &media);
+            let which = if footer { "フッター" } else { "ヘッダー" };
+            let hf = if footer { &mut doc.footer } else { &mut doc.header };
+            hf.part = Some(part);
+            if hdoc.tables().next().is_some() {
+                rep.note(&format!("{which}の表(編集できないが保存では残る)"));
+            } else {
+                hf.paragraphs = hdoc.paragraphs().cloned().collect();
+                if hf.paragraphs.is_empty() {
+                    // 段落の無い部品でも、空の段落を1つ置けば編集できる
+                    hf.paragraphs.push(Paragraph::default());
+                }
+            }
+            for (n, k) in hrep.unsupported {
+                for _ in 0..k {
+                    rep.note(&format!("{which}: {n}"));
+                }
+            }
+        }
+    }
     // 文書の既定書体(styles.xml の docDefaults)。読まないと
     // 明朝の書類がこちらの既定(ゴシック)で表示される
     let mut styles = String::new();
@@ -258,6 +295,81 @@ fn parse_sect(raw: &str) -> kumihan::PageSetup {
     }
 }
 
+/// sectPr の中から、全ページ同じヘッダー(フッター)の参照 r:id を引く。
+/// `<w:headerReference w:type="default" r:id="rId8"/>`。type 無しは default 扱い。
+fn hf_ref(sect: &str, tag: &str) -> Option<String> {
+    let needle = format!("<w:{tag}");
+    let mut at = 0usize;
+    while let Some(i) = sect[at..].find(&needle) {
+        let s = at + i;
+        let e = sect[s..].find('>')? + s;
+        let head = &sect[s..e];
+        if !head.contains("w:type=") || head.contains("w:type=\"default\"") {
+            if let Some(j) = head.find("r:id=\"") {
+                let js = j + 6;
+                if let Some(je) = head[js..].find('"') {
+                    return Some(head[js..js + je].to_string());
+                }
+            }
+        }
+        at = e;
+    }
+    None
+}
+
+/// フィールドの命令が PAGE(いまのページの番号)か。NUMPAGES(総頁)は別物。
+fn is_page_instr(instr: &str) -> bool {
+    instr.split_whitespace().next() == Some("PAGE")
+}
+
+/// w:fldChar(複雑なフィールドの区切り)を1つ処理する。
+/// begin〜end の間に instrText で命令が来る。separate〜end は
+/// 「計算済みの見た目」なので持たない(開く側が計算し直す)。
+#[allow(clippy::too_many_arguments)]
+fn fldchar(
+    kind: Option<&str>,
+    in_field: &mut bool,
+    field_hide: &mut bool,
+    field_instr: &mut String,
+    para: &mut Option<Vec<Run>>,
+    rep: &mut Report,
+    size_pt: f32,
+    font: &Option<String>,
+    fmt: &CharFormat,
+) {
+    match kind {
+        Some("begin") => {
+            *in_field = true;
+            *field_hide = false;
+            field_instr.clear();
+        }
+        Some("separate") => {
+            if *in_field {
+                *field_hide = true;
+            }
+        }
+        Some("end") => {
+            if *in_field {
+                *in_field = false;
+                *field_hide = false;
+                if is_page_instr(field_instr) {
+                    if let Some(p) = para.as_mut() {
+                        p.push(Run {
+                            text: PAGE_MARK.to_string(),
+                            size_pt,
+                            font: font.clone(),
+                            fmt: fmt.clone(),
+                        });
+                    }
+                } else if !field_instr.trim().is_empty() {
+                    rep.note(&format!("フィールド({})", field_instr.trim()));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn parse_document_xml(xml: &str) -> (Document, Report) {
     parse_document_with(xml, &Default::default())
 }
@@ -302,6 +414,11 @@ pub fn parse_document_with(
     let mut in_text = false;
     let mut in_rpr = false;
     let mut cur = String::new();
+    // フィールド(w:fldChar / w:instrText)。PAGE(ページ番号)だけを印として持つ
+    let mut in_instr = false;
+    let mut in_field = false;
+    let mut field_hide = false;
+    let mut field_instr = String::new();
     const SKIP_KNOWN: &[&str] = &["drawing", "pict", "object", "sdt"];
 
     let mut buf = Vec::new();
@@ -317,7 +434,8 @@ pub fn parse_document_with(
             Ok(Event::Start(e)) => {
                 let n = local(e.name().as_ref()).to_vec();
                 match n.as_slice() {
-                    b"document" => {
+                    // hdr / ftr はヘッダー・フッターの部品を読むときの root
+                    b"document" | b"hdr" | b"ftr" => {
                         // root の xmlns:* を控える(画像の原文の接頭辞に要る)
                         for a in e.attributes().flatten() {
                             let k = String::from_utf8_lossy(a.key.as_ref()).to_string();
@@ -467,6 +585,26 @@ pub fn parse_document_with(
                         }
                     }
                     b"sdt" => rep.note("w:sdt"),
+                    // 単純なフィールド。PAGE は印として持ち、それ以外は報告する
+                    b"fldSimple" => {
+                        let instr = attr(&e, "instr").unwrap_or_default();
+                        let name = e.name().to_owned();
+                        if r.read_to_end_into(name, &mut Vec::new()).is_ok() {
+                            last_pos = r.buffer_position() as usize;
+                        }
+                        if is_page_instr(&instr) {
+                            if let Some(p) = para.as_mut() {
+                                p.push(Run { text: PAGE_MARK.to_string(), size_pt,
+                                             font: font.clone(), fmt: fmt.clone() });
+                            }
+                        } else {
+                            rep.note(&format!("フィールド({})", instr.trim()));
+                        }
+                    }
+                    b"instrText" => in_instr = true,
+                    b"fldChar" => fldchar(attr(&e, "fldCharType").as_deref(),
+                        &mut in_field, &mut field_hide, &mut field_instr,
+                        &mut para, &mut rep, size_pt, &font, &fmt),
                     other => {
                         let _ = other;
                     }
@@ -563,21 +701,47 @@ pub fn parse_document_with(
                     },
                     b"drawing" | b"pict" | b"object" =>
                         rep.note(&format!("w:{}", String::from_utf8_lossy(&n))),
+                    // fldChar は空要素で来るのが普通の形
+                    b"fldChar" => fldchar(attr(&e, "fldCharType").as_deref(),
+                        &mut in_field, &mut field_hide, &mut field_instr,
+                        &mut para, &mut rep, size_pt, &font, &fmt),
+                    b"fldSimple" => {
+                        // 空の fldSimple(中身なし)。PAGE なら印だけ置く
+                        let instr = attr(&e, "instr").unwrap_or_default();
+                        if is_page_instr(&instr) {
+                            if let Some(p) = para.as_mut() {
+                                p.push(Run { text: PAGE_MARK.to_string(), size_pt,
+                                             font: font.clone(), fmt: fmt.clone() });
+                            }
+                        } else {
+                            rep.note(&format!("フィールド({})", instr.trim()));
+                        }
+                    }
                     _ => {}
                 }
             }
-            Ok(Event::Text(t)) if in_text => cur.push_str(&t.unescape().unwrap_or_default()),
+            Ok(Event::Text(t)) => {
+                if in_text {
+                    cur.push_str(&t.unescape().unwrap_or_default());
+                } else if in_instr {
+                    field_instr.push_str(&t.unescape().unwrap_or_default());
+                }
+            }
             Ok(Event::End(e)) => {
                 let n = local(e.name().as_ref()).to_vec();
                 match n.as_slice() {
                     b"t" => {
                         in_text = false;
-                        if !cur.is_empty() {
+                        if field_hide {
+                            // フィールドの計算済みの見た目。持たない(開く側が計算し直す)
+                            cur.clear();
+                        } else if !cur.is_empty() {
                             if let Some(p) = para.as_mut() {
                                 p.push(Run { text: std::mem::take(&mut cur), size_pt, font: font.clone(), fmt: fmt.clone() });
                             }
                         }
                     }
+                    b"instrText" => in_instr = false,
                     b"rPr" => in_rpr = false,
                     b"pPr" => in_ppr = false,
                     b"p" => {
@@ -654,12 +818,8 @@ pub fn write_document_xml(doc: &Document) -> String {
 
 /// 本体と、このアプリで挿した画像(出て来る順)を返す。
 /// 画像の番号(rIdJO1〜)はこの順で振られる。
-pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u8>>>) {
-    use quick_xml::events::{BytesEnd, BytesStart as BS};
-    let mut w = Writer::new(Cursor::new(Vec::new()));
-
-    fn para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
-            imgn: &mut usize, media: &mut Vec<std::sync::Arc<Vec<u8>>>) {
+fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
+        imgn: &mut usize, media: &mut Vec<std::sync::Arc<Vec<u8>>>) {
         use quick_xml::events::{BytesEnd, BytesStart as BS, BytesText};
         w.write_event(Event::Start(BS::new("w:p"))).unwrap();
         // 段落の性質。既定のものは書かない — 余計な指定を増やさない
@@ -733,6 +893,14 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
         }
         for run in &p.runs {
             if run.text.is_empty() { continue }
+            // ページ番号の印([`PAGE_MARK`])は PAGE フィールドとして書く
+            // (印の前後で run を割る)。中の「1」は開く側が計算し直す種
+            for (fi, chunk) in run.text.split(PAGE_MARK).enumerate() {
+            if fi > 0 {
+                let _ = w.get_mut().write_all(
+                    br#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple>"#);
+            }
+            if chunk.is_empty() { continue }
             w.write_event(Event::Start(BS::new("w:r"))).unwrap();
             w.write_event(Event::Start(BS::new("w:rPr"))).unwrap();
             // 書体は文書の設定なので、読んだものをそのまま返す。
@@ -775,7 +943,7 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
                 format!("{}", (run.size_pt * 2.0).round() as i32).as_str()));
             w.write_event(Event::Empty(sz)).unwrap();
             w.write_event(Event::End(BytesEnd::new("w:rPr"))).unwrap();
-            for (i, seg) in run.text.split('\n').enumerate() {
+            for (i, seg) in chunk.split('\n').enumerate() {
                 if i > 0 { w.write_event(Event::Empty(BS::new("w:br"))).unwrap(); }
                 if seg.is_empty() { continue }
                 let mut t = BS::new("w:t");
@@ -785,6 +953,7 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
                 w.write_event(Event::End(BytesEnd::new("w:t"))).unwrap();
             }
             w.write_event(Event::End(BytesEnd::new("w:r"))).unwrap();
+            }
         }
         // このアプリで挿した画像。部品(media・rels)は write_with が同じ番号で作る
         for im in &p.images_new {
@@ -798,7 +967,30 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
             media.push(im.bytes.clone());
         }
         w.write_event(Event::End(BytesEnd::new("w:p"))).unwrap();
+}
+
+/// ヘッダー・フッターの部品(headerN.xml / footerN.xml)の中身を作る。
+fn hf_xml(hf: &kumihan::HeadFoot, footer: bool) -> String {
+    use quick_xml::events::{BytesEnd, BytesStart as BS};
+    let root_name = if footer { "w:ftr" } else { "w:hdr" };
+    let mut w = Writer::new(Cursor::new(Vec::new()));
+    let mut root = BS::new(root_name);
+    root.push_attribute(("xmlns:w", W_NS));
+    root.push_attribute(("xmlns:r", RNS_DOC));
+    w.write_event(Event::Start(root)).unwrap();
+    // 画像の挿入はヘッダーには無い(imgn/media はここでは増えない)
+    let (mut imgn, mut media) = (0usize, Vec::new());
+    for p in &hf.paragraphs {
+        write_para(&mut w, p, &mut imgn, &mut media);
     }
+    w.write_event(Event::End(BytesEnd::new(root_name))).unwrap();
+    let body = String::from_utf8(w.into_inner().into_inner()).unwrap();
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n{body}")
+}
+
+pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u8>>>) {
+    use quick_xml::events::{BytesEnd, BytesStart as BS};
+    let mut w = Writer::new(Cursor::new(Vec::new()));
 
     let mut root = BS::new("w:document");
     root.push_attribute(("xmlns:w", W_NS));
@@ -815,7 +1007,7 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
     let mut media: Vec<std::sync::Arc<Vec<u8>>> = Vec::new();
     for b in &doc.blocks {
         match b {
-            Block::Para(p) => para(&mut w, p, &mut imgn, &mut media),
+            Block::Para(p) => write_para(&mut w, p, &mut imgn, &mut media),
             Block::Table(t) => {
                 w.write_event(Event::Start(BS::new("w:tbl"))).unwrap();
                 // 罫線(事務様式は罫線が見えないと様式にならない)
@@ -870,11 +1062,11 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
                             w.write_event(Event::End(BytesEnd::new("w:tcPr"))).unwrap();
                         }
                         if cell.paragraphs.is_empty() {
-                            para(&mut w, &Paragraph { line_spacing: 1.0, ..Default::default() },
+                            write_para(&mut w, &Paragraph { line_spacing: 1.0, ..Default::default() },
                                  &mut imgn, &mut media);
                         } else {
                             for p in &cell.paragraphs {
-                                para(&mut w, p, &mut imgn, &mut media)
+                                write_para(&mut w, p, &mut imgn, &mut media)
                             }
                         }
                         w.write_event(Event::End(BytesEnd::new("w:tc"))).unwrap();
@@ -886,8 +1078,32 @@ pub fn write_document_parts(doc: &Document) -> (String, Vec<std::sync::Arc<Vec<u
         }
     }
 
-    if let Some(sect) = &doc.sect_raw {
-        // 節の設定を原文のまま返す(用紙・余白・ヘッダーの参照)
+    // 節の設定を原文のまま返す(用紙・余白・ヘッダーの参照)。
+    // このアプリで足したヘッダー・フッターの参照が無ければ差し込む
+    // (参照が無いと、部品を書いても表示されない)
+    let mut sect = doc.sect_raw.clone();
+    {
+        let cur = sect.as_deref().unwrap_or("");
+        let mut refs = String::new();
+        if !doc.header.paragraphs.is_empty() && hf_ref(cur, "headerReference").is_none() {
+            refs.push_str(r#"<w:headerReference w:type="default" r:id="rIdJOhdr"/>"#);
+        }
+        if !doc.footer.paragraphs.is_empty() && hf_ref(cur, "footerReference").is_none() {
+            refs.push_str(r#"<w:footerReference w:type="default" r:id="rIdJOftr"/>"#);
+        }
+        if !refs.is_empty() {
+            sect = Some(match sect {
+                // 参照は sectPr の先頭に置く(スキーマの並び)
+                Some(s) if s.contains("</w:sectPr>") => match s.find('>') {
+                    Some(i) => format!("{}{}{}", &s[..i + 1], refs, &s[i + 1..]),
+                    None => s,
+                },
+                // 無い・空(<w:sectPr/>)なら作る
+                _ => format!("<w:sectPr>{refs}</w:sectPr>"),
+            });
+        }
+    }
+    if let Some(sect) = &sect {
         let _ = w.get_mut().write_all(sect.as_bytes());
     }
     w.write_event(Event::End(BytesEnd::new("w:body"))).unwrap();
@@ -935,6 +1151,16 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             format!("word/media/joimg{}.{ext}", i + 1)
         })
         .collect();
+    // ヘッダー・フッター。モデルに持っているもの(編集できたもの)だけ作り直す。
+    // paragraphs が空 = 触っていない/持てなかった部品 → 原本のまま持ち越す
+    let hdr: Option<(String, String)> = (!doc.header.paragraphs.is_empty()).then(|| (
+        doc.header.part.clone().unwrap_or_else(|| "word/johdr1.xml".to_string()),
+        hf_xml(&doc.header, false),
+    ));
+    let ftr: Option<(String, String)> = (!doc.footer.paragraphs.is_empty()).then(|| (
+        doc.footer.part.clone().unwrap_or_else(|| "word/joftr1.xml".to_string()),
+        hf_xml(&doc.footer, true),
+    ));
 
     // [Content_Types] と本文の rels は、挿した画像のぶんを織り込んで作り直す
     let mut copied = false;
@@ -970,6 +1196,12 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 if regen_media.contains(&name) {
                     continue;
                 }
+                // 作り直すヘッダー・フッターの部品も持ち越さない(後で書く)
+                if hdr.as_ref().is_some_and(|(n, _)| *n == name)
+                    || ftr.as_ref().is_some_and(|(n, _)| *n == name)
+                {
+                    continue;
+                }
                 zip.start_file(name, opts).map_err(|e| e.to_string())?;
                 zip.write_all(&buf).map_err(|e| e.to_string())?;
                 copied = true;
@@ -977,7 +1209,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
     }
 
-    // [Content_Types]。挿した画像の拡張子の宣言が無ければ足す
+    // [Content_Types]。挿した画像の拡張子とヘッダー・フッターの宣言が無ければ足す
     {
         let mut ct = orig_ct.unwrap_or_else(|| CONTENT_TYPES.to_string());
         let mut add = String::new();
@@ -986,6 +1218,18 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             let decl = format!(r#"<Default Extension="{ext}" ContentType="{ty}"/>"#);
             if !ct.contains(&format!("Extension=\"{ext}\"")) && !add.contains(&decl) {
                 add.push_str(&decl);
+            }
+        }
+        for (name, ty) in [
+            (hdr.as_ref().map(|(n, _)| n.as_str()),
+             "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"),
+            (ftr.as_ref().map(|(n, _)| n.as_str()),
+             "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"),
+        ] {
+            let Some(name) = name else { continue };
+            if !ct.contains(&format!("PartName=\"/{name}\"")) {
+                add.push_str(&format!(
+                    r#"<Override PartName="/{name}" ContentType="{ty}"/>"#));
             }
         }
         if !add.is_empty() {
@@ -1002,8 +1246,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     }
 
     // 本文の rels。原本の関係(既存の画像・ヘッダー等)は残し、
-    // 挿した画像のぶん(rIdJO1〜)を足す
-    if orig_rels.is_some() || !new_media.is_empty() {
+    // 挿した画像のぶん(rIdJO1〜)と、新しく作るヘッダー・フッターを足す
+    if orig_rels.is_some() || !new_media.is_empty() || hdr.is_some() || ftr.is_some() {
         let mut rels = orig_rels.unwrap_or_else(|| {
             concat!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
@@ -1028,6 +1272,27 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 r#"<Relationship Id="rIdJO{n}" Type="{RNS_DOC}/image" Target="media/joimg{n}.{ext}"/>"#
             ));
         }
+        // このアプリで作るヘッダー・フッター(johdr/joftr)の関係。
+        // 原本由来の部品(header1.xml 等)は参照も rels も原本のまま
+        for (rid, ty, part) in [
+            hdr.as_ref().map(|(n, _)| ("rIdJOhdr", "header", n.as_str())),
+            ftr.as_ref().map(|(n, _)| ("rIdJOftr", "footer", n.as_str())),
+        ].into_iter().flatten() {
+            let Some(target) = part.strip_prefix("word/") else { continue };
+            if !target.starts_with("johdr") && !target.starts_with("joftr") {
+                continue;
+            }
+            // 前の保存が残した同じ Id は除く(残すと Id が重なる)
+            let needle = format!("<Relationship Id=\"{rid}\"");
+            if let Some(i) = rels.find(&needle) {
+                if let Some(j) = rels[i..].find("/>") {
+                    rels.replace_range(i..i + j + 2, "");
+                }
+            }
+            add.push_str(&format!(
+                r#"<Relationship Id="{rid}" Type="{RNS_DOC}/{ty}" Target="{target}"/>"#
+            ));
+        }
         if let Some(p) = rels.rfind("</Relationships>") {
             rels.insert_str(p, &add);
         }
@@ -1041,6 +1306,11 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         zip.start_file(format!("word/media/joimg{n}.{ext}"), opts)
             .map_err(|e| e.to_string())?;
         zip.write_all(m).map_err(|e| e.to_string())?;
+    }
+    // ヘッダー・フッターの部品
+    for (name, xml) in [&hdr, &ftr].into_iter().flatten() {
+        zip.start_file(name.clone(), opts).map_err(|e| e.to_string())?;
+        zip.write_all(xml.as_bytes()).map_err(|e| e.to_string())?;
     }
 
     zip.start_file("word/document.xml", opts).map_err(|e| e.to_string())?;
@@ -1062,7 +1332,7 @@ mod tests {
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
-        Document { font: None, page: None, sect_raw: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
+        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
     }
     fn round_trip(d: &Document) -> (Document, Report) {
         let mut buf = Cursor::new(Vec::new());
@@ -1092,7 +1362,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -1125,7 +1395,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -1141,7 +1411,7 @@ mod tests {
 
     #[test]
     fn 表が往復する() {
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![
             Block::Para(para("(様式3) 会社概要")),
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![cell("会　社　名"), cell("日本フネン株式会社")],
@@ -1164,7 +1434,7 @@ mod tests {
 
     #[test]
     fn 表と本文の順序が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![
             Block::Para(para("前")),
             Block::Table(Table { col_mm: vec![], rows: vec![vec![cell("表1")]] }),
             Block::Para(para("中")),
@@ -1180,7 +1450,7 @@ mod tests {
     #[test]
     fn 空セルも列として残る() {
         // 事務様式は「記入欄が空の表」が本体。空セルが消えると様式が壊れる
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
             vec![cell("氏名"), Cellbox::default()],
             vec![cell("所属"), Cellbox::default()],
         ]})]};
@@ -1220,7 +1490,7 @@ mod tests {
         vstart.v_merge = kumihan::VMerge::Start;
         let mut vcont = Cellbox::default();
         vcont.v_merge = kumihan::VMerge::Continue;
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![head],
                 vec![vstart, cell("本社")],
@@ -1277,7 +1547,7 @@ mod font_tests {
         let doc = Document {
             font: None,
             page: None,
-            sect_raw: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(),
             blocks: vec![Block::Para(Paragraph {
                 align: Default::default(),
                 anchors: Vec::new(),
@@ -1333,7 +1603,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(),
             blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
@@ -1348,7 +1618,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(),
             blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
@@ -1362,7 +1632,7 @@ mod fmt_tests {
             let d = Document {
                 font: None,
                 page: None,
-                sect_raw: None,
+                sect_raw: None, header: Default::default(), footer: Default::default(),
                 blocks: vec![Block::Para(Paragraph {
                     align: a,
                     anchors: Vec::new(),
@@ -1427,7 +1697,7 @@ mod para_tests {
     }
 
     fn roundtrip(p: Paragraph) -> Paragraph {
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(p)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(p)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         crate::read(std::io::Cursor::new(&buf)).unwrap().0.paragraphs().next().unwrap().clone()
@@ -1457,7 +1727,7 @@ mod para_tests {
 
     #[test]
     fn 既定の段落には余計な指定を書かない() {
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(&buf)).unwrap();
@@ -1495,7 +1765,7 @@ mod break_round {
         para.page_break_before = true;
         para.runs.push(Run {
             text: "二頁目".into(), size_pt: 10.5, font: None, fmt: Default::default() });
-        let d = Document { font: None, page: None, sect_raw: None, blocks: vec![Block::Para(para)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(para)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
@@ -1649,7 +1919,7 @@ mod vertalign_tests {
         Document {
             font: None,
             page: None,
-            sect_raw: None,
+            sect_raw: None, header: Default::default(), footer: Default::default(),
             blocks: vec![Block::Para(Paragraph {
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
@@ -1731,7 +2001,7 @@ mod shade_tests {
         };
         p.shade = Some("FFF2CC".into());
         p.boxed = true;
-        let d = Document { font: None, page: None, sect_raw: None,
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(),
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");
@@ -1741,6 +2011,156 @@ mod shade_tests {
         let p = back.paragraphs().next().unwrap();
         assert_eq!(p.shade.as_deref(), Some("FFF2CC"), "背景色が往復しない");
         assert!(p.boxed, "囲み枠が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod hf_tests {
+    use super::*;
+    use kumihan::{Align, Document, Paragraph, Run, PAGE_MARK};
+
+    fn para(s: &str) -> Paragraph {
+        Paragraph {
+            line_spacing: 1.0,
+            runs: vec![Run { text: s.into(), size_pt: 10.5, font: None,
+                             fmt: Default::default() }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ヘッダーとフッターが往復する() {
+        let mut d = Document::plain("本文", 10.5);
+        d.header.paragraphs = vec![para("社外秘")];
+        let mut f = para(&format!("- {PAGE_MARK} -"));
+        f.align = Align::Center;
+        d.footer.paragraphs = vec![f];
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        assert_eq!(kumihan::paras_text(&back.header.paragraphs), "社外秘",
+            "ヘッダーが往復しない");
+        let ftxt = kumihan::paras_text(&back.footer.paragraphs);
+        assert!(ftxt.contains(PAGE_MARK), "ページ番号の印が消えた: {ftxt:?}");
+        assert_eq!(back.footer.paragraphs[0].align, Align::Center,
+            "フッターの揃えが消えた");
+        assert_eq!(back.header.part.as_deref(), Some("word/johdr1.xml"));
+        assert_eq!(texts_of(&back), vec!["本文"], "本文が変わった");
+    }
+
+    fn texts_of(d: &Document) -> Vec<String> {
+        d.paragraphs()
+            .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn 複雑なフィールドのページ番号も読める() {
+        // Word は PAGE を fldChar(begin/instrText/separate/計算済み/end)で書く
+        let xml = r#"<w:hdr xmlns:w="x"><w:p>
+            <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+            <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+            <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+            <w:r><w:t>7</w:t></w:r>
+            <w:r><w:fldChar w:fldCharType="end"/></w:r>
+        </w:p></w:hdr>"#;
+        let (doc, _) = parse_document_xml(xml);
+        let t = doc.body_text();
+        assert!(!t.contains('7'), "計算済みの見た目(7)が本文へ漏れた: {t:?}");
+        assert!(t.contains(PAGE_MARK), "PAGE が印にならない: {t:?}");
+    }
+
+    #[test]
+    fn pageでないフィールドは報告して落とす() {
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p>
+            <w:fldSimple w:instr=" NUMPAGES "><w:r><w:t>9</w:t></w:r></w:fldSimple>
+        </w:p></w:body></w:document>"#;
+        let (doc, rep) = parse_document_xml(xml);
+        assert!(!doc.body_text().contains('9'), "計算済みの見た目が漏れた");
+        assert!(rep.unsupported.iter().any(|(n, _)| n.contains("フィールド")),
+            "黙って落とした: {:?}", rep.unsupported);
+    }
+
+    /// 原本に header1.xml を持つ最小の docx
+    fn docx_with_header(header_xml: &[u8]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o: zip::write::FileOptions<'_, ()> = Default::default();
+        let mut put = |n: &str, d: &[u8]| {
+            zip.start_file(n, o).unwrap();
+            zip.write_all(d).unwrap();
+        };
+        put("[Content_Types].xml", br#"<Types xmlns="ct"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/></Types>"#);
+        put("_rels/.rels", br#"<Relationships xmlns="r"/>"#);
+        put("word/_rels/document.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>"#);
+        put("word/document.xml", r#"<w:document xmlns:w="x" xmlns:r="y"><w:body><w:p><w:r><w:t>本文</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rId9"/><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>"#.as_bytes());
+        put("word/header1.xml", header_xml);
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn 原本のヘッダー部品へ書き戻す() {
+        let src = docx_with_header(
+            r#"<w:hdr xmlns:w="x"><w:p><w:r><w:t>旧いヘッダー</w:t></w:r></w:p></w:hdr>"#.as_bytes());
+        let (mut doc, _) = crate::read(Cursor::new(&src)).unwrap();
+        assert_eq!(doc.header.part.as_deref(), Some("word/header1.xml"));
+        assert_eq!(kumihan::paras_text(&doc.header.paragraphs), "旧いヘッダー");
+        kumihan::set_paras_text(&mut doc.header.paragraphs, "新しいヘッダー", 10.5);
+        let mut out = Vec::new();
+        crate::write_with(&doc, Some(Cursor::new(&src)), Cursor::new(&mut out)).unwrap();
+        let z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+        let names: Vec<String> = {
+            let mut z2 = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+            (0..z2.len()).map(|i| z2.by_index(i).unwrap().name().to_string()).collect()
+        };
+        drop(z);
+        assert_eq!(names.iter().filter(|n| *n == "word/header1.xml").count(), 1,
+            "部品が二重になった: {names:?}");
+        let mut z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+        let mut s = String::new();
+        z.by_name("word/header1.xml").unwrap().read_to_string(&mut s).unwrap();
+        assert!(s.contains("新しいヘッダー"), "部品に書き戻っていない: {s}");
+        let mut rels = String::new();
+        z.by_name("word/_rels/document.xml.rels").unwrap().read_to_string(&mut rels).unwrap();
+        assert!(!rels.contains("rIdJOhdr"), "原本の参照に重ねて足した: {rels}");
+        let (back, _) = crate::read(Cursor::new(&out)).unwrap();
+        assert_eq!(kumihan::paras_text(&back.header.paragraphs), "新しいヘッダー",
+            "読み直すと消えている");
+    }
+
+    #[test]
+    fn 表のあるヘッダーは触らず持ち越す() {
+        // まだ持てないもの(表)が入った部品は編集の対象にせず、原文のまま生かす
+        let orig = r#"<w:hdr xmlns:w="x"><w:tbl><w:tr><w:tc><w:p><w:r><w:t>枠</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:hdr>"#.as_bytes();
+        let src = docx_with_header(orig);
+        let (doc, rep) = crate::read(Cursor::new(&src)).unwrap();
+        assert!(doc.header.paragraphs.is_empty(), "編集できない部品を編集の対象にした");
+        assert!(rep.unsupported.iter().any(|(n, _)| n.contains("ヘッダーの表")),
+            "黙って隠した: {:?}", rep.unsupported);
+        let mut out = Vec::new();
+        crate::write_with(&doc, Some(Cursor::new(&src)), Cursor::new(&mut out)).unwrap();
+        let mut z = zip::ZipArchive::new(Cursor::new(&out)).unwrap();
+        let mut s = String::new();
+        z.by_name("word/header1.xml").unwrap().read_to_string(&mut s).unwrap();
+        assert_eq!(s.as_bytes(), orig, "触っていない部品が変わった");
+    }
+
+    #[test]
+    fn 二度保存しても参照と部品が二重にならない() {
+        let mut d = Document::plain("本文", 10.5);
+        d.footer.paragraphs = vec![para(&PAGE_MARK.to_string())];
+        let mut first = Vec::new();
+        crate::write(&d, Cursor::new(&mut first)).unwrap();
+        // 開き直さず、同じモデルからもう一度保存(アプリの上書き保存と同じ形)
+        let mut second = Vec::new();
+        crate::write_with(&d, Some(Cursor::new(&first)), Cursor::new(&mut second)).unwrap();
+        let mut z = zip::ZipArchive::new(Cursor::new(&second)).unwrap();
+        let mut rels = String::new();
+        z.by_name("word/_rels/document.xml.rels").unwrap().read_to_string(&mut rels).unwrap();
+        assert_eq!(rels.matches("rIdJOftr").count(), 1, "関係が二重: {rels}");
+        let (back, _) = crate::read(Cursor::new(&second)).unwrap();
+        assert!(kumihan::paras_text(&back.footer.paragraphs).contains(PAGE_MARK));
     }
 }
 
@@ -1769,7 +2189,7 @@ mod image_insert_tests {
             w_mm: 50.0,
             h_mm: 30.0,
         });
-        let d = Document { font: None, page: None, sect_raw: None,
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(),
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");

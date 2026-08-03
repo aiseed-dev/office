@@ -57,30 +57,12 @@ fn hex(s: &str, i: usize) -> f32 {
 
 /// セルの文章(段落を \n で繋いだもの)。
 fn cell_text(c: &kumihan::Cellbox) -> String {
-    c.paragraphs
-        .iter()
-        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n")
+    kumihan::paras_text(&c.paragraphs)
 }
 
 /// セルへ文章を戻す。段落ごとの書式は同じ位置から引き継ぐ(本文と同じ規則)。
 fn set_cell_text(c: &mut kumihan::Cellbox, text: &str) {
-    let old: Vec<kumihan::Paragraph> = c.paragraphs.clone();
-    c.paragraphs = text
-        .split('\n')
-        .enumerate()
-        .map(|(i, s)| {
-            let mut p = old.get(i).cloned().unwrap_or_default();
-            let (size, font, fmt) = p
-                .runs
-                .first()
-                .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
-                .unwrap_or((SIZE_PT, None, Default::default()));
-            p.runs = vec![kumihan::Run { text: s.to_string(), size_pt: size, font, fmt }];
-            p
-        })
-        .collect();
+    kumihan::set_paras_text(&mut c.paragraphs, text, SIZE_PT);
 }
 
 /// PNG / JPEG の画素数 (幅, 高さ)。読めなければ None。
@@ -241,6 +223,13 @@ struct Writer {
     find_field: usize,
     find_ed: Editor,
     repl_ed: Editor,
+    /// ヘッダー・フッターの編集の板。Some(false)=ヘッダー / Some(true)=フッター。
+    /// 開いている間、打鍵はここに入る(検索の板と同じ方式)
+    hf_edit: Option<bool>,
+    hf_ed: Editor,
+    /// 紙面に出すヘッダー・フッターの行(1ページ目の番号で組んだもの)
+    header_lines: Vec<kumihan::Line>,
+    footer_lines: Vec<kumihan::Line>,
     /// 校正の指摘(レビュー > 校正)。英語は辞書、日本語はモデル
     proof: Vec<ui::check::Finding>,
     proof_msg: SharedString,
@@ -250,10 +239,12 @@ struct Writer {
 
 impl HasEditor for Writer {
     fn editor(&mut self) -> &mut Editor {
-        // 置換の板が開いている間、入力(IME含む)は検索欄へ入る。
+        // 置換・ヘッダーの板が開いている間、入力(IME含む)はそちらへ入る。
         // 別の入力部品を作らず、同じ Editor と結線を使い回す
         if self.find_open {
             if self.find_field == 0 { &mut self.find_ed } else { &mut self.repl_ed }
+        } else if self.hf_edit.is_some() {
+            &mut self.hf_ed
         } else {
             &mut self.ed
         }
@@ -261,6 +252,8 @@ impl HasEditor for Writer {
     fn editor_ref(&self) -> &Editor {
         if self.find_open {
             if self.find_field == 0 { &self.find_ed } else { &self.repl_ed }
+        } else if self.hf_edit.is_some() {
+            &self.hf_ed
         } else {
             &self.ed
         }
@@ -268,6 +261,15 @@ impl HasEditor for Writer {
     fn on_edited(&mut self) {
         if self.find_open {
             // 検索欄への打鍵は文書を変えない
+            return;
+        }
+        if let Some(footer) = self.hf_edit {
+            // 板の打鍵はその場で文書のヘッダー・フッターに反映する
+            let text = self.hf_ed.text().to_string();
+            let hf = if footer { &mut self.doc.footer } else { &mut self.doc.header };
+            kumihan::set_paras_text(&mut hf.paragraphs, &text, SIZE_PT);
+            self.dirty = true;
+            self.refresh_hf();
             return;
         }
         self.dirty = true;
@@ -306,6 +308,10 @@ impl Writer {
             find_field: 0,
             find_ed: Editor::new(""),
             repl_ed: Editor::new(""),
+            hf_edit: None,
+            hf_ed: Editor::new(""),
+            header_lines: Vec::new(),
+            footer_lines: Vec::new(),
             font_name: kumihan::font::for_document(None)
                 .map(|(f, _)| SharedString::from(f.name.clone()))
                 .unwrap_or_else(|_| "sans-serif".into()),
@@ -390,6 +396,35 @@ impl Writer {
             &m,
             &Frame { measure_mm: self.pg.measure_mm(), line_height_mm: LINE_MM, y0_mm: self.pg.top_mm + 4.0 },
         );
+        self.refresh_hf();
+    }
+
+    /// 紙面に出すヘッダー・フッターの行を組み直す(番号は1ページ目のもの。
+    /// 各ページの本当の番号は PDF で入る)。
+    fn refresh_hf(&mut self) {
+        let m = Metrics::new(&self.font_bytes).expect("フォント");
+        self.header_lines = kumihan::layout_hf(&self.doc.header, &m, &self.pg, LINE_MM, 1, false);
+        self.footer_lines = kumihan::layout_hf(&self.doc.footer, &m, &self.pg, LINE_MM, 1, true);
+    }
+
+    /// ヘッダー・フッターの編集の板を開く(もう一度で閉じる)。
+    fn open_hf(&mut self, footer: bool) {
+        if self.hf_edit == Some(footer) {
+            self.hf_edit = None;
+            return;
+        }
+        let hf = if footer { &self.doc.footer } else { &self.doc.header };
+        let which = if footer { "フッター" } else { "ヘッダー" };
+        if hf.paragraphs.is_empty() && hf.part.is_some() {
+            // 読めたが持てなかった部品(表入りなど)。嘘の編集をさせない
+            self.status = format!(
+                "この{which}には表があり、この版では編集できません(保存では残ります)").into();
+            return;
+        }
+        self.find_open = false;
+        self.hf_edit = Some(footer);
+        self.hf_ed = Editor::new(&kumihan::paras_text(&hf.paragraphs));
+        self.status = format!("{which}を編集中(全ページ共通。Esc で閉じる)").into();
     }
 
     /// 文書の書体を実体に結ぶ。無ければ系統を保って代替し、**そう言う**。
@@ -415,6 +450,8 @@ impl Writer {
 
     fn open(&mut self, p: PathBuf) {
         self.target = Target::Body;
+        // 前の文書の板が残っていると、打鍵が新しい文書のヘッダーを潰す
+        self.hf_edit = None;
         match std::fs::File::open(&p)
             .map_err(|e| e.to_string())
             .and_then(ooxml::read)
@@ -733,14 +770,22 @@ impl Writer {
         else {
             return;
         };
+        let m = Metrics::new(&self.font_bytes).expect("フォント");
+        let (hdr, ftr, pg) = (self.doc.header.clone(), self.doc.footer.clone(), self.pg);
         let r = kumihan::atomic::save(&p, |f| {
-            paper::to_pdf(
+            paper::to_pdf_with(
                 &self.page,
                 &self.font_bytes,
                 paper::Paper {
-                    width_mm: self.pg.w_mm,
-                    height_mm: self.pg.h_mm,
-                    margin_mm: self.pg.left_mm,
+                    width_mm: pg.w_mm,
+                    height_mm: pg.h_mm,
+                    margin_mm: pg.left_mm,
+                },
+                // ヘッダー・フッター。ページ番号はここで各頁の数字になる
+                |k| {
+                    let mut v = kumihan::layout_hf(&hdr, &m, &pg, LINE_MM, k, false);
+                    v.extend(kumihan::layout_hf(&ftr, &m, &pg, LINE_MM, k, true));
+                    v
                 },
                 std::io::BufWriter::new(f),
             )
@@ -829,6 +874,7 @@ impl Writer {
             &m,
             &Frame { measure_mm: self.pg.measure_mm(), line_height_mm: LINE_MM, y0_mm: self.pg.top_mm + 4.0 },
         );
+        self.refresh_hf();
     }
 
     /// クリックした画素位置(編集領域からの相対)にカーソルを置く。
@@ -1020,6 +1066,7 @@ impl Writer {
         "spell", "wordcount", "zoom-in", "zoom-out", "hidenchars", "ruler",
         "fontname", "fontsize",
         "pageorient", "pagesize", "pagemargins",
+        "edit-header", "edit-footer", "pagenum",
     ];
 
     fn run_cmd(&mut self, id: &str) {
@@ -1029,8 +1076,8 @@ impl Writer {
                     .add_filter("Word文書", &["docx"]).pick_file() { self.open(p) }
             }
             "save" => self.save(),
-            "undo" => { if self.ed.undo() { self.on_edited() } }
-            "redo" => { if self.ed.redo() { self.on_edited() } }
+            "undo" => { if self.editor().undo() { self.on_edited() } }
+            "redo" => { if self.editor().redo() { self.on_edited() } }
             "selectall" => self.ed.select_all(),
             "spell" => self.run_proof(),
             // 文字書式 — 押すたびに入切する(Word と同じ挙動)
@@ -1226,6 +1273,21 @@ impl Writer {
                 pg.bottom_mm = next;
             }),
             "fontsize" => { self.size_list = !self.size_list; self.font_list = false; }
+            // ヘッダー・フッターの編集(板。開いている間、打鍵はそこへ)
+            "edit-header" => self.open_hf(false),
+            "edit-footer" => self.open_hf(true),
+            // ページ番号。開いている板(無ければフッター)のカーソル位置に入れる
+            "pagenum" => {
+                if self.hf_edit.is_none() {
+                    self.open_hf(true);
+                }
+                if self.hf_edit.is_some() {
+                    self.hf_ed.insert(&kumihan::PAGE_MARK.to_string());
+                    self.on_edited();
+                    self.status =
+                        "ページ番号を入れました(docx では PAGE フィールドになります)".into();
+                }
+            }
             "ruler" => self.ruler = !self.ruler,
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
@@ -1332,13 +1394,18 @@ impl Writer {
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        // メニュー → 検索の板 → 一覧の板、の順で閉じる
+        // メニュー → 検索の板 → ヘッダーの板 → 一覧の板、の順で閉じる
         if self.menu_at.take().is_some() {
             cx.notify();
             return;
         }
         if self.find_open {
             self.find_open = false;
+            cx.notify();
+            return;
+        }
+        if self.hf_edit.take().is_some() {
+            self.status = "".into();
             cx.notify();
             return;
         }
@@ -1410,23 +1477,25 @@ impl Writer {
         cx.notify();
     }
     fn copy(&mut self, _: &ui::Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let sel = self.ed.selection();
+        // 板(ヘッダー等)を編集中なら、その板の選択が対象
+        let e = self.editor_ref();
+        let sel = e.selection();
         if sel.is_empty() {
             self.status = "コピーする選択がありません".into();
-        } else if let Some(s) = self.ed.text().get(sel) {
+        } else if let Some(s) = e.text().get(sel) {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(s.to_string()));
             self.status = "コピーしました".into();
         }
         cx.notify();
     }
     fn cut(&mut self, _: &ui::Cut, _: &mut Window, cx: &mut Context<Self>) {
-        let sel = self.ed.selection();
+        let sel = self.editor_ref().selection();
         if sel.is_empty() {
             self.status = "切り取る選択がありません".into();
-        } else if let Some(s) = self.ed.text().get(sel) {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(s.to_string()));
+        } else if let Some(s) = self.editor_ref().text().get(sel).map(str::to_string) {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(s));
             // 選択を空文字で置き換える = undo の1手で戻る
-            self.ed.insert("");
+            self.editor().insert("");
             self.on_edited();
             self.status = "切り取りました".into();
         }
@@ -1443,13 +1512,14 @@ impl Writer {
         cx.notify();
     }
     fn undo(&mut self, _: &ui::Undo, _: &mut Window, cx: &mut Context<Self>) {
-        if self.ed.undo() {
+        // 板(ヘッダー等)を編集中なら、その板の一手を戻す
+        if self.editor().undo() {
             self.on_edited();
         }
         cx.notify();
     }
     fn redo(&mut self, _: &ui::Redo, _: &mut Window, cx: &mut Context<Self>) {
-        if self.ed.redo() {
+        if self.editor().redo() {
             self.on_edited();
         }
         cx.notify();
@@ -1965,6 +2035,31 @@ impl Render for Writer {
             }
 
         }
+        // ヘッダー・フッター。画面の紙は巻物なので、ヘッダーは紙の頭、
+        // フッターは紙の末尾の頁の位置に出す(番号は1ページ目のもの。
+        // 各ページの本当の番号は PDF で入る)。編集中は青、普段は灰色
+        let foot_shift = (self.content_mm() - self.pg.h_mm).max(0.0);
+        for (lines, dy, active) in [
+            (&self.header_lines, 0.0, self.hf_edit == Some(false)),
+            (&self.footer_lines, foot_shift, self.hf_edit == Some(true)),
+        ] {
+            for line in lines.iter() {
+                if line.cells.is_empty() {
+                    continue;
+                }
+                let pt = line.cells[0].size_pt;
+                let sz = pt * 96.0 / 72.0 * self.zoom;
+                let x0 = self.pg.left_mm + line.cells[0].x_mm;
+                let top = (line.y_mm + dy) * pxmm - sz * 0.88;
+                paper = paper.child(div().absolute()
+                    .left(px(x0 * pxmm)).top(px(top))
+                    .text_size(px(sz))
+                    .font_family(self.font_name.clone())
+                    .whitespace_nowrap()
+                    .text_color(if active { rgb(0x165E83) } else { rgb(0x8899A6) })
+                    .child(SharedString::from(line.text())));
+            }
+        }
         // キャレット
         paper = paper.child(div().absolute()
             .left(px(cx_mm * pxmm))
@@ -2025,6 +2120,53 @@ impl Render for Writer {
                             this.find_open = false; cx.notify()
                         })))))
         };
+
+        // ヘッダー・フッターの編集の板。開いている間、打鍵はここに入る
+        let hf_panel = self.hf_edit.map(|footer| {
+            let title = if footer { "フッター" } else { "ヘッダー" };
+            // キャレットは | で見せる(検索の板と同じ割り切り)。
+            // ページ番号の印は読める形で見せる
+            let mut s = self.hf_ed.text().to_string();
+            let cur = self.hf_ed.cursor().min(s.len());
+            s.insert(cur, '|');
+            let shown = s.replace(kumihan::PAGE_MARK, "《ページ番号》");
+            let btn = |id: &str, label: &str| {
+                div().id(SharedString::from(id.to_string()))
+                    .px_2p5().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).text_color(rgb(0x1B6E3C))
+                    .text_size(px(11.5)).cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .child(SharedString::from(label.to_string()))
+            };
+            let mut field = div().flex_1().px_2().py_1().rounded_sm()
+                .border_1().border_color(rgb(0x1B6E3C)).bg(gpui::white())
+                .text_size(px(12.5)).flex().flex_col();
+            for ln in shown.split('\n') {
+                field = field.child(div().whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(ln.to_string())));
+            }
+            div().absolute().left(px(16.0)).top(px(8.0)).w(px(430.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child(SharedString::from(format!("{title}の編集 — 全ページ共通"))))
+                .child(field)
+                .child(div().flex().flex_row().gap_2()
+                    .child(btn("hf-num", "ページ番号を挿入")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.run_cmd("pagenum");
+                            cx.notify()
+                        })))
+                    .child(div().flex_1())
+                    .child(btn("hf-close", "閉じる (Esc)")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.hf_edit = None;
+                            this.status = "".into();
+                            cx.notify()
+                        }))))
+        });
 
         // フォントの一覧。この機械にある日本語の書体だけ
         let font_panel = if !self.font_list {
@@ -2284,6 +2426,7 @@ impl Render for Writer {
                     .child(paper)
                     .children(notes)
                     .children(find_panel)
+                    .children(hf_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(symbol_panel)
