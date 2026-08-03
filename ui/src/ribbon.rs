@@ -184,7 +184,7 @@ pub const CALC: &[Tab] = &[
         c("condformat", "条件付き書式", "condformat"),
         x("表の挿入", "table-tpl"),
         x("styles", "styles"),
-        x("置き換え", "replace"),
+        c("replace", "置き換え", "replace"),
         c("selectall", "すべて選択", "select-all"),
         c("setfilter", "フィルター", "setfilter"),
         c("clear-filter", "フィルターを解除", "clear-filter"),

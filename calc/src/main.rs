@@ -294,6 +294,8 @@ struct Calc {
     /// 画像の復号の控え(実体のアドレス → GPUI の画像)。
     /// 毎フレーム作り直すと復号と転送をやり直すことになる
     img_cache: std::cell::RefCell<std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>>,
+    /// 検索と置換の検索語(板を2枚続けて使う間の控え。次回の初期値にもなる)
+    find_term: Option<String>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 右クリックのメニュー(出ている場所。格子領域の px)
@@ -375,6 +377,7 @@ impl Calc {
             size_drag: None,
             head_drag: None,
             img_cache: Default::default(),
+            find_term: None,
             wheel: (0.0, 0.0),
             menu_at: None,
             menu_sub: None,
@@ -1321,6 +1324,52 @@ impl Calc {
                     if gt { "大きい値" } else { "小さい値" }
                 ).into();
             }
+            "find" => {
+                if text.is_empty() {
+                    self.status = "探す言葉を入れてください".into();
+                    return;
+                }
+                self.find_term = Some(text);
+                self.prompt = Some(("replace-with", Editor::new("")));
+            }
+            "replace-with" => {
+                let Some(find) = self.find_term.take() else { return };
+                if text.is_empty() {
+                    // 検索だけ
+                    self.find_next(&find);
+                    return;
+                }
+                // 全て置き換え(シート全体。式の中も)
+                let targets: Vec<(Pos, String)> = self
+                    .sheet()
+                    .cells
+                    .iter()
+                    .filter(|(_, c)| c.editable().contains(&find))
+                    .map(|(p, c)| (*p, c.editable()))
+                    .collect();
+                if targets.is_empty() {
+                    self.status = format!("「{find}」は見つかりません").into();
+                    self.find_term = Some(find);
+                    return;
+                }
+                self.checkpoint();
+                let mut n = 0usize;
+                for (p, src) in targets {
+                    n += src.matches(find.as_str()).count();
+                    let dst = src.replace(find.as_str(), &text);
+                    let fmt = self.sheet().get(p).map(|c| c.fmt.clone()).unwrap_or_default();
+                    let mut cell = Cell::input(&dst);
+                    cell.fmt = fmt;
+                    self.sheet_mut().set(p, cell);
+                }
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.sync_input();
+                self.find_term = Some(find.clone());
+                self.status =
+                    format!("「{find}」→「{text}」: {n} カ所を置き換えました(Ctrl+Z で戻せます)")
+                        .into();
+            }
             "validation" => {
                 let (a, b) = self.sel_rect();
                 let overlap = |v: &sheet::model::Validation| {
@@ -2096,6 +2145,36 @@ impl Calc {
         .detach();
     }
 
+    /// 「次を検索」。いまのセルの次(行→列の順)から探し、末尾まで行ったら
+    /// 頭に戻る。式の中の文字も探す(editable = 打った通りの姿)。
+    fn find_next(&mut self, term: &str) {
+        let hits: Vec<Pos> = self
+            .sheet()
+            .cells
+            .iter()
+            .filter(|(_, c)| c.editable().contains(term) || c.value.display().contains(term))
+            .map(|(p, _)| *p)
+            .collect();
+        if hits.is_empty() {
+            self.status = format!("「{term}」は見つかりません").into();
+            return;
+        }
+        let cur = self.cursor;
+        let next = hits.iter().find(|p| **p > cur).copied().unwrap_or(hits[0]);
+        self.anchor = None;
+        self.cursor = next;
+        self.follow();
+        self.sync_input();
+        self.status = format!(
+            "「{term}」: {}({} カ所)。もう一度「置き換え」で次へ",
+            next.a1(),
+            hits.len()
+        )
+        .into();
+        // 次回の板の初期値に残す(続けて探すのが検索の常)
+        self.find_term = Some(term.to_string());
+    }
+
     /// 選んだ範囲を matplotlib で棒グラフにして、シートに浮かべる。
     /// 1列目が項目名、残りの列が系列(先頭行が文字なら系列名)。
     /// Python は別の糸で回す(主の糸を塞がない — ダイアログと同じ作法)。
@@ -2363,7 +2442,7 @@ impl Calc {
         "sum", "average", "count", "max", "min",
         "data-validation", "condformat", "defname",
         "pageorient", "pagesize", "pagemargins", "printarea",
-        "inschart", "insimage", "inshyperlink",
+        "inschart", "insimage", "inshyperlink", "replace",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2542,6 +2621,12 @@ impl Calc {
                     self.status =
                         "印刷範囲にする範囲を Shift+矢印かドラッグで選んでください".into();
                 }
+            }
+            // 検索と置換(ホーム > 置き換え)。板を2枚続けて使う
+            "replace" => {
+                self.commit();
+                let init = self.find_term.clone().unwrap_or_default();
+                self.prompt = Some(("find", Editor::new(&init)));
             }
             // グラフ(matplotlib)と画像。挿入タブ
             "inschart" => {
@@ -3557,6 +3642,11 @@ impl Render for Calc {
                 "cond-gt" => format!("条件付き書式 — {range} で、いくつより大きい値を塗る?"),
                 "cond-lt" => format!("条件付き書式 — {range} で、いくつより小さい値を塗る?"),
                 "validation" => format!("入力規則 — {range} は候補から選ぶ(空にして Enter で解除)"),
+                "find" => "検索と置換 — 探す言葉".to_string(),
+                "replace-with" => format!(
+                    "「{}」を何に置き換える?",
+                    self.find_term.as_deref().unwrap_or("")
+                ),
                 _ => String::new(),
             };
             // キャレットは | で見せる(writer の検索欄と同じ割り切り)
@@ -3577,6 +3667,8 @@ impl Render for Calc {
                     .child(match *kind {
                         "name" => "Enter で決定 / Esc で取消。定義した名前は式の中で使えます(=単価*2)",
                         "validation" => "候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)。Enter で決定 / Esc で取消",
+                        "find" => "Enter で次へ / Esc で取消。式の中の文字も探します",
+                        "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         _ => "Enter で決定 / Esc で取消",
                     }))
         });

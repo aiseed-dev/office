@@ -100,7 +100,7 @@ READY = {
         "pageorient": "pageorient", "pagesize": "pagesize",
         "pagemargins": "pagemargins", "printarea": "printarea",
         "inschart": "inschart", "insimage": "insimage",
-        "inshyperlink": "inshyperlink",
+        "inshyperlink": "inshyperlink", "replace": "replace",
     },
 }
 
