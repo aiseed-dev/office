@@ -297,7 +297,20 @@ pub struct Document {
     pub watermark: Option<String>,
     /// 手描きの線(描画タブのペン)。docx では自由曲線の図形になる
     pub ink: Vec<Stroke>,
+    /// 変更履歴の書き手(w:ins / w:del の author)。
+    /// 保存用の写しにだけ入る — 印([`TRK_INS_S`] 等)と対で使う
+    pub track_author: Option<String>,
 }
+
+/// 変更履歴の印。保存用の写しの本文に埋め、docx の w:ins / w:del になる。
+/// PAGE の印と同じ作法(私用領域の字。画面には出さない)。
+pub const TRK_INS_S: char = '\u{E010}';
+/// 挿入の終わり
+pub const TRK_INS_E: char = '\u{E011}';
+/// 削除の始まり(中の字は w:delText — 消された字として残る)
+pub const TRK_DEL_S: char = '\u{E012}';
+/// 削除の終わり
+pub const TRK_DEL_E: char = '\u{E013}';
 
 /// 手描きの1筆。座標は**そのページの中**の mm(紙の左上が原点)。
 /// ページに貼り付く(本文を編集しても動かない)— Word のページ固定の図形と同じ。
@@ -550,7 +563,7 @@ impl Document {
         Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
             blocks: text
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
@@ -1696,7 +1709,7 @@ mod table_layout_tests {
             }],
             ..Default::default()
         };
-        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), blocks: vec![] };
+        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, blocks: vec![] };
         d.blocks.push(Block::Table(Table {
             col_mm: vec![],
             rows: vec![vec![cell(&"あ".repeat(30)), cell("短い")]],
@@ -1736,7 +1749,7 @@ mod merge_layout_tests {
         let data = font::load(font::for_document(None).unwrap().0).unwrap();
         let m = Metrics::new(&data).unwrap();
         let d = Document {
-            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
+            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
             blocks: vec![Block::Table(Table { col_mm: vec![], rows })],
         };
         layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 })
@@ -1813,7 +1826,7 @@ mod gridcol_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(),
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None,
             blocks: vec![Block::Table(Table {
                 col_mm,
                 rows: vec![vec![cell("項目"), cell("値")]],

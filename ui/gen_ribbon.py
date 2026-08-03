@@ -70,6 +70,7 @@ READY = {
         "tof": "tof", "tof-update": "tof-update",
         "columns": "columns",
         "pen": "pen", "highlighter": "highlighter", "eraser": "eraser",
+        "track-changes": "track-changes",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

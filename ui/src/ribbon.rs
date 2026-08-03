@@ -128,7 +128,7 @@ pub const WRITER: &[Tab] = &[
     Tab { name: "レビュー", cmds: &[
         c("spell", "スペルチェック", "spell"),
         c("wordcount", "文字カウント", "wordcount"),
-        x("変更履歴", "track-changes"),
+        c("track-changes", "変更履歴", "track-changes"),
         c("comment", "コメント", "comment"),
     ]},
     Tab { name: "表示", cmds: &[

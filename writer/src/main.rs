@@ -100,6 +100,109 @@ fn image_px(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// 変更履歴: 現在の段落の記(そのまま/新規/変更)。
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum PMark {
+    Same,
+    New,
+    /// 変更(組みになる記録開始時点の段落の番号)
+    Changed(usize),
+}
+
+/// 変更履歴: 段落の列を突き合わせる(LCS)。
+/// 返り値: 現在の各段落の記と、消えた段落の列(現在の何番目の前か, 元の番号)。
+fn track_diff(base: &[String], cur: &[String]) -> (Vec<PMark>, Vec<(usize, usize)>) {
+    let (n, m) = (base.len(), cur.len());
+    let idx = |i: usize, j: usize| i * (m + 1) + j;
+    let mut dp = vec![0u32; (n + 1) * (m + 1)];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[idx(i, j)] = if base[i] == cur[j] {
+                dp[idx(i + 1, j + 1)] + 1
+            } else {
+                dp[idx(i + 1, j)].max(dp[idx(i, j + 1)])
+            };
+        }
+    }
+    // 操作の列に直す
+    let mut ops: Vec<(Option<usize>, Option<usize>)> = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n && j < m {
+        if base[i] == cur[j] {
+            ops.push((Some(i), Some(j)));
+            i += 1;
+            j += 1;
+        } else if dp[idx(i + 1, j)] >= dp[idx(i, j + 1)] {
+            ops.push((Some(i), None));
+            i += 1;
+        } else {
+            ops.push((None, Some(j)));
+            j += 1;
+        }
+    }
+    while i < n { ops.push((Some(i), None)); i += 1; }
+    while j < m { ops.push((None, Some(j))); j += 1; }
+    // 隣り合う「消えた」と「増えた」は組みにして「変わった段落」とみなす
+    let mut marks = vec![PMark::Same; m];
+    let mut deleted: Vec<(usize, usize)> = Vec::new();
+    let mut k = 0usize;
+    while k < ops.len() {
+        if ops[k].0.is_some() && ops[k].1.is_some() {
+            k += 1;
+            continue;
+        }
+        let mut olds: Vec<usize> = Vec::new();
+        let mut news: Vec<usize> = Vec::new();
+        while k < ops.len() && !(ops[k].0.is_some() && ops[k].1.is_some()) {
+            match ops[k] {
+                (Some(i2), None) => olds.push(i2),
+                (None, Some(j2)) => news.push(j2),
+                _ => unreachable!(),
+            }
+            k += 1;
+        }
+        let pair = olds.len().min(news.len());
+        for t in 0..news.len() {
+            marks[news[t]] = if t < pair { PMark::Changed(olds[t]) } else { PMark::New };
+        }
+        // 余った「消えた」は、この塊の次の現在の段落の前に置く
+        let at = news.last().map(|j2| j2 + 1)
+            .or_else(|| ops.get(k).and_then(|o| o.1))
+            .unwrap_or(m);
+        for t in pair..olds.len() {
+            deleted.push((at, olds[t]));
+        }
+    }
+    (marks, deleted)
+}
+
+/// 文字の差分(共通の頭・消えた中身・増えた中身・共通の尻尾)。
+fn split_diff(old: &str, new: &str) -> (String, String, String, String) {
+    let oc: Vec<char> = old.chars().collect();
+    let nc: Vec<char> = new.chars().collect();
+    let mut pre = 0usize;
+    while pre < oc.len() && pre < nc.len() && oc[pre] == nc[pre] {
+        pre += 1;
+    }
+    let mut suf = 0usize;
+    while suf < oc.len() - pre && suf < nc.len() - pre
+        && oc[oc.len() - 1 - suf] == nc[nc.len() - 1 - suf]
+    {
+        suf += 1;
+    }
+    (
+        oc[..pre].iter().collect(),
+        oc[pre..oc.len() - suf].iter().collect(),
+        nc[pre..nc.len() - suf].iter().collect(),
+        oc[oc.len() - suf..].iter().collect(),
+    )
+}
+
+/// 段落の本文(ランを繋いだもの)。
+fn para_text(p: &kumihan::Paragraph) -> String {
+    p.runs.iter().map(|r| r.text.as_str()).collect()
+}
+
 /// 文字の種類。**日本語の「語」は文字種の変わり目で切る**(分かち書きが無いので、
 /// 英数の連なり・ひらがな・カタカナ・漢字・記号の境を語の境とみなす。IME や
 /// エディタの通り相場)。
@@ -251,6 +354,9 @@ struct Writer {
     ink_undo: Vec<Vec<kumihan::Stroke>>,
     /// ページの繰り上げ量(紙と同じ折り方)。筆のページ⇔巻物の変換に使う
     page_offsets: Vec<f32>,
+    /// 変更履歴を記録中か。記録開始時点の段落の写しを持つ
+    track: bool,
+    track_base: Option<Vec<String>>,
     /// 紙面に出すヘッダー・フッターの行(1ページ目の番号で組んだもの)
     header_lines: Vec<kumihan::Line>,
     footer_lines: Vec<kumihan::Line>,
@@ -395,6 +501,8 @@ impl Writer {
             bm_ed: Editor::new(""),
             tool: None,
             ink_cur: None,
+            track: false,
+            track_base: None,
             ink_undo: Vec::new(),
             page_offsets: vec![0.0],
             header_lines: Vec::new(),
@@ -567,6 +675,75 @@ impl Writer {
     /// 保存のたびに増えないように、写しに差す。
     fn doc_for_save(&self) -> Document {
         let mut doc = self.doc.clone();
+        // 変更履歴: 記録開始時点との差分を印の字にする(ooxml が w:ins/w:del に)
+        if self.track {
+            if let Some(base) = &self.track_base {
+                use kumihan::{TRK_DEL_E, TRK_DEL_S, TRK_INS_E, TRK_INS_S};
+                let cur: Vec<String> = doc.paragraphs().map(para_text).collect();
+                let (marks, deleted) = track_diff(base, &cur);
+                doc.track_author =
+                    Some(std::env::var("USER").unwrap_or_else(|_| "writer".into()));
+                let mut pi = 0usize;
+                for b in &mut doc.blocks {
+                    let kumihan::Block::Para(p) = b else { continue };
+                    let mark = marks.get(pi).copied().unwrap_or(PMark::Same);
+                    match mark {
+                        PMark::Same => {}
+                        PMark::New => {
+                            let t = para_text(p);
+                            let (pt, font, fmt) = p.runs.first()
+                                .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
+                                .unwrap_or((SIZE_PT, None, Default::default()));
+                            p.runs = vec![kumihan::Run {
+                                text: format!("{TRK_INS_S}{t}{TRK_INS_E}"),
+                                size_pt: pt, font, fmt,
+                            }];
+                        }
+                        PMark::Changed(bi) => {
+                            let t = para_text(p);
+                            let (pre, del, ins, suf) = split_diff(&base[bi], &t);
+                            let (pt, font, fmt) = p.runs.first()
+                                .map(|r| (r.size_pt, r.font.clone(), r.fmt.clone()))
+                                .unwrap_or((SIZE_PT, None, Default::default()));
+                            let mut text = pre;
+                            if !del.is_empty() {
+                                text.push(TRK_DEL_S);
+                                text.push_str(&del);
+                                text.push(TRK_DEL_E);
+                            }
+                            if !ins.is_empty() {
+                                text.push(TRK_INS_S);
+                                text.push_str(&ins);
+                                text.push(TRK_INS_E);
+                            }
+                            text.push_str(&suf);
+                            p.runs = vec![kumihan::Run { text, size_pt: pt, font, fmt }];
+                        }
+                    }
+                    pi += 1;
+                }
+                // 消えた段落は、その場所に「全部削除」の段落として置く
+                let pbi: Vec<usize> = doc.blocks.iter().enumerate()
+                    .filter(|(_, b)| matches!(b, kumihan::Block::Para(_)))
+                    .map(|(i, _)| i)
+                    .collect();
+                let mut dels = deleted.clone();
+                dels.sort_by_key(|(at, _)| *at);
+                for (at, bi) in dels.into_iter().rev() {
+                    let pos = pbi.get(at).copied().unwrap_or(doc.blocks.len());
+                    doc.blocks.insert(pos, kumihan::Block::Para(kumihan::Paragraph {
+                        line_spacing: 1.0,
+                        runs: vec![kumihan::Run {
+                            text: format!("{TRK_DEL_S}{}{TRK_DEL_E}", base[bi]),
+                            size_pt: SIZE_PT,
+                            font: None,
+                            fmt: Default::default(),
+                        }],
+                        ..Default::default()
+                    }));
+                }
+            }
+        }
         if doc.ink.is_empty() {
             return doc;
         }
@@ -669,6 +846,8 @@ impl Writer {
         self.target = Target::Body;
         // 前の文書の板が残っていると、打鍵が新しい文書のヘッダーを潰す
         self.hf_edit = None;
+        self.track = false;
+        self.track_base = None;
         match std::fs::File::open(&p)
             .map_err(|e| e.to_string())
             .and_then(ooxml::read)
@@ -1641,7 +1820,7 @@ impl Writer {
         "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
         "caption", "tof", "tof-update", "columns",
-        "pen", "highlighter", "eraser",
+        "pen", "highlighter", "eraser", "track-changes",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2067,6 +2246,21 @@ impl Writer {
             "ruler" => self.ruler = !self.ruler,
             // ダークモード。**紙は白いまま**(画面と紙の一致)。周りだけ暗くする
             "darkmode" => self.dark = !self.dark,
+            // 変更履歴。記録中の編集は、保存で Word の w:ins / w:del になる
+            "track-changes" => {
+                self.flush_target();
+                self.track = !self.track;
+                if self.track {
+                    self.track_base =
+                        Some(self.doc.paragraphs().map(para_text).collect());
+                    self.status =
+                        "変更履歴を記録します(保存で Word の変更履歴になります)".into();
+                } else {
+                    self.track_base = None;
+                    self.status =
+                        "変更履歴の記録をやめました(記録していた差分は捨てました)".into();
+                }
+            }
             // 描画。ペン・蛍光ペン・消しゴム(もう一度押すか Esc で戻る)。
             // 筆は文書に入り、docx では自由曲線の図形になる(ページに固定)
             "pen" | "highlighter" | "eraser" => {
@@ -2907,6 +3101,36 @@ impl Render for Writer {
                     .font_family(self.font_name.clone())
                     .text_color(gpui::Rgba { r: 0.62, g: 0.62, b: 0.62, a: 0.5 })
                     .child(SharedString::from(ch.to_string())));
+            }
+        }
+
+        // 変更履歴の記録中: 変わった段落の左に橙の棒(Word の変更バー)
+        if self.track {
+            if let Some(base) = &self.track_base {
+                let base_set: std::collections::HashSet<&str> =
+                    base.iter().map(|s| s.as_str()).collect();
+                let mut starts: Vec<(usize, bool)> = Vec::new();
+                let mut at = 0usize;
+                for p in self.doc.paragraphs() {
+                    let t = para_text(p);
+                    starts.push((at, !base_set.contains(t.as_str())));
+                    at += t.len() + 1;
+                }
+                for line in self.page.lines.iter().filter(|l| l.from_body) {
+                    let changed = starts
+                        .iter()
+                        .rev()
+                        .find(|(b, _)| *b <= line.byte0)
+                        .map(|(_, c)| *c)
+                        .unwrap_or(false);
+                    if changed {
+                        paper = paper.child(div().absolute()
+                            .left(px((self.pg.left_mm - 5.0).max(0.5) * pxmm))
+                            .top(px((line.y_mm - LINE_MM * 0.7) * pxmm))
+                            .w(px(2.0)).h(px(LINE_MM * pxmm))
+                            .bg(rgb(0xE08A00)));
+                    }
+                }
             }
         }
 
@@ -4118,6 +4342,46 @@ mod page_setup_tests {
         }
         assert!(out.contains("headerReference"), "ヘッダーの参照が落ちた: {out}");
         assert!(!out.contains("pgSz"), "古い用紙が残った: {out}");
+    }
+}
+
+#[cfg(test)]
+mod track_tests {
+    use super::*;
+
+    fn v(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn 変わった段落と増えた段落が分かる() {
+        let base = v(&["一", "二", "三"]);
+        let cur = v(&["一", "二を直した", "追加", "三"]);
+        let (marks, deleted) = track_diff(&base, &cur);
+        assert_eq!(marks[0], PMark::Same);
+        assert_eq!(marks[1], PMark::Changed(1), "変わった段落が組みにならない");
+        assert_eq!(marks[2], PMark::New, "増えた段落が新規にならない");
+        assert_eq!(marks[3], PMark::Same);
+        assert!(deleted.is_empty());
+    }
+
+    #[test]
+    fn 消えた段落は次の段落の前に付く() {
+        let base = v(&["一", "二", "三"]);
+        let cur = v(&["一", "三"]);
+        let (marks, deleted) = track_diff(&base, &cur);
+        assert_eq!(marks, vec![PMark::Same, PMark::Same]);
+        assert_eq!(deleted, vec![(1, 1)], "消えた段落の場所が違う");
+    }
+
+    #[test]
+    fn 文字の差分は頭と尻尾を残す() {
+        let (pre, del, ins, suf) = split_diff("防火戸の仕様", "防火ドアの仕様");
+        assert_eq!((pre.as_str(), del.as_str(), ins.as_str(), suf.as_str()),
+            ("防火", "戸", "ドア", "の仕様"));
+        let (pre, del, ins, suf) = split_diff("同じ", "同じ");
+        assert_eq!((pre.as_str(), del.as_str(), ins.as_str(), suf.as_str()),
+            ("同じ", "", "", ""));
     }
 }
 
