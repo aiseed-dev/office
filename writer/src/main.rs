@@ -1440,6 +1440,34 @@ impl Render for Writer {
                     .w(px(w_mm * pxmm)).h(px(sz * 1.15))
                     .bg(bg));
             }
+            // 選択の色。**選択が見えないと、コピーも切り取りも信用できない**
+            // (ドラッグで選べるようにしても、色が出なければ「できない」に見える)
+            let selr = self.ed.selection();
+            if !selr.is_empty() {
+                let mine = match self.target {
+                    Target::Body => line.from_body,
+                    Target::Cell { table, row, col } => line.cell == Some((table, row, col)),
+                };
+                let (ls, le) = (line.byte0, line.byte_end());
+                if mine && selr.start < le && selr.end > ls {
+                    let a = selr.start.max(ls) - ls;
+                    let b = selr.end.min(le) - ls;
+                    let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
+                    let w = |upto: usize| -> f32 {
+                        line.cells.iter()
+                            .take_while(|c| c.off - base < upto)
+                            .map(|c| c.w_mm)
+                            .sum()
+                    };
+                    paper = paper.child(div().absolute()
+                        .left(px((x0 + w(a)) * pxmm))
+                        .top(px(top + sz * HALF_LEADING))
+                        .w(px((w(b) - w(a)).max(1.5) * pxmm))
+                        .h(px(sz * 1.2))
+                        // 半透明の青。文字より下・蛍光ペンより上に敷く
+                        .bg(gpui::Rgba { r: 0.40, g: 0.60, b: 0.85, a: 0.35 }));
+                }
+            }
             let mut d = div().absolute()
                 .left(px(x0 * pxmm)).top(px(top))
                 .text_size(px(sz))
