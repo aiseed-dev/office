@@ -849,7 +849,7 @@ impl Calc {
                 let n = self.clear_range();
                 self.status = format!("{n} セルの中身を消しました(書式は残る)").into();
             }
-            "clear-fmt" => self.run_cmd("clear"),
+            "clear-fmt" => self.run_cmd("clear", cx),
             "insrow" => {
                 self.rowcol(|s, p| s.insert_row(p.row));
                 self.status = "行を挿しました(下の式の参照も直っています)".into();
@@ -880,8 +880,8 @@ impl Calc {
                 )
                 .into();
             }
-            "filter-set" => self.run_cmd("setfilter"),
-            "filter-clear" => self.run_cmd("clear-filter"),
+            "filter-set" => self.run_cmd("setfilter", cx),
+            "filter-clear" => self.run_cmd("clear-filter", cx),
             "reapply" => {
                 if let Some((c, v)) = self.filter.clone() {
                     let n = self.matching_rows(c, &v).len();
@@ -979,10 +979,10 @@ impl Calc {
                 // メニューの出ていた場所の近くに小窓を開く
                 self.fmt_panel = Some(menu_was_at.unwrap_or((HEAD_W + 24.0, ROW_H + 24.0)));
             }
-            "freeze" => self.run_cmd("freeze"),
+            "freeze" => self.run_cmd("freeze", cx),
             // 数値の書式・関数はリボンと同じ配線を通す
             "comma" | "currency" | "percents" | "digit-inc" | "digit-dec"
-            | "sum" | "average" | "count" | "max" | "min" => self.run_cmd(id),
+            | "sum" | "average" | "count" | "max" | "min" => self.run_cmd(id, cx),
             _ => {}
         }
         cx.notify();
@@ -1179,7 +1179,7 @@ impl Calc {
     }
 
     /// 書式の小窓の釦。
-    fn fmt_panel_action(&mut self, id: &str) {
+    fn fmt_panel_action(&mut self, id: &str, cx: &mut Context<Self>) {
         match id {
             "close" => self.fmt_panel = None,
             "b-all" => {
@@ -1211,7 +1211,7 @@ impl Calc {
                     self.fmt(move |f| f.color = Some(v.clone()));
                 }
             }
-            other => self.run_cmd(other),
+            other => self.run_cmd(other, cx),
         }
     }
 
@@ -1661,12 +1661,28 @@ impl Calc {
         cx.notify();
     }
     fn a_save(&mut self, _: &ui::Save, _: &mut Window, cx: &mut Context<Self>) {
-        self.commit(); self.save(); cx.notify();
+        self.save(false, cx); cx.notify();
     }
     fn a_open(&mut self, _: &ui::Open, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(p) = rfd::FileDialog::new()
-            .add_filter("Excelブック", &["xlsx"]).pick_file() { self.open(p) }
-        cx.notify();
+        self.open_dialog(cx); cx.notify();
+    }
+
+    /// 開くファイルを選ぶ。**ダイアログは別の糸** — rfd は同期で、
+    /// 主の糸で開くと画面ごと固まる(終了確認と同じ作法)。
+    fn open_dialog(&mut self, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new().add_filter("Excelブック", &["xlsx"]).pick_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    this.open(p);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 終了の要求。書きかけが無ければ即終了、あれば確認を**別の糸**で出す。
@@ -1692,12 +1708,8 @@ impl Calc {
             let r = ask.await;
             let _ = this.update(cx, |this, cx| {
                 match r {
-                    rfd::MessageDialogResult::Yes => {
-                        this.save();
-                        if !this.dirty {
-                            cx.quit();
-                        }
-                    }
+                    // 保存先が未定なら別の糸で選ばせ、済んだときだけ終了する
+                    rfd::MessageDialogResult::Yes => this.save(true, cx),
                     rfd::MessageDialogResult::No => cx.quit(),
                     _ => this.status = "終了をやめました".into(),
                 }
@@ -1789,15 +1801,28 @@ impl Calc {
         });
     }
 
-    fn save_pdf(&mut self) {
+    /// PDF に書き出す。保存先の選択は**別の糸**(rfd は同期)。
+    fn save_pdf(&mut self, cx: &mut Context<Self>) {
         self.commit();
-        let Some(p) = rfd::FileDialog::new()
-            .add_filter("PDF", &["pdf"])
-            .set_file_name("帳票.pdf")
-            .save_file()
-        else {
-            return;
-        };
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .set_file_name("帳票.pdf")
+                .save_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    this.write_pdf(&p);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn write_pdf(&mut self, p: &std::path::Path) {
         let (fam, exact) = match kumihan::font::for_document(None) {
             Ok(x) => x,
             Err(e) => {
@@ -1812,6 +1837,7 @@ impl Calc {
                 return;
             }
         };
+        let mut clipped = 0u32;
         let r = kumihan::atomic::save(&p, |f| {
             paper::grid::sheet_to_pdf(
                 &self.book.sheets[self.active],
@@ -1819,13 +1845,19 @@ impl Calc {
                 paper::Paper::default(),
                 std::io::BufWriter::new(f),
             )
+            .map(|n| clipped = n)
         });
         self.status = match r {
-            // 塗りの色と列幅はまだ紙に出ない。黙って出したことにしない
+            // 紙に入り切らなかった列は黙らない
             Ok(_) => format!(
-                "PDF にしました(塗りと列幅は未対応)— {}{}",
+                "PDF にしました — {}{}{}",
                 p.file_name().unwrap_or_default().to_string_lossy(),
-                if exact { "" } else { " ※代替フォント" }
+                if exact { "" } else { " ※代替フォント" },
+                if clipped > 0 {
+                    format!("(右の {clipped} 列は紙に入り切らず切れています)")
+                } else {
+                    String::new()
+                }
             )
             .into(),
             Err(e) => format!("PDF にできません: {e}").into(),
@@ -1859,13 +1891,10 @@ impl Calc {
         "sum", "average", "count", "max", "min",
     ];
 
-    fn run_cmd(&mut self, id: &str) {
+    fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
         match id {
-            "open" => {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Excelブック", &["xlsx"]).pick_file() { self.open(p) }
-            }
-            "save" => { self.commit(); self.save() }
+            "open" => self.open_dialog(cx),
+            "save" => self.save(false, cx),
             "undo" => {
                 if !self.input.undo() {
                     self.undo_sheet();
@@ -1947,7 +1976,7 @@ impl Calc {
             // 表示。**値は変えない** — 見え方だけの話
             "show-formulas" => self.show_formulas = !self.show_formulas,
             // 帳票を PDF に。画面に見えているもの(値・書式・罫線)を写す
-            "pdf" => self.save_pdf(),
+            "pdf" => self.save_pdf(cx),
             "show-gridlines" => self.gridlines = !self.gridlines,
             // ウィンドウ枠の固定。カーソルの上と左を留める。もう一度で解く
             // 選んだセルの値で絞る。もう一度で解く。**中身は変えない**
@@ -2057,14 +2086,42 @@ impl Calc {
         }
     }
 
-    fn save(&mut self) {
-        let p = match self.path.clone() {
-            Some(p) => Some(p),
-            None => rfd::FileDialog::new()
+    /// 保存。名前が無ければ選ばせる(**ダイアログは別の糸**)。
+    /// `then_quit` なら保存が済んだときだけ終了する — 書きかけを黙って捨てない。
+    fn save(&mut self, then_quit: bool, cx: &mut Context<Self>) {
+        self.commit();
+        if let Some(p) = self.path.clone() {
+            self.save_to(p);
+            if then_quit && !self.dirty {
+                cx.quit();
+            }
+            return;
+        }
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new()
                 .add_filter("Excelブック", &["xlsx"])
-                .save_file(),
-        };
-        let Some(p) = p else { return };
+                .save_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Some(p) => {
+                        this.save_to(p);
+                        if then_quit && !this.dirty {
+                            cx.quit();
+                        }
+                    }
+                    None => this.status = "保存をやめました(名前が決まっていません)".into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 決まった場所へ書く。成功すると dirty が消える。
+    fn save_to(&mut self, p: PathBuf) {
         // 原本の部品(図形・テーマ・印刷設定)を持ち越す。読み終えてから書く
         let original: Option<std::io::Cursor<Vec<u8>>> = self
             .path
@@ -2312,7 +2369,7 @@ impl Render for Calc {
                     .hover(|s| s.bg(rgb(0xEAF5EE)))
                     .child(cmd.label)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run_cmd(id); cx.notify()
+                        this.run_cmd(id, cx); cx.notify()
                     })));
             } else {
                 cmds = cmds.child(div().px_3().py_1().rounded_md()
@@ -2812,7 +2869,7 @@ impl Render for Calc {
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                         move |this, _, _, cx| {
                             cx.stop_propagation();
-                            this.fmt_panel_action(id);
+                            this.fmt_panel_action(id, cx);
                             cx.notify();
                         }))
             };
@@ -2829,7 +2886,7 @@ impl Render for Calc {
                 s.on_mouse_down(gpui::MouseButton::Left, cx.listener(
                     move |this, _, _, cx| {
                         cx.stop_propagation();
-                        this.fmt_panel_action(id);
+                        this.fmt_panel_action(id, cx);
                         cx.notify();
                     }))
             };

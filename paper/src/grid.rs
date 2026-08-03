@@ -1,12 +1,11 @@
 //! 帳票(表計算)を紙へ写す。
 //!
-//! writer と同じ約束: **画面に見えているもの(値・書式・罫線)を写すだけ。**
-//! 計算はやり直さない。
+//! writer と同じ約束: **画面に見えているもの(値・書式・罫線・塗り・文字色)を
+//! 写すだけ。** 計算はやり直さない。条件付き書式も画面と同じ規則で効く。
 //!
 //! まだやらないこと(黙らずに書いておく):
-//!   - 塗りつぶしの色(罫線と文字だけ)
-//!   - 列幅の指定(全列同じ幅)
-//!   - 横に紙からはみ出す列は**次の紙に送らず、切れる**(status で伝えること)
+//!   - 横に紙からはみ出す列は**次の紙に送らず、切れる**。
+//!     切れた列の数を返すので、呼ぶ側は画面に出すこと(黙って落とさない)
 
 use std::io::{BufWriter, Write};
 
@@ -21,13 +20,24 @@ const ROW_MM: f32 = 7.0;
 /// xlsx の列幅1 ≒ 2.0mm(標準フォントの「0」1個ぶん)
 const MM_PER_CHW: f32 = 2.0;
 
+/// `RRGGBB` を 0..1 の RGB にする。読めなければ None(黙って黒にしない)。
+fn hex_rgb(s: &str) -> Option<(f32, f32, f32)> {
+    let g = |i: usize| {
+        s.get(i * 2..i * 2 + 2)
+            .and_then(|h| u8::from_str_radix(h, 16).ok())
+            .map(|v| v as f32 / 255.0)
+    };
+    Some((g(0)?, g(1)?, g(2)?))
+}
+
 /// 1つの表を PDF にする。行が紙に収まらなければ次のページへ。
+/// 返すのは**右にはみ出して切れた列の数**(0 なら全部紙に入っている)。
 pub fn sheet_to_pdf<W: Write>(
     grid: &Grid,
     font_data: &[u8],
     paper: Paper,
     out: W,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     let (rows, cols) = grid.extent();
     let (doc, page, layer) = PdfDocument::new(
         &grid.name,
@@ -49,6 +59,11 @@ pub fn sheet_to_pdf<W: Write>(
     for w in &col_mm {
         col_x.push(col_x.last().unwrap() + w);
     }
+    // 右にはみ出して切れる列(右端が紙の使える幅を超えるもの)
+    let usable_w = paper.width_mm - 2.0 * paper.margin_mm;
+    let clipped = (0..cols)
+        .filter(|c| col_x[*c as usize + 1] > usable_w + 0.1)
+        .count() as u32;
 
     // 行の高さ(pt → mm)。指定のない行は既定
     let row_mm = |r: u32| -> f32 {
@@ -77,6 +92,28 @@ pub fn sheet_to_pdf<W: Write>(
             let x = paper.margin_mm + col_x[c as usize];
             let cw = col_mm[c as usize];
             let Some(cell) = grid.cells.get(&p) else { continue };
+
+            // 塗りと文字色。条件付き書式は画面と同じ規則で上書きする
+            let mut fill = cell.fmt.fill.clone();
+            let mut ink = cell.fmt.color.clone();
+            for rule in &grid.cond {
+                if rule.hits(p, &cell.value) {
+                    if let Some(f) = &rule.fill {
+                        fill = Some(f.clone());
+                    }
+                    if let Some(c) = &rule.color {
+                        ink = Some(c.clone());
+                    }
+                }
+            }
+            // 塗りは罫線より先に敷く(線を塗り潰さない)
+            if let Some((cr, cg, cb)) = fill.as_deref().and_then(hex_rgb) {
+                l.set_fill_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));
+                l.add_rect(Rect::new(
+                    Mm(x), Mm(y_top - rh), Mm(x + cw), Mm(y_top),
+                ));
+                l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+            }
 
             // 罫線。引いてある辺だけ
             let b = cell.fmt.borders;
@@ -126,13 +163,22 @@ pub fn sheet_to_pdf<W: Write>(
                 x + 1.5
             };
             let ty = y_top - rh + 2.0;
+            // 文字は塗り色で描かれる(PDF の作法)ので、色付きの字は前後で入れ替える
+            let colored = ink.as_deref().and_then(hex_rgb);
+            if let Some((cr, cg, cb)) = colored {
+                l.set_fill_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));
+            }
             l.use_text(&shown, pt, Mm(tx), Mm(ty), &font);
             if cell.fmt.bold {
                 l.use_text(&shown, pt, Mm(tx + 0.1), Mm(ty), &font);
             }
+            if colored.is_some() {
+                l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+            }
         }
     }
-    doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())
+    doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())?;
+    Ok(clipped)
 }
 
 #[cfg(test)]
@@ -188,6 +234,70 @@ mod tests {
         let n: usize = hay[i..].chars().take_while(|c| c.is_ascii_digit())
             .collect::<String>().parse().unwrap();
         assert!(n >= 2, "80行が {n} ページ(下へはみ出している)");
+    }
+
+    #[test]
+    fn 塗りと文字色が紙に出る() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let mut s = grid();
+        // 塗りが無ければ長方形(re)は1つも描かれない
+        let mut plain = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &mut plain).unwrap();
+        assert!(!String::from_utf8_lossy(&plain).contains(" re\n"), "塗りが無いのに長方形がある");
+        s.set(Pos::parse("A2").unwrap(), Cell {
+            formula: None,
+            value: Value::Text("塗り".into()),
+            fmt: CellFormat {
+                fill: Some("FFF2CC".into()),
+                color: Some("C00000".into()),
+                ..Default::default()
+            },
+        });
+        let mut buf = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        let hay = String::from_utf8_lossy(&buf).to_string();
+        assert!(hay.contains(" re\n"), "塗りの長方形が無い");
+        assert!(hay.contains(" rg\n"), "色の指定が無い");
+    }
+
+    #[test]
+    fn 条件付き書式も紙に効く() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let mut s = grid(); // B2 = 1200(塗りの指定なし)
+        s.cond.push(sheet::model::CondRule {
+            range: (Pos::parse("B2").unwrap(), Pos::parse("B2").unwrap()),
+            op: sheet::model::CondOp::Gt,
+            value: 1000.0,
+            color: None,
+            fill: Some("E2EFDA".into()),
+        });
+        let mut buf = Vec::new();
+        sheet_to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf).contains(" re\n"),
+            "条件に合う値の塗りが紙に出ない"
+        );
+    }
+
+    #[test]
+    fn はみ出した列の数が返る() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let mut s = Grid { name: "広い".into(), ..Default::default() };
+        // 40mm × 10列 = 400mm は A4 縦(使える幅 170mm)に入り切らない
+        for c in 0..10 {
+            s.set(Pos::new(0, c), Cell {
+                formula: None, value: Value::Number(c as f64), fmt: Default::default() });
+            s.col_width.insert(c, 20.0); // 20字 ≒ 40mm
+        }
+        let mut buf = Vec::new();
+        let clipped = sheet_to_pdf(&s, &data, Paper::default(), &mut buf).unwrap();
+        assert!(clipped > 0, "切れた列が報告されない");
+        let mut buf = Vec::new();
+        assert_eq!(sheet_to_pdf(&grid(), &data, Paper::default(), &mut buf).unwrap(), 0,
+                   "入り切っているのに切れたと言った");
     }
 
     #[test]

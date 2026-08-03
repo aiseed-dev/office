@@ -44,7 +44,8 @@
   描かれる(writer の `HALF_LEADING`)。自前で引く線・帯はこれを織り込む
 - rfd のダイアログは同期 = 主の糸を塞ぐ。終了確認は
   `background_executor().spawn` + `cx.spawn` で別の糸に出してある。
-  **ファイル選択(pick_file / save_file)はまだ同期のまま**(既知の残件)
+  **calc のファイル選択(開く・保存・PDF)も別の糸にした**(2026-08-03)。
+  writer の pick_file / save_file はまだ同期のまま(既知の残件)
 - リボンは生成物: `python3 ui/gen_ribbon.py ja > ui/src/ribbon.rs`。
   押せるものは同スクリプトの READY 表。テンプレートの class 注入スロット
   (pagebreak・insertimage 等)は id の正規表現に掛からないので手で差し込む
@@ -64,7 +65,9 @@
 済: calc の右クリックメニュー(Euro-Office 準拠・灰色ゼロ)、
 Paste Special(独自)、複数シート、条件付き書式・コメント・リンク・
 名前の定義(xlsx 往復つき)、コピー範囲の破線、
-列幅・行高のドラッグ(見出しの境界を掴む。undo 可・xlsx 往復は元からある)。
+列幅・行高のドラッグ(見出しの境界を掴む。undo 可・xlsx 往復は元からある)、
+calc のファイル選択の別糸化(開く・保存・PDF。保存が済んだときだけ終了)、
+PDF の塗り・文字色・条件付き書式(切れた列の数も返して status に出す)。
 writer の選択描画・ドラッグ選択・全カーソル操作・右クリックメニュー・
 段落の帯と囲み枠・画像の挿入(media/rels/Content_Types 生成)。
 両アプリの窓の移動・終了確認(別糸)・スクロール・クリップボード。
@@ -76,6 +79,6 @@ pysheet(Python 束縛、polars 連携)。
    済み。モデル化(header/footer の段落列)+ 紙面への描画 +
    ooxml の headerN.xml 読み書きが本体
 2. 目次(見出しスタイルが前提)、writer の残りの灰色
-3. 小さい残件: ファイル選択の非同期化、
+3. 小さい残件: writer のファイル選択の非同期化(calc は済)、
    writer のキャレット表示の改善、変換下線の位置の実機確認、
    calc の列幅境界のダブルクリックで内容に合わせる(文字幅の実測が要るので見送った)
