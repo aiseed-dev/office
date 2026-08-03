@@ -172,9 +172,16 @@ hunspell と同じくユーザ辞書 `OFFICE_DICT_USER` で受ける。
 
 Python 側の道具は **polars を第一にする**(2026-08-03 ユーザー判断)。
 
-| リボンにあるもの | 作らない。Python での正解 |
+**改訂(2026-08-04 発注者)**: Python の方が楽なものは、**リボンの釦の裏方として
+Python を呼んでよい**。「作らない」から「裏で Python が働く釦」へ。第1号がグラフ —
+挿入 > グラフを挿入は、選択範囲を matplotlib(裏方)で棒グラフにして画像として
+シートに浮かべる(機械の日本語フォントを matplotlib に登録して豆腐を防ぐ。
+Python の探し方: JO_PYTHON → .venv/bin/python → python3。無ければ status で言う)。
+
+| リボンにあるもの | Python での扱い |
 |---|---|
-| グラフ・図形・SmartArt | matplotlib 等で描いて、画像として貼る |
+| グラフ | **釦あり**(裏方 matplotlib。上記) |
+| 図形・SmartArt | matplotlib 等で描いて、画像として貼る(画像の挿入は釦あり) |
 | ソルバー / ゴールシーク | scipy.optimize |
 | テキストからデータ / 区切り位置 | polars.read_csv(SJIS は先に文字コードを直してから) |
 | 外部リンク(他ブックの参照) | 取り込みは Python でやり、値として渡す(リンク切れの帳票を作らない) |

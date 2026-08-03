@@ -99,6 +99,8 @@ READY = {
         "named-range": "defname", "named-range-huge": "defname",
         "pageorient": "pageorient", "pagesize": "pagesize",
         "pagemargins": "pagemargins", "printarea": "printarea",
+        "inschart": "inschart", "insimage": "insimage",
+        "inshyperlink": "inshyperlink",
     },
 }
 

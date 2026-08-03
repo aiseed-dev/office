@@ -185,6 +185,106 @@ fn parse_rels(xml: &str) -> Vec<(String, String, String, bool)> {
 }
 
 /// xl/worksheets/ からの相対の的を zip の中の道に直す("../comments1.xml" → "xl/comments1.xml")。
+/// drawing(xl/drawings/drawingN.xml)から、画像の錨を拾う。
+/// 返すのは (置き場所のセル, 幅EMU, 高さEMU, r:embed)。
+/// oneCellAnchor / twoCellAnchor / absoluteAnchor のどれでも、
+/// xdr:from のセルと、最初に見つかった ext の大きさを使う。
+fn parse_drawing_images(xml: &str) -> Vec<(Pos, i64, i64, String)> {
+    let mut r = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut out = Vec::new();
+    let (mut col, mut row) = (None::<u32>, None::<u32>);
+    let (mut cx, mut cy) = (None::<i64>, None::<i64>);
+    let mut embed = None::<String>;
+    let mut in_from = false;
+    let mut cur: Vec<u8> = Vec::new();
+    loop {
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Start(e)) => match local(e.name().as_ref()) {
+                b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
+                    (col, row, cx, cy, embed) = (None, None, None, None, None);
+                }
+                b"from" => in_from = true,
+                t @ (b"col" | b"row") if in_from => cur = t.to_vec(),
+                b"blip" => {
+                    if embed.is_none() {
+                        embed = attr(&e, "embed");
+                    }
+                }
+                _ => cur.clear(),
+            },
+            Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
+                b"ext" => {
+                    if cx.is_none() {
+                        cx = attr(&e, "cx").and_then(|v| v.parse().ok());
+                        cy = attr(&e, "cy").and_then(|v| v.parse().ok());
+                    }
+                }
+                b"blip" => {
+                    if embed.is_none() {
+                        embed = attr(&e, "embed");
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Text(t)) if !cur.is_empty() => {
+                let v: u32 = t.unescape().unwrap_or_default().trim().parse().unwrap_or(0);
+                if cur == b"col" {
+                    col = Some(v);
+                } else {
+                    row = Some(v);
+                }
+            }
+            Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                b"from" => {
+                    in_from = false;
+                    cur.clear();
+                }
+                b"col" | b"row" => cur.clear(),
+                b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
+                    if let (Some(c), Some(rr), Some(em)) = (col, row, embed.take()) {
+                        out.push((
+                            Pos::new(rr, c),
+                            cx.unwrap_or(300 * 9525),
+                            cy.unwrap_or(200 * 9525),
+                            em,
+                        ));
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// 挿した画像1枚の錨(oneCellAnchor)。大きさは px → EMU(9525 EMU = 1px)。
+fn image_anchor_xml(im: &crate::model::SheetImage, rid: &str, id: u32) -> String {
+    let (cx, cy) = ((im.width_px * 9525.0) as i64, (im.height_px * 9525.0) as i64);
+    format!(
+        concat!(
+            "<xdr:oneCellAnchor>",
+            "<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>0</xdr:colOff>",
+            "<xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>",
+            "<xdr:ext cx=\"{cx}\" cy=\"{cy}\"/>",
+            "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"画像 {id}\"/><xdr:cNvPicPr/></xdr:nvPicPr>",
+            "<xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>",
+            "<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>",
+            "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
+            "<xdr:clientData/></xdr:oneCellAnchor>"
+        ),
+        col = im.at.col,
+        row = im.at.row,
+        cx = cx,
+        cy = cy,
+        id = id,
+        rid = rid
+    )
+}
+
 fn resolve_target(t: &str) -> String {
     if let Some(rest) = t.strip_prefix("../") {
         format!("xl/{rest}")
@@ -609,6 +709,47 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                 }
             }
         }
+        // 画像(drawing)。**表示のために**読む — 保存は原文の持ち越しが担うので、
+        // ここで読んだ絵を書き直すことはしない(図形など理解しない部品を壊さない)
+        if let Some((_, _, target, _)) =
+            rels.iter().find(|(_, ty, _, _)| ty.ends_with("/drawing"))
+        {
+            let dpath = resolve_target(target);
+            let mut dx = String::new();
+            if let Ok(mut f) = zip.by_name(&dpath) {
+                let _ = f.read_to_string(&mut dx);
+            }
+            let drels = {
+                let (dir, base) = dpath.rsplit_once('/').unwrap_or(("xl/drawings", &dpath));
+                format!("{dir}/_rels/{base}.rels")
+            };
+            let mut rx = String::new();
+            if let Ok(mut f) = zip.by_name(&drels) {
+                let _ = f.read_to_string(&mut rx);
+            }
+            let dmap = parse_rels(&rx);
+            for (at, cx_emu, cy_emu, embed) in parse_drawing_images(&dx) {
+                let Some((_, _, t, _)) = dmap.iter().find(|(id, _, _, _)| *id == embed) else {
+                    rep.note("画像(実体への参照が無い)");
+                    continue;
+                };
+                let mpath = resolve_target(t);
+                let mut data = Vec::new();
+                if let Ok(mut f) = zip.by_name(&mpath) {
+                    let _ = f.read_to_end(&mut data);
+                }
+                if data.is_empty() {
+                    rep.note("画像(実体が見つからない)");
+                    continue;
+                }
+                sh.images.push(crate::model::SheetImage {
+                    at,
+                    width_px: cx_emu as f32 / 9525.0,
+                    height_px: cy_emu as f32 / 9525.0,
+                    data,
+                });
+            }
+        }
         book.sheets.push(sh);
         rep.sheets += 1;
     }
@@ -1030,8 +1171,98 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     let overrides: String = (1..=book.sheets.len())
         .map(|i| format!(r#"<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#))
         .collect();
+    // このアプリで挿した画像(グラフ)の部品。原本に drawing のあるシートは
+    // **その部品の中へ錨と rels を継ぎ足す**(drawing は1シート1部品の決まり)。
+    // 無いシートは drawingC{N}.xml を新しく作る
+    let mut media_out: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut fresh_parts: Vec<(String, String)> = Vec::new();
+    // 連番は原本にある imageC の続きから(前の保存で足した分と衝突しない)
+    let mut media_n = 0usize;
+    for (name, _) in &carried {
+        if let Some(rest) = name.strip_prefix("xl/media/imageC") {
+            if let Some(num) = rest.split('.').next().and_then(|v| v.parse::<usize>().ok()) {
+                media_n = media_n.max(num);
+            }
+        }
+    }
+    for (i, sh) in book.sheets.iter().enumerate() {
+        if sh.images_new.is_empty() {
+            continue;
+        }
+        let mut anchors = String::new();
+        let mut rels_add = String::new();
+        for (k, im) in sh.images_new.iter().enumerate() {
+            media_n += 1;
+            let ext = if im.data.starts_with(&[0xFF, 0xD8]) { "jpeg" } else { "png" };
+            let _ = k;
+            let rid = format!("rIdC{media_n}");
+            media_out.push((format!("xl/media/imageC{media_n}.{ext}"), im.data.clone()));
+            rels_add.push_str(&format!(
+                r#"<Relationship Id="{rid}" Type="{RNS}/image" Target="../media/imageC{media_n}.{ext}"/>"#
+            ));
+            anchors.push_str(&image_anchor_xml(im, &rid, (i as u32) * 100 + k as u32 + 2));
+        }
+        let orig_target = orig_sheet_rels.get(i).cloned().flatten().and_then(|onr| {
+            parse_rels(&onr)
+                .into_iter()
+                .find(|(_, ty, _, _)| ty.ends_with("/drawing"))
+                .map(|(_, _, t, _)| resolve_target(&t))
+        });
+        match orig_target {
+            Some(dpath) => {
+                for (name, buf) in carried.iter_mut() {
+                    if *name == dpath {
+                        let mut xml = String::from_utf8_lossy(buf).to_string();
+                        if let Some(p) = xml.rfind("</xdr:wsDr>") {
+                            xml.insert_str(p, &anchors);
+                            *buf = xml.into_bytes();
+                        }
+                    }
+                }
+                let drels = {
+                    let (dir, base) = dpath.rsplit_once('/').unwrap_or(("xl/drawings", &dpath));
+                    format!("{dir}/_rels/{base}.rels")
+                };
+                let mut found = false;
+                for (name, buf) in carried.iter_mut() {
+                    if *name == drels {
+                        let mut xml = String::from_utf8_lossy(buf).to_string();
+                        if let Some(p) = xml.rfind("</Relationships>") {
+                            xml.insert_str(p, &rels_add);
+                            *buf = xml.into_bytes();
+                        }
+                        found = true;
+                    }
+                }
+                if !found {
+                    fresh_parts.push((drels, format!(
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{rels_add}</Relationships>"
+                    )));
+                }
+            }
+            None => {
+                fresh_parts.push((
+                    format!("xl/drawings/drawingC{}.xml", i + 1),
+                    format!(
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">{anchors}</xdr:wsDr>"
+                    ),
+                ));
+                fresh_parts.push((
+                    format!("xl/drawings/_rels/drawingC{}.xml.rels", i + 1),
+                    format!(
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{rels_add}</Relationships>"
+                    ),
+                ));
+            }
+        }
+    }
+
     let carry = !carried.is_empty();
     for (name, buf) in &carried {
+        zip.start_file(name.as_str(), o).map_err(|e| e.to_string())?;
+        zip.write_all(buf).map_err(|e| e.to_string())?;
+    }
+    for (name, buf) in &media_out {
         zip.start_file(name.as_str(), o).map_err(|e| e.to_string())?;
         zip.write_all(buf).map_err(|e| e.to_string())?;
     }
@@ -1056,12 +1287,29 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 add.push_str(&format!(r#"<Override PartName="{part}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>"#));
             }
         }
+        // 挿した画像の部品の宣言(絵の拡張子と、新しく作った drawing)
+        if media_out.iter().any(|(n, _)| n.ends_with(".png")) && !ct.contains("Extension=\"png\"") {
+            add.push_str(r#"<Default Extension="png" ContentType="image/png"/>"#);
+        }
+        if media_out.iter().any(|(n, _)| n.ends_with(".jpeg")) && !ct.contains("Extension=\"jpeg\"") {
+            add.push_str(r#"<Default Extension="jpeg" ContentType="image/jpeg"/>"#);
+        }
+        for (name, _) in &fresh_parts {
+            if name.starts_with("xl/drawings/drawingC") && name.ends_with(".xml") {
+                add.push_str(&format!(
+                    r#"<Override PartName="/{name}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>"#
+                ));
+            }
+        }
         if !add.is_empty() {
             if let Some(p) = ct.rfind("</Types>") {
                 ct.insert_str(p, &add);
             }
         }
         put("[Content_Types].xml", &ct)?;
+    }
+    for (name, xml) in &fresh_parts {
+        put(name, xml)?;
     }
     if !carry {
         put("_rels/.rels", RELS)?;
@@ -1252,6 +1500,13 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 }
             }
         }
+        // このアプリで挿した画像。原本に drawing が無ければ新しい部品への参照を足す
+        // (原本に有るときは、その部品の中へ錨を継ぎ足す — 部品は1シート1つの決まり)
+        if !sh.images_new.is_empty() && !body.contains("<drawing ") {
+            if let Some(pos) = body.rfind("</worksheet>") {
+                body.insert_str(pos, r#"<drawing r:id="rIdDRW"/>"#);
+            }
+        }
         // コメントの図形(VML)への参照は一番後ろ
         if !sh.comments.is_empty() {
             if let Some(pos) = body.rfind("</worksheet>") {
@@ -1264,7 +1519,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         // このシートの rels。原本のもの(図形など)は残し、
         // リンク・コメントのぶんはこちらが作り直す
         let orig = orig_sheet_rels.get(i).cloned().flatten();
-        if !sh.links.is_empty() || !sh.comments.is_empty() || orig.is_some() {
+        if !sh.links.is_empty() || !sh.comments.is_empty() || orig.is_some()
+            || !sh.images_new.is_empty()
+        {
             let mut inner = String::new();
             if let Some(o) = &orig {
                 for (id, ty, target, ext) in parse_rels(o) {
@@ -1285,6 +1542,13 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 inner.push_str(&format!(
                     r#"<Relationship Id="rIdHL{}" Type="{RNS}/hyperlink" Target="{}" TargetMode="External"/>"#,
                     n + 1, esc(url)
+                ));
+            }
+            let had_drawing = orig.as_deref().is_some_and(|o| o.contains("/drawing\""));
+            if !sh.images_new.is_empty() && !had_drawing {
+                inner.push_str(&format!(
+                    r#"<Relationship Id="rIdDRW" Type="{RNS}/drawing" Target="../drawings/drawingC{}.xml"/>"#,
+                    i + 1
                 ));
             }
             if !sh.comments.is_empty() {
@@ -1937,5 +2201,74 @@ mod print_setup_roundtrip_tests {
         assert!(s.contains(r#"scale="85""#), "知らない属性(scale)が消えた");
         assert!(s.contains(r#"orientation="portrait""#), "変えた向きが書かれていない");
         assert!(!s.contains("landscape"), "古い向きが残った");
+    }
+}
+
+#[cfg(test)]
+mod image_roundtrip_tests {
+    use super::*;
+    use crate::model::SheetImage;
+
+    fn png() -> Vec<u8> {
+        // 実体は問わない(読みは復号しない)。PNG の魔法数だけ本物
+        let mut d = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        d.extend_from_slice(&[0; 32]);
+        d
+    }
+
+    #[test]
+    fn 挿した画像が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].images_new.push(SheetImage {
+            at: Pos::new(2, 3),
+            width_px: 300.0,
+            height_px: 200.0,
+            data: png(),
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let ims = &back.sheets[0].images;
+        assert_eq!(ims.len(), 1, "画像が往復しない");
+        assert_eq!(ims[0].at, Pos::new(2, 3), "錨のセルが違う");
+        assert!((ims[0].width_px - 300.0).abs() < 1.0, "幅が違う: {}", ims[0].width_px);
+        assert_eq!(ims[0].data, png(), "実体が化けた");
+        assert!(back.sheets[0].images_new.is_empty(), "読んだ画像が「挿した側」に入った");
+    }
+
+    #[test]
+    fn 画像入りの原本に足しても両方残る() {
+        // 1枚入りを作る → それを原本にもう1枚足して保存 → 2枚とも読める
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].images_new.push(SheetImage {
+            at: Pos::new(0, 0),
+            width_px: 100.0,
+            height_px: 50.0,
+            data: png(),
+        });
+        let mut buf1 = Cursor::new(Vec::new());
+        write(&b, &mut buf1).expect("書けない");
+        buf1.set_position(0);
+        let (mut b2, _) = read(buf1.clone()).expect("読めない");
+        assert_eq!(b2.sheets[0].images.len(), 1);
+        b2.sheets[0].images_new.push(SheetImage {
+            at: Pos::new(5, 5),
+            width_px: 200.0,
+            height_px: 100.0,
+            data: png(),
+        });
+        let mut buf2 = Cursor::new(Vec::new());
+        buf1.set_position(0);
+        write_with(&b2, Some(buf1), &mut buf2).expect("書けない");
+        buf2.set_position(0);
+        let (b3, _) = read(buf2).expect("読めない");
+        assert_eq!(b3.sheets[0].images.len(), 2, "継ぎ足しで枚数が合わない");
+        assert!(
+            b3.sheets[0].images.iter().any(|im| im.at == Pos::new(5, 5)),
+            "足した方の錨が無い"
+        );
     }
 }

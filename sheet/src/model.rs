@@ -279,6 +279,25 @@ pub struct Sheet {
     /// 印刷範囲(definedName _xlnm.Print_Area)。編集の対象なのでモデルで持つ
     /// (xlsx との往復は読み書きが解く)。複数の域も持てる
     pub print_areas: Vec<(Pos, Pos)>,
+    /// 読んだ xlsx の画像(**表示だけ**。保存は原文の drawing 持ち越しが担う —
+    /// 図形など理解しない部品を壊さないため、読んだ絵はこちらで書き直さない)
+    pub images: Vec<SheetImage>,
+    /// **このアプリで挿した**画像(グラフもこれ)。保存でこちらが部品
+    /// (drawing・rels・media)ごと書き出す。読んだ画像と持ち場を分ける —
+    /// 混ぜると保存で二重になる(writer と同じ構図)
+    pub images_new: Vec<SheetImage>,
+}
+
+/// シートに浮かぶ画像。左上をセルに留める(xlsx の oneCellAnchor)。
+#[derive(Debug, Clone)]
+pub struct SheetImage {
+    /// 左上を留めるセル
+    pub at: Pos,
+    /// 画面での大きさ(px)。xlsx の EMU とは 9525 EMU = 1px で換算
+    pub width_px: f32,
+    pub height_px: f32,
+    /// 絵の実体(PNG / JPEG)
+    pub data: Vec<u8>,
 }
 
 /// データの入力規則(list だけ)。「この範囲は、この候補から選ぶ」。

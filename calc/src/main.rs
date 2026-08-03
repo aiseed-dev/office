@@ -291,6 +291,9 @@ struct Calc {
     size_drag: Option<SizeDrag>,
     /// 見出しを掴んだ選択ドラッグ(列か, 始まりの番号)。B→D と撫でて複数列
     head_drag: Option<(bool, u32)>,
+    /// 画像の復号の控え(実体のアドレス → GPUI の画像)。
+    /// 毎フレーム作り直すと復号と転送をやり直すことになる
+    img_cache: std::cell::RefCell<std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 右クリックのメニュー(出ている場所。格子領域の px)
@@ -371,6 +374,7 @@ impl Calc {
             drag: None,
             size_drag: None,
             head_drag: None,
+            img_cache: Default::default(),
             wheel: (0.0, 0.0),
             menu_at: None,
             menu_sub: None,
@@ -2092,6 +2096,165 @@ impl Calc {
         .detach();
     }
 
+    /// 選んだ範囲を matplotlib で棒グラフにして、シートに浮かべる。
+    /// 1列目が項目名、残りの列が系列(先頭行が文字なら系列名)。
+    /// Python は別の糸で回す(主の糸を塞がない — ダイアログと同じ作法)。
+    fn insert_chart(&mut self, a: Pos, b: Pos, cx: &mut Context<Self>) {
+        let sh = self.sheet();
+        // 先頭行が見出しか(項目列以外に文字があるか)
+        let header = (a.col + 1..=b.col).any(|c| {
+            matches!(
+                sh.get(Pos::new(a.row, c)).map(|x| &x.value),
+                Some(sheet::Value::Text(_))
+            )
+        });
+        let r0 = if header { a.row + 1 } else { a.row };
+        let labels: Vec<String> = (r0..=b.row)
+            .map(|r| {
+                let v = sh.get(Pos::new(r, a.col)).map(|x| x.value.display()).unwrap_or_default();
+                if v.is_empty() { (r + 1).to_string() } else { v }
+            })
+            .collect();
+        let mut series = Vec::new();
+        for c in a.col + 1..=b.col {
+            let name = if header {
+                sh.get(Pos::new(a.row, c)).map(|x| x.value.display()).unwrap_or_default()
+            } else {
+                col_name(c)
+            };
+            let values: Vec<f64> = (r0..=b.row)
+                .map(|r| sh.get(Pos::new(r, c)).map(|x| x.value.as_number()).unwrap_or(0.0))
+                .collect();
+            series.push((name, values));
+        }
+        if labels.is_empty() || series.is_empty() {
+            self.status = "グラフにする範囲を選んでください(1列目が項目名、2列目からが数)".into();
+            return;
+        }
+        // JSON は手で組む(依存を増やさない。文字列は最小の逃がし)
+        let esc = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
+        let dir = std::env::temp_dir().join(format!("jo-chart-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let out = dir.join("chart.png");
+        let font = kumihan::font::for_document(None)
+            .ok()
+            .map(|(fam, _)| fam.path.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let mut json = String::from("{\"labels\":[");
+        json.push_str(&labels.iter().map(|l| format!("\"{}\"", esc(l))).collect::<Vec<_>>().join(","));
+        json.push_str("],\"series\":[");
+        json.push_str(
+            &series
+                .iter()
+                .map(|(n, vs)| {
+                    format!(
+                        "{{\"name\":\"{}\",\"values\":[{}]}}",
+                        esc(n),
+                        vs.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        json.push_str(&format!(
+            "],\"font\":\"{}\",\"out\":\"{}\"}}",
+            esc(&font),
+            esc(&out.to_string_lossy())
+        ));
+        let at = Pos::new(a.row, b.col + 1);
+        self.status = "グラフを描いています…".into();
+        let task = cx.background_executor().spawn(async move {
+            let json_path = dir.join("chart.json");
+            let py_path = dir.join("chart.py");
+            std::fs::write(&json_path, json).map_err(|e| e.to_string())?;
+            std::fs::write(&py_path, CHART_PY).map_err(|e| e.to_string())?;
+            let o = std::process::Command::new(find_python())
+                .arg(&py_path)
+                .arg(&json_path)
+                .output()
+                .map_err(|e| format!("Python が起動できません: {e}"))?;
+            if !o.status.success() {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("原因不明");
+                return Err(if err.contains("No module named") {
+                    format!("matplotlib がありません({last})。conda か pip で入れてください")
+                } else {
+                    format!("グラフが描けません: {last}")
+                });
+            }
+            std::fs::read(&out).map_err(|e| e.to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok(data) => {
+                        let (w, h) = image_px(&data).unwrap_or((640, 400));
+                        this.checkpoint();
+                        this.sheet_mut().images_new.push(sheet::model::SheetImage {
+                            at,
+                            width_px: w as f32,
+                            height_px: h as f32,
+                            data,
+                        });
+                        this.dirty = true;
+                        this.status = format!(
+                            "グラフを {} に置きました(保存で xlsx に入ります)",
+                            at.a1()
+                        )
+                        .into();
+                    }
+                    Err(e) => this.status = e.into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 画像ファイルを選んで、いまのセルに浮かべる(選択は別の糸)。
+    fn insert_image_dialog(&mut self, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new()
+                .add_filter("画像", &["png", "jpg", "jpeg"])
+                .pick_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    match std::fs::read(&p) {
+                        Ok(data) => match image_px(&data) {
+                            Some((w, h)) => {
+                                this.checkpoint();
+                                let at = this.cursor;
+                                this.sheet_mut().images_new.push(sheet::model::SheetImage {
+                                    at,
+                                    width_px: w as f32,
+                                    height_px: h as f32,
+                                    data,
+                                });
+                                this.dirty = true;
+                                this.status = format!(
+                                    "画像を {} に置きました(保存で xlsx に入ります)",
+                                    at.a1()
+                                )
+                                .into();
+                            }
+                            None => {
+                                this.status =
+                                    "この画像は読めません(PNG か JPEG を選んでください)".into();
+                            }
+                        },
+                        Err(e) => this.status = format!("読めません: {e}").into(),
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn write_pdf(&mut self, p: &std::path::Path) {
         let (fam, exact) = match kumihan::font::for_document(None) {
             Ok(x) => x,
@@ -2200,6 +2363,7 @@ impl Calc {
         "sum", "average", "count", "max", "min",
         "data-validation", "condformat", "defname",
         "pageorient", "pagesize", "pagemargins", "printarea",
+        "inschart", "insimage", "inshyperlink",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2379,6 +2543,27 @@ impl Calc {
                         "印刷範囲にする範囲を Shift+矢印かドラッグで選んでください".into();
                 }
             }
+            // グラフ(matplotlib)と画像。挿入タブ
+            "inschart" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status =
+                        "グラフにする範囲を選んでください(1列目が項目名、2列目からが数)"
+                            .into();
+                } else {
+                    let (a, b) = self.sel_rect();
+                    self.insert_chart(a, b, cx);
+                }
+            }
+            "insimage" => {
+                self.commit();
+                self.insert_image_dialog(cx);
+            }
+            "inshyperlink" => {
+                self.commit();
+                let cur = self.sheet().links.get(&self.cursor).cloned().unwrap_or_default();
+                self.prompt = Some(("link", Editor::new(&cur)));
+            }
             // データの入力規則。選んだ範囲に候補を付ける(板で受ける)
             "data-validation" => {
                 self.commit();
@@ -2552,6 +2737,12 @@ impl Calc {
                 .into();
                 self.path = Some(p);
                 self.dirty = false;
+                // 挿した絵はもう原本(いま書いたファイル)にある。次の保存で
+                // 二重に書かないよう「読んだ側」へ持ち場を移す
+                for sh in &mut self.book.sheets {
+                    let moved: Vec<_> = sh.images_new.drain(..).collect();
+                    sh.images.extend(moved);
+                }
             }
             Err(e) => self.status = format!("保存できません: {e}").into(),
         }
@@ -2710,6 +2901,83 @@ impl gpui::Element for InputSink {
         });
     }
 }
+
+/// 画像の寸法(px)。PNG は IHDR、JPEG は SOF から(writer と同じ読み方)。
+fn image_px(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        let w = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+        let h = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+        return Some((w, h));
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        let mut i = 2usize;
+        while i + 9 < bytes.len() {
+            if bytes[i] != 0xFF {
+                return None;
+            }
+            let marker = bytes[i + 1];
+            if marker == 0xFF || (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
+                i += 2;
+                continue;
+            }
+            let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+            if matches!(marker, 0xC0..=0xC3) {
+                let h = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+                let w = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as u32;
+                return Some((w, h));
+            }
+            i += 2 + len;
+        }
+        return None;
+    }
+    None
+}
+
+/// グラフ描きの Python を探す。JO_PYTHON → リポジトリの .venv → python3。
+/// matplotlib が居るかは実行して分かる(居なければ status で言う)。
+fn find_python() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("JO_PYTHON") {
+        return p.into();
+    }
+    let venv = std::path::Path::new(".venv/bin/python");
+    if venv.exists() {
+        return venv.into();
+    }
+    "python3".into()
+}
+
+/// グラフの台本(matplotlib)。データは JSON で渡す。
+/// 日本語は機械のフォントを matplotlib に登録して出す(豆腐にしない)。
+const CHART_PY: &str = r#"
+import json, sys
+import matplotlib
+matplotlib.use("Agg")
+import numpy as np
+from matplotlib import font_manager, pyplot as plt
+
+spec = json.load(open(sys.argv[1], encoding="utf-8"))
+if spec.get("font"):
+    try:
+        font_manager.fontManager.addfont(spec["font"])
+        plt.rcParams["font.family"] = font_manager.FontProperties(
+            fname=spec["font"]).get_name()
+    except Exception:
+        pass
+labels = spec["labels"]
+x = np.arange(len(labels))
+series = spec["series"] or [{"name": "", "values": [0] * len(labels)}]
+n = len(series)
+w = 0.8 / n
+fig, ax = plt.subplots(figsize=(6.4, 4.0))
+for i, s in enumerate(series):
+    ax.bar(x + (i - (n - 1) / 2) * w, s["values"], w, label=s["name"])
+ax.set_xticks(x)
+ax.set_xticklabels(labels)
+if n > 1:
+    ax.legend()
+fig.tight_layout()
+fig.savefig(spec["out"], dpi=100)
+"#;
 
 fn col_name(c: u32) -> String {
     Pos::new(0, c).a1().trim_end_matches('1').to_string()
@@ -3511,6 +3779,44 @@ impl Render for Calc {
                        }
                    }))
                    .child(grid)
+                   .children({
+                       // 浮かぶ画像(グラフ)。錨のセルが見えている間だけ描く。
+                       // マウスは受けない(セルの操作を遮らない)
+                       let mut layer = Vec::new();
+                       for im in self.sheet().images.iter().chain(self.sheet().images_new.iter()) {
+                           let Some((x, y)) = self.cell_origin_px(im.at) else { continue };
+                           let key = im.data.as_ptr() as usize;
+                           let src = self
+                               .img_cache
+                               .borrow_mut()
+                               .entry(key)
+                               .or_insert_with(|| {
+                                   let fmt = if im.data.starts_with(&[0xFF, 0xD8]) {
+                                       gpui::ImageFormat::Jpeg
+                                   } else {
+                                       gpui::ImageFormat::Png
+                                   };
+                                   std::sync::Arc::new(gpui::Image::from_bytes(
+                                       fmt,
+                                       im.data.clone(),
+                                   ))
+                               })
+                               .clone();
+                           layer.push(
+                               gpui::img(src)
+                                   .absolute()
+                                   .left(px(x))
+                                   .top(px(y))
+                                   .w(px(im.width_px))
+                                   .h(px(im.height_px)),
+                           );
+                       }
+                       // 控えが育ちすぎたら捨てる(undo のクローンで鍵が増えるため)
+                       if self.img_cache.borrow().len() > 64 {
+                           self.img_cache.borrow_mut().clear();
+                       }
+                       layer
+                   })
                    .child(InputSink { view: me })
                    .children(ants)
                    .children(tip)
