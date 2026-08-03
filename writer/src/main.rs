@@ -211,6 +211,8 @@ struct Writer {
     font_list: bool,
     /// 大きさの一覧を出しているか
     size_list: bool,
+    /// 段落のスタイルの一覧を出しているか
+    style_list: bool,
     /// 画像の実体 → gpui の画像(作り直すと毎フレーム復号されるため控える)
     image_cache: std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>,
     /// 組版に使うフォントの実体。**文書の書体に従う**(開くたびに引き直す)
@@ -301,6 +303,7 @@ impl Writer {
             ruler: false,
             font_list: false,
             size_list: false,
+            style_list: false,
             image_cache: Default::default(),
             font_bytes: std::sync::Arc::new(font_data().to_vec()),
             pg: kumihan::PageSetup::default(),
@@ -902,6 +905,150 @@ impl Writer {
         self.relayout_keep();
     }
 
+    /// 段落のスタイル。0 = 標準、1〜3 = 見出し。
+    /// スタイル定義(styles.xml)を持たないので、見た目は直接書式で付ける。
+    fn set_para_style(&mut self, n: u8) {
+        let (pt, bold) = match n {
+            1 => (16.0, true),
+            2 => (13.0, true),
+            3 => (11.5, true),
+            _ => (SIZE_PT, false),
+        };
+        self.para(move |p| {
+            p.style = if n == 0 {
+                kumihan::ParaStyle::Body
+            } else {
+                kumihan::ParaStyle::Heading(n)
+            };
+        });
+        self.size(move |_| pt);
+        self.toggle(move |f| f.bold = bold);
+        self.status = match n {
+            0 => "標準の段落にしました".into(),
+            n => format!("見出し{n} にしました(参考資料 > 目次 の材料になります)").into(),
+        };
+    }
+
+    /// 目次を作る・挿し直す。見出し(ホーム > 段落のスタイル)が材料。
+    /// ページ番号は紙(PDF)と同じ折り方(paper::paginate)から出すので、
+    /// 印刷した紙とずれない。目次の行は ParaStyle::Toc の印を持ち、
+    /// 「目次の更新」はその連続を丸ごと置き換える。
+    fn make_toc(&mut self) {
+        self.switch_target(Target::Body);
+        self.flush_target();
+        // 見出しを集める(本文のバイト位置つき)
+        let mut heads: Vec<(u8, String, usize)> = Vec::new();
+        let mut at = 0usize;
+        for p in self.doc.paragraphs() {
+            let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+            if let kumihan::ParaStyle::Heading(n) = p.style {
+                heads.push((n, text.clone(), at));
+            }
+            at += text.len() + 1;
+        }
+        if heads.is_empty() {
+            self.status =
+                "見出しがありません(ホーム > 段落のスタイルで見出しを付けてください)".into();
+            return;
+        }
+        // 行 → ページ番号(紙と同じ折り方)
+        let (pages, _) = paper::paginate(&self.page, paper::Paper {
+            width_mm: self.pg.w_mm,
+            height_mm: self.pg.h_mm,
+            margin_mm: self.pg.left_mm,
+        });
+        let page_of = |byte: usize| -> usize {
+            let mut hit = 1usize;
+            for (l, pg) in self.page.lines.iter().zip(&pages) {
+                if l.from_body && l.byte0 <= byte {
+                    hit = *pg;
+                }
+            }
+            hit
+        };
+        // 目次の行。レベルぶん字下げし、番号を添える
+        let lines: Vec<(u8, String)> = heads
+            .iter()
+            .map(|(n, t, b)| {
+                (*n, format!("{}{}　…… {}", "　".repeat((*n - 1) as usize), t, page_of(*b)))
+            })
+            .collect();
+
+        // 段落ごとの (頭のバイト, 長さ, 目次の行か) と、blocks の中の位置
+        let mut para_meta: Vec<(usize, usize, bool)> = Vec::new();
+        let mut at = 0usize;
+        for p in self.doc.paragraphs() {
+            let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+            para_meta.push((at, len, matches!(p.style, kumihan::ParaStyle::Toc(_))));
+            at += len + 1;
+        }
+        let para_block_idx: Vec<usize> = self
+            .doc
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| matches!(b, kumihan::Block::Para(_)))
+            .map(|(i, _)| i)
+            .collect();
+        let toc_text: String =
+            lines.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n");
+        let toc_paras: Vec<kumihan::Block> = lines
+            .iter()
+            .map(|(n, t)| {
+                kumihan::Block::Para(kumihan::Paragraph {
+                    style: kumihan::ParaStyle::Toc(*n),
+                    line_spacing: 1.0,
+                    runs: vec![kumihan::Run {
+                        text: t.clone(),
+                        size_pt: SIZE_PT,
+                        font: None,
+                        fmt: Default::default(),
+                    }],
+                    ..Default::default()
+                })
+            })
+            .collect();
+        // 置き場所: 既にある目次(Toc の連続)を置き換える。無ければカーソルの段落の前。
+        // **編集(undo の1手)と blocks を同じ形に揃える** — 揃えないと
+        // set_body_text の性質の持ち越し(段落番号ベース)がずれる
+        let old = para_meta.iter().position(|(_, _, t)| *t).map(|st| {
+            let mut e = st;
+            while e + 1 < para_meta.len() && para_meta[e + 1].2 {
+                e += 1;
+            }
+            (st, e)
+        });
+        match old {
+            Some((st, e)) => {
+                let (b0, _, _) = para_meta[st];
+                let (b1, l1, _) = para_meta[e];
+                self.ed.move_to(b0, false);
+                self.ed.move_to(b1 + l1, true);
+                self.ed.insert(&toc_text);
+                self.doc.blocks.splice(para_block_idx[st]..=para_block_idx[e], toc_paras);
+                self.status = format!("目次を更新しました({} 項目)", lines.len()).into();
+            }
+            None => {
+                let cur = self.ed.cursor();
+                let pi = para_meta.iter().rposition(|(b0, _, _)| *b0 <= cur).unwrap_or(0);
+                let (b0, _, _) = para_meta[pi];
+                self.ed.move_to(b0, false);
+                self.ed.move_to(b0, true);
+                self.ed.insert(&format!("{toc_text}\n"));
+                let bi = para_block_idx[pi];
+                self.doc.blocks.splice(bi..bi, toc_paras);
+                self.status = format!(
+                    "目次を入れました({} 項目。見出しを変えたら「目次の更新」)",
+                    lines.len()
+                )
+                .into();
+            }
+        }
+        self.dirty = true;
+        self.relayout();
+        self.follow_caret();
+    }
+
     /// 書式を触ったあとの組み直し。**本文を戻さない**
     /// (戻すと今つけた書式が消える)。
     fn relayout_keep(&mut self) {
@@ -1104,6 +1251,7 @@ impl Writer {
         "fontname", "fontsize",
         "pageorient", "pagesize", "pagemargins",
         "edit-header", "edit-footer", "pagenum",
+        "parastyle", "toc", "toc-update",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -1309,7 +1457,8 @@ impl Writer {
             // 見え方だけの切り替え(文書は変わらない)
             "hidenchars" => self.show_marks = !self.show_marks,
             // 一覧板(フォント・大きさ)。選ぶのは板の中
-            "fontname" => { self.font_list = !self.font_list; self.size_list = false; }
+            "fontname" => { self.font_list = !self.font_list; self.size_list = false;
+                            self.style_list = false; }
             // 用紙。向き / サイズ / 余白(選ぶ小窓は無いが、回して選べる)
             "pageorient" => self.set_page(|pg| {
                 std::mem::swap(&mut pg.w_mm, &mut pg.h_mm);
@@ -1336,7 +1485,13 @@ impl Writer {
                 pg.top_mm = next;
                 pg.bottom_mm = next;
             }),
-            "fontsize" => { self.size_list = !self.size_list; self.font_list = false; }
+            "fontsize" => { self.size_list = !self.size_list; self.font_list = false;
+                            self.style_list = false; }
+            // 段落のスタイルの一覧(標準・見出し1〜3)
+            "parastyle" => { self.style_list = !self.style_list;
+                             self.font_list = false; self.size_list = false; }
+            // 目次。挿す・挿し直すは同じ道(Toc の印の連続を置き換える)
+            "toc" | "toc-update" => self.make_toc(),
             // ヘッダー・フッターの編集(板。開いている間、打鍵はそこへ)
             "edit-header" => self.open_hf(false),
             "edit-footer" => self.open_hf(true),
@@ -1473,10 +1628,11 @@ impl Writer {
             cx.notify();
             return;
         }
-        if self.font_list || self.size_list || self.symbols {
+        if self.font_list || self.size_list || self.symbols || self.style_list {
             self.font_list = false;
             self.size_list = false;
             self.symbols = false;
+            self.style_list = false;
             cx.notify();
         }
     }
@@ -2294,6 +2450,42 @@ impl Render for Writer {
             Some(d)
         };
 
+        // 段落のスタイルの一覧(標準・見出し1〜3)
+        let style_panel = if !self.style_list {
+            None
+        } else {
+            let mut d = div().absolute().left(px(16.0)).top(px(8.0)).w(px(240.0))
+                .p_2().rounded_md().bg(gpui::white())
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_0p5()
+                .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
+                    .child("段落のスタイル(選んだ段落に掛かる)"));
+            for (n, label, pt, bold) in [
+                (0u8, "標準", 12.5f32, false),
+                (1, "見出し1", 16.0, true),
+                (2, "見出し2", 14.0, true),
+                (3, "見出し3", 12.5, true),
+            ] {
+                let mut item = div()
+                    .id(SharedString::from(format!("style-{n}")))
+                    .px_2().py_0p5().rounded_sm()
+                    .text_size(px(pt))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF2F7)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_para_style(n);
+                        this.style_list = false;
+                        cx.notify();
+                    }));
+                if bold {
+                    item = item.font_weight(gpui::FontWeight::BOLD);
+                }
+                d = d.child(item);
+            }
+            Some(d)
+        };
+
         // 記号の一覧。事務の書類で使うものだけ(飾りの絵文字は入れない)
         let symbol_panel = if !self.symbols {
             None
@@ -2484,6 +2676,7 @@ impl Render for Writer {
                     .children(hf_panel)
                     .children(font_panel)
                     .children(size_panel)
+                    .children(style_panel)
                     .children(symbol_panel)
                     .children(proof_panel)
                     .child(InputSink { view: me })

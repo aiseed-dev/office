@@ -103,9 +103,25 @@ pub enum ListKind {
     Number,
 }
 
+/// 段落の役割(docx の `w:pStyle` の最小対応)。
+///
+/// 見出しは目次の材料。目次の行は「目次の更新」で作り直すための印。
+/// スタイル定義(styles.xml)は持たない — 見た目は直接書式で付ける。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ParaStyle {
+    #[default]
+    Body,
+    /// 見出し(1〜3)。docx の Heading1〜3 / outlineLvl
+    Heading(u8),
+    /// 目次の行(1〜3)。docx の TOC1〜3(このアプリが目次を作った印)
+    Toc(u8),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Paragraph {
     pub runs: Vec<Run>,
+    /// 段落の役割(見出し・目次の行)。既定は本文
+    pub style: ParaStyle,
     /// 読めなかった要素(画像など)の原文。**理解はしないが、捨てない。**
     /// 保存でそのまま返す
     pub anchors: Vec<String>,

@@ -251,6 +251,24 @@ for r in p.runs[1:]: r.text = ""
 d.save("記入済.docx")
 ```
 
+## writer の見出しと目次(2026-08-03)
+
+- 段落の役割は `ParaStyle`(Body / Heading 1〜3 / Toc 1〜3)。
+  docx の `w:pStyle` と往復する。見出しの style id は日本語版 Word が「1」、
+  英語版が「Heading1」— 読みは両方受け、書きは `Heading{n}` + `outlineLvl`
+  (スタイル定義の無い文書でも見出しとして扱われるように)
+- **スタイル定義(styles.xml)は持たない。** 見出しを付けるとき、見た目
+  (太字・大きさ)は直接書式で付ける。開いた文書の styles.xml は今まで通り
+  原文で持ち越す
+- 目次は**静的な本文**として挿す(TOC フィールドは書かない — 開いた側に
+  「フィールドを更新してください」を出させない)。目次の行は
+  `ParaStyle::Toc` の印(docx では pStyle TOC1〜3)を持ち、
+  「目次」「目次の更新」はどちらも Toc の連続を丸ごと作り直す。
+  挿すときは**編集(undo の1手)と blocks を同じ形で揃える** —
+  揃えないと set_body_text の性質の持ち越し(段落番号ベース)がずれる
+- ページ番号は `paper::paginate`(to_pdf と同じ折り方に一本化)から出す —
+  **目次の番号と印刷した紙が食い違わない**
+
 ## writer のヘッダー・フッター(2026-08-03)
 
 - **モデル**: `Document.header / .footer = HeadFoot`(段落の列 + 読み込んだ部品名)。

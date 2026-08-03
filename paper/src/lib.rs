@@ -63,46 +63,28 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
     let font = doc
         .add_external_font(std::io::Cursor::new(font_data))
         .map_err(|e| e.to_string())?;
-    let mut l = doc.get_page(page).get_layer(layer);
+    let l = doc.get_page(page).get_layer(layer);
     // ページごとの描き先を控えておく(罫線を後から同じ頁割りで引くため)
     let mut layers: Vec<PdfLayerReference> = vec![l.clone()];
 
-    // **改ページはここでやる。** 紙面は1枚の長い巻物として来るので、
-    // 紙の高さを超えたら次のページに移し、y を巻き戻す。
-    // これをやらないと、長い文書が1ページ目の下へ黙ってはみ出す。
-    let bottom = paper.height_mm - paper.margin_mm;
-    let mut page_no = 0u32;
-    let mut offset = 0.0f32; // このページの先頭が、巻物のどの高さか
-    // 明示の改ページ(文書側の指定)。高さ超過とは別に、ここでも頁を割る
-    let mut breaks = sheet.breaks.iter().copied().peekable();
-
-    for line in &sheet.lines {
+    // **改ページの計算は paginate に一本化。** 目次のページ番号も
+    // 同じ関数から出るので、紙と番号が食い違わない
+    let (pages, offsets) = paginate(sheet, paper);
+    for (i, line) in sheet.lines.iter().enumerate() {
         if line.cells.is_empty() {
             continue;
         }
-        let mut forced = false;
-        while let Some(&b) = breaks.peek() {
-            if line.y_mm >= b - 0.01 {
-                breaks.next();
-                forced = true;
-            } else {
-                break;
-            }
-        }
-        let mut y_roll = line.y_mm - offset;
-        if forced || y_roll > bottom {
-            // 次のページへ。行の紙面上の高さは(余白ぶんを除いて)そのまま続ける
-            page_no += 1;
-            offset = line.y_mm - paper.margin_mm;
-            y_roll = paper.margin_mm;
+        let k = pages[i];
+        while layers.len() < k {
             let (np, nl) = doc.add_page(
                 Mm(paper.width_mm),
                 Mm(paper.height_mm),
-                format!("本文 {}", page_no + 1),
+                format!("本文 {}", layers.len() + 1),
             );
-            l = doc.get_page(np).get_layer(nl);
-            layers.push(l.clone());
+            layers.push(doc.get_page(np).get_layer(nl));
         }
+        let l = &layers[k - 1];
+        let y_roll = line.y_mm - offsets[k - 1];
         // 太字は同じ書体を少しずらして二度打つ(合成太字)。
         // 太字の実体を別に持っていないので、**持っていないものを持っている顔をしない**
         let bold = line.cells[0].fmt.bold;
@@ -116,9 +98,10 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
         if bold {
             l.use_text(&text, pt, Mm(x + 0.12), Mm(y), &font);
         }
-        rule(&l, &line.cells[0].fmt, x, y, width_mm(line), pt);
+        rule(l, &line.cells[0].fmt, x, y, width_mm(line), pt);
     }
 
+    let bottom = paper.height_mm - paper.margin_mm;
     // 画像。行と同じ頁割りで置く
     {
         let usable = bottom - paper.margin_mm;
@@ -210,6 +193,41 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
         }
     }
     doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())
+}
+
+/// 巻物(紙面)をページに折る。
+/// 返り値: 各行が載るページ(1始まり。行の並びは `sheet.lines` の順)と、
+/// ページごとの繰り上げ量(そのページの先頭が巻物のどの高さか)。
+/// `to_pdf` もこれを使うので、**目次のページ番号と紙が必ず一致する**。
+pub fn paginate(sheet: &Sheet, paper: Paper) -> (Vec<usize>, Vec<f32>) {
+    let bottom = paper.height_mm - paper.margin_mm;
+    let mut pages = Vec::with_capacity(sheet.lines.len());
+    let mut offsets = vec![0.0f32];
+    // 明示の改ページ(文書側の指定)。高さ超過とは別に、ここでも頁を割る
+    let mut breaks = sheet.breaks.iter().copied().peekable();
+    for line in &sheet.lines {
+        if line.cells.is_empty() {
+            // 空行は頁を進めない(描かれないので)。いまの頁に属するとみなす
+            pages.push(offsets.len());
+            continue;
+        }
+        let mut forced = false;
+        while let Some(&b) = breaks.peek() {
+            if line.y_mm >= b - 0.01 {
+                breaks.next();
+                forced = true;
+            } else {
+                break;
+            }
+        }
+        let y_roll = line.y_mm - offsets.last().unwrap();
+        if forced || y_roll > bottom {
+            // 次のページへ。行の紙面上の高さは(余白ぶんを除いて)そのまま続ける
+            offsets.push(line.y_mm - paper.margin_mm);
+        }
+        pages.push(offsets.len());
+    }
+    (pages, offsets)
 }
 
 fn width_mm(line: &kumihan::Line) -> f32 {

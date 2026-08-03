@@ -55,6 +55,8 @@ READY = {
         "insertimage": "insimage",
         "edit-header": "edit-header", "edit-footer": "edit-footer",
         "pagenum": "pagenum",
+        "styles": "parastyle",
+        "contents": "toc", "contents-update": "toc-update",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
@@ -78,6 +80,8 @@ READY = {
         "show-formulas": "show-formulas", "show-gridlines": "show-gridlines",
         "freeze": "freeze",
         "print": "pdf",
+        "data-validation": "data-validation", "condformat": "condformat",
+        "named-range": "defname", "named-range-huge": "defname",
     },
 }
 
@@ -172,6 +176,7 @@ FALLBACK = {
     "solver": "ソルバー", "group": "グループ化", "ungroup": "グループ解除",
     "show-details": "詳細の表示", "hide-details": "詳細の非表示",
     "spell": "スペルチェック", "furigana": "ふりがな", "pagebreak": "区切り", "setfilter": "フィルター", "clear-filter": "フィルターを解除",
+    "contents": "目次",
     "open": "開く", "print": "印刷",
 }
 
@@ -268,6 +273,9 @@ def tabs_of(app, prefix):
         # 画像も class 注入(slot-insertimage)。Euro-Office では表の隣にある
         if tab == "ins" and app == "documenteditor" and "instable" in slots:
             slots.insert(slots.index("instable") + 1, "insertimage")
+        # 目次も class 注入。Euro-Office では参考資料の先頭にある
+        if tab == "links" and app == "documenteditor" and "contents" not in slots:
+            slots.insert(0, "contents")
         # フィルターも class 注入(btn-slot.slot-btn-setfilter)
         if tab == "home" and app == "spreadsheeteditor" and "custom-sort" not in slots:
             slots.extend(["setfilter", "clear-filter"])

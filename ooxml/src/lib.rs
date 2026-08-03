@@ -13,8 +13,8 @@
 
 use std::io::{Cursor, Read, Seek, Write};
 
-use kumihan::{Align, Block, Cellbox, CharFormat, Document, ListKind, Paragraph, Run, Table,
-              VMerge, PAGE_MARK};
+use kumihan::{Align, Block, Cellbox, CharFormat, Document, ListKind, ParaStyle, Paragraph,
+              Run, Table, VMerge, PAGE_MARK};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
@@ -322,6 +322,22 @@ fn is_page_instr(instr: &str) -> bool {
     instr.split_whitespace().next() == Some("PAGE")
 }
 
+/// `w:pStyle` の val を段落の役割へ。見出しと目次の行だけを見る
+/// (それ以外のスタイルは今まで通り持たない)。
+/// 見出しの style id は日本語版 Word が「1」、英語版が「Heading1」。
+fn style_of(val: &str) -> ParaStyle {
+    let v = val.to_ascii_lowercase().replace(' ', "");
+    match v.as_str() {
+        "1" | "heading1" | "見出し1" => ParaStyle::Heading(1),
+        "2" | "heading2" | "見出し2" => ParaStyle::Heading(2),
+        "3" | "heading3" | "見出し3" => ParaStyle::Heading(3),
+        "toc1" => ParaStyle::Toc(1),
+        "toc2" => ParaStyle::Toc(2),
+        "toc3" => ParaStyle::Toc(3),
+        _ => ParaStyle::Body,
+    }
+}
+
 /// w:fldChar(複雑なフィールドの区切り)を1つ処理する。
 /// begin〜end の間に instrText で命令が来る。separate〜end は
 /// 「計算済みの見た目」なので持たない(開く側が計算し直す)。
@@ -404,6 +420,8 @@ pub fn parse_document_with(
     // 段落の背景色(w:shd)と囲み枠(w:pBdr)
     let mut shade: Option<String> = None;
     let mut boxed = false;
+    // 段落の役割(w:pStyle / w:outlineLvl)
+    let mut pstyle = ParaStyle::Body;
     // 読めなかった要素の原文(画像など)。段落ごとに集めて持ち越す
     let mut anchors: Vec<String> = Vec::new();
     // 表示できる画像(r:embed と wp:extent が読めたもの)
@@ -461,7 +479,8 @@ pub fn parse_document_with(
                     b"p" => { para = Some(Vec::new()); size_pt = DEFAULT_PT; font = None;
                               fmt = CharFormat::default(); align = Align::default();
                               list = ListKind::default(); indent = 0; line_spacing = 1.0;
-                              page_break_before = false; shade = None; boxed = false; }
+                              page_break_before = false; shade = None; boxed = false;
+                              pstyle = ParaStyle::Body; }
                     b"rPr" => { in_rpr = true; fmt = CharFormat::default(); }
                     b"pPr" => in_ppr = true,
                     b"sz" if in_rpr => {
@@ -503,6 +522,18 @@ pub fn parse_document_with(
                             Some("0") | None => ListKind::None,
                             _ => ListKind::Bullet,
                         };
+                    }
+                    // 段落のスタイル。見出しと目次の行だけを持つ
+                    b"pStyle" if in_ppr => {
+                        if let Some(v) = attr(&e, "val") { pstyle = style_of(&v); }
+                    }
+                    // スタイル名で見出しと分からなくても、outlineLvl があれば見出し
+                    b"outlineLvl" if in_ppr => {
+                        if pstyle == ParaStyle::Body {
+                            if let Some(n) = attr(&e, "val").and_then(|v| v.parse::<u8>().ok()) {
+                                if n < 3 { pstyle = ParaStyle::Heading(n + 1); }
+                            }
+                        }
                     }
                     b"pageBreakBefore" if in_ppr => {
                         page_break_before = on(&e);
@@ -662,6 +693,18 @@ pub fn parse_document_with(
                             _ => ListKind::Bullet,
                         };
                     }
+                    // 段落のスタイル。見出しと目次の行だけを持つ
+                    b"pStyle" if in_ppr => {
+                        if let Some(v) = attr(&e, "val") { pstyle = style_of(&v); }
+                    }
+                    // スタイル名で見出しと分からなくても、outlineLvl があれば見出し
+                    b"outlineLvl" if in_ppr => {
+                        if pstyle == ParaStyle::Body {
+                            if let Some(n) = attr(&e, "val").and_then(|v| v.parse::<u8>().ok()) {
+                                if n < 3 { pstyle = ParaStyle::Heading(n + 1); }
+                            }
+                        }
+                    }
                     b"pageBreakBefore" if in_ppr => {
                         page_break_before = on(&e);
                     }
@@ -751,6 +794,7 @@ pub fn parse_document_with(
                             let p = Paragraph { align, anchors: std::mem::take(&mut anchors),
                                 images: std::mem::take(&mut images),
                                 page_break_before, list, indent, line_spacing,
+                                style: pstyle,
                                 shade: shade.take(), boxed,
                                 images_new: Vec::new(),
                                 runs: if runs.is_empty() {
@@ -829,9 +873,24 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
             || p.indent > 0
             || (p.spacing() - 1.0).abs() > 0.001
             || p.shade.is_some()
-            || p.boxed;
+            || p.boxed
+            || p.style != ParaStyle::Body;
         if has_ppr {
             w.write_event(Event::Start(BS::new("w:pPr"))).unwrap();
+            // 段落のスタイル(pPr の先頭に置く — スキーマの並び)
+            match p.style {
+                ParaStyle::Heading(n) => {
+                    let mut st = BS::new("w:pStyle");
+                    st.push_attribute(("w:val", format!("Heading{n}").as_str()));
+                    w.write_event(Event::Empty(st)).unwrap();
+                }
+                ParaStyle::Toc(n) => {
+                    let mut st = BS::new("w:pStyle");
+                    st.push_attribute(("w:val", format!("TOC{n}").as_str()));
+                    w.write_event(Event::Empty(st)).unwrap();
+                }
+                ParaStyle::Body => {}
+            }
             if p.page_break_before {
                 w.write_event(Event::Empty(BS::new("w:pageBreakBefore"))).unwrap();
             }
@@ -882,6 +941,13 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
                 let mut jc = BS::new("w:jc");
                 jc.push_attribute(("w:val", p.align.as_docx()));
                 w.write_event(Event::Empty(jc)).unwrap();
+            }
+            // 見出しの階層。スタイル定義(styles.xml)が無い文書でも
+            // 見出しとして扱われるように、outlineLvl も付けておく
+            if let ParaStyle::Heading(n) = p.style {
+                let mut ol = BS::new("w:outlineLvl");
+                ol.push_attribute(("w:val", (n - 1).to_string().as_str()));
+                w.write_event(Event::Empty(ol)).unwrap();
             }
             w.write_event(Event::End(BytesEnd::new("w:pPr"))).unwrap();
         }
@@ -1327,7 +1393,7 @@ mod tests {
     use kumihan::{Align, CharFormat, ListKind, Block, Cellbox, Document, Paragraph, Run, Table};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph { align: Default::default(), anchors: Vec::new(),
+        Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
@@ -1362,7 +1428,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -1395,7 +1461,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(Paragraph { align: Default::default(), anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -1548,7 +1614,7 @@ mod font_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(),
-            blocks: vec![Block::Para(Paragraph {
+            blocks: vec![Block::Para(Paragraph { style: Default::default(),
                 align: Default::default(),
                 anchors: Vec::new(),
                     images: Vec::new(),
@@ -1604,7 +1670,7 @@ mod fmt_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(),
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
         };
@@ -1619,7 +1685,7 @@ mod fmt_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(),
-            blocks: vec![Block::Para(Paragraph { align: Align::Left, anchors: Vec::new(),
+            blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
         };
@@ -1633,7 +1699,7 @@ mod fmt_tests {
                 font: None,
                 page: None,
                 sect_raw: None, header: Default::default(), footer: Default::default(),
-                blocks: vec![Block::Para(Paragraph {
+                blocks: vec![Block::Para(Paragraph { style: Default::default(),
                     align: a,
                     anchors: Vec::new(),
                     images: Vec::new(),
@@ -1681,7 +1747,7 @@ mod para_tests {
     use kumihan::{Align, Block, Document, ListKind, Paragraph, Run};
 
     fn para(list: ListKind, indent: u8, spacing: f32) -> Paragraph {
-        Paragraph {
+        Paragraph { style: Default::default(),
             align: Align::Left,
             anchors: Vec::new(),
                     images: Vec::new(),
@@ -1920,7 +1986,7 @@ mod vertalign_tests {
             font: None,
             page: None,
             sect_raw: None, header: Default::default(), footer: Default::default(),
-            blocks: vec![Block::Para(Paragraph {
+            blocks: vec![Block::Para(Paragraph { style: Default::default(),
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
                 ..Default::default()
@@ -1993,7 +2059,7 @@ mod shade_tests {
 
     #[test]
     fn 段落の背景色と囲み枠が往復する() {
-        let mut p = Paragraph {
+        let mut p = Paragraph { style: Default::default(),
             line_spacing: 1.0,
             runs: vec![Run { text: "注意".into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],
@@ -2015,12 +2081,46 @@ mod shade_tests {
 }
 
 #[cfg(test)]
+mod style_tests {
+    use super::*;
+    use kumihan::{Block, Document, ParaStyle};
+
+    #[test]
+    fn 見出しと目次の行が往復する() {
+        let mut d = Document::plain("表題\n本文\n目次の行", 10.5);
+        if let Block::Para(p) = &mut d.blocks[0] { p.style = ParaStyle::Heading(1); }
+        if let Block::Para(p) = &mut d.blocks[2] { p.style = ParaStyle::Toc(2); }
+        let mut buf = Cursor::new(Vec::new());
+        write(&d, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, rep) = read(buf).expect("読めない");
+        assert!(rep.is_lossless(), "未対応: {:?}", rep.unsupported);
+        let ps: Vec<ParaStyle> = back.paragraphs().map(|p| p.style).collect();
+        assert_eq!(ps, vec![ParaStyle::Heading(1), ParaStyle::Body, ParaStyle::Toc(2)],
+            "段落の役割が往復しない");
+    }
+
+    #[test]
+    fn 日本語版wordの見出しも読める() {
+        // 日本語版 Word の見出し1は style id が「1」。outlineLvl だけでも見出し
+        let xml = r#"<w:document xmlns:w="x"><w:body>
+            <w:p><w:pPr><w:pStyle w:val="1"/></w:pPr><w:r><w:t>甲</w:t></w:r></w:p>
+            <w:p><w:pPr><w:outlineLvl w:val="1"/></w:pPr><w:r><w:t>乙</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="af0"/></w:pPr><w:r><w:t>丙</w:t></w:r></w:p>
+        </w:body></w:document>"#;
+        let (doc, _) = parse_document_xml(xml);
+        let ps: Vec<ParaStyle> = doc.paragraphs().map(|p| p.style).collect();
+        assert_eq!(ps, vec![ParaStyle::Heading(1), ParaStyle::Heading(2), ParaStyle::Body]);
+    }
+}
+
+#[cfg(test)]
 mod hf_tests {
     use super::*;
     use kumihan::{Align, Document, Paragraph, Run, PAGE_MARK};
 
     fn para(s: &str) -> Paragraph {
-        Paragraph {
+        Paragraph { style: Default::default(),
             line_spacing: 1.0,
             runs: vec![Run { text: s.into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],
@@ -2178,7 +2278,7 @@ mod image_insert_tests {
 
     #[test]
     fn 挿した画像が部品ごと保存され読み直せる() {
-        let mut p = Paragraph {
+        let mut p = Paragraph { style: Default::default(),
             line_spacing: 1.0,
             runs: vec![Run { text: "ロゴの下".into(), size_pt: 10.5, font: None,
                              fmt: Default::default() }],
