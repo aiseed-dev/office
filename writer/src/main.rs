@@ -1911,12 +1911,30 @@ impl Writer {
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
+    /// SVG(matplotlib の savefig("図.svg") など)は高精細の PNG に直して貼る。
     fn insert_image(&mut self, path: &std::path::Path) {
         match std::fs::read(path) {
             Ok(bytes) => {
-                let Some((pw, ph)) = image_px(&bytes) else {
-                    self.status = "PNG か JPEG だけ挿せます".into();
-                    return;
+                let is_svg = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+                    || bytes.starts_with(b"<svg")
+                    || bytes.starts_with(b"<?xml");
+                let (bytes, pw, ph) = if is_svg {
+                    match ui::svg_to_png(&bytes, 3.0) {
+                        Ok((png, w, h)) => (png, w, h),
+                        Err(e) => {
+                            self.status = e.into();
+                            return;
+                        }
+                    }
+                } else {
+                    let Some((pw, ph)) = image_px(&bytes) else {
+                        self.status = "PNG・JPEG・SVG だけ挿せます".into();
+                        return;
+                    };
+                    (bytes, pw, ph)
                 };
                 // 96dpi 相当で置き、行長に収まらなければ比例で縮める
                 let mut w_mm = pw as f32 * 25.4 / 96.0;
@@ -1939,8 +1957,11 @@ impl Writer {
                     p.images.push(im.clone()); // 表示
                     p.images_new.push(im.clone()); // 保存
                 });
-                self.status =
-                    "画像を挿しました(段落の下に付き、保存で docx に入ります)".into();
+                self.status = if is_svg {
+                    "SVG を高精細の画像にして挿しました(保存で docx に入ります)".into()
+                } else {
+                    "画像を挿しました(段落の下に付き、保存で docx に入ります)".into()
+                };
             }
             Err(e) => self.status = format!("読めません: {e}").into(),
         }
@@ -2132,11 +2153,12 @@ impl Writer {
             | "instextart" | "insequation" => {
                 if id != "insimage" {
                     self.status =
-                        "図は Python(matplotlib 等)で描いて、画像として貼ります".into();
+                        "図は Python(matplotlib 等)で描いて貼ります(SVG なら拡大しても粗くなりません)"
+                            .into();
                 }
                 let ask = cx.background_executor().spawn(async {
                     rfd::FileDialog::new()
-                        .add_filter("画像", &["png", "jpg", "jpeg"])
+                        .add_filter("画像", &["png", "jpg", "jpeg", "svg"])
                         .pick_file()
                 });
                 cx.spawn(async move |this, cx| {

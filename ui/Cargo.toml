@@ -9,6 +9,7 @@ kumihan = { path = "../engine" }
 lang = { path = "../lang" }
 # GPUI は crates.io に無いので、版を固定して zed から直に取る
 gpui = { git = "https://github.com/zed-industries/zed", rev = "5e1fd392f67e27fa1da91bad43eef7db1a5dec23" }
+resvg = "0.48.1"
 
 [dev-dependencies]
 ooxml = { path = "../ooxml" }

@@ -40,6 +40,32 @@ impl AssetSource for Icons {
 }
 use kumihan::Editor;
 
+/// SVG を高精細の PNG に直す(matplotlib の `savefig("図.svg")` を貼るため)。
+/// 返り値: (PNG のバイト列, 論理の幅px, 高さpx)。幅高さは SVG の寸法
+/// (96dpi 相当)で、PNG 自体は scale 倍で描く — 拡大しても粗くならない。
+/// 紙に貼るものなので下地は白(透過を PDF の RGB 化で黒く潰さない)。
+pub fn svg_to_png(data: &[u8], scale: f32) -> Result<(Vec<u8>, u32, u32), String> {
+    use resvg::{tiny_skia, usvg};
+    let tree = usvg::Tree::from_data(data, &usvg::Options::default())
+        .map_err(|e| format!("SVG が読めません: {e}"))?;
+    let size = tree.size();
+    let (w, h) = (size.width(), size.height());
+    let (pw, ph) = ((w * scale).ceil() as u32, (h * scale).ceil() as u32);
+    if pw == 0 || ph == 0 || pw > 20000 || ph > 20000 {
+        return Err("SVG の大きさが扱えません".into());
+    }
+    let mut pixmap =
+        tiny_skia::Pixmap::new(pw, ph).ok_or_else(|| "画素が確保できません".to_string())?;
+    pixmap.fill(tiny_skia::Color::WHITE);
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    let png = pixmap.encode_png().map_err(|e| e.to_string())?;
+    Ok((png, w.round() as u32, h.round() as u32))
+}
+
 actions!(
     jo_edit,
     [
@@ -196,6 +222,25 @@ pub mod handler {
 
     pub fn text_len_utf16<T: HasEditor>(this: &T) -> usize {
         this.editor_ref().utf16_len()
+    }
+}
+
+#[cfg(test)]
+mod svg_tests {
+    #[test]
+    fn svgを高精細のpngに直せる() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#165E83"/></svg>"##;
+        let (png, w, h) = super::svg_to_png(svg, 3.0).expect("直せない");
+        assert_eq!((w, h), (40, 20), "論理の寸法が違う");
+        assert!(png.starts_with(&[0x89, b'P', b'N', b'G']), "PNG になっていない");
+        // 3倍の画素で描かれている(頭の IHDR の幅)
+        let pw = u32::from_be_bytes(png[16..20].try_into().unwrap());
+        assert_eq!(pw, 120, "高精細になっていない: {pw}px");
+    }
+
+    #[test]
+    fn 壊れたsvgは断る() {
+        assert!(super::svg_to_png(b"not svg", 3.0).is_err());
     }
 }
 
