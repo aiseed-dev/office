@@ -636,8 +636,50 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
             )),
         }
     }
+    // 印刷範囲は編集の対象なのでモデルへ(他の definedName は原文のまま)。
+    // 読めない形だけ原文に残す — 黙って捨てない
+    let mut rest = Vec::new();
+    for raw in std::mem::take(&mut book.names_raw) {
+        if raw.contains("_xlnm.Print_Area") {
+            if let Some((sid, areas)) = parse_print_area(&raw) {
+                if let Some(sh) = book.sheets.get_mut(sid) {
+                    sh.print_areas.extend(areas);
+                    continue;
+                }
+            }
+        }
+        rest.push(raw);
+    }
+    book.names_raw = rest;
     Ok((book, rep))
 }
+
+/// `_xlnm.Print_Area` の definedName を(シート番号, 範囲の列)に解く。
+/// `,` 区切りの複数の域も受ける。読めなければ None。
+fn parse_print_area(raw: &str) -> Option<(usize, Vec<(Pos, Pos)>)> {
+    let sid = raw
+        .split(SID_ATTR)
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .and_then(|v| v.parse::<usize>().ok())?;
+    let body = raw.split('>').nth(1).and_then(|r| r.split('<').next())?;
+    let mut out = Vec::new();
+    for part in body.split(',') {
+        let range = part.rsplit('!').next().unwrap_or(part);
+        let parsed = match range.split_once(':') {
+            Some((x, y)) => Pos::parse(x).zip(Pos::parse(y)),
+            None => Pos::parse(range).map(|p| (p, p)),
+        };
+        out.push(parsed?);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some((sid, out))
+}
+
+/// localSheetId 属性の頭(引用符の入れ子を避けるため定数で持つ)
+const SID_ATTR: &str = "localSheetId=\"";
 
 // ---------- 書く ----------
 
@@ -711,11 +753,35 @@ fn patch_defined_names(workbook: &str, block: &str) -> String {
     }
 }
 
-/// 全シートの名前の定義 + 理解しなかった原文を definedNames の塊にする。
+/// A1 を絶対参照($A$1)にする。Print_Area は絶対参照で書くのが通り相場。
+fn abs_a1(p: Pos) -> String {
+    let a1 = p.a1();
+    let split = a1.find(|c: char| c.is_ascii_digit()).unwrap_or(0);
+    format!("${}${}", &a1[..split], &a1[split..])
+}
+
+/// 全シートの名前の定義 + 印刷範囲 + 理解しなかった原文を definedNames の塊にする。
 fn defined_names_xml(book: &Book) -> String {
     let mut inner = String::new();
     for raw in &book.names_raw {
         inner.push_str(raw);
+    }
+    // 印刷範囲(モデルが正)。シート名は常に引用符で包む(空白・記号に安全)
+    for (i, sh) in book.sheets.iter().enumerate() {
+        if sh.print_areas.is_empty() {
+            continue;
+        }
+        let refs: Vec<String> = sh
+            .print_areas
+            .iter()
+            .map(|(a, b)| {
+                format!("'{}'!{}:{}", sh.name.replace('\'', "''"), abs_a1(*a), abs_a1(*b))
+            })
+            .collect();
+        inner.push_str(&format!(
+            "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"{i}\">{}</definedName>",
+            esc(&refs.join(","))
+        ));
     }
     for s in &book.sheets {
         for (n, r) in &s.names {
@@ -732,6 +798,75 @@ fn defined_names_xml(book: &Book) -> String {
     } else {
         format!("<definedNames>{inner}</definedNames>")
     }
+}
+
+/// 自己閉じ要素の属性を差し替える(無ければ足す)。他の属性は触らない。
+fn set_attr(el: &str, name: &str, value: &str) -> String {
+    let pat = format!("{name}=\"");
+    if let Some(i) = el.find(&pat) {
+        let vstart = i + pat.len();
+        if let Some(vend) = el[vstart..].find('"') {
+            let mut out = String::with_capacity(el.len() + value.len());
+            out.push_str(&el[..vstart]);
+            out.push_str(value);
+            out.push_str(&el[vstart + vend..]);
+            return out;
+        }
+    }
+    el.replacen("/>", &format!(" {name}=\"{value}\"/>"), 1)
+}
+
+/// 印刷まわりの塊(pageMargins → pageSetup → drawing の順 = schema の順)。
+/// 原文があれば**属性だけ差し替える**(拡大縮小など知らない属性を残す)。
+/// 無ければモデルの値から最小の要素を作る。
+fn print_extra_xml(orig: &str, sh: &Sheet) -> String {
+    let take = |pat: &str| -> Option<String> {
+        let i = orig.find(pat)?;
+        let j = orig[i..].find("/>")? + i + 2;
+        Some(orig[i..j].to_string())
+    };
+    let inch = |mm: f32| format!("{:.5}", mm / 25.4);
+    let margins = match (sh.margins_mm, take("<pageMargins")) {
+        (Some((l, r, t, b)), Some(el)) => {
+            let el = set_attr(&el, "left", &inch(l));
+            let el = set_attr(&el, "right", &inch(r));
+            let el = set_attr(&el, "top", &inch(t));
+            Some(set_attr(&el, "bottom", &inch(b)))
+        }
+        (Some((l, r, t, b)), None) => Some(format!(
+            "<pageMargins left=\"{}\" right=\"{}\" top=\"{}\" bottom=\"{}\" header=\"0.3\" footer=\"0.3\"/>",
+            inch(l), inch(r), inch(t), inch(b)
+        )),
+        (None, el) => el,
+    };
+    let setup = {
+        let orig_el = take("<pageSetup");
+        if !sh.landscape && sh.paper_size.is_none() && orig_el.is_none() {
+            None
+        } else {
+            let el = orig_el.unwrap_or_else(|| "<pageSetup/>".to_string());
+            let el = set_attr(
+                &el,
+                "orientation",
+                if sh.landscape { "landscape" } else { "portrait" },
+            );
+            Some(match sh.paper_size {
+                Some(c) => set_attr(&el, "paperSize", &c.to_string()),
+                None => el,
+            })
+        }
+    };
+    let mut out = String::new();
+    if let Some(m) = margins {
+        out.push_str(&m);
+    }
+    if let Some(su) = setup {
+        out.push_str(&su);
+    }
+    if let Some(d) = take("<drawing") {
+        out.push_str(&d);
+    }
+    out
 }
 
 pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
@@ -1106,10 +1241,15 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 body.insert_str(pos, &hl);
             }
         }
-        // 原本の印刷まわり・図形の参照を、schema の位置(mergeCells の後)へ戻す
-        if let Some(extra) = sheet_extras.get(i).filter(|s| !s.is_empty()) {
-            if let Some(pos) = body.rfind("</worksheet>") {
-                body.insert_str(pos, extra);
+        // 印刷まわり(原本の原文にモデルの向き・用紙・余白を織り込む)と
+        // 図形の参照を、schema の位置(hyperlinks の後)へ
+        {
+            let orig = sheet_extras.get(i).map(|s| s.as_str()).unwrap_or("");
+            let extra = print_extra_xml(orig, sh);
+            if !extra.is_empty() {
+                if let Some(pos) = body.rfind("</worksheet>") {
+                    body.insert_str(pos, &extra);
+                }
             }
         }
         // コメントの図形(VML)への参照は一番後ろ
@@ -1727,5 +1867,75 @@ mod page_setup_tests {
         let (l, _, t, _) = sh.margins_mm.expect("余白が読めない");
         assert!((l - 17.78).abs() < 0.01, "0.7インチ = 17.78mm でない: {l}");
         assert!((t - 19.05).abs() < 0.01, "{t}");
+    }
+}
+
+#[cfg(test)]
+mod print_setup_roundtrip_tests {
+    use super::*;
+
+    #[test]
+    fn 印刷設定と印刷範囲がモデル経由で往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].landscape = true;
+        b.sheets[0].paper_size = Some(12);
+        b.sheets[0].margins_mm = Some((10.0, 10.0, 20.0, 20.0));
+        b.sheets[0]
+            .print_areas
+            .push((Pos::parse("A1").unwrap(), Pos::parse("G30").unwrap()));
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let sh = &back.sheets[0];
+        assert!(sh.landscape, "向きが往復しない");
+        assert_eq!(sh.paper_size, Some(12), "用紙が往復しない");
+        let (l, _, t, _) = sh.margins_mm.expect("余白が往復しない");
+        assert!((l - 10.0).abs() < 0.05, "{l}");
+        assert!((t - 20.0).abs() < 0.05, "{t}");
+        assert_eq!(
+            sh.print_areas,
+            vec![(Pos::parse("A1").unwrap(), Pos::parse("G30").unwrap())],
+            "印刷範囲が往復しない"
+        );
+    }
+
+    #[test]
+    fn 原文の知らない属性を消さずに向きだけ変わる() {
+        // 拡大縮小(scale)付きの原本を読み、向きだけ変えて保存する
+        let b0 = Book::new();
+        let mut buf = Cursor::new(Vec::new());
+        write(&b0, &mut buf).expect("書けない");
+        let mut z = zip::ZipArchive::new(Cursor::new(buf.get_ref().clone())).unwrap();
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        use std::io::Write as _;
+        for i in 0..z.len() {
+            let mut f = z.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut s = Vec::new();
+            f.read_to_end(&mut s).unwrap();
+            if name.ends_with("sheet1.xml") {
+                let t = String::from_utf8(s).unwrap().replace(
+                    "</worksheet>",
+                    r#"<pageSetup paperSize="9" scale="85" orientation="landscape"/></worksheet>"#,
+                );
+                s = t.into_bytes();
+            }
+            w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(&s).unwrap();
+        }
+        let original = w.finish().unwrap().into_inner();
+        let (mut book, _) = read(Cursor::new(original.clone())).expect("読めない");
+        assert!(book.sheets[0].landscape, "原本の向きが読めていない");
+        book.sheets[0].landscape = false; // 縦に変える
+        let mut out = Cursor::new(Vec::new());
+        write_with(&book, Some(Cursor::new(original)), &mut out).expect("書けない");
+        let mut z = zip::ZipArchive::new(Cursor::new(out.into_inner())).unwrap();
+        let mut s = String::new();
+        z.by_name("xl/worksheets/sheet1.xml").unwrap().read_to_string(&mut s).unwrap();
+        assert!(s.contains(r#"scale="85""#), "知らない属性(scale)が消えた");
+        assert!(s.contains(r#"orientation="portrait""#), "変えた向きが書かれていない");
+        assert!(!s.contains("landscape"), "古い向きが残った");
     }
 }

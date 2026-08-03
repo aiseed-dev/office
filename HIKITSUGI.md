@@ -72,7 +72,10 @@ PDF の塗り・文字色・条件付き書式(切れた列の数も返して st
 データの入力規則(list を読み・効かせ・往復・リボンから作成/解除。
 設計は SEKKEI「calc に残すもの」。条件付き書式と名前の管理もリボンから)、
 PDF が帳票の印刷設定に従う(pageSetup の向き・用紙(B は JIS)・
-pageMargins・Print_Area。効かせたものは status に言う)。
+pageMargins・Print_Area。効かせたものは status に言う)、
+レイアウトタブの印刷設定(向き・用紙・余白・印刷範囲を設定できる。
+Print_Area はモデルに昇格し undo 可。保存は原文の pageSetup に
+**属性だけ差し替え** — 拡大縮小など知らない属性は残す)。
 writer の選択描画・ドラッグ選択・全カーソル操作・右クリックメニュー・
 段落の帯と囲み枠・画像の挿入(media/rels/Content_Types 生成)・
 ヘッダー・フッター(板で編集・ページ番号は PAGE フィールド往復・

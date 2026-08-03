@@ -2057,7 +2057,7 @@ impl Calc {
             std::mem::swap(&mut paper.width_mm, &mut paper.height_mm);
             desc.push("横向き".into());
         }
-        let areas = self.book.print_areas(self.active);
+        let areas = sh.print_areas.clone();
         let setup = paper::grid::PrintSetup {
             area: areas.first().copied(),
             margins_mm: sh.margins_mm,
@@ -2127,6 +2127,7 @@ impl Calc {
         "fn-math", "fn-text", "fn-logical", "fn-recent",
         "sum", "average", "count", "max", "min",
         "data-validation", "condformat", "defname",
+        "pageorient", "pagesize", "pagemargins", "printarea",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2237,6 +2238,74 @@ impl Calc {
             "clear-filter" => {
                 self.filter = None;
                 self.status = "絞り込みを解きました".into();
+            }
+            // 印刷の設定。モデルに置き、保存で原文へ織り込み、PDF が従う。
+            // どれもシートの控えで1手戻せる
+            "pageorient" => {
+                self.commit();
+                self.checkpoint();
+                let sh = self.sheet_mut();
+                sh.landscape = !sh.landscape;
+                let landscape = sh.landscape;
+                self.dirty = true;
+                self.status = format!(
+                    "印刷の向き: {}(PDF と保存に効きます)",
+                    if landscape { "横" } else { "縦" }
+                )
+                .into();
+            }
+            "pagesize" => {
+                self.commit();
+                self.checkpoint();
+                // A4 → A3 → B4 → B5 → A5 → A4 の順で回す
+                const CYCLE: [u32; 5] = [9, 8, 12, 13, 11];
+                let sh = self.sheet_mut();
+                let now = sh.paper_size.unwrap_or(9);
+                let i = CYCLE.iter().position(|c| *c == now).unwrap_or(0);
+                let next = CYCLE[(i + 1) % CYCLE.len()];
+                sh.paper_size = Some(next);
+                self.dirty = true;
+                let name = paper_mm(next).map(|(_, _, n)| n).unwrap_or("A4");
+                self.status = format!("用紙: {name}(B は JIS)").into();
+            }
+            "pagemargins" => {
+                self.commit();
+                self.checkpoint();
+                // 既定(20mm)→ 狭い(10mm)→ 広い(30mm)→ 既定
+                let sh = self.sheet_mut();
+                let (next, label) = match sh.margins_mm {
+                    None => (Some((10.0, 10.0, 10.0, 10.0)), "狭い(10mm)"),
+                    Some((l, _, _, _)) if l < 15.0 => {
+                        (Some((30.0, 30.0, 30.0, 30.0)), "広い(30mm)")
+                    }
+                    Some(_) => (None, "既定(20mm)"),
+                };
+                sh.margins_mm = next;
+                self.dirty = true;
+                self.status = format!("印刷の余白: {label}").into();
+            }
+            "printarea" => {
+                self.commit();
+                if self.anchor.is_some() {
+                    self.checkpoint();
+                    let range = self.sel_rect();
+                    self.sheet_mut().print_areas = vec![range];
+                    self.dirty = true;
+                    self.status = format!(
+                        "印刷範囲: {}:{}(もう一度押すと解除)",
+                        range.0.a1(),
+                        range.1.a1()
+                    )
+                    .into();
+                } else if !self.sheet().print_areas.is_empty() {
+                    self.checkpoint();
+                    self.sheet_mut().print_areas.clear();
+                    self.dirty = true;
+                    self.status = "印刷範囲を解きました(全域を印刷します)".into();
+                } else {
+                    self.status =
+                        "印刷範囲にする範囲を Shift+矢印かドラッグで選んでください".into();
+                }
             }
             // データの入力規則。選んだ範囲に候補を付ける(板で受ける)
             "data-validation" => {
