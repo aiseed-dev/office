@@ -185,10 +185,123 @@ fn parse_rels(xml: &str) -> Vec<(String, String, String, bool)> {
 }
 
 /// xl/worksheets/ からの相対の的を zip の中の道に直す("../comments1.xml" → "xl/comments1.xml")。
-/// drawing(xl/drawings/drawingN.xml)から、画像の錨を拾う。
-/// 返すのは (置き場所のセル, 幅EMU, 高さEMU, r:embed)。
-/// oneCellAnchor / twoCellAnchor / absoluteAnchor のどれでも、
-/// xdr:from のセルと、最初に見つかった ext の大きさを使う。
+/// drawing の錨の中身(画像か図形か)。
+enum DrawKind {
+    /// 画像(r:embed)
+    Image(String),
+    /// 図形(prstGeom の名前, 塗り, 線)
+    Shape(String, Option<String>, Option<String>),
+}
+
+/// drawing(xl/drawings/drawingN.xml)から、画像と図形の錨を拾う。
+/// 返すのは (置き場所のセル, 幅EMU, 高さEMU, 中身)。
+fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
+    let mut r = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut out = Vec::new();
+    let (mut col, mut row) = (None::<u32>, None::<u32>);
+    let (mut cx, mut cy) = (None::<i64>, None::<i64>);
+    let mut embed = None::<String>;
+    let mut prst = None::<String>;
+    // 図形の色: solidFill の1つ目が塗り、a:ln の中のものが線
+    let (mut fill, mut line) = (None::<String>, None::<String>);
+    let mut in_from = false;
+    let mut in_ln = false;
+    let mut in_sp = false;
+    let mut cur: Vec<u8> = Vec::new();
+    loop {
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Start(e)) => match local(e.name().as_ref()) {
+                b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
+                    (col, row, cx, cy, embed, prst, fill, line) =
+                        (None, None, None, None, None, None, None, None);
+                    in_sp = false;
+                    in_ln = false;
+                }
+                b"from" => in_from = true,
+                t @ (b"col" | b"row") if in_from => cur = t.to_vec(),
+                b"sp" => in_sp = true,
+                b"ln" => in_ln = true,
+                b"blip" => {
+                    if embed.is_none() {
+                        embed = attr(&e, "embed");
+                    }
+                }
+                b"prstGeom" => {
+                    if prst.is_none() {
+                        prst = attr(&e, "prst");
+                    }
+                }
+                _ => cur.clear(),
+            },
+            Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
+                b"ext" => {
+                    if cx.is_none() {
+                        cx = attr(&e, "cx").and_then(|v| v.parse().ok());
+                        cy = attr(&e, "cy").and_then(|v| v.parse().ok());
+                    }
+                }
+                b"blip" => {
+                    if embed.is_none() {
+                        embed = attr(&e, "embed");
+                    }
+                }
+                b"srgbClr" if in_sp => {
+                    let v = attr(&e, "val");
+                    if in_ln {
+                        if line.is_none() {
+                            line = v;
+                        }
+                    } else if fill.is_none() {
+                        fill = v;
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Text(t)) if !cur.is_empty() => {
+                let v: u32 = t.unescape().unwrap_or_default().trim().parse().unwrap_or(0);
+                if cur == b"col" {
+                    col = Some(v);
+                } else {
+                    row = Some(v);
+                }
+            }
+            Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                b"from" => {
+                    in_from = false;
+                    cur.clear();
+                }
+                b"col" | b"row" => cur.clear(),
+                b"ln" => in_ln = false,
+                b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
+                    let kind = match (embed.take(), prst.take()) {
+                        (Some(em), _) => Some(DrawKind::Image(em)),
+                        (None, Some(pr)) => {
+                            Some(DrawKind::Shape(pr, fill.take(), line.take()))
+                        }
+                        _ => None,
+                    };
+                    if let (Some(c), Some(rr), Some(k)) = (col, row, kind) {
+                        out.push((
+                            Pos::new(rr, c),
+                            cx.unwrap_or(300 * 9525),
+                            cy.unwrap_or(200 * 9525),
+                            k,
+                        ));
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// (古い名前の互換。画像だけを拾う)
+#[allow(dead_code)]
 fn parse_drawing_images(xml: &str) -> Vec<(Pos, i64, i64, String)> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
@@ -259,6 +372,42 @@ fn parse_drawing_images(xml: &str) -> Vec<(Pos, i64, i64, String)> {
         buf.clear();
     }
     out
+}
+
+/// 挿した図形1枚の錨(oneCellAnchor の xdr:sp)。Excel でも図形として開ける。
+fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
+    let (cx, cy) = ((sp.width_px * 9525.0) as i64, (sp.height_px * 9525.0) as i64);
+    let fill = match &sp.fill {
+        Some(c) => format!("<a:solidFill><a:srgbClr val=\"{c}\"/></a:solidFill>"),
+        None => "<a:noFill/>".to_string(),
+    };
+    let line = match &sp.line {
+        Some(c) => format!(
+            "<a:ln w=\"19050\"><a:solidFill><a:srgbClr val=\"{c}\"/></a:solidFill></a:ln>"
+        ),
+        None => String::new(),
+    };
+    format!(
+        concat!(
+            "<xdr:oneCellAnchor>",
+            "<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>0</xdr:colOff>",
+            "<xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>",
+            "<xdr:ext cx=\"{cx}\" cy=\"{cy}\"/>",
+            "<xdr:sp macro=\"\" textlink=\"\">",
+            "<xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"図形 {id}\"/><xdr:cNvSpPr/></xdr:nvSpPr>",
+            "<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>",
+            "<a:prstGeom prst=\"{kind}\"><a:avLst/></a:prstGeom>{fill}{line}</xdr:spPr>",
+            "</xdr:sp><xdr:clientData/></xdr:oneCellAnchor>"
+        ),
+        col = sp.at.col,
+        row = sp.at.row,
+        cx = cx,
+        cy = cy,
+        id = id,
+        kind = sp.kind,
+        fill = fill,
+        line = line
+    )
 }
 
 /// 挿した画像1枚の錨(oneCellAnchor)。大きさは px → EMU(9525 EMU = 1px)。
@@ -759,26 +908,44 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                 let _ = f.read_to_string(&mut rx);
             }
             let dmap = parse_rels(&rx);
-            for (at, cx_emu, cy_emu, embed) in parse_drawing_images(&dx) {
-                let Some((_, _, t, _)) = dmap.iter().find(|(id, _, _, _)| *id == embed) else {
-                    rep.note("画像(実体への参照が無い)");
-                    continue;
-                };
-                let mpath = resolve_target(t);
-                let mut data = Vec::new();
-                if let Ok(mut f) = zip.by_name(&mpath) {
-                    let _ = f.read_to_end(&mut data);
+            for (at, cx_emu, cy_emu, kind) in parse_drawing_anchors(&dx) {
+                let (width_px, height_px) =
+                    (cx_emu as f32 / 9525.0, cy_emu as f32 / 9525.0);
+                match kind {
+                    DrawKind::Image(embed) => {
+                        let Some((_, _, t, _)) =
+                            dmap.iter().find(|(id, _, _, _)| *id == embed)
+                        else {
+                            rep.note("画像(実体への参照が無い)");
+                            continue;
+                        };
+                        let mpath = resolve_target(t);
+                        let mut data = Vec::new();
+                        if let Ok(mut f) = zip.by_name(&mpath) {
+                            let _ = f.read_to_end(&mut data);
+                        }
+                        if data.is_empty() {
+                            rep.note("画像(実体が見つからない)");
+                            continue;
+                        }
+                        sh.images.push(crate::model::SheetImage {
+                            at,
+                            width_px,
+                            height_px,
+                            data,
+                        });
+                    }
+                    DrawKind::Shape(prst, fill, line) => {
+                        sh.shapes.push(crate::model::SheetShape {
+                            at,
+                            width_px,
+                            height_px,
+                            kind: prst,
+                            fill,
+                            line,
+                        });
+                    }
                 }
-                if data.is_empty() {
-                    rep.note("画像(実体が見つからない)");
-                    continue;
-                }
-                sh.images.push(crate::model::SheetImage {
-                    at,
-                    width_px: cx_emu as f32 / 9525.0,
-                    height_px: cy_emu as f32 / 9525.0,
-                    data,
-                });
             }
         }
         book.sheets.push(sh);
@@ -1270,11 +1437,14 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
     }
     for (i, sh) in book.sheets.iter().enumerate() {
-        if sh.images_new.is_empty() {
+        if sh.images_new.is_empty() && sh.shapes_new.is_empty() {
             continue;
         }
         let mut anchors = String::new();
         let mut rels_add = String::new();
+        for (k, spn) in sh.shapes_new.iter().enumerate() {
+            anchors.push_str(&shape_anchor_xml(spn, (i as u32) * 100 + k as u32 + 50));
+        }
         for (k, im) in sh.images_new.iter().enumerate() {
             media_n += 1;
             let ext = if im.data.starts_with(&[0xFF, 0xD8]) { "jpeg" } else { "png" };
@@ -1586,7 +1756,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         // このアプリで挿した画像。原本に drawing が無ければ新しい部品への参照を足す
         // (原本に有るときは、その部品の中へ錨を継ぎ足す — 部品は1シート1つの決まり)
-        if !sh.images_new.is_empty() && !body.contains("<drawing ") {
+        if (!sh.images_new.is_empty() || !sh.shapes_new.is_empty())
+            && !body.contains("<drawing ")
+        {
             if let Some(pos) = body.rfind("</worksheet>") {
                 body.insert_str(pos, r#"<drawing r:id="rIdDRW"/>"#);
             }
@@ -1604,7 +1776,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         // リンク・コメントのぶんはこちらが作り直す
         let orig = orig_sheet_rels.get(i).cloned().flatten();
         if !sh.links.is_empty() || !sh.comments.is_empty() || orig.is_some()
-            || !sh.images_new.is_empty()
+            || !sh.images_new.is_empty() || !sh.shapes_new.is_empty()
         {
             let mut inner = String::new();
             if let Some(o) = &orig {
@@ -1629,7 +1801,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 ));
             }
             let had_drawing = orig.as_deref().is_some_and(|o| o.contains("/drawing\""));
-            if !sh.images_new.is_empty() && !had_drawing {
+            if (!sh.images_new.is_empty() || !sh.shapes_new.is_empty()) && !had_drawing {
                 inner.push_str(&format!(
                     r#"<Relationship Id="rIdDRW" Type="{RNS}/drawing" Target="../drawings/drawingC{}.xml"/>"#,
                     i + 1
@@ -2379,5 +2551,37 @@ mod print_extras_roundtrip_tests {
         assert_eq!(sh.row_breaks, vec![10, 30], "改ページが往復しない");
         assert!(sh.print_gridlines && sh.print_headings, "printOptions が往復しない");
         assert_eq!(sh.print_title_rows, Some((0, 1)), "タイトル行が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod shape_roundtrip_tests {
+    use super::*;
+    use crate::model::SheetShape;
+
+    #[test]
+    fn 挿した図形が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].shapes_new.push(SheetShape {
+            at: Pos::new(1, 2),
+            width_px: 160.0,
+            height_px: 100.0,
+            kind: "rightArrow".into(),
+            fill: Some("FFF2CC".into()),
+            line: Some("1B6E3C".into()),
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let sp = &back.sheets[0].shapes;
+        assert_eq!(sp.len(), 1, "図形が往復しない");
+        assert_eq!(sp[0].kind, "rightArrow");
+        assert_eq!(sp[0].at, Pos::new(1, 2));
+        assert_eq!(sp[0].fill.as_deref(), Some("FFF2CC"));
+        assert_eq!(sp[0].line.as_deref(), Some("1B6E3C"), "線の色が塗りと混ざった");
+        assert!((sp[0].width_px - 160.0).abs() < 1.0);
+        assert!(back.sheets[0].shapes_new.is_empty());
     }
 }

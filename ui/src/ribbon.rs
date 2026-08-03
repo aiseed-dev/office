@@ -192,7 +192,7 @@ pub const CALC: &[Tab] = &[
     Tab { name: "挿入", cmds: &[
         x("表の挿入", "instable"),
         c("insimage", "画像を挿入", "insimage"),
-        x("図形を挿入", "insshape"),
+        c("insshape", "図形を挿入", "insshape"),
         x("SmartArtの挿入", "inssmartart"),
         x("inscheckbox", "inscheckbox"),
         x("推奨チャートを挿入", "insrecommend"),

@@ -181,7 +181,11 @@ Python の探し方: JO_PYTHON → .venv/bin/python → python3。無ければ s
 | リボンにあるもの | Python での扱い |
 |---|---|
 | グラフ | **釦あり**(裏方 matplotlib。上記) |
-| 図形・SmartArt | matplotlib 等で描いて、画像として貼る(画像の挿入は釦あり) |
+| 図形 | **釦あり**(発注者案 2026-08-04: **SVG で作る** — モデルは種類+色+錨で持ち、
+  画面は大きさを織り込んだ SVG を都度ラスタ化(拡大しても鮮明)、xlsx へは
+  DrawingML の prstGeom で書く = Excel でも本物の図形。読みは prstGeom の
+  部分集合を SVG に写して表示、知らない図形は原文持ち越しのまま表示だけ諦める) |
+| SmartArt | matplotlib 等で描いて、画像として貼る(画像の挿入は釦あり) |
 | ソルバー / ゴールシーク | scipy.optimize |
 | テキストからデータ / 区切り位置 | polars.read_csv(SJIS は先に文字コードを直してから) |
 | 外部リンク(他ブックの参照) | 取り込みは Python でやり、値として渡す(リンク切れの帳票を作らない) |

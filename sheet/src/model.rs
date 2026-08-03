@@ -289,6 +289,10 @@ pub struct Sheet {
     pub print_headings: bool,
     /// タイトル行(各ページの頭で繰り返す行の範囲。Print_Titles の行の部)
     pub print_title_rows: Option<(u32, u32)>,
+    /// 読んだ xlsx の図形(**表示だけ**。保存は原文の持ち越しが担う)
+    pub shapes: Vec<SheetShape>,
+    /// **このアプリで挿した**図形。保存でこちらが DrawingML として書き出す
+    pub shapes_new: Vec<SheetShape>,
     /// 読んだ xlsx の画像(**表示だけ**。保存は原文の drawing 持ち越しが担う —
     /// 図形など理解しない部品を壊さないため、読んだ絵はこちらで書き直さない)
     pub images: Vec<SheetImage>,
@@ -296,6 +300,88 @@ pub struct Sheet {
     /// (drawing・rels・media)ごと書き出す。読んだ画像と持ち場を分ける —
     /// 混ぜると保存で二重になる(writer と同じ構図)
     pub images_new: Vec<SheetImage>,
+}
+
+/// シートに浮かぶ図形。**中身はベクタ**(発注者案 2026-08-04: SVG で作る —
+/// 拡大縮小で崩れない)。画面へは to_svg が SVG を作り、xlsx へは DrawingML の
+/// 図形(prstGeom)として書く — Excel でも図形として開ける。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetShape {
+    /// 左上を留めるセル
+    pub at: Pos,
+    pub width_px: f32,
+    pub height_px: f32,
+    /// 図形の種類(xlsx の prstGeom の名前):
+    /// rect / roundRect / ellipse / rightArrow / diamond / line
+    pub kind: String,
+    /// 塗り RRGGBB(無ければ塗らない)
+    pub fill: Option<String>,
+    /// 線 RRGGBB(無ければ引かない)
+    pub line: Option<String>,
+}
+
+impl SheetShape {
+    /// 画面用の SVG。**大きさを width/height に織り込む**ので、
+    /// 描画側がその都度ラスタ化すれば、どの大きさでも輪郭が鮮明に出る。
+    pub fn to_svg(&self) -> String {
+        let (w, h) = (self.width_px.max(4.0), self.height_px.max(4.0));
+        let fill = self
+            .fill
+            .as_deref()
+            .map(|c| format!("#{c}"))
+            .unwrap_or_else(|| "none".into());
+        let line = self
+            .line
+            .as_deref()
+            .map(|c| format!("#{c}"))
+            .unwrap_or_else(|| "none".into());
+        let style = format!(r#"fill="{fill}" stroke="{line}" stroke-width="2""#);
+        // 線の太さの半分だけ内側に(縁が切れないように)
+        let (x0, y0, x1, y1) = (1.0, 1.0, w - 1.0, h - 1.0);
+        let body = match self.kind.as_str() {
+            "roundRect" => format!(
+                r#"<rect x="{x0}" y="{y0}" width="{}" height="{}" rx="{r}" ry="{r}" {style}/>"#,
+                x1 - x0,
+                y1 - y0,
+                r = ((x1 - x0).min(y1 - y0) * 0.15).max(4.0)
+            ),
+            "ellipse" => format!(
+                r#"<ellipse cx="{}" cy="{}" rx="{}" ry="{}" {style}/>"#,
+                w / 2.0,
+                h / 2.0,
+                (x1 - x0) / 2.0,
+                (y1 - y0) / 2.0
+            ),
+            "rightArrow" => {
+                // 胴と鏃。高さの半分が鏃(prstGeom の既定に寄せる)
+                let neck = h * 0.25;
+                let head = (w * 0.35).min(h);
+                format!(
+                    r#"<polygon points="{x0},{ty} {bx},{ty} {bx},{y0} {x1},{my} {bx},{y1} {bx},{by} {x0},{by}" {style}/>"#,
+                    ty = y0 + neck,
+                    by = y1 - neck,
+                    bx = x1 - head,
+                    my = h / 2.0
+                )
+            }
+            "diamond" => format!(
+                r#"<polygon points="{},{y0} {x1},{} {},{y1} {x0},{}" {style}/>"#,
+                w / 2.0,
+                h / 2.0,
+                w / 2.0,
+                h / 2.0
+            ),
+            "line" => format!(r#"<line x1="{x0}" y1="{y0}" x2="{x1}" y2="{y1}" {style}/>"#),
+            _ => format!(
+                r#"<rect x="{x0}" y="{y0}" width="{}" height="{}" {style}/>"#,
+                x1 - x0,
+                y1 - y0
+            ),
+        };
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">{body}</svg>"#
+        )
+    }
 }
 
 /// シートに浮かぶ画像。左上をセルに留める(xlsx の oneCellAnchor)。
@@ -1666,3 +1752,27 @@ mod validation_tests {
     }
 }
 
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    #[test]
+    fn 図形のsvgに大きさと色が入る() {
+        let sh = SheetShape {
+            at: Pos::new(0, 0),
+            width_px: 200.0,
+            height_px: 100.0,
+            kind: "ellipse".into(),
+            fill: Some("FFF2CC".into()),
+            line: Some("1B6E3C".into()),
+        };
+        let svg = sh.to_svg();
+        assert!(svg.contains(r#"width="200""#), "{svg}");
+        assert!(svg.contains("#FFF2CC") && svg.contains("#1B6E3C"));
+        assert!(svg.contains("<ellipse"));
+        // 知らない種類は四角で描く(黙って消さない)
+        let unknown = SheetShape { kind: "hexagon".into(), ..sh };
+        assert!(unknown.to_svg().contains("<rect"));
+    }
+}

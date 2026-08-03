@@ -283,6 +283,70 @@ pub fn sheet_to_pdf<W: Write>(
         y_used += rh;
         draw_row(grid, &l, &font, r, y_top, rh, ml, c0, ncols, &col_x, &col_mm, scale);
     }
+    // 図形(挿した分も読んだ分も)。**輪郭だけ**を紙に出す(塗りはまだ —
+    // printpdf の多角形塗りを持ち込むまで。黙って出したことにしない)
+    {
+        // セル→1ページ目基準のmm(改ページをまたぐ図形の紙送りはまだ)
+        let cell_mm = |at: sheet::Pos| -> (f32, f32) {
+            let x: f32 = (c0..at.col.min(c0 + ncols))
+                .map(|c| col_mm[(c - c0) as usize])
+                .sum();
+            let y: f32 = (r0..at.row.min(r1)).map(row_mm).sum();
+            (ml + x, paper.height_mm - mt - y)
+        };
+        let l1 = doc.get_page(page).get_layer(layer);
+        for sp in grid.shapes.iter().chain(grid.shapes_new.iter()) {
+            let (x, y_top) = cell_mm(sp.at);
+            let mm = 25.4 / 96.0; // px → mm
+            let (w, h) = (sp.width_px * mm * scale, sp.height_px * mm * scale);
+            if let Some((cr, cg, cb)) = sp.line.as_deref().and_then(hex_rgb) {
+                l1.set_outline_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));
+            }
+            let pts: Vec<(f32, f32)> = match sp.kind.as_str() {
+                "ellipse" => (0..=24)
+                    .map(|i| {
+                        let t = i as f32 / 24.0 * std::f32::consts::TAU;
+                        (x + w / 2.0 + w / 2.0 * t.cos(), y_top - h / 2.0 + h / 2.0 * t.sin())
+                    })
+                    .collect(),
+                "rightArrow" => {
+                    let (ty, by, bx, my) =
+                        (h * 0.25, h * 0.75, w - (w * 0.35).min(h), h / 2.0);
+                    vec![
+                        (x, y_top - ty),
+                        (x + bx, y_top - ty),
+                        (x + bx, y_top),
+                        (x + w, y_top - my),
+                        (x + bx, y_top - h),
+                        (x + bx, y_top - by),
+                        (x, y_top - by),
+                    ]
+                }
+                "diamond" => vec![
+                    (x + w / 2.0, y_top),
+                    (x + w, y_top - h / 2.0),
+                    (x + w / 2.0, y_top - h),
+                    (x, y_top - h / 2.0),
+                ],
+                "line" => vec![(x, y_top), (x + w, y_top - h)],
+                _ => vec![
+                    (x, y_top),
+                    (x + w, y_top),
+                    (x + w, y_top - h),
+                    (x, y_top - h),
+                ],
+            };
+            let closed = sp.kind != "line";
+            l1.add_line(Line {
+                points: pts
+                    .into_iter()
+                    .map(|(px_, py_)| (Point::new(Mm(px_), Mm(py_)), false))
+                    .collect(),
+                is_closed: closed,
+            });
+            l1.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
+        }
+    }
     doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())?;
     Ok(clipped)
 }

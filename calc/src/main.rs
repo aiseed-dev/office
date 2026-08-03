@@ -298,6 +298,10 @@ struct Calc {
     find_term: Option<String>,
     /// ゴールシークの途中の控え(目標セル, 目標値)
     goal: Option<(Pos, f64)>,
+    /// 選択中の図形(shapes_new の番号)。Esc/他クリックで解除、Del で削除
+    shape_sel: Option<usize>,
+    /// 図形のドラッグ(番号, 掴んだ格子px, 掴んだ時の錨の格子px, 大きさ変更か)
+    shape_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 右クリックのメニュー(出ている場所。格子領域の px)
@@ -383,6 +387,8 @@ impl Calc {
             img_cache: Default::default(),
             find_term: None,
             goal: None,
+            shape_sel: None,
+            shape_drag: None,
             wheel: (0.0, 0.0),
             menu_at: None,
             menu_sub: None,
@@ -653,12 +659,27 @@ impl Calc {
         self.size_drag = None;
         self.drag = None;
         self.head_drag = None;
+        self.shape_drag = None;
         if std::env::var_os("JO_MOUSE_LOG").is_some() {
             eprintln!(
                 "down x={x:.1} y={y:.1} clicks={clicks} grip={:?}",
                 self.size_grip_at(x, y)
             );
         }
+        // 浮いている図形が最優先(セルの上に描かれているので)
+        if let Some((i, (sx, sy), corner)) = self.shape_at(x, y) {
+            self.commit();
+            self.checkpoint();
+            self.shape_sel = Some(i);
+            self.shape_drag = Some((i, (x, y), if corner { (sx, sy) } else { (sx, sy) }, corner));
+            self.status = if corner {
+                "右下を引いて大きさを変えます".into()
+            } else {
+                "図形を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)".into()
+            };
+            return;
+        }
+        self.shape_sel = None;
         // 見出しの境界の取っ手が最優先(セルの当たり判定より先に見る)。
         // **ダブルクリックの自動調整は撤去した**(2026-08-03 発注者報告)。
         // 押し直し・掴み直しは 400ms 以内なら click_count が 2,3,… と数えられる
@@ -797,6 +818,11 @@ impl Calc {
         }
         if self.head_drag.take().is_some() {
             return; // 列・行の選択の確定。status は select_* が出している
+        }
+        if let Some((_, _, _, moved)) = self.shape_drag.take() {
+            // 動かしていない(選んだだけ)なら、積んだ控えは戻す
+            let _ = moved;
+            return;
         }
         if self.drag.take().is_some() && self.anchor.is_some() {
             let (a, b) = self.sel_rect();
@@ -996,6 +1022,33 @@ impl Calc {
                     self.fmt(move |f| f.size_c = Some((pt * 100.0) as u32));
                     self.status = format!("文字の大きさを {v}pt にしました").into();
                 }
+            }
+            "shape" => {
+                let kind = match v {
+                    "角丸四角形" => "roundRect",
+                    "楕円" => "ellipse",
+                    "右矢印" => "rightArrow",
+                    "ひし形" => "diamond",
+                    "直線" => "line",
+                    _ => "rect",
+                };
+                self.checkpoint();
+                let at = self.cursor;
+                self.sheet_mut().shapes_new.push(sheet::model::SheetShape {
+                    at,
+                    width_px: 160.0,
+                    height_px: 100.0,
+                    kind: kind.into(),
+                    fill: None,
+                    line: Some("1B6E3C".into()),
+                });
+                self.shape_sel = Some(self.sheet().shapes_new.len() - 1);
+                self.dirty = true;
+                self.status = format!(
+                    "{v}を {} に置きました(ドラッグで移動 / 右下で大きさ / Del で削除)",
+                    at.a1()
+                )
+                .into();
             }
             _ => self.pick_value(v),
         }
@@ -1270,6 +1323,7 @@ impl Calc {
             || self.menu_at.take().is_some()
             || self.fmt_panel.take().is_some()
             || self.clip_range.take().is_some()
+            || self.shape_sel.take().is_some()
         {
             cx.notify();
         } else if self.editing() {
@@ -1843,6 +1897,16 @@ impl Calc {
     }
 
     fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(i) = self.shape_sel.take() {
+            if self.sheet().shapes_new.len() > i {
+                self.checkpoint();
+                self.sheet_mut().shapes_new.remove(i);
+                self.dirty = true;
+                self.status = "図形を削除しました(Ctrl+Z で戻せます)".into();
+            }
+            cx.notify();
+            return;
+        }
         if self.anchor.is_some() {
             // 範囲を選んでいるときの Delete は、その中身を消す(戻せる)
             self.checkpoint();
@@ -2234,6 +2298,47 @@ impl Calc {
             });
         })
         .detach();
+    }
+
+    /// この格子座標に**このアプリで挿した図形**があるか(上に描かれた順 = 後勝ち)。
+    /// 返すのは (番号, 図形の左上px, 右下隅の掴みか)。
+    fn shape_at(&self, x: f32, y: f32) -> Option<(usize, (f32, f32), bool)> {
+        for (i, sp) in self.sheet().shapes_new.iter().enumerate().rev() {
+            let Some((sx, sy)) = self.cell_origin_px(sp.at) else { continue };
+            let (w, h) = (sp.width_px, sp.height_px);
+            if x >= sx && x <= sx + w && y >= sy && y <= sy + h {
+                let corner = x >= sx + w - 12.0 && y >= sy + h - 12.0;
+                return Some((i, (sx, sy), corner));
+            }
+        }
+        None
+    }
+
+    /// 図形のドラッグ(移動 or 右下の掴みで大きさ変更)。
+    fn shape_drag_at(&mut self, x: f32, y: f32) {
+        let Some((i, (gx, gy), (ox, oy), resize)) = self.shape_drag else { return };
+        if self.sheet().shapes_new.len() <= i {
+            return;
+        }
+        if resize {
+            let sp = &mut self.sheet_mut().shapes_new[i];
+            sp.width_px = (x - ox).max(16.0);
+            sp.height_px = (y - oy).max(16.0);
+            let (w, h) = (sp.width_px, sp.height_px);
+            self.dirty = true;
+            self.status = format!("大きさ: {w:.0}×{h:.0}px").into();
+        } else {
+            // 移動: 掴んだときのずれを保って、左上の来るセルに留め直す
+            let (nx, ny) = (ox + x - gx, oy + y - gy);
+            if let (Some(c), Some(r)) = (self.col_at(nx.max(HEAD_W)), self.row_at(ny.max(ROW_H))) {
+                let at = Pos::new(r, c);
+                if self.sheet().shapes_new[i].at != at {
+                    self.sheet_mut().shapes_new[i].at = at;
+                    self.dirty = true;
+                    self.status = format!("図形を {} に留めました", at.a1()).into();
+                }
+            }
+        }
     }
 
     /// 「次を検索」。いまのセルの次(行→列の順)から探し、末尾まで行ったら
@@ -2630,6 +2735,7 @@ impl Calc {
         "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
         "scale", "pagebreak", "printtitles", "print-gridlines", "print-headings",
         "data-from-text", "text-column", "goal-seek", "data-external-links",
+        "insshape",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -3084,6 +3190,20 @@ impl Calc {
                 self.commit();
                 self.insert_image_dialog(cx);
             }
+            "insshape" => {
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                self.pick_kind = "shape";
+                self.pick = Some((
+                    ["四角形", "角丸四角形", "楕円", "右矢印", "ひし形", "直線"]
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect(),
+                    at,
+                ));
+            }
             "inshyperlink" => {
                 self.commit();
                 let cur = self.sheet().links.get(&self.cursor).cloned().unwrap_or_default();
@@ -3272,7 +3392,10 @@ impl Calc {
                 for sh in &mut self.book.sheets {
                     let moved: Vec<_> = sh.images_new.drain(..).collect();
                     sh.images.extend(moved);
+                    let moved: Vec<_> = sh.shapes_new.drain(..).collect();
+                    sh.shapes.extend(moved);
                 }
+                self.shape_sel = None;
             }
             Err(e) => self.status = format!("保存できません: {e}").into(),
         }
@@ -3395,7 +3518,10 @@ impl gpui::Element for InputSink {
             }
             let rel = e.position - bounds.origin;
             view.update(cx, |c, cx| {
-                if c.size_drag.is_some() {
+                if c.shape_drag.is_some() {
+                    c.shape_drag_at(f32::from(rel.x), f32::from(rel.y));
+                    cx.notify();
+                } else if c.size_drag.is_some() {
                     c.size_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
                 } else if c.drag.is_some() || c.head_drag.is_some() {
@@ -4091,6 +4217,33 @@ impl Render for Calc {
                 .children(sub_panel)
         });
 
+        // ---- 選択中の図形の枠と右下の掴み ----
+        let shape_frame = self.shape_sel.and_then(|i| {
+            let sp = self.sheet().shapes_new.get(i)?;
+            let (x, y) = self.cell_origin_px(sp.at)?;
+            Some(
+                div()
+                    .absolute()
+                    .left(px(x - 2.0))
+                    .top(px(y - 2.0))
+                    .w(px(sp.width_px + 4.0))
+                    .h(px(sp.height_px + 4.0))
+                    .border_2()
+                    .border_dashed()
+                    .border_color(rgb(0x1B6E3C))
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(-1.0))
+                            .bottom(px(-1.0))
+                            .w(px(10.0))
+                            .h(px(10.0))
+                            .bg(rgb(0x1B6E3C))
+                            .cursor_nwse_resize(),
+                    ),
+            )
+        });
+
         // ---- コピーした範囲の破線(蟻の行進の静止版) ----
         // セルの罫線と混ざらないよう、重ね描きの1枚で囲む。マウスは受けない
         let ants = self.clip_range.and_then(|(si, a, b)| {
@@ -4414,6 +4567,43 @@ impl Render for Calc {
                                    .h(px(im.height_px)),
                            );
                        }
+                       // 図形(SVG)。大きさを織り込んで作るので、伸ばしても鮮明
+                       for (i, sp) in self
+                           .sheet()
+                           .shapes
+                           .iter()
+                           .chain(self.sheet().shapes_new.iter())
+                           .enumerate()
+                       {
+                           let Some((x, y)) = self.cell_origin_px(sp.at) else { continue };
+                           let svg = sp.to_svg();
+                           let key = {
+                               use std::hash::{Hash, Hasher};
+                               let mut h = std::collections::hash_map::DefaultHasher::new();
+                               svg.hash(&mut h);
+                               h.finish() as usize
+                           };
+                           let src = self
+                               .img_cache
+                               .borrow_mut()
+                               .entry(key)
+                               .or_insert_with(|| {
+                                   std::sync::Arc::new(gpui::Image::from_bytes(
+                                       gpui::ImageFormat::Svg,
+                                       svg.into_bytes(),
+                                   ))
+                               })
+                               .clone();
+                           layer.push(
+                               gpui::img(src)
+                                   .absolute()
+                                   .left(px(x))
+                                   .top(px(y))
+                                   .w(px(sp.width_px))
+                                   .h(px(sp.height_px)),
+                           );
+                           let _ = i;
+                       }
                        // 控えが育ちすぎたら捨てる(undo のクローンで鍵が増えるため)
                        if self.img_cache.borrow().len() > 64 {
                            self.img_cache.borrow_mut().clear();
@@ -4421,6 +4611,7 @@ impl Render for Calc {
                        layer
                    })
                    .child(InputSink { view: me })
+                   .children(shape_frame)
                    .children(ants)
                    .children(tip)
                    .children(fmt_panel)
