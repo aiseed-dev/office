@@ -33,6 +33,14 @@ fn attr(e: &BytesStart, want: &str) -> Option<String> {
     })
 }
 
+/// attr の実体参照(&lt; 等)を戻す版。自由な文字が入る属性(名前の類い)用
+fn attr_un(e: &BytesStart, want: &str) -> Option<String> {
+    e.attributes().flatten().find_map(|a| {
+        (local(a.key.as_ref()) == want.as_bytes())
+            .then(|| a.unescape_value().map(|v| v.to_string()).unwrap_or_default())
+    })
+}
+
 /// sharedStrings.xml → 文字列表
 ///
 /// 日本語の xlsx には**ふりがな**(`<rPh>`)が入る。その中にも `<t>` があるので、
@@ -706,7 +714,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     let mut paths = paths;
     paths.sort();
 
-    let mut book = Book { sheets: Vec::new(), names_raw: defined_raw, scripts: Vec::new() };
+    let mut book = Book { sheets: Vec::new(), names_raw: defined_raw, ..Default::default() };
     for (i, path) in paths.iter().enumerate() {
         let mut s = String::new();
         if let Ok(mut f) = zip.by_name(path) { let _ = f.read_to_string(&mut s); }
@@ -1010,6 +1018,75 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             book.scripts.push((n, code.clone()));
                         }
                         in_s = false;
+                    }
+                    _ => {}
+                }
+                buf.clear();
+            }
+        }
+    }
+    // ピボットの指図(独自部品 xl/joPivot.xml)。読むだけ — 更新は明示の操作
+    {
+        let mut sx = String::new();
+        if let Ok(mut f) = zip.by_name("xl/joPivot.xml") {
+            let _ = f.read_to_string(&mut sx);
+        }
+        if !sx.is_empty() {
+            let mut r = Reader::from_str(&sx);
+            let mut buf = Vec::new();
+            let mut cur: Option<crate::model::PivotDef> = None;
+            let mut field = 0u8; // 1 = <r> 行の見出し / 2 = <c> 列の見出し
+            loop {
+                match r.read_event_into(&mut buf) {
+                    Ok(Event::Eof) | Err(_) => break,
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"pivot" => {
+                        let range = attr(&e, "src").unwrap_or_default();
+                        let mut it = range.split(':');
+                        let a = it.next().and_then(Pos::parse);
+                        let b = it.next().and_then(Pos::parse);
+                        let dest = attr(&e, "dest").and_then(|d| Pos::parse(&d));
+                        if let (Some(a), Some(b), Some(dest)) = (a, b, dest) {
+                            cur = Some(crate::model::PivotDef {
+                                sheet: attr_un(&e, "sheet").unwrap_or_default(),
+                                src: (a, b),
+                                rows_sel: Vec::new(),
+                                cols_sel: Vec::new(),
+                                value: attr_un(&e, "value").unwrap_or_default(),
+                                agg: attr_un(&e, "agg").unwrap_or_else(|| "合計".into()),
+                                totals: attr(&e, "totals").as_deref() == Some("1"),
+                                subtotals: attr(&e, "subtotals").as_deref() == Some("1"),
+                                blank_rows: attr(&e, "blank").as_deref() == Some("1"),
+                                compact: attr(&e, "compact").as_deref() == Some("1"),
+                                dest,
+                                size: (
+                                    attr(&e, "h").and_then(|v| v.parse().ok()).unwrap_or(0),
+                                    attr(&e, "w").and_then(|v| v.parse().ok()).unwrap_or(0),
+                                ),
+                            });
+                        }
+                    }
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"r" => field = 1,
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"c" => field = 2,
+                    Ok(Event::Text(t)) if field > 0 => {
+                        if let Some(d) = cur.as_mut() {
+                            let v = t.unescape().unwrap_or_default().to_string();
+                            if field == 1 {
+                                d.rows_sel.push(v);
+                            } else {
+                                d.cols_sel.push(v);
+                            }
+                        }
+                    }
+                    Ok(Event::End(e))
+                        if local(e.name().as_ref()) == b"r"
+                            || local(e.name().as_ref()) == b"c" =>
+                    {
+                        field = 0;
+                    }
+                    Ok(Event::End(e)) if local(e.name().as_ref()) == b"pivot" => {
+                        if let Some(d) = cur.take() {
+                            book.pivots.push(d);
+                        }
                     }
                     _ => {}
                 }
@@ -1553,8 +1630,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
     }
 
-    // ブックに載せた Python はモデルが正(古い部品は写さない)
-    carried.retain(|(name, _)| name != "xl/joPython.xml");
+    // ブックに載せた Python とピボットの指図はモデルが正(古い部品は写さない)
+    carried.retain(|(name, _)| name != "xl/joPython.xml" && name != "xl/joPivot.xml");
     let carry = !carried.is_empty();
     for (name, buf) in &carried {
         zip.start_file(name.as_str(), o).map_err(|e| e.to_string())?;
@@ -1618,6 +1695,37 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         sx.push_str("</joPython>");
         put("xl/joPython.xml", &sx)?;
+    }
+    if !book.pivots.is_empty() {
+        let mut px = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<joPivot>",
+        );
+        for d in &book.pivots {
+            px.push_str(&format!(
+                "<pivot sheet=\"{}\" src=\"{}:{}\" dest=\"{}\" h=\"{}\" w=\"{}\" value=\"{}\" agg=\"{}\" totals=\"{}\" subtotals=\"{}\" blank=\"{}\" compact=\"{}\">",
+                esc(&d.sheet),
+                d.src.0.a1(),
+                d.src.1.a1(),
+                d.dest.a1(),
+                d.size.0,
+                d.size.1,
+                esc(&d.value),
+                esc(&d.agg),
+                d.totals as u8,
+                d.subtotals as u8,
+                d.blank_rows as u8,
+                d.compact as u8,
+            ));
+            for r in &d.rows_sel {
+                px.push_str(&format!("<r>{}</r>", esc(r)));
+            }
+            for c in &d.cols_sel {
+                px.push_str(&format!("<c>{}</c>", esc(c)));
+            }
+            px.push_str("</pivot>");
+        }
+        px.push_str("</joPivot>");
+        put("xl/joPivot.xml", &px)?;
     }
     if !carry {
         put("_rels/.rels", RELS)?;
@@ -1912,7 +2020,7 @@ mod fmt_round {
             formula: None, value: Value::Text("品名".into()), fmt: fmt.clone() });
         s.set(Pos { row: 0, col: 1 }, Cell {
             formula: None, value: Value::Number(1200.0), fmt });
-        Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new() }
+        Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() }
     }
 
     fn roundtrip(b: &Book) -> Book {
@@ -1974,7 +2082,7 @@ mod fmt_round {
             value: Value::Empty,
             fmt: CellFormat { borders: Borders::ALL, ..Default::default() },
         });
-        let back = roundtrip(&Book { sheets: vec![sh], names_raw: Vec::new(), scripts: Vec::new() });
+        let back = roundtrip(&Book { sheets: vec![sh], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() });
         let c = back.sheets[0].get(Pos { row: 2, col: 2 });
         assert!(c.is_some(), "値の無い罫線セルが消えた");
         assert_eq!(c.unwrap().fmt.borders, Borders::ALL);
@@ -2000,7 +2108,7 @@ mod merge_round {
             formula: None, value: Value::Text("見出し".into()), fmt: Default::default() });
         s.merges.push((Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
         s.merges.push((Pos::parse("A2").unwrap(), Pos::parse("A4").unwrap()));
-        let back = roundtrip(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new() });
+        let back = roundtrip(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() });
         assert_eq!(back.sheets[0].merges.len(), 2, "結合が消えた");
         assert_eq!(back.sheets[0].merges[0],
                    (Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
@@ -2050,7 +2158,7 @@ mod colwidth_round {
         s.col_width.insert(0, 3.5);
         s.col_width.insert(2, 24.0);
         let mut buf = Vec::new();
-        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
         let cw = &back.sheets[0].col_width;
         assert_eq!(cw.get(&0), Some(&3.5), "列幅が消えた: {cw:?}");
@@ -2090,7 +2198,7 @@ mod rowheight_round {
             formula: None, value: Value::Text("高い行".into()), fmt: Default::default() });
         s.row_height.insert(2, 27.5);
         let mut buf = Vec::new();
-        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
         assert_eq!(back.sheets[0].row_height.get(&2), Some(&27.5), "行の高さが消えた");
     }
@@ -2708,5 +2816,38 @@ mod script_roundtrip_tests {
         buf2.set_position(0);
         let (b3, _) = read(buf2).expect("読めない");
         assert_eq!(b3.scripts.len(), 1, "二往復で二重になった");
+    }
+
+    #[test]
+    fn ピボットの指図が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.pivots.push(crate::model::PivotDef {
+            sheet: "Sheet1".into(),
+            src: (Pos::parse("A1").unwrap(), Pos::parse("C5").unwrap()),
+            rows_sel: vec!["部署".into(), "係".into()],
+            cols_sel: vec!["月".into()],
+            value: "金額 <税込>".into(),
+            agg: "平均".into(),
+            totals: true,
+            subtotals: false,
+            blank_rows: true,
+            compact: false,
+            dest: Pos::parse("E1").unwrap(),
+            size: (4, 3),
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf.clone()).expect("読めない");
+        assert_eq!(back.pivots.len(), 1, "指図が往復しない");
+        assert_eq!(back.pivots[0], b.pivots[0], "中身が変わった: {:?}", back.pivots[0]);
+        // もう一往復(古い部品と二重にならない)
+        let mut buf2 = Cursor::new(Vec::new());
+        buf.set_position(0);
+        write_with(&back, Some(buf), &mut buf2).expect("書けない");
+        buf2.set_position(0);
+        let (b3, _) = read(buf2).expect("読めない");
+        assert_eq!(b3.pivots.len(), 1, "二往復で二重になった");
     }
 }

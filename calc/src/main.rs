@@ -278,34 +278,38 @@ fn parse_pivot_val(text: &str, headers: &[String]) -> Result<(String, &'static s
 }
 
 /// ピボットの指図を JSON にする(手で組む — グラフと同じ割り切り)。
-fn pivot_spec_json(
-    headers: &[String],
-    rows: &[Vec<String>],
-    index: &[String],
-    columns: &[String],
-    value: &str,
-    agg: &str,
-) -> String {
+fn pivot_spec_json(headers: &[String], rows: &[Vec<String>], d: &sheet::model::PivotDef) -> String {
     let esc = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
     let strs = |xs: &[String]| {
         xs.iter().map(|x| format!("\"{}\"", esc(x))).collect::<Vec<_>>().join(",")
     };
-    let mut json = format!("{{\"headers\":[{}],\"rows\":[", strs(headers));
-    json.push_str(
-        &rows
-            .iter()
-            .map(|r| format!("[{}]", strs(r)))
-            .collect::<Vec<_>>()
-            .join(","),
-    );
-    json.push_str(&format!(
-        "],\"index\":[{}],\"columns\":[{}],\"value\":\"{}\",\"agg\":\"{}\"}}",
-        strs(index),
-        strs(columns),
-        esc(value),
-        esc(agg)
-    ));
-    json
+    format!(
+        "{{\"headers\":[{}],\"rows\":[{}],\"index\":[{}],\"columns\":[{}],\"value\":\"{}\",\"agg\":\"{}\",\"totals\":{},\"subtotals\":{},\"blank_rows\":{},\"compact\":{}}}",
+        strs(headers),
+        rows.iter().map(|r| format!("[{}]", strs(r))).collect::<Vec<_>>().join(","),
+        strs(&d.rows_sel),
+        strs(&d.cols_sel),
+        esc(&d.value),
+        esc(&d.agg),
+        d.totals,
+        d.subtotals,
+        d.blank_rows,
+        d.compact,
+    )
+}
+
+/// ピボットの台本の答えを読む。各行の1欄目は種別
+/// (h=見出し d=データ s=小計 b=空行 t=総計)、残りが欄。
+fn parse_pivot_grid(raw: &str) -> (Vec<Vec<String>>, Vec<char>) {
+    let mut grid = Vec::new();
+    let mut kinds = Vec::new();
+    for line in raw.split('\u{1e}') {
+        let mut it = line.split('\u{1f}');
+        let kind = it.next().and_then(|k| k.chars().next()).unwrap_or('d');
+        grid.push(it.map(|v| v.to_string()).collect());
+        kinds.push(kind);
+    }
+    (grid, kinds)
 }
 
 /// 表のデザインの「合計行」。選択の下の行に、数の列へ =SUM(…) を入れて
@@ -2831,9 +2835,8 @@ impl Calc {
         .detach();
     }
 
-    /// ピボットテーブルの挿入(polars が裏方)。集計した結果を**その時の値**で
-    /// 元の表の右の空きに置く(新しいシートは undo で消せないのでここに置く)。
-    /// 開く=再計算の仕掛けは持たない — 帳面には値だけが残る(正直な劣化)。
+    /// ピボットテーブルの挿入(polars が裏方)。指図(PivotDef)を組んで
+    /// 回すだけ — 置き直せるように指図はブックに控える(xl/joPivot.xml)。
     fn insert_pivot(
         &mut self,
         pend: PivotPend,
@@ -2841,8 +2844,80 @@ impl Calc {
         agg: &'static str,
         cx: &mut Context<Self>,
     ) {
-        let PivotPend { a, b, headers, rows_sel, cols_sel } = pend;
-        let sh = self.sheet();
+        let def = sheet::model::PivotDef {
+            sheet: self.book.sheets[self.active].name.clone(),
+            src: (pend.a, pend.b),
+            rows_sel: pend.rows_sel,
+            cols_sel: pend.cols_sel,
+            value,
+            agg: agg.to_string(),
+            totals: false,
+            subtotals: false,
+            blank_rows: false,
+            compact: false,
+            dest: pend.a, // 仮 — 置くときに右の空きを探して決める
+            size: (0, 0),
+        };
+        self.spawn_pivot(def, None, cx);
+    }
+
+    /// いまのシートで、この位置に置いてあるピボットの指図の番号。
+    fn pivot_at(&self, p: Pos) -> Option<usize> {
+        let name = &self.book.sheets[self.active].name;
+        self.book.pivots.iter().position(|d| {
+            d.sheet == *name
+                && d.size.0 > 0
+                && p.row >= d.dest.row
+                && p.row < d.dest.row + d.size.0
+                && p.col >= d.dest.col
+                && p.col < d.dest.col + d.size.1
+        })
+    }
+
+    /// 集計の面をセルに書く。種別で見た目を付ける(h=見出しの帯、
+    /// s=小計 t=総計は太字、t は上罫線も)。
+    fn place_pivot_grid(&mut self, si: usize, at: Pos, grid: &[Vec<String>], kinds: &[char]) {
+        paste_values_text(&mut self.book.sheets[si], at, grid);
+        let w = grid.iter().map(|r| r.len()).max().unwrap_or(1) as u32;
+        for (i, k) in kinds.iter().enumerate() {
+            if !matches!(k, 'h' | 's' | 't') {
+                continue;
+            }
+            for c in 0..w {
+                let p = Pos::new(at.row + i as u32, at.col + c);
+                let mut cell = self.book.sheets[si].get(p).cloned().unwrap_or_default();
+                cell.fmt.bold = true;
+                if *k == 'h' {
+                    cell.fmt.fill = Some("D5E8DC".into());
+                }
+                if *k == 't' {
+                    cell.fmt.borders.top = true;
+                }
+                self.book.sheets[si].set(p, cell);
+            }
+        }
+    }
+
+    /// 指図どおりに polars を回して置く。replace=None は挿入(右の空きを探す)、
+    /// Some(i) は i 番の指図の更新(同じ場所に置き直す)。
+    fn spawn_pivot(
+        &mut self,
+        mut def: sheet::model::PivotDef,
+        replace: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(si) = self.book.sheets.iter().position(|s| s.name == def.sheet) else {
+            self.status = format!("シート「{}」がありません(ピボットの元の表)", def.sheet).into();
+            return;
+        };
+        let (a, b) = def.src;
+        let sh = &self.book.sheets[si];
+        let headers: Vec<String> = (a.col..=b.col)
+            .map(|c| {
+                let v = sh.get(Pos::new(a.row, c)).map(|x| x.value.display()).unwrap_or_default();
+                if v.is_empty() { col_name(c) } else { v }
+            })
+            .collect();
         let data: Vec<Vec<String>> = (a.row + 1..=b.row)
             .map(|r| {
                 (a.col..=b.col)
@@ -2850,9 +2925,9 @@ impl Calc {
                     .collect()
             })
             .collect();
-        let json = pivot_spec_json(&headers, &data, &rows_sel, &cols_sel, &value, agg);
+        let json = pivot_spec_json(&headers, &data, &def);
         let dir = std::env::temp_dir().join(format!("jo-pivot-{}", std::process::id()));
-        self.status = format!("{} の {agg} を集めています…", value).into();
+        self.status = format!("{} の {} を集めています…", def.value, def.agg).into();
         let task = cx.background_executor().spawn(async move {
             let _ = std::fs::create_dir_all(&dir);
             let json_path = dir.join("pivot.json");
@@ -2879,60 +2954,101 @@ impl Calc {
             let r = task.await;
             let _ = this.update(cx, |this, cx| {
                 match r {
-                    Ok(data) => {
-                        let grid: Vec<Vec<String>> = data
-                            .split('\u{1e}')
-                            .map(|row| row.split('\u{1f}').map(|f| f.to_string()).collect())
-                            .collect();
+                    Ok(raw) => {
+                        let (grid, kinds) = parse_pivot_grid(&raw);
                         let h = grid.len() as u32;
                         let w = grid.iter().map(|r| r.len()).max().unwrap_or(1) as u32;
-                        // 右の空きを探す(埋まっていたらさらに右へ。黙って上書きしない)
-                        let mut dc = b.col + 2;
-                        let mut tries = 0;
-                        let free = loop {
-                            let occupied = (0..h).any(|r| {
-                                (0..w).any(|c| {
-                                    this.sheet()
-                                        .get(Pos::new(a.row + r, dc + c))
-                                        .map(|cell| {
-                                            !cell.value.display().is_empty()
-                                                || cell.formula.is_some()
-                                        })
-                                        .unwrap_or(false)
+                        let used = |this: &Self, p: Pos| {
+                            this.book.sheets[si]
+                                .get(p)
+                                .map(|cell| {
+                                    !cell.value.display().is_empty() || cell.formula.is_some()
                                 })
-                            });
-                            if !occupied {
-                                break true;
-                            }
-                            dc += w + 1;
-                            tries += 1;
-                            if tries > 50 {
-                                break false;
-                            }
+                                .unwrap_or(false)
                         };
-                        if !free {
-                            this.status = "右に空きが見つかりません(場所を空けてから)".into();
-                        } else {
-                            this.checkpoint();
-                            let at = Pos::new(a.row, dc);
-                            paste_values_text(&mut this.book.sheets[this.active], at, &grid);
-                            // 見出し行に帯(表の挿入と同じ色)
-                            for c in 0..w {
-                                let p = Pos::new(a.row, dc + c);
-                                let mut cell =
-                                    this.sheet().get(p).cloned().unwrap_or_default();
-                                cell.fmt.bold = true;
-                                cell.fmt.fill = Some("D5E8DC".into());
-                                this.book.sheets[this.active].set(p, cell);
+                        match replace {
+                            None => {
+                                // 右の空きを探す(埋まっていたらさらに右へ。黙って上書きしない)
+                                let mut dc = b.col + 2;
+                                let mut tries = 0;
+                                let free = loop {
+                                    let occupied = (0..h).any(|r| {
+                                        (0..w).any(|c| used(this, Pos::new(a.row + r, dc + c)))
+                                    });
+                                    if !occupied {
+                                        break true;
+                                    }
+                                    dc += w + 1;
+                                    tries += 1;
+                                    if tries > 50 {
+                                        break false;
+                                    }
+                                };
+                                if !free {
+                                    this.status =
+                                        "右に空きが見つかりません(場所を空けてから)".into();
+                                } else {
+                                    this.checkpoint_book();
+                                    def.dest = Pos::new(a.row, dc);
+                                    def.size = (h, w);
+                                    let at = def.dest;
+                                    this.place_pivot_grid(si, at, &grid, &kinds);
+                                    recalc(&mut this.book.sheets[si]);
+                                    let (value, agg) = (def.value.clone(), def.agg.clone());
+                                    this.book.pivots.push(def);
+                                    this.dirty = true;
+                                    this.sync_input();
+                                    this.status = format!(
+                                        "ピボット({value} の {agg})を {} に置きました — その時の値。元が変わったら「更新」(Ctrl+Z で戻せます)",
+                                        at.a1()
+                                    )
+                                    .into();
+                                }
                             }
-                            recalc(&mut this.book.sheets[this.active]);
-                            this.dirty = true;
-                            this.sync_input();
-                            this.status = format!(
-                                "ピボット({value} の {agg})を {} に置きました — その時の値。元が変わったら選び直してもう一度(Ctrl+Z で戻せます)",
-                                at.a1()
-                            )
-                            .into();
+                            Some(pi) => {
+                                let Some(old) = this.book.pivots.get(pi).cloned() else {
+                                    return;
+                                };
+                                let dest = old.dest;
+                                let in_old = |p: Pos| {
+                                    p.row >= dest.row
+                                        && p.row < dest.row + old.size.0
+                                        && p.col >= dest.col
+                                        && p.col < dest.col + old.size.1
+                                };
+                                let occupied = (0..h).any(|r| {
+                                    (0..w).any(|c| {
+                                        let p = Pos::new(dest.row + r, dest.col + c);
+                                        !in_old(p) && used(this, p)
+                                    })
+                                });
+                                if occupied {
+                                    this.status =
+                                        "広がった分の場所が塞がっています(右下を空けてから更新)"
+                                            .into();
+                                } else {
+                                    this.checkpoint_book();
+                                    for r in 0..old.size.0 {
+                                        for c in 0..old.size.1 {
+                                            this.book.sheets[si]
+                                                .cells
+                                                .remove(&Pos::new(dest.row + r, dest.col + c));
+                                        }
+                                    }
+                                    def.dest = dest;
+                                    def.size = (h, w);
+                                    this.place_pivot_grid(si, dest, &grid, &kinds);
+                                    recalc(&mut this.book.sheets[si]);
+                                    this.book.pivots[pi] = def;
+                                    this.dirty = true;
+                                    this.sync_input();
+                                    this.status = format!(
+                                        "ピボットを更新しました({} — その時の値。Ctrl+Z で戻せます)",
+                                        dest.a1()
+                                    )
+                                    .into();
+                                }
+                            }
                         }
                     }
                     Err(e) => this.status = e.into(),
@@ -3585,6 +3701,8 @@ calc の隣に置いてください)"
         "insshape", "instext", "inssparkline", "python", "addcomment",
         "trace-prec", "trace-dep", "remove-arrows", "insrecommend",
         "instable", "table-tpl", "inssymbol", "pivot-insert",
+        "pivot-refresh", "pivot-refresh-all", "pivot-select",
+        "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout",
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
     ];
@@ -3960,6 +4078,95 @@ calc の隣に置いてください)"
                             cols_sel: Vec::new(),
                         });
                         self.prompt = Some(("pivot-rows", Editor::new("")));
+                    }
+                }
+            }
+            // ピボットの手入れ: どれも「指図を直して置き直す」だけ。
+            // 対象はカーソルの下のピボット(指図はブックに控えてある)
+            "pivot-refresh" => {
+                self.commit();
+                match self.pivot_at(self.cursor) {
+                    Some(i) => {
+                        let d = self.book.pivots[i].clone();
+                        self.spawn_pivot(d, Some(i), cx);
+                    }
+                    None => {
+                        self.status =
+                            "更新したいピボットの上にカーソルを置いてください".into();
+                    }
+                }
+            }
+            "pivot-refresh-all" => {
+                self.commit();
+                let n = self.book.pivots.len();
+                if n == 0 {
+                    self.status = "このブックにピボットはありません".into();
+                } else {
+                    for i in 0..n {
+                        let d = self.book.pivots[i].clone();
+                        self.spawn_pivot(d, Some(i), cx);
+                    }
+                    self.status = format!("{n} 件のピボットを更新しています…").into();
+                }
+            }
+            "pivot-select" => {
+                match self.pivot_at(self.cursor) {
+                    Some(i) => {
+                        let d = &self.book.pivots[i];
+                        self.cursor = d.dest;
+                        self.anchor = Some(Pos::new(
+                            d.dest.row + d.size.0.saturating_sub(1),
+                            d.dest.col + d.size.1.saturating_sub(1),
+                        ));
+                        self.sync_input();
+                        self.status = "ピボット全体を選びました".into();
+                    }
+                    None => {
+                        self.status = "ピボットの上にカーソルを置いてください".into();
+                    }
+                }
+            }
+            "pivot-totals" | "pivot-subtotals" | "pivot-blank" | "pivot-layout" => {
+                self.commit();
+                match self.pivot_at(self.cursor) {
+                    None => {
+                        self.status = "ピボットの上にカーソルを置いてください".into();
+                    }
+                    Some(i) => {
+                        let need_two = matches!(id, "pivot-subtotals" | "pivot-blank");
+                        if need_two && self.book.pivots[i].rows_sel.len() < 2 {
+                            self.status =
+                                "行の見出しが2つ以上のピボットで効きます(挿入で複数選ぶ)"
+                                    .into();
+                        } else {
+                            let d = &mut self.book.pivots[i];
+                            let (name, on) = match id {
+                                "pivot-totals" => {
+                                    d.totals = !d.totals;
+                                    ("総計", d.totals)
+                                }
+                                "pivot-subtotals" => {
+                                    d.subtotals = !d.subtotals;
+                                    ("小計", d.subtotals)
+                                }
+                                "pivot-blank" => {
+                                    d.blank_rows = !d.blank_rows;
+                                    ("空行", d.blank_rows)
+                                }
+                                _ => {
+                                    d.compact = !d.compact;
+                                    ("コンパクト形式", d.compact)
+                                }
+                            };
+                            let d = self.book.pivots[i].clone();
+                            self.dirty = true;
+                            self.status = format!(
+                                "{name}を{}にして置き直します…",
+                                if on { "あり" } else { "なし" }
+                            )
+                            .into();
+                            self.spawn_pivot(d, Some(i), cx);
+                        }
                     }
                 }
             }
@@ -5118,18 +5325,76 @@ if agg != "個数":
     # 数にならないものは null(集計から外れる)
     df = df.with_columns(pl.col(val).cast(pl.Float64, strict=False))
 idx, cols = spec["index"], spec["columns"]
-if cols:
-    fn = {"合計": "sum", "平均": "mean", "個数": "len", "最大": "max", "最小": "min"}[agg]
-    out = df.pivot(cols, index=idx, values=val, aggregate_function=fn, sort_columns=True).sort(idx)
-else:
-    e = {
-        "合計": pl.sum(val),
-        "平均": pl.mean(val),
-        "個数": pl.len().alias(val),
-        "最大": pl.max(val),
-        "最小": pl.min(val),
-    }[agg]
-    out = df.group_by(idx).agg(e).sort(idx)
+FN = {"合計": "sum", "平均": "mean", "個数": "len", "最大": "max", "最小": "min"}
+
+def agg_expr():
+    return {"合計": pl.sum(val), "平均": pl.mean(val), "個数": pl.len().alias(val),
+            "最大": pl.max(val), "最小": pl.min(val)}[agg]
+
+def table(frame, index):
+    if cols:
+        return frame.pivot(cols, index=index, values=val,
+                           aggregate_function=FN[agg], sort_columns=True).sort(index)
+    return frame.group_by(index).agg(agg_expr()).sort(index)
+
+def stub(frame, label, index):
+    # index の1列目に札を立て、残りを空にした複製。ピボットに通すことで
+    # 列名の並びを main と揃えたまま「1行に集めた」答えが得られる
+    ex = [pl.lit(label).alias(index[0])] + [pl.lit("").alias(i) for i in index[1:]]
+    return frame.with_columns(ex)
+
+def row_total(frame, index):
+    # 行ごとの総計(列に広げたぶんを全部まとめた値)。集計の種類を守る
+    return {tuple(r[:-1]): r[-1]
+            for r in frame.group_by(index).agg(agg_expr().alias("_t")).rows()}
+
+main = table(df, idx)
+tot_col = spec["totals"] and bool(cols)
+tots = row_total(df, idx) if tot_col else {}
+
+out = []  # (種別, 欄) 種別: d=データ s=小計 b=空行 t=総計
+
+sub = None
+if spec["subtotals"] and len(idx) >= 2:
+    sub = {r[0]: list(r[1:]) for r in table(df, [idx[0]]).rows()}
+    sub_tots = row_total(df, [idx[0]]) if tot_col else {}
+
+# 1つ目の見出しで束ねながら吐く(小計・空行はその区切りごと)
+groups = []
+for r in main.rows():
+    if groups and groups[-1][0] == r[0]:
+        groups[-1][1].append(r)
+    else:
+        groups.append((r[0], [r]))
+
+for g, rs in groups:
+    prev = None
+    for r in rs:
+        cells = list(r)
+        if spec["compact"] and prev is not None:
+            # 繰り返しの見出しを空欄に(コンパクト形式)
+            for i in range(len(idx)):
+                if cells[i] == prev[i]:
+                    cells[i] = ""
+                else:
+                    break
+        if tot_col:
+            cells.append(tots.get(tuple(r[:len(idx)])))
+        out.append(("d", cells))
+        prev = list(r)
+    if sub is not None:
+        cells = [f"{g} 小計"] + [""] * (len(idx) - 1) + sub[g]
+        if tot_col:
+            cells.append(sub_tots.get((g,)))
+        out.append(("s", cells))
+    if spec["blank_rows"] and len(idx) >= 2:
+        out.append(("b", [""] * (len(main.columns) + (1 if tot_col else 0))))
+
+if spec["totals"]:
+    cells = list(table(stub(df, "総計", idx), idx).rows()[0])
+    if tot_col:
+        cells.append(df.select(agg_expr()).item())
+    out.append(("t", cells))
 
 def s(v):
     if v is None:
@@ -5138,9 +5403,10 @@ def s(v):
         return "%g" % v
     return str(v)
 
-lines = ["\x1f".join(out.columns)]
-for row in out.rows():
-    lines.append("\x1f".join(s(v) for v in row))
+head = list(main.columns) + (["総計"] if tot_col else [])
+lines = ["h\x1f" + "\x1f".join(head)]
+for kind, cells in out:
+    lines.append(kind + "\x1f" + "\x1f".join(s(v) for v in cells))
 sys.stdout.buffer.write("\x1e".join(lines).encode("utf-8"))
 "#;
 
@@ -6479,30 +6745,61 @@ mod pivot_tests {
         assert!(parse_pivot_val("", &hs).is_err(), "空は断る");
     }
 
+    fn def(rows: &[&str], cols: &[&str], value: &str, agg: &str) -> sheet::model::PivotDef {
+        sheet::model::PivotDef {
+            sheet: "S".into(),
+            src: (Pos::new(0, 0), Pos::new(1, 1)),
+            rows_sel: rows.iter().map(|s| s.to_string()).collect(),
+            cols_sel: cols.iter().map(|s| s.to_string()).collect(),
+            value: value.into(),
+            agg: agg.into(),
+            totals: false,
+            subtotals: false,
+            blank_rows: false,
+            compact: false,
+            dest: Pos::new(0, 0),
+            size: (0, 0),
+        }
+    }
+
     #[test]
     fn 指図のjsonは逃がしが効く() {
         let json = pivot_spec_json(
             &["部\"署".to_string()],
             &[vec!["営\\業".to_string()]],
-            &["部\"署".to_string()],
-            &[],
-            "部\"署",
-            "合計",
+            &def(&["部\"署"], &[], "部\"署", "合計"),
         );
         assert!(json.contains("部\\\"署"), "二重引用符が逃げていない: {json}");
         assert!(json.contains("営\\\\業"), "バックスラッシュが逃げていない: {json}");
+        assert!(json.contains("\"totals\":false"), "旗が無い: {json}");
     }
 
-    #[test]
-    fn 台本が実際にpolarsで回る() {
+    fn run_py(spec: String) -> Option<(Vec<Vec<String>>, Vec<char>)> {
         // .venv が無い機械では黙って飛ぶ(HIKITSUGI の作法)
         let py = ["../.venv/bin/python", ".venv/bin/python"]
             .iter()
             .map(std::path::PathBuf::from)
-            .find(|p| p.exists());
-        let Some(py) = py else { return };
+            .find(|p| p.exists())?;
+        // 並走する試験と取り合わないよう、呼び出しごとに番号を振る
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("jo-pivot-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
+        let json_path = dir.join(format!("pivot{n}.json"));
+        let py_path = dir.join(format!("pivot{n}.py"));
+        std::fs::write(&json_path, spec).unwrap();
+        std::fs::write(&py_path, PIVOT_PY).unwrap();
+        let o = std::process::Command::new(&py)
+            .arg(&py_path)
+            .arg(&json_path)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        Some(parse_pivot_grid(&String::from_utf8_lossy(&o.stdout)))
+    }
+
+    #[test]
+    fn 台本が実際にpolarsで回る() {
         let headers: Vec<String> =
             ["部署", "月", "金額"].iter().map(|s| s.to_string()).collect();
         let rows: Vec<Vec<String>> = [
@@ -6514,47 +6811,64 @@ mod pivot_tests {
         .iter()
         .map(|r| r.iter().map(|s| s.to_string()).collect())
         .collect();
-        let run = |spec: String| -> Vec<Vec<String>> {
-            let json_path = dir.join("pivot.json");
-            let py_path = dir.join("pivot.py");
-            std::fs::write(&json_path, spec).unwrap();
-            std::fs::write(&py_path, PIVOT_PY).unwrap();
-            let o = std::process::Command::new(&py)
-                .arg(&py_path)
-                .arg(&json_path)
-                .output()
-                .unwrap();
-            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-            String::from_utf8_lossy(&o.stdout)
-                .split('\u{1e}')
-                .map(|row| row.split('\u{1f}').map(|f| f.to_string()).collect())
-                .collect()
-        };
         // 部署×月の合計(クロス表)
-        let g = run(pivot_spec_json(
-            &headers,
-            &rows,
-            &["部署".to_string()],
-            &["月".to_string()],
-            "金額",
-            "合計",
-        ));
+        let spec = pivot_spec_json(&headers, &rows, &def(&["部署"], &["月"], "金額", "合計"));
+        let Some((g, k)) = run_py(spec) else { return };
+        assert_eq!(k[0], 'h');
         assert_eq!(g[0], vec!["部署", "1月", "2月"], "見出しの形が違う: {g:?}");
         assert_eq!(g[1], vec!["営業", "150", "70"]);
         // 無い組み合わせ: 合計は 0(空の合計)。平均などは null → 空欄になる
         assert_eq!(g[2], vec!["総務", "30", "0"]);
         // 部署ごとの個数(列に広げない)
-        let g = run(pivot_spec_json(
-            &headers,
-            &rows,
-            &["部署".to_string()],
-            &[],
-            "金額",
-            "個数",
-        ));
+        let spec = pivot_spec_json(&headers, &rows, &def(&["部署"], &[], "金額", "個数"));
+        let Some((g, _)) = run_py(spec) else { return };
         assert_eq!(g[0], vec!["部署", "金額"]);
         assert_eq!(g[1], vec!["営業", "3"]);
         assert_eq!(g[2], vec!["総務", "1"]);
+    }
+
+    #[test]
+    fn 総計と小計と空行が付く() {
+        let headers: Vec<String> =
+            ["部署", "係", "月", "金額"].iter().map(|s| s.to_string()).collect();
+        let rows: Vec<Vec<String>> = [
+            ["営業", "一", "1月", "100"],
+            ["営業", "二", "1月", "50"],
+            ["営業", "一", "2月", "70"],
+            ["総務", "一", "1月", "30"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|s| s.to_string()).collect())
+        .collect();
+        let mut d = def(&["部署", "係"], &["月"], "金額", "合計");
+        d.totals = true;
+        d.subtotals = true;
+        d.blank_rows = true;
+        let spec = pivot_spec_json(&headers, &rows, &d);
+        let Some((g, k)) = run_py(spec) else { return };
+        assert_eq!(g[0], vec!["部署", "係", "1月", "2月", "総計"], "見出し: {g:?}");
+        assert_eq!(g[1], vec!["営業", "一", "100", "70", "170"]);
+        assert_eq!(g[2], vec!["営業", "二", "50", "0", "50"]);
+        assert_eq!(
+            g[3],
+            vec!["営業 小計", "", "150", "70", "220"],
+            "小計が違う: {g:?}"
+        );
+        assert_eq!(k[3], 's', "小計の種別が違う");
+        assert_eq!(k[4], 'b', "空行が無い");
+        assert_eq!(g[6], vec!["総務 小計", "", "30", "0", "30"]);
+        let last = g.last().unwrap();
+        assert_eq!(last, &vec!["総計", "", "180", "70", "250"], "総計が違う: {g:?}");
+        assert_eq!(*k.last().unwrap(), 't');
+        // コンパクト形式: 繰り返しの見出しが空欄になる
+        d.subtotals = false;
+        d.blank_rows = false;
+        d.totals = false;
+        d.compact = true;
+        let spec = pivot_spec_json(&headers, &rows, &d);
+        let Some((g, _)) = run_py(spec) else { return };
+        assert_eq!(g[2][0], "", "繰り返しの部署が空欄にならない: {g:?}");
+        assert_eq!(g[2][1], "二");
     }
 }
 

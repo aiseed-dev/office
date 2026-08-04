@@ -557,6 +557,31 @@ impl Sheet {
     }
 }
 
+/// ピボットの指図。src の表を集計して dest に**その時の値**で置いたもの。
+/// セルには値しか残らない — この指図があるから「更新」で置き直せる。
+/// 更新は明示の操作のときだけ polars を回す(開く=再計算はしない)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PivotDef {
+    /// 元の表があるシートの名前(番号ではなく名前 — 並べ替えに耐える)
+    pub sheet: String,
+    pub src: (Pos, Pos),
+    pub rows_sel: Vec<String>,
+    pub cols_sel: Vec<String>,
+    pub value: String,
+    pub agg: String,
+    /// 総計(行。列に広げていれば総計の列も)
+    pub totals: bool,
+    /// 小計(行の見出しが2つ以上のとき、1つ目の区切りごと)
+    pub subtotals: bool,
+    /// 空行(1つ目の区切りごとに1行空ける)
+    pub blank_rows: bool,
+    /// コンパクト形式(繰り返しの見出しを空欄に)。false = 表形式
+    pub compact: bool,
+    pub dest: Pos,
+    /// 置いた広さ(行数, 列数)— 更新のとき前の面を消すため
+    pub size: (u32, u32),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Book {
     pub sheets: Vec<Sheet>,
@@ -567,11 +592,14 @@ pub struct Book {
     /// 実行は明示の操作+サンドボックスのみ(SEKKEI「Python in Calc」参照)。
     /// xlsx へは xl/joPython.xml で往復する(この形式の独自部品)
     pub scripts: Vec<(String, String)>,
+    /// ピボットの指図(xl/joPivot.xml で往復する独自部品)。
+    /// Excel で保存し直すと消える — そのときピボットはただの値になる(正直な劣化)
+    pub pivots: Vec<PivotDef>,
 }
 
 impl Book {
     pub fn new() -> Book {
-        Book { sheets: vec![Sheet::new("Sheet1")], names_raw: Vec::new(), scripts: Vec::new() }
+        Book { sheets: vec![Sheet::new("Sheet1")], ..Default::default() }
     }
 
 }
