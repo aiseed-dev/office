@@ -209,6 +209,42 @@ pub fn sheet_to_pdf<W: Write>(
             if grid.covered_by_merge(p) {
                 continue;
             }
+            // Bool はチェックボックスとして紙にも出す(画面と一致)。
+            // ☑/☐ の字は日本語フォントに無い(Noto CJK 実測)ので、
+            // 文字ではなく線で描く — 豆腐を刷らない
+            if let Value::Bool(b) = &cell.value {
+                let s = (rh - 1.6).min(3.2); // 箱の一辺 mm
+                let bx = x + 1.5;
+                let by = y_top - rh / 2.0 - s / 2.0; // 箱の下辺
+                l.set_outline_color(Color::Rgb(Rgb::new(0.1, 0.1, 0.1, None)));
+                let sq = vec![
+                    (bx, by), (bx + s, by), (bx + s, by + s), (bx, by + s),
+                ];
+                l.add_line(Line {
+                    points: sq
+                        .into_iter()
+                        .map(|(px_, py_)| (printpdf::Point::new(Mm(px_), Mm(py_)), false))
+                        .collect(),
+                    is_closed: true,
+                });
+                if *b {
+                    let tick = vec![
+                        (bx + s * 0.2, by + s * 0.5),
+                        (bx + s * 0.45, by + s * 0.2),
+                        (bx + s * 0.85, by + s * 0.85),
+                    ];
+                    l.add_line(Line {
+                        points: tick
+                            .into_iter()
+                            .map(|(px_, py_)| {
+                                (printpdf::Point::new(Mm(px_), Mm(py_)), false)
+                            })
+                            .collect(),
+                        is_closed: false,
+                    });
+                }
+                continue;
+            }
             let shown = format_value(&cell.value, cell.fmt.number_format.as_deref());
             if shown.is_empty() {
                 continue;

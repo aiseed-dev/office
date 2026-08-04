@@ -232,11 +232,12 @@ enum DrawKind {
 
 /// drawing(xl/drawings/drawingN.xml)から、画像と図形の錨を拾う。
 /// 返すのは (置き場所のセル, 幅EMU, 高さEMU, 中身)。
-fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
+fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut out = Vec::new();
     let (mut col, mut row) = (None::<u32>, None::<u32>);
+    let (mut off_x, mut off_y) = (0i64, 0i64);
     let (mut cx, mut cy) = (None::<i64>, None::<i64>);
     let mut embed = None::<String>;
     let mut prst = None::<String>;
@@ -259,6 +260,7 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                 b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
                     (col, row, cx, cy, embed, prst, fill, line) =
                         (None, None, None, None, None, None, None, None);
+                    (off_x, off_y) = (0, 0);
                     text.clear();
                     pts.clear();
                     has_custom = false;
@@ -267,7 +269,9 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                     in_ln = false;
                 }
                 b"from" => in_from = true,
-                t @ (b"col" | b"row") if in_from => cur = t.to_vec(),
+                t @ (b"col" | b"row" | b"colOff" | b"rowOff") if in_from => {
+                    cur = t.to_vec()
+                }
                 b"sp" => in_sp = true,
                 b"ln" => in_ln = true,
                 b"blip" => {
@@ -321,11 +325,13 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                 text.push_str(&t.unescape().unwrap_or_default());
             }
             Ok(Event::Text(t)) if !cur.is_empty() => {
-                let v: u32 = t.unescape().unwrap_or_default().trim().parse().unwrap_or(0);
-                if cur == b"col" {
-                    col = Some(v);
-                } else {
-                    row = Some(v);
+                let raw = t.unescape().unwrap_or_default();
+                let v: i64 = raw.trim().parse().unwrap_or(0);
+                match cur.as_slice() {
+                    b"col" => col = Some(v.max(0) as u32),
+                    b"row" => row = Some(v.max(0) as u32),
+                    b"colOff" => off_x = v,
+                    _ => off_y = v,
                 }
             }
             Ok(Event::End(e)) => match local(e.name().as_ref()) {
@@ -333,7 +339,7 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                     in_from = false;
                     cur.clear();
                 }
-                b"col" | b"row" => cur.clear(),
+                b"col" | b"row" | b"colOff" | b"rowOff" => cur.clear(),
                 b"ln" => in_ln = false,
                 b"t" => in_t = false,
                 b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
@@ -355,6 +361,8 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, DrawKind)> {
                     if let (Some(c), Some(rr), Some(k)) = (col, row, kind) {
                         out.push((
                             Pos::new(rr, c),
+                            off_x,
+                            off_y,
                             cx.unwrap_or(300 * 9525),
                             cy.unwrap_or(200 * 9525),
                             k,
@@ -978,7 +986,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                 let _ = f.read_to_string(&mut rx);
             }
             let dmap = parse_rels(&rx);
-            for (at, cx_emu, cy_emu, kind) in parse_drawing_anchors(&dx) {
+            for (at, ox_emu, oy_emu, cx_emu, cy_emu, kind) in parse_drawing_anchors(&dx) {
                 let (width_px, height_px) =
                     (cx_emu as f32 / 9525.0, cy_emu as f32 / 9525.0);
                 match kind {
@@ -1015,10 +1023,10 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             line,
                             text,
                             points,
-                            // 読みは錨のセルまで(ずらしはまだ読まない —
-                            // 表示専用なので大勢に影響しない)
-                            dx_px: 0.0,
-                            dy_px: 0.0,
+                            // ずらし(colOff/rowOff)も読む — SmartArt の
+                            // 図形の集まりが保存後も同じ場所に見える
+                            dx_px: ox_emu as f32 / 9525.0,
+                            dy_px: oy_emu as f32 / 9525.0,
                         });
                     }
                 }
@@ -2943,6 +2951,29 @@ mod script_roundtrip_tests {
         buf2.set_position(0);
         let (b3, _) = read(buf2).expect("読めない");
         assert_eq!(b3.scripts.len(), 1, "二往復で二重になった");
+    }
+
+    #[test]
+    fn 図形のずらしが往復する() {
+        let mut b = Book::new();
+        b.sheets[0].shapes_new.push(crate::model::SheetShape {
+            at: Pos::parse("B2").unwrap(),
+            width_px: 100.0,
+            height_px: 50.0,
+            kind: "rect".into(),
+            fill: None,
+            line: Some("1B6E3C".into()),
+            dx_px: 30.0,
+            dy_px: 12.0,
+            ..Default::default()
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let sp = &back.sheets[0].shapes[0];
+        assert!((sp.dx_px - 30.0).abs() < 0.2, "colOff が往復しない: {}", sp.dx_px);
+        assert!((sp.dy_px - 12.0).abs() < 0.2, "rowOff が往復しない: {}", sp.dy_px);
     }
 
     #[test]
