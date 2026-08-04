@@ -469,6 +469,10 @@ struct Writer {
     /// 文書の情報で編集中の欄(0=作成者 1=タイトル 2=タグ 3=件名 4=コメント)
     file_field: Option<u8>,
     prop_ed: Editor,
+    /// ルビの板(選んだ字に読みを振る)
+    rb_open: bool,
+    rb_ed: Editor,
+    rb_range: std::ops::Range<usize>,
     /// 暗号化のパスワード。Some なら保存で ECMA-376 Standard に包む
     encrypt_pw: Option<String>,
     /// パスワードの板。pw_pending が Some なら「開くために聞いている」
@@ -525,6 +529,8 @@ impl HasEditor for Writer {
             &mut self.wm_ed
         } else if self.bm_open {
             &mut self.bm_ed
+        } else if self.rb_open {
+            &mut self.rb_ed
         } else if self.chat_open {
             &mut self.chat_ed
         } else {
@@ -546,6 +552,8 @@ impl HasEditor for Writer {
             &self.wm_ed
         } else if self.bm_open {
             &self.bm_ed
+        } else if self.rb_open {
+            &self.rb_ed
         } else if self.chat_open {
             &self.chat_ed
         } else {
@@ -557,8 +565,8 @@ impl HasEditor for Writer {
             // パスワード・検索欄への打鍵は文書を変えない
             return;
         }
-        if self.chat_open || self.file_field.is_some() {
-            // チャット・文書の情報の入力欄。打鍵は(確定まで)文書を変えない
+        if self.chat_open || self.file_field.is_some() || self.rb_open {
+            // チャット・文書の情報・ルビの入力欄。打鍵は(確定まで)文書を変えない
             return;
         }
         if self.protected() {
@@ -695,6 +703,9 @@ impl Writer {
             file_view: 0,
             file_field: None,
             prop_ed: Editor::new(""),
+            rb_open: false,
+            rb_ed: Editor::new(""),
+            rb_range: 0..0,
             encrypt_pw: None,
             pw_open: false,
             pw_ed: Editor::new(""),
@@ -1358,6 +1369,26 @@ impl Writer {
         }
         self.dirty = true;
         self.status = "文書の情報を控えました(保存で docx に入ります)".into();
+    }
+
+    /// ルビの板の Enter。控えた範囲に読みを付ける(空なら外す)
+    fn rb_commit(&mut self) {
+        self.rb_open = false;
+        let text = self.rb_ed.text().trim().to_string();
+        let range = self.rb_range.clone();
+        if range.is_empty() {
+            return;
+        }
+        self.doc.set_body_text(self.ed.text(), SIZE_PT);
+        let ruby = (!text.is_empty()).then(|| text.clone());
+        self.doc.apply_char_format(range, move |f| f.ruby = ruby.clone());
+        self.dirty = true;
+        self.relayout_keep();
+        self.status = if text.is_empty() {
+            "ルビを外しました".into()
+        } else {
+            format!("ルビ「{text}」を振りました(保存で docx の w:ruby に)").into()
+        };
     }
 
     /// 上書きの前に、直前の中身を控えとして残す(最大9世代)。
@@ -2693,6 +2724,7 @@ impl Writer {
         "bold", "italic", "underline", "strikeout", "fontcolor",
         "superscript", "subscript", "highlight", "clearstyle",
         "align-left", "align-center", "align-right", "align-just", "align-dist",
+        "ruby",
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
         "instable", "inssymbol", "replace", "changecase", "blankpage",
@@ -2913,6 +2945,24 @@ impl Writer {
             "align-just" => self.set_align(Align::Justify),
             // 均等割付(日本語一級)。最後の行も行長いっぱいに字間を配る
             "align-dist" => self.set_align(Align::Distribute),
+            // ルビ(日本語一級)。選んだ字の上に半分の大きさで読みを振る
+            "ruby" => {
+                self.switch_target(Target::Body);
+                let sel = self.ed.selection();
+                if sel.is_empty() {
+                    self.status = "ルビを振る字を選んでから押してください".into();
+                    return;
+                }
+                self.rb_range = sel.clone();
+                let cur = self.doc.char_format_at(sel).ruby.unwrap_or_default();
+                self.rb_ed = Editor::new(&cur);
+                self.find_open = false;
+                self.hf_edit = None;
+                self.cmt_edit = false;
+                self.rb_open = true;
+                self.status =
+                    "ルビ: 読みを打って Enter(空にして Enter で外す)".into();
+            }
             // 文字の大きさ
             "incfont" => self.size(|s| s + 1.0),
             "decfont" => self.size(|s| s - 1.0),
@@ -3810,6 +3860,12 @@ impl Writer {
             cx.notify();
             return;
         }
+        if self.rb_open {
+            self.rb_open = false;
+            self.status = "".into();
+            cx.notify();
+            return;
+        }
         if self.hist_open || self.chat_open || self.plug_open {
             self.hist_open = false;
             self.chat_open = false;
@@ -3911,6 +3967,8 @@ impl Writer {
             self.bm_add();
         } else if self.chat_open {
             self.chat_send();
+        } else if self.rb_open {
+            self.rb_commit();
         } else {
             self.editor().insert("\n");
             self.on_edited();
@@ -4269,7 +4327,8 @@ impl Render for Writer {
             &[
                 ("copy", None), ("cut", None), ("‖", None), ("fontname", None),
                 ("fontsize", None), ("incfont", None), ("decfont", None),
-                ("changecase", None), ("‖", None), ("markers", None),
+                ("changecase", None), ("ruby", None), ("‖", None),
+                ("markers", None),
                 ("numbering", None), ("multilevels", None), ("decoffset", None),
                 ("incoffset", None), ("linespace", None), ("direction", None),
                 ("‖", None), ("parastyle", None),
@@ -5701,6 +5760,26 @@ impl Render for Writer {
                             パスワードを忘れると誰にも開けません")))
         };
 
+        // ルビの板(読みの入力)
+        let rb_panel = if !self.rb_open {
+            None
+        } else {
+            let mut t = self.rb_ed.text().to_string();
+            let cur = self.rb_ed.cursor().min(t.len());
+            t.insert(cur, '|');
+            Some(div().absolute().left(px(16.0)).top(px(8.0)).w(px(360.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("ルビ — 読みを打って Enter(空で外す。Esc で取りやめ)"))
+                .child(div().px_2().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).bg(gpui::white())
+                    .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(t))))
+        };
+
         // プラグインの板(置き場の .py 一覧。押すと檻の中で実行)
         let plug_panel = if !self.plug_open {
             None
@@ -6120,6 +6199,7 @@ impl Render for Writer {
                     .children(chat_panel)
                     .children(plug_panel)
                     .children(pw_panel)
+                    .children(rb_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)

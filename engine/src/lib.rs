@@ -47,6 +47,9 @@ pub struct CharFormat {
     /// 相互参照。ここ(書式)に持つのは、run の分割・結合・描画の
     /// 既存の道具立てがそのまま使えるため(field が違えば繋がらない)
     pub field: Option<RefField>,
+    /// ルビ(ふりがな)。この run の字の上に半分の大きさで振る。
+    /// field と同じ理由でここに持つ — run の切り貼りが面倒を見てくれる
+    pub ruby: Option<String>,
 }
 
 impl CharFormat {
@@ -533,8 +536,10 @@ impl Document {
             .unwrap_or((size_pt, None, CharFormat::default()));
         let ins_run = |t: &str| {
             let mut fmt = ins_fmt.clone();
-            // 参照(フィールド)の直後に打った字は参照の一部ではない
+            // 参照(フィールド)の直後に打った字は参照の一部ではない。
+            // ルビも同じ(打った字に読みは付いてこない)
             fmt.field = None;
+            fmt.ruby = None;
             Run { text: t.to_string(), size_pt: ins_pt, font: ins_font.clone(), fmt }
         };
 
@@ -834,9 +839,12 @@ fn split_runs(runs: &[Run], byte: usize) -> (Vec<Run>, Vec<Run>) {
             let mut b = r.clone();
             b.text = r.text[cut..].to_string();
             // 参照(フィールド)の中を割った = 手で書き換えた。
-            // 半分ずつが参照を名乗ると更新で二重になるので、普通の字に降ろす
+            // 半分ずつが参照を名乗ると更新で二重になるので、普通の字に降ろす。
+            // ルビも同じ(半分の基底に同じ読みが二重に付くのを防ぐ)
             a.fmt.field = None;
             b.fmt.field = None;
+            a.fmt.ruby = None;
+            b.fmt.ruby = None;
             left.push(a);
             right.push(b);
         }
@@ -1334,6 +1342,63 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                         .into_iter()
                         .map(|mut c| { c.x_mm = x; x += c.w_mm + gap; c })
                         .collect();
+                    // ルビ。同じ読みの連なりの上に、半分の大きさの行を置く。
+                    // 基底より狭ければ中付き(字間を等配)、広ければ中央から
+                    // はみ出す(v1 — 基底を広げる詰めはまだしない)
+                    {
+                        let mut i = 0usize;
+                        while i < cells.len() {
+                            let Some(rt) = cells[i].fmt.ruby.clone() else {
+                                i += 1;
+                                continue;
+                            };
+                            let mut j = i + 1;
+                            while j < cells.len()
+                                && cells[j].fmt.ruby.as_deref() == Some(rt.as_str())
+                            {
+                                j += 1;
+                            }
+                            let x0 = cells[i].x_mm;
+                            let x1 = cells[j - 1].x_mm + cells[j - 1].w_mm;
+                            let pt = cells[i].size_pt / 2.0;
+                            let rw: f32 =
+                                rt.chars().map(|c| m.advance_mm(c, pt)).sum();
+                            let n = rt.chars().count();
+                            let gap = if n >= 1 && rw < (x1 - x0) {
+                                ((x1 - x0) - rw) / (n as f32 + 1.0)
+                            } else {
+                                0.0
+                            };
+                            let mut rx = if gap > 0.0 {
+                                x0 + gap
+                            } else {
+                                (x0 + x1 - rw) / 2.0
+                            };
+                            let mut rcells = Vec::new();
+                            for ch in rt.chars() {
+                                let w = m.advance_mm(ch, pt);
+                                rcells.push(Cell {
+                                    ch,
+                                    x_mm: rx,
+                                    w_mm: w,
+                                    size_pt: pt,
+                                    off: cells[i].off,
+                                    fmt: CharFormat::default(),
+                                    font: cells[i].font.clone(),
+                                });
+                                rx += w + gap;
+                            }
+                            sheet.lines.push(Line {
+                                cells: rcells,
+                                // 行送りの空き(黄金比の余白)の中、基底の頭の上
+                                y_mm: y - frame.line_height_mm * 0.45,
+                                from_body: false,
+                                byte0: para_byte0 + cells[i].off,
+                                cell: None,
+                            });
+                            i = j;
+                        }
+                    }
                     // 行頭の字の段落内位置から、本文の絶対位置を出す。
                     // 箇条書きの印は off=0 で入っているので、最小値を取れば
                     // 1行目(印+本文頭)も続きの行も正しく出る
@@ -2071,6 +2136,36 @@ mod list_tests {
             let right = l.cells.last().map(|c| c.x_mm + c.w_mm).unwrap_or(0.0);
             assert!(right <= 100.5, "行長を超えた: {right}mm");
         }
+    }
+}
+
+#[cfg(test)]
+mod ruby_tests {
+    use super::*;
+
+    #[test]
+    fn ルビの行が基底の上に半分の大きさで出る() {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("組版の話", 10.5);
+        // 「組版」にだけルビを振る
+        d.apply_char_format(0..6, |f| f.ruby = Some("くみはん".into()));
+        let sheet = layout(&d, &m,
+            &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        let body: Vec<&Line> = sheet.lines.iter().filter(|l| l.from_body).collect();
+        let ruby: Vec<&Line> = sheet.lines.iter().filter(|l| !l.from_body).collect();
+        assert_eq!(body.len(), 1);
+        assert_eq!(ruby.len(), 1, "ルビの行が無い");
+        assert_eq!(ruby[0].text(), "くみはん");
+        assert!(ruby[0].y_mm < body[0].y_mm, "ルビが基底より下にある");
+        assert!((ruby[0].cells[0].size_pt - 5.25).abs() < 0.01, "半分の大きさでない");
+        let bx0 = body[0].cells[0].x_mm;
+        let bx1 = body[0].cells[1].x_mm + body[0].cells[1].w_mm;
+        let rx0 = ruby[0].cells[0].x_mm;
+        let rlast = ruby[0].cells.last().unwrap();
+        let rx1 = rlast.x_mm + rlast.w_mm;
+        let (bc, rc) = ((bx0 + bx1) / 2.0, (rx0 + rx1) / 2.0);
+        assert!((bc - rc).abs() < 1.0, "ルビが基底の中央に来ていない: {bc} vs {rc}");
     }
 }
 

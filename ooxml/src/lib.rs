@@ -1083,6 +1083,52 @@ fn parse_document_full(
                             rep.note(&format!("フィールド({})", instr.trim()));
                         }
                     }
+                    // ルビ(w:ruby)。読みは w:rt、基底は w:rubyBase から。
+                    // 基底の中の書式は落ちる(基底はふつう一様なので許す)
+                    b"ruby" => {
+                        let name = e.name().to_owned();
+                        if r.read_to_end_into(name, &mut Vec::new()).is_ok() {
+                            let end = r.buffer_position() as usize;
+                            let raw = &xml[start_pos..end];
+                            last_pos = end;
+                            let slice = |tag: &str| -> &str {
+                                let open = format!("<w:{tag}");
+                                let close = format!("</w:{tag}>");
+                                match (raw.find(&open), raw.find(&close)) {
+                                    (Some(a), Some(b)) if b > a => &raw[a..b],
+                                    _ => "",
+                                }
+                            };
+                            let rt = inner_texts(slice("rt"));
+                            let base_raw = slice("rubyBase").to_string();
+                            let base = inner_texts(&base_raw);
+                            // 基底の大きさは rubyBase の中の w:sz から
+                            let pt = base_raw
+                                .find("<w:sz ")
+                                .and_then(|i| {
+                                    base_raw[i..].find("w:val=\"").map(|j| i + j + 7)
+                                })
+                                .and_then(|s0| {
+                                    base_raw[s0..].find('"').and_then(|e2| {
+                                        base_raw[s0..s0 + e2].parse::<f32>().ok()
+                                    })
+                                })
+                                .map(|h| h / 2.0)
+                                .unwrap_or(size_pt);
+                            if !base.is_empty() {
+                                if let Some(p) = para.as_mut() {
+                                    let mut f2 = fmt.clone();
+                                    f2.ruby = (!rt.is_empty()).then_some(rt);
+                                    p.push(Run {
+                                        text: base,
+                                        size_pt: pt,
+                                        font: font.clone(),
+                                        fmt: f2,
+                                    });
+                                }
+                            }
+                        }
+                    }
                     b"instrText" => in_instr = true,
                     b"fldChar" => fldchar(attr(&e, "fldCharType").as_deref(),
                         &mut in_field, &mut field_hide, &mut field_instr, &mut field_buf,
@@ -1613,6 +1659,29 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
                 ).as_bytes());
             }
             let ttag = if mode == 2 { "w:delText" } else { "w:t" };
+            // ルビ。基底の run を w:ruby(rt + rubyBase)で包む(Word の作法)
+            let ruby_rt = if mode == 0 {
+                run.fmt.ruby.as_deref().filter(|t| !t.is_empty())
+            } else {
+                None
+            };
+            if let Some(rt) = ruby_rt {
+                let hps = run.size_pt.round() as i32; // 半分の大きさ(半ポイント)
+                let base_sz = (run.size_pt * 2.0).round() as i32;
+                let raise = (run.size_pt * 2.0 * 0.9).round() as i32;
+                let _ = w.get_mut().write_all(format!(
+                    concat!(
+                        r#"<w:ruby><w:rubyPr><w:rubyAlign w:val="center"/>"#,
+                        r#"<w:hps w:val="{hps}"/><w:hpsRaise w:val="{raise}"/>"#,
+                        r#"<w:hpsBaseText w:val="{base}"/><w:lid w:val="ja-JP"/>"#,
+                        r#"</w:rubyPr><w:rt><w:r><w:rPr>"#,
+                        r#"<w:rFonts w:hint="eastAsia"/><w:sz w:val="{hps}"/>"#,
+                        r#"</w:rPr><w:t xml:space="preserve">{rt}</w:t></w:r></w:rt>"#,
+                        r#"<w:rubyBase>"#
+                    ),
+                    hps = hps, raise = raise, base = base_sz, rt = esc(rt)
+                ).as_bytes());
+            }
             w.write_event(Event::Start(BS::new("w:r"))).unwrap();
             w.write_event(Event::Start(BS::new("w:rPr"))).unwrap();
             // 書体は文書の設定なので、読んだものをそのまま返す。
@@ -1669,6 +1738,9 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
                 }
             }
             w.write_event(Event::End(BytesEnd::new("w:r"))).unwrap();
+            if ruby_rt.is_some() {
+                let _ = w.get_mut().write_all(b"</w:rubyBase></w:ruby>");
+            }
             if mode != 0 {
                 let tag = if mode == 1 { "ins" } else { "del" };
                 let _ = w.get_mut().write_all(format!("</w:{tag}>").as_bytes());
@@ -3027,6 +3099,38 @@ mod partial_fmt_tests {
             ("仕様".into(), true, 14.0),
             ("を確認".into(), false, 10.5),
         ], "部分書式が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod ruby_round_tests {
+    use super::*;
+    use kumihan::Document;
+
+    #[test]
+    fn ルビが往復する() {
+        let mut d = Document::plain("組版の話", 10.5);
+        d.apply_char_format(0..6, |f| f.ruby = Some("くみはん".into()));
+        let mut buf = Vec::new();
+        write(&d, Cursor::new(&mut buf)).expect("書けない");
+        let xml = {
+            let mut z = zip::ZipArchive::new(Cursor::new(&buf)).unwrap();
+            let mut s = String::new();
+            use std::io::Read as _;
+            z.by_name("word/document.xml").unwrap().read_to_string(&mut s).unwrap();
+            s
+        };
+        assert!(xml.contains("<w:ruby>"), "w:ruby が無い");
+        assert!(xml.contains("<w:rubyBase>"), "rubyBase が無い");
+        let (back, _) = read(Cursor::new(&buf)).expect("読めない");
+        assert_eq!(back.body_text(), "組版の話", "本文が変わった");
+        let p = back.paragraphs().next().unwrap();
+        let r = p.runs.iter().find(|r| r.text == "組版").expect("基底の run が無い");
+        assert_eq!(r.fmt.ruby.as_deref(), Some("くみはん"), "読みが往復しない");
+        assert!(
+            p.runs.iter().any(|r| r.text.contains("の話") && r.fmt.ruby.is_none()),
+            "ルビの無い字に読みが付いた"
+        );
     }
 }
 

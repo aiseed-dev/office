@@ -77,7 +77,7 @@ READY = {
         "coauth-mode": "coauth-mode", "prot-doc": "prot-doc",
         "copy": "copy", "cut": "cut", "paste": "paste",
         "align-left": "align-left", "align-right": "align-right",
-        "align-dist": "align-dist",
+        "align-dist": "align-dist", "ruby": "ruby",
         "co-chat": "co-chat", "co-history": "co-history",
         "plug-macros": "plug-macros", "plug-manage": "plug-manage",
         "prot-encrypt": "prot-encrypt", "prot-sign": "prot-sign",
@@ -392,7 +392,8 @@ def tabs_of(app, prefix):
         # クリップボードと左右揃えも本家どおり出す
         if tab == "home" and app == "documenteditor":
             slots = ["copy", "cut", "paste", "fontname", "fontsize", "incfont",
-                     "decfont", "changecase", "bold", "italic", "underline",
+                     "decfont", "changecase", "ruby", "bold", "italic",
+                     "underline",
                      "strikeout", "superscript", "subscript", "highlight",
                      "fontcolor", "clearstyle", "markers", "numbering",
                      "multilevels", "decoffset", "incoffset", "linespace",
@@ -402,7 +403,8 @@ def tabs_of(app, prefix):
                      "styles", "replace", "select-all"]
             for c, l in [("copy", "コピー"), ("cut", "切り取り"),
                          ("paste", "貼り付け"), ("align-left", "左揃え"),
-                         ("align-right", "右揃え"), ("align-dist", "均等割付")]:
+                         ("align-right", "右揃え"), ("align-dist", "均等割付"),
+                         ("ruby", "ルビ")]:
                 DYN_LABELS[c] = l
         # ヘッダー・フッター類はタブを畳んで挿入タブへ(デスクトップ版の場所)
         if tab == "ins" and app == "documenteditor":

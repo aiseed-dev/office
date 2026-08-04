@@ -53,6 +53,7 @@ pub const WRITER: &[Tab] = &[
         c("incfont", "フォントサイズの拡大", "incfont"),
         c("decfont", "フォントサイズの縮小", "decfont"),
         c("changecase", "大文字小文字を変更", "changecase"),
+        c("ruby", "ルビ", "ruby"),
         c("bold", "太字", "bold"),
         c("italic", "斜体", "italic"),
         c("underline", "下線", "underline"),
