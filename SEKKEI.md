@@ -203,7 +203,11 @@ Python の探し方: JO_PYTHON → .venv/bin/python → python3。無ければ s
   DrawingML の prstGeom で書く = Excel でも本物の図形。読みは prstGeom の
   部分集合を SVG に写して表示、知らない図形は原文持ち越しのまま表示だけ諦める) |
 | SmartArt | matplotlib 等で描いて、画像として貼る(画像の挿入は釦あり) |
-| ソルバー / ゴールシーク | scipy.optimize |
+| ソルバー / ゴールシーク | **釦あり**(2026-08-04 発注者確定: ソルバーの入力画面は
+  ONLYOFFICE の「ソルバーのパラメータ」と同じ形の小窓。解法も本家と同じ
+  **単体法 LP だけ** — 係数は表の複製から測り(全0→単位ベクトル→全1の
+  検算)、線形でなければ正直に断る。解くのは scipy.optimize.linprog(highs)。
+  ゴールシークは割線法で実装済み) |
 | テキストからデータ / 区切り位置 | polars.read_csv(SJIS は先に文字コードを直してから) |
 | 外部リンク(他ブックの参照) | 取り込みは Python でやり、値として渡す(リンク切れの帳票を作らない) |
 | (ピボット集計・予測・統計) | polars の group_by・pivot / statsmodels |

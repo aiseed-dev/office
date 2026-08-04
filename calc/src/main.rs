@@ -233,6 +233,97 @@ fn paste_values_text(s: &mut sheet::Sheet, at: Pos, grid: &[Vec<String>]) -> usi
     n
 }
 
+/// ソルバーの小窓(ONLYOFFICE の「ソルバーのパラメータ」と同じ形)。
+/// 解法は単体法 LP だけ — 本家と同じで、非線形は正直に断る。
+struct Solver {
+    /// 目的のセル
+    target: Editor,
+    /// 0=最大 1=最小 2=値
+    mode: u8,
+    /// mode=2 の目標の値
+    value: Editor,
+    /// 変数セル(範囲・カンマ区切り)
+    vars: Editor,
+    /// 決めた制約(左辺セル/範囲, 記号, 右辺)
+    cons: Vec<(String, &'static str, String)>,
+    /// 追加・変更中の制約の入力
+    con_l: Editor,
+    con_op: usize,
+    con_r: Editor,
+    /// 制約のない変数を非負にする
+    nonneg: bool,
+    /// 打鍵の宛先: 0=目的 1=値 2=変数 3=制約左 4=制約右
+    focus: u8,
+    /// 一覧で選んだ制約(変更・削除の相手)
+    sel: Option<usize>,
+}
+
+impl Solver {
+    fn new(target: &str) -> Self {
+        Solver {
+            target: Editor::new(target),
+            mode: 0,
+            value: Editor::new(""),
+            vars: Editor::new(""),
+            cons: Vec::new(),
+            con_l: Editor::new(""),
+            con_op: 0,
+            con_r: Editor::new(""),
+            nonneg: true,
+            focus: 2, // まず変数セルを聞く(目的は選択から入っている)
+            sel: None,
+        }
+    }
+    fn focused(&mut self) -> &mut Editor {
+        match self.focus {
+            0 => &mut self.target,
+            1 => &mut self.value,
+            2 => &mut self.vars,
+            3 => &mut self.con_l,
+            _ => &mut self.con_r,
+        }
+    }
+    fn focused_ref(&self) -> &Editor {
+        match self.focus {
+            0 => &self.target,
+            1 => &self.value,
+            2 => &self.vars,
+            3 => &self.con_l,
+            _ => &self.con_r,
+        }
+    }
+}
+
+const SOLVER_OPS: [&str; 3] = ["<=", "=", ">="];
+
+/// セル・範囲の列挙を読む(A1 / B2:B5 / $A$1。カンマ・読点・空白区切り)。
+/// 範囲は左上→右下に展開する。読めない・大きすぎるときは None。
+fn parse_cell_list(text: &str, cap: usize) -> Option<Vec<Pos>> {
+    let mut out = Vec::new();
+    // $ の絶対参照の印は捨て、小文字も受ける(Excel と同じく区別しない)
+    for tok in split_fields(&text.replace('$', "").to_uppercase()) {
+        if let Some((a, b)) = tok.split_once(':') {
+            let (a, b) = (Pos::parse(a.trim())?, Pos::parse(b.trim())?);
+            let (r0, r1) = (a.row.min(b.row), a.row.max(b.row));
+            let (c0, c1) = (a.col.min(b.col), a.col.max(b.col));
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    out.push(Pos::new(r, c));
+                    if out.len() > cap {
+                        return None;
+                    }
+                }
+            }
+        } else {
+            out.push(Pos::parse(tok.trim())?);
+            if out.len() > cap {
+                return None;
+            }
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
 /// ピボットの聞き取りの途中経過。板を3枚続けて使う間の控え
 /// (行に並べる欄 → 列に広げる欄 → 値と集計、の順に聞く)。
 struct PivotPend {
@@ -243,9 +334,10 @@ struct PivotPend {
     cols_sel: Vec<String>,
 }
 
-/// 見出しの列挙を割る(カンマ・読点・空白のどれでも)。
+/// 見出しの列挙を割る(カンマ・読点・セミコロン・空白のどれでも。
+/// ; も受けるのは日本語配列で : が ; に化けやすいため)。
 fn split_fields(text: &str) -> Vec<String> {
-    text.split(|c: char| c == ',' || c == '、' || c.is_whitespace())
+    text.split(|c: char| matches!(c, ',' | '、' | ';' | '；') || c.is_whitespace())
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
@@ -477,6 +569,8 @@ struct Calc {
     pivot_pend: Option<PivotPend>,
     /// 小計の聞き取りの途中経過(同じ形の控えを使い回す)
     sub_pend: Option<PivotPend>,
+    /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
+    solver: Option<Solver>,
     /// コメントを見せるか(共同編集タブで切替。隠しても付いたまま)
     show_comments: bool,
     /// 暗号化のパスワード(次の保存から効く。開いた暗号化ブックからも入る)
@@ -549,14 +643,21 @@ struct Calc {
 }
 
 impl HasEditor for Calc {
-    // 小さな入力の板(名前の定義など)が開いている間は、打鍵(IME含む)はそこへ
+    // 小さな入力の板(名前の定義など)・ソルバーの小窓が開いている間は、
+    // 打鍵(IME含む)はそこへ
     fn editor(&mut self) -> &mut Editor {
+        if let Some(sv) = &mut self.solver {
+            return sv.focused();
+        }
         match &mut self.prompt {
             Some((_, ed)) => ed,
             None => &mut self.input,
         }
     }
     fn editor_ref(&self) -> &Editor {
+        if let Some(sv) = &self.solver {
+            return sv.focused_ref();
+        }
         match &self.prompt {
             Some((_, ed)) => ed,
             None => &self.input,
@@ -585,6 +686,7 @@ impl Calc {
             find_term: None,
             pivot_pend: None,
             sub_pend: None,
+            solver: None,
             show_comments: true,
             pick_paths: Vec::new(),
             encrypt_pw: None,
@@ -1609,7 +1711,8 @@ impl Calc {
         self.pivot_pend = None; // 聞き取り途中のピボット・小計は Esc でやめる
         self.sub_pend = None;
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
-        if self.prompt.take().is_some()
+        if self.solver.take().is_some()
+            || self.prompt.take().is_some()
             || self.pick.take().is_some()
             || self.menu_sub.take().is_some()
             || self.menu_at.take().is_some()
@@ -2665,7 +2768,9 @@ impl Calc {
 
     // ---- 割り当てられた操作 ----
     fn a_backspace(&mut self, _: &ui::Backspace, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some((_, ed)) = &mut self.prompt {
+        if let Some(sv) = &mut self.solver {
+            sv.focused().backspace();
+        } else if let Some((_, ed)) = &mut self.prompt {
             ed.backspace();
         } else {
             self.input.backspace();
@@ -2837,14 +2942,16 @@ impl Calc {
     }
 
     fn a_left(&mut self, _: &ui::Left, _: &mut Window, cx: &mut Context<Self>) {
-        // 板 → 打ちかけの文字 → セル、の順で見る
-        if let Some((_, ed)) = &mut self.prompt { ed.move_char(false, false) }
+        // 小窓 → 板 → 打ちかけの文字 → セル、の順で見る
+        if let Some(sv) = &mut self.solver { sv.focused().move_char(false, false) }
+        else if let Some((_, ed)) = &mut self.prompt { ed.move_char(false, false) }
         else if self.editing() { self.input.move_char(false, false) }
         else { self.move_cursor(0, -1) }
         cx.notify();
     }
     fn a_right(&mut self, _: &ui::Right, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some((_, ed)) = &mut self.prompt { ed.move_char(true, false) }
+        if let Some(sv) = &mut self.solver { sv.focused().move_char(true, false) }
+        else if let Some((_, ed)) = &mut self.prompt { ed.move_char(true, false) }
         else if self.editing() { self.input.move_char(true, false) }
         else { self.move_cursor(0, 1) }
         cx.notify();
@@ -2894,6 +3001,11 @@ impl Calc {
         self.move_cursor(0, 1); cx.notify();
     }
     fn a_enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
+        if self.solver.is_some() {
+            // 小窓の Enter では何も走らせない(解くのは「解を求める」の釦)
+            cx.notify();
+            return;
+        }
         if self.prompt.is_some() {
             self.finish_prompt(cx);
         } else if let Some(i) = self.shape_sel {
@@ -3988,6 +4100,225 @@ calc の隣に置いてください)"
         .detach();
     }
 
+    /// ソルバーを解く。係数は**表の複製の上で測る**(ゴールシークと同じ流儀):
+    /// 変数を全部 0 → 単位ベクトル、で目的と制約左辺の一次係数を取り、
+    /// 全部 1 の点で検算して**線形でなければ正直に断る**(単体法 LP は
+    /// 線形の問題だけ — 本家 ONLYOFFICE の断り書きと同じ)。
+    /// 解くのは scipy.optimize.linprog(highs)。
+    fn solve_solver(&mut self, cx: &mut Context<Self>) {
+        let Some(sv) = &self.solver else { return };
+        // ---- 読み取りと検め ----
+        let Some(target) = Pos::parse(&sv.target.text().replace('$', "").to_uppercase()) else {
+            self.status = "目的のセルが読めません(例: E6)".into();
+            return;
+        };
+        let Some(vars) = parse_cell_list(&sv.vars.text(), 64) else {
+            self.status = "変数セルが読めません(例: B2:B4 や B2,C2。最大64個)".into();
+            return;
+        };
+        let mode = sv.mode;
+        let want = if mode == 2 {
+            match sv.value.text().trim().parse::<f64>() {
+                Ok(v) => v,
+                Err(_) => {
+                    self.status = "「値」が数として読めません".into();
+                    return;
+                }
+            }
+        } else {
+            0.0
+        };
+        // 制約: (セル, op, 右辺の数)。左辺は範囲なら1セルずつの行になる
+        let mut rows: Vec<(Pos, usize, f64)> = Vec::new();
+        for (l, op, r) in &sv.cons {
+            let Some(cells) = parse_cell_list(l, 256) else {
+                self.status = format!("制約の左辺が読めません: {l}").into();
+                return;
+            };
+            let opi = SOLVER_OPS.iter().position(|o| o == op).unwrap_or(0);
+            // 右辺: 数か、セルの今の値
+            let rhs = match r.trim().parse::<f64>() {
+                Ok(v) => v,
+                Err(_) => match Pos::parse(&r.replace('$', "").to_uppercase()) {
+                    Some(p) => self
+                        .sheet()
+                        .get(p)
+                        .map(|c| c.value.as_number())
+                        .unwrap_or(0.0),
+                    None => {
+                        self.status = format!("制約の右辺が読めません: {r}").into();
+                        return;
+                    }
+                },
+            };
+            for c in cells {
+                rows.push((c, opi, rhs));
+            }
+        }
+        // ---- 係数の抽出(表の複製で測る)----
+        let base = self.sheet().clone();
+        let eval = |xs: &[f64]| -> (f64, Vec<f64>) {
+            let mut s = base.clone();
+            for (i, p) in vars.iter().enumerate() {
+                s.set(*p, Cell::input(&format!("{}", xs[i])));
+            }
+            recalc(&mut s);
+            let g = |p: Pos| s.get(p).map(|c| c.value.as_number()).unwrap_or(0.0);
+            (g(target), rows.iter().map(|(p, _, _)| g(*p)).collect())
+        };
+        let n = vars.len();
+        let zeros = vec![0.0; n];
+        let (f0, c0) = eval(&zeros);
+        let mut obj = vec![0.0; n];
+        let mut a: Vec<Vec<f64>> = vec![vec![0.0; n]; rows.len()];
+        for i in 0..n {
+            let mut xs = zeros.clone();
+            xs[i] = 1.0;
+            let (fi, ci) = eval(&xs);
+            obj[i] = fi - f0;
+            for (k, v) in ci.iter().enumerate() {
+                a[k][i] = v - c0[k];
+            }
+        }
+        // 線形の検算(全部 1 の点)
+        let ones = vec![1.0; n];
+        let (f1, c1) = eval(&ones);
+        let lin = |measured: f64, base: f64, coefs: &[f64]| -> bool {
+            let predicted = base + coefs.iter().sum::<f64>();
+            (measured - predicted).abs() <= 1e-6 * measured.abs().max(1.0)
+        };
+        let mut linear = lin(f1, f0, &obj);
+        for k in 0..rows.len() {
+            linear = linear && lin(c1[k], c0[k], &a[k]);
+        }
+        if !linear {
+            self.status =
+                "線形ではありません — 単体法 LP は線形の問題だけを解きます(非線形は未対応。本家と同じ)"
+                    .into();
+            return;
+        }
+        // ---- LP に組む ----
+        // 目的: 最大=係数を負に、最小=そのまま、値=目的0で f=want を等式に
+        let mut aub: Vec<Vec<f64>> = Vec::new();
+        let mut bub: Vec<f64> = Vec::new();
+        let mut aeq: Vec<Vec<f64>> = Vec::new();
+        let mut beq: Vec<f64> = Vec::new();
+        for (k, (_, opi, rhs)) in rows.iter().enumerate() {
+            let row = a[k].clone();
+            let b = rhs - c0[k];
+            match opi {
+                0 => {
+                    aub.push(row);
+                    bub.push(b);
+                }
+                1 => {
+                    aeq.push(row);
+                    beq.push(b);
+                }
+                _ => {
+                    aub.push(row.iter().map(|v| -v).collect());
+                    bub.push(-b);
+                }
+            }
+        }
+        let c: Vec<f64> = match mode {
+            0 => obj.iter().map(|v| -v).collect(),
+            1 => obj.clone(),
+            _ => {
+                aeq.push(obj.clone());
+                beq.push(want - f0);
+                vec![0.0; n]
+            }
+        };
+        // ---- JSON → scipy ----
+        let arr = |v: &[f64]| {
+            v.iter().map(|x| format!("{x}")).collect::<Vec<_>>().join(",")
+        };
+        let mat = |m: &[Vec<f64>]| {
+            m.iter().map(|r| format!("[{}]", arr(r))).collect::<Vec<_>>().join(",")
+        };
+        let json = format!(
+            "{{\"c\":[{}],\"aub\":[{}],\"bub\":[{}],\"aeq\":[{}],\"beq\":[{}],\"nonneg\":{}}}",
+            arr(&c),
+            mat(&aub),
+            arr(&bub),
+            mat(&aeq),
+            arr(&beq),
+            sv.nonneg
+        );
+        let dir = std::env::temp_dir().join(format!("jo-solver-{}", std::process::id()));
+        self.status = "解を探しています…(単体法 LP)".into();
+        let task = cx.background_executor().spawn(async move {
+            let _ = std::fs::create_dir_all(&dir);
+            let json_path = dir.join("solver.json");
+            let py_path = dir.join("solver.py");
+            std::fs::write(&json_path, json).map_err(|e| e.to_string())?;
+            std::fs::write(&py_path, SOLVER_PY).map_err(|e| e.to_string())?;
+            let o = std::process::Command::new(find_python())
+                .arg(&py_path)
+                .arg(&json_path)
+                .output()
+                .map_err(|e| format!("Python が起動できません: {e}"))?;
+            if !o.status.success() {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("原因不明");
+                return Err(if err.contains("No module named") {
+                    format!("scipy がありません({last})。pip で入れてください")
+                } else {
+                    last.to_string()
+                });
+            }
+            Ok(String::from_utf8_lossy(&o.stdout).to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok(out) => {
+                        let xs: Vec<f64> = out
+                            .split('\u{1f}')
+                            .filter_map(|v| v.trim().parse().ok())
+                            .collect();
+                        if xs.len() != vars.len() {
+                            this.status = format!("答えの形が違います: {out}").into();
+                        } else {
+                            this.checkpoint();
+                            for (p, x) in vars.iter().zip(&xs) {
+                                let x = (x * 1e9).round() / 1e9;
+                                let fmt = this
+                                    .sheet()
+                                    .get(*p)
+                                    .map(|c| c.fmt.clone())
+                                    .unwrap_or_default();
+                                let mut cell = Cell::input(&format!("{x}"));
+                                cell.fmt = fmt;
+                                this.book.sheets[this.active].set(*p, cell);
+                            }
+                            recalc(&mut this.book.sheets[this.active]);
+                            this.dirty = true;
+                            this.sync_input();
+                            this.solver = None;
+                            let got = this
+                                .sheet()
+                                .get(target)
+                                .map(|c| c.value.display())
+                                .unwrap_or_default();
+                            this.status = format!(
+                                "解を求めました: {} = {got}(変数 {} 個を書き換え。Ctrl+Z で1手)",
+                                target.a1(),
+                                xs.len()
+                            )
+                            .into();
+                        }
+                    }
+                    Err(e) => this.status = e.into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// ゴールシーク。変えるセルの値を割線法で探す(表の複製の上で試す)。
     fn goal_seek(&mut self, target: Pos, goal: f64, var: Pos) {
         let base = self.sheet().clone();
@@ -4188,7 +4519,7 @@ calc の隣に置いてください)"
         "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout",
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
-        "group", "ungroup", "hide-details", "show-details", "subtotal",
+        "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
         "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
         "co-history", "plug-macros", "plug-manage",
         "prot-doc", "prot-encrypt", "prot-sign",
@@ -4834,6 +5165,20 @@ calc の隣に置いてください)"
                     self.status =
                         "プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)"
                             .into();
+                }
+            }
+            // ソルバー。ONLYOFFICE と同じ小窓を開く(解法も同じ単体法 LP)
+            "solver" => {
+                if self.solver.take().is_none() {
+                    self.commit();
+                    let init = if self.anchor.is_some() {
+                        self.sel_rect().0.a1()
+                    } else {
+                        self.cursor.a1()
+                    };
+                    self.solver = Some(Solver::new(&init));
+                    self.status =
+                        "ソルバー: 欄を押して打つ。目的・変数セル・制約を決めて「解を求める」".into();
                 }
             }
             // 小計(Excel の集計)。本家のデータタブに無い釦だが、グループ化を
@@ -6260,6 +6605,28 @@ out = "\x1e".join("\x1f".join(row) for row in rows)
 sys.stdout.buffer.write(out.encode("utf-8"))
 "#;
 
+/// ソルバーの台本(scipy)。指図は JSON、答えは \x1f 区切りの変数の値。
+const SOLVER_PY: &str = r#"
+import json, sys
+from scipy.optimize import linprog
+
+spec = json.load(open(sys.argv[1], encoding="utf-8"))
+n = len(spec["c"])
+lo = 0 if spec["nonneg"] else None
+r = linprog(
+    c=spec["c"],
+    A_ub=spec["aub"] or None,
+    b_ub=spec["bub"] or None,
+    A_eq=spec["aeq"] or None,
+    b_eq=spec["beq"] or None,
+    bounds=[(lo, None)] * n,
+    method="highs",
+)
+if not r.success:
+    sys.exit("解がありません: " + str(r.message))
+sys.stdout.write("\x1f".join("%.12g" % v for v in r.x))
+"#;
+
 /// ピボットの台本(polars)。指図は JSON、答えは CSV 取り込みと同じ
 /// 区切りの印(\x1e 行 / \x1f 欄)で返す。
 const PIVOT_PY: &str = r#"
@@ -7170,6 +7537,228 @@ impl Render for Calc {
                     }))
         });
 
+        // ---- ソルバーの小窓(ONLYOFFICE の「ソルバーのパラメータ」の形) ----
+        // モーダルにしない板たちと同じ作法。打鍵は focus の欄へ(HasEditor)
+        let solver_panel = self.solver.as_ref().map(|sv| {
+            let show = |ed: &Editor, on: bool| -> String {
+                let mut t = ed.text().to_string();
+                if on {
+                    let cur = ed.cursor().min(t.len());
+                    t.insert(cur, '|');
+                }
+                if t.is_empty() { t = " ".into() }
+                t
+            };
+            let (focus, mode, nonneg, sel) = (sv.focus, sv.mode, sv.nonneg, sv.sel);
+            let field = |id: &'static str, f: u8, text: String, cx: &mut Context<Self>| {
+                div().id(id).flex_1().px_2().py_1().bg(rgb(0xFFFFFF))
+                    .border_1().rounded_sm()
+                    .border_color(if focus == f { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                    .text_size(px(12.5)).font_family("Noto Sans JP")
+                    .whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(text))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(sv) = &mut this.solver {
+                            sv.focus = f;
+                        }
+                        cx.notify();
+                    }))
+            };
+            let label = |t: &'static str| {
+                div().mt_1p5().text_size(px(11.5)).text_color(rgb(0x444B52)).child(t)
+            };
+            let btn = |id: &'static str, t: &'static str, on: bool| {
+                div().id(id).px_2p5().py_1().rounded_sm().border_1()
+                    .border_color(if on { rgb(0xC6CDD3) } else { rgb(0xEDEFF1) })
+                    .text_size(px(11.5))
+                    .text_color(if on { rgb(0x1B1B1B) } else { rgb(0xB6BDC4) })
+                    .when(on, |d| d.cursor_pointer().hover(|s| s.bg(rgb(0xEAF5EE))))
+            };
+            let radio = |id: &'static str, m: u8, t: &'static str, cx: &mut Context<Self>| {
+                div().id(id).flex().flex_row().items_center().gap_1()
+                    .cursor_pointer().text_size(px(12.0))
+                    .child(if mode == m { "◉" } else { "○" })
+                    .child(t)
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(sv) = &mut this.solver {
+                            sv.mode = m;
+                            if m == 2 {
+                                sv.focus = 1;
+                            }
+                        }
+                        cx.notify();
+                    }))
+            };
+            // 制約の一覧
+            let mut list = div().mt_1().p_1().h(px(96.0)).bg(rgb(0xFAFBFC))
+                .border_1().border_color(rgb(0xC6CDD3)).rounded_sm()
+                .flex().flex_col().overflow_hidden();
+            if sv.cons.is_empty() {
+                list = list.child(div().flex_1().flex().items_center().justify_center()
+                    .text_size(px(11.5)).text_color(rgb(0xB6BDC4))
+                    .child("まだ制約はありません。左辺・記号・右辺を打って「追加」"));
+            } else {
+                for (i, (l, op, r)) in sv.cons.iter().enumerate() {
+                    let on = sel == Some(i);
+                    list = list.child(div()
+                        .id(SharedString::from(format!("con{i}")))
+                        .px_2().py_0p5().rounded_sm().text_size(px(12.0))
+                        .bg(if on { rgb(0xEAF5EE) } else { rgb(0xFAFBFC) })
+                        .cursor_pointer()
+                        .child(SharedString::from(format!("{l} {op} {r}")))
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(sv) = &mut this.solver {
+                                sv.sel = Some(i);
+                                let (l, op, r) = sv.cons[i].clone();
+                                sv.con_l = Editor::new(&l);
+                                sv.con_op =
+                                    SOLVER_OPS.iter().position(|o| *o == op).unwrap_or(0);
+                                sv.con_r = Editor::new(&r);
+                            }
+                            cx.notify();
+                        })));
+                }
+            }
+            div().absolute().left(px(HEAD_W + 60.0)).top(px(8.0)).w(px(470.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .flex().flex_col().gap_1()
+                .child(div().flex().flex_row().items_center()
+                    .child(div().text_size(px(13.0)).font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(0x1B6E3C)).child("ソルバーのパラメータ"))
+                    .child(div().flex_1())
+                    .child(div().id("sv-x").px_2().cursor_pointer().text_size(px(13.0))
+                        .text_color(rgb(0x66707A)).hover(|s| s.text_color(rgb(0xC0392B)))
+                        .child("✕")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.solver = None;
+                            cx.notify();
+                        }))))
+                .child(label("目的を設定"))
+                .child(div().flex().flex_row()
+                    .child(field("sv-target", 0, show(&sv.target, focus == 0), cx)))
+                .child(div().mt_1().flex().flex_row().items_center().gap_3()
+                    .child(radio("sv-max", 0, "最大", cx))
+                    .child(radio("sv-min", 1, "最小", cx))
+                    .child(radio("sv-val", 2, "値:", cx))
+                    .child(field("sv-value", 1, show(&sv.value, focus == 1), cx)))
+                .child(label("変数セルを変更して"))
+                .child(div().flex().flex_row()
+                    .child(field("sv-vars", 2, show(&sv.vars, focus == 2), cx)))
+                .child(label("制約条件付き(左辺セル / 記号 / 右辺の数かセル)"))
+                .child(div().flex().flex_row().items_center().gap_1()
+                    .child(field("sv-conl", 3, show(&sv.con_l, focus == 3), cx))
+                    .child(div().id("sv-op").px_2().py_1().rounded_sm().border_1()
+                        .border_color(rgb(0xC6CDD3)).text_size(px(12.0))
+                        .cursor_pointer().hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .child(SOLVER_OPS[sv.con_op])
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(sv) = &mut this.solver {
+                                sv.con_op = (sv.con_op + 1) % 3;
+                            }
+                            cx.notify();
+                        })))
+                    .child(field("sv-conr", 4, show(&sv.con_r, focus == 4), cx)))
+                .child(div().mt_1().flex().flex_row().gap_1()
+                    .child(btn("sv-add", "追加", true).child("追加")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(sv) = &mut this.solver {
+                                let (l, r) =
+                                    (sv.con_l.text().trim().to_string(),
+                                     sv.con_r.text().trim().to_string());
+                                if l.is_empty() || r.is_empty() {
+                                    this.status =
+                                        "制約の左辺と右辺を先に打ってください".into();
+                                } else {
+                                    sv.cons.push((l, SOLVER_OPS[sv.con_op], r));
+                                    sv.con_l = Editor::new("");
+                                    sv.con_r = Editor::new("");
+                                    sv.sel = None;
+                                }
+                            }
+                            cx.notify();
+                        })))
+                    .child(btn("sv-edit", "変更", sel.is_some()).child("変更")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(sv) = &mut this.solver {
+                                if let Some(i) = sv.sel {
+                                    let (l, r) =
+                                        (sv.con_l.text().trim().to_string(),
+                                         sv.con_r.text().trim().to_string());
+                                    if !l.is_empty() && !r.is_empty() && i < sv.cons.len() {
+                                        sv.cons[i] = (l, SOLVER_OPS[sv.con_op], r);
+                                    }
+                                }
+                            }
+                            cx.notify();
+                        })))
+                    .child(div().flex_1())
+                    .child(btn("sv-del", "削除", sel.is_some()).child("削除")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(sv) = &mut this.solver {
+                                if let Some(i) = sv.sel.take() {
+                                    if i < sv.cons.len() {
+                                        sv.cons.remove(i);
+                                    }
+                                }
+                            }
+                            cx.notify();
+                        }))))
+                .child(list)
+                .child(div().id("sv-nonneg").mt_1().flex().flex_row().items_center().gap_1()
+                    .cursor_pointer().text_size(px(12.0))
+                    .child(if nonneg { "☑" } else { "☐" })
+                    .child("制約のない変数を非負にする")
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(sv) = &mut this.solver {
+                            sv.nonneg = !sv.nonneg;
+                        }
+                        cx.notify();
+                    })))
+                .child(div().mt_1().flex().flex_row().items_center().gap_2()
+                    .child(div().text_size(px(12.0)).font_weight(gpui::FontWeight::BOLD)
+                        .child("解法の方法"))
+                    .child(div().px_2().py_0p5().border_1().border_color(rgb(0xC6CDD3))
+                        .rounded_sm().text_size(px(11.5)).child("単体法 LP")))
+                .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
+                    .child("線形の問題を LP シンプレックスで解きます(裏方 scipy)。非線形はまだ解けません — そのときは断ります"))
+                .child(div().mt_1p5().flex().flex_row().gap_1()
+                    .child(btn("sv-reset", "すべてリセット", true).child("すべてリセット")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            let init = this.cursor.a1();
+                            this.solver = Some(Solver::new(&init));
+                            cx.notify();
+                        })))
+                    .child(div().flex_1())
+                    .child(div().id("sv-solve").px_3().py_1().rounded_sm()
+                        .bg(rgb(0x1B6E3C)).text_color(rgb(0xFFFFFF))
+                        .text_size(px(12.0)).cursor_pointer()
+                        .hover(|s| s.bg(rgb(0x2E8B57)))
+                        .child("解を求める")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.solve_solver(cx);
+                            cx.notify();
+                        })))
+                    .child(btn("sv-close", "閉じる", true).child("閉じる")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.solver = None;
+                            cx.notify();
+                        }))))
+        });
+
         // ---- 書式の小窓(セルをフォーマットする) ----
         // モーダルにしない: 範囲を選び直しながら続けて使える道具箱。
         // どの釦も既存の書式の道(fmt / run_cmd)を通り、1手ずつ戻せる
@@ -7469,7 +8058,8 @@ impl Render for Calc {
                    .children(fmt_panel)
                    .children(menu)
                    .children(pick_panel)
-                   .children(prompt_panel))
+                   .children(prompt_panel)
+                   .children(solver_panel))
             .child(sheets_bar)
             .children(notes)
     }
@@ -7877,6 +8467,53 @@ mod subtotal_tests {
         s.remove_row(0);
         assert_eq!(s.row_outline.get(&5), Some(&1), "削除で深さが置き去り");
         assert!(s.row_hidden.contains(&5));
+    }
+}
+
+#[cfg(test)]
+mod solver_tests {
+    use super::*;
+
+    #[test]
+    fn セルと範囲の列挙が読める() {
+        let v = parse_cell_list("B2:B4", 64).unwrap();
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0], Pos::new(1, 1));
+        let v = parse_cell_list("$A$1, C3", 64).unwrap();
+        assert_eq!(v, vec![Pos::new(0, 0), Pos::new(2, 2)]);
+        assert!(parse_cell_list("ほげ", 64).is_none(), "読めないものは None");
+        assert!(parse_cell_list("A1:Z99", 10).is_none(), "上限を超えたら None");
+        assert!(parse_cell_list("", 64).is_none());
+    }
+
+    #[test]
+    fn 台本が実際にscipyで回る() {
+        // .venv が無い機械では黙って飛ぶ(HIKITSUGI の作法)
+        let py = ["../.venv/bin/python", ".venv/bin/python"]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .find(|p| p.exists());
+        let Some(py) = py else { return };
+        // max x+2y  s.t. x+y<=4, x<=2, x,y>=0 → x=0,y=4(目的8)
+        let dir = std::env::temp_dir().join(format!("jo-solver-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let spec = "{\"c\":[-1,-2],\"aub\":[[1,1],[1,0]],\"bub\":[4,2],\"aeq\":[],\"beq\":[],\"nonneg\":true}";
+        let json_path = dir.join("solver.json");
+        let py_path = dir.join("solver.py");
+        std::fs::write(&json_path, spec).unwrap();
+        std::fs::write(&py_path, SOLVER_PY).unwrap();
+        let o = std::process::Command::new(&py)
+            .arg(&py_path)
+            .arg(&json_path)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let out = String::from_utf8_lossy(&o.stdout).to_string();
+        let xs: Vec<f64> =
+            out.split('\u{1f}').filter_map(|v| v.trim().parse().ok()).collect();
+        assert_eq!(xs.len(), 2, "答えの形が違う: {out:?}");
+        assert!(xs[0].abs() < 1e-6 && (xs[1] - 4.0).abs() < 1e-6,
+                "最適解が違う: {xs:?}");
     }
 }
 

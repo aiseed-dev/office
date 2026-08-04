@@ -280,7 +280,7 @@ pub const CALC: &[Tab] = &[
         c("rem-duplicates", "重複の削除", "rem-duplicates"),
         c("data-validation", "データの入力規則", "data-validation"),
         c("goal-seek", "ゴールシーク", "goal-seek"),
-        x("ソルバー", "solver"),
+        c("solver", "ソルバー", "solver"),
         c("group", "グループ化", "group"),
         c("ungroup", "グループ解除", "ungroup"),
         c("show-details", "詳細の表示", "show-details"),

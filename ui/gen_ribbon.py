@@ -119,6 +119,7 @@ READY = {
         "print-headings": "print-headings",
         "data-from-text": "data-from-text", "text-column": "text-column",
         "goal-seek": "goal-seek", "data-external-links": "data-external-links",
+        "solver": "solver",
         "insshape": "insshape", "instext": "instext",
         "inssparkline": "inssparkline", "co-addcomment": "addcomment",
         "coauth-mode": "coauth-mode", "co-delcomment": "co-delcomment",
