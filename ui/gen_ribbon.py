@@ -114,6 +114,7 @@ READY = {
         "insshape": "insshape", "instext": "instext",
         "inssparkline": "inssparkline", "co-addcomment": "addcomment",
         "td-remdup": "rem-duplicates",
+        "pivot-insert": "pivot-insert",
         "trace-prec": "trace-prec", "trace-dep": "trace-dep",
         "remove-arrows": "remove-arrows", "insrecommend": "insrecommend",
         "instable": "instable", "table-tpl": "table-tpl",

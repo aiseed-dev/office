@@ -233,6 +233,81 @@ fn paste_values_text(s: &mut sheet::Sheet, at: Pos, grid: &[Vec<String>]) -> usi
     n
 }
 
+/// ピボットの聞き取りの途中経過。板を3枚続けて使う間の控え
+/// (行に並べる欄 → 列に広げる欄 → 値と集計、の順に聞く)。
+struct PivotPend {
+    a: Pos,
+    b: Pos,
+    headers: Vec<String>,
+    rows_sel: Vec<String>,
+    cols_sel: Vec<String>,
+}
+
+/// 見出しの列挙を割る(カンマ・読点・空白のどれでも)。
+fn split_fields(text: &str) -> Vec<String> {
+    text.split(|c: char| c == ',' || c == '、' || c.is_whitespace())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+const PIVOT_AGGS: [&str; 5] = ["合計", "平均", "個数", "最大", "最小"];
+
+/// 「金額 合計」を(見出し, 集計)に読む。集計を省けば合計。
+fn parse_pivot_val(text: &str, headers: &[String]) -> Result<(String, &'static str), String> {
+    let mut parts = split_fields(text);
+    let agg = match parts.last().map(|s| s.as_str()) {
+        Some(last) => match PIVOT_AGGS.iter().find(|a| **a == last) {
+            Some(a) => {
+                parts.pop();
+                *a
+            }
+            None => "合計",
+        },
+        None => "合計",
+    };
+    let name = parts.join(" ");
+    if name.is_empty() {
+        return Err("値にする見出しを書いてください(例: 金額 合計)".into());
+    }
+    if !headers.iter().any(|h| *h == name) {
+        return Err(format!("「{name}」は見出しにありません"));
+    }
+    Ok((name, agg))
+}
+
+/// ピボットの指図を JSON にする(手で組む — グラフと同じ割り切り)。
+fn pivot_spec_json(
+    headers: &[String],
+    rows: &[Vec<String>],
+    index: &[String],
+    columns: &[String],
+    value: &str,
+    agg: &str,
+) -> String {
+    let esc = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
+    let strs = |xs: &[String]| {
+        xs.iter().map(|x| format!("\"{}\"", esc(x))).collect::<Vec<_>>().join(",")
+    };
+    let mut json = format!("{{\"headers\":[{}],\"rows\":[", strs(headers));
+    json.push_str(
+        &rows
+            .iter()
+            .map(|r| format!("[{}]", strs(r)))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    json.push_str(&format!(
+        "],\"index\":[{}],\"columns\":[{}],\"value\":\"{}\",\"agg\":\"{}\"}}",
+        strs(index),
+        strs(columns),
+        esc(value),
+        esc(agg)
+    ));
+    json
+}
+
 /// 控えたセルの**書式だけ**を写す(中身は残す)。帳票の枠の使い回し。
 fn paste_formats(s: &mut sheet::Sheet, at: Pos, cells: &[Vec<Option<Cell>>]) -> usize {
     let mut n = 0usize;
@@ -298,6 +373,8 @@ struct Calc {
     find_term: Option<String>,
     /// ゴールシークの途中の控え(目標セル, 目標値)
     goal: Option<(Pos, f64)>,
+    /// ピボットの聞き取りの途中経過(元の範囲・見出し・決めた欄)
+    pivot_pend: Option<PivotPend>,
     /// PY のスピルの台帳(シート番号, 錨 → 行×列)。次の @計算 で前の面を消す
     py_spills: std::collections::HashMap<(usize, Pos), (u32, u32)>,
     /// トレースの光り(参照元=青緑 / 参照先=橙)。見え方だけ、保存されない
@@ -396,6 +473,7 @@ impl Calc {
             head_drag: None,
             img_cache: Default::default(),
             find_term: None,
+            pivot_pend: None,
             goal: None,
             py_spills: Default::default(),
             trace: Vec::new(),
@@ -1374,6 +1452,7 @@ impl Calc {
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
         // 入力の板 → 一覧 → 子メニュー → 親メニュー → 書式の小窓 → コピーの破線、
         // の順で閉じる
+        self.pivot_pend = None; // 聞き取り途中のピボットは Esc でやめる
         if self.prompt.take().is_some()
             || self.pick.take().is_some()
             || self.menu_sub.take().is_some()
@@ -1598,6 +1677,58 @@ impl Calc {
                     return;
                 };
                 self.goal_seek(target, goal, var);
+            }
+            // ピボットの聞き取り(行 → 列 → 値と集計)。間違いは板を出し直して言う
+            "pivot-rows" => {
+                let Some(mut pend) = self.pivot_pend.take() else { return };
+                let sel = split_fields(&text);
+                if sel.is_empty() {
+                    self.status =
+                        format!("行に並べる見出しを1つは選んでください: {}", pend.headers.join(" / ")).into();
+                    self.pivot_pend = Some(pend);
+                    self.prompt = Some(("pivot-rows", Editor::new("")));
+                    return;
+                }
+                if let Some(bad) = sel.iter().find(|s| !pend.headers.contains(s)) {
+                    self.status = format!("「{bad}」は見出しにありません: {}", pend.headers.join(" / ")).into();
+                    self.pivot_pend = Some(pend);
+                    self.prompt = Some(("pivot-rows", Editor::new(&text)));
+                    return;
+                }
+                pend.rows_sel = sel;
+                let rest: Vec<&String> =
+                    pend.headers.iter().filter(|h| !pend.rows_sel.contains(h)).collect();
+                self.status = format!(
+                    "列に広げる見出し(空 Enter = なし): {}",
+                    rest.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" / ")
+                ).into();
+                self.pivot_pend = Some(pend);
+                self.prompt = Some(("pivot-cols", Editor::new("")));
+            }
+            "pivot-cols" => {
+                let Some(mut pend) = self.pivot_pend.take() else { return };
+                let sel = split_fields(&text);
+                if let Some(bad) = sel.iter().find(|s| !pend.headers.contains(s)) {
+                    self.status = format!("「{bad}」は見出しにありません: {}", pend.headers.join(" / ")).into();
+                    self.pivot_pend = Some(pend);
+                    self.prompt = Some(("pivot-cols", Editor::new(&text)));
+                    return;
+                }
+                pend.cols_sel = sel;
+                self.status = "値にする見出しと集計(例: 金額 合計。合計/平均/個数/最大/最小)".into();
+                self.pivot_pend = Some(pend);
+                self.prompt = Some(("pivot-val", Editor::new("")));
+            }
+            "pivot-val" => {
+                let Some(pend) = self.pivot_pend.take() else { return };
+                match parse_pivot_val(&text, &pend.headers) {
+                    Ok((value, agg)) => self.insert_pivot(pend, value, agg, cx),
+                    Err(e) => {
+                        self.status = e.into();
+                        self.pivot_pend = Some(pend);
+                        self.prompt = Some(("pivot-val", Editor::new(&text)));
+                    }
+                }
             }
             "find" => {
                 if text.is_empty() {
@@ -2664,6 +2795,118 @@ impl Calc {
         .detach();
     }
 
+    /// ピボットテーブルの挿入(polars が裏方)。集計した結果を**その時の値**で
+    /// 元の表の右の空きに置く(新しいシートは undo で消せないのでここに置く)。
+    /// 開く=再計算の仕掛けは持たない — 帳面には値だけが残る(正直な劣化)。
+    fn insert_pivot(
+        &mut self,
+        pend: PivotPend,
+        value: String,
+        agg: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let PivotPend { a, b, headers, rows_sel, cols_sel } = pend;
+        let sh = self.sheet();
+        let data: Vec<Vec<String>> = (a.row + 1..=b.row)
+            .map(|r| {
+                (a.col..=b.col)
+                    .map(|c| sh.get(Pos::new(r, c)).map(|x| x.value.display()).unwrap_or_default())
+                    .collect()
+            })
+            .collect();
+        let json = pivot_spec_json(&headers, &data, &rows_sel, &cols_sel, &value, agg);
+        let dir = std::env::temp_dir().join(format!("jo-pivot-{}", std::process::id()));
+        self.status = format!("{} の {agg} を集めています…", value).into();
+        let task = cx.background_executor().spawn(async move {
+            let _ = std::fs::create_dir_all(&dir);
+            let json_path = dir.join("pivot.json");
+            let py_path = dir.join("pivot.py");
+            std::fs::write(&json_path, json).map_err(|e| e.to_string())?;
+            std::fs::write(&py_path, PIVOT_PY).map_err(|e| e.to_string())?;
+            let o = std::process::Command::new(find_python())
+                .arg(&py_path)
+                .arg(&json_path)
+                .output()
+                .map_err(|e| format!("Python が起動できません: {e}"))?;
+            if !o.status.success() {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("原因不明");
+                return Err(if err.contains("No module named") {
+                    format!("polars がありません({last})。pip で入れてください")
+                } else {
+                    format!("集計できません: {last}")
+                });
+            }
+            Ok(String::from_utf8_lossy(&o.stdout).to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok(data) => {
+                        let grid: Vec<Vec<String>> = data
+                            .split('\u{1e}')
+                            .map(|row| row.split('\u{1f}').map(|f| f.to_string()).collect())
+                            .collect();
+                        let h = grid.len() as u32;
+                        let w = grid.iter().map(|r| r.len()).max().unwrap_or(1) as u32;
+                        // 右の空きを探す(埋まっていたらさらに右へ。黙って上書きしない)
+                        let mut dc = b.col + 2;
+                        let mut tries = 0;
+                        let free = loop {
+                            let occupied = (0..h).any(|r| {
+                                (0..w).any(|c| {
+                                    this.sheet()
+                                        .get(Pos::new(a.row + r, dc + c))
+                                        .map(|cell| {
+                                            !cell.value.display().is_empty()
+                                                || cell.formula.is_some()
+                                        })
+                                        .unwrap_or(false)
+                                })
+                            });
+                            if !occupied {
+                                break true;
+                            }
+                            dc += w + 1;
+                            tries += 1;
+                            if tries > 50 {
+                                break false;
+                            }
+                        };
+                        if !free {
+                            this.status = "右に空きが見つかりません(場所を空けてから)".into();
+                        } else {
+                            this.checkpoint();
+                            let at = Pos::new(a.row, dc);
+                            paste_values_text(&mut this.book.sheets[this.active], at, &grid);
+                            // 見出し行に帯(表の挿入と同じ色)
+                            for c in 0..w {
+                                let p = Pos::new(a.row, dc + c);
+                                let mut cell =
+                                    this.sheet().get(p).cloned().unwrap_or_default();
+                                cell.fmt.bold = true;
+                                cell.fmt.fill = Some("D5E8DC".into());
+                                this.book.sheets[this.active].set(p, cell);
+                            }
+                            recalc(&mut this.book.sheets[this.active]);
+                            this.dirty = true;
+                            this.sync_input();
+                            this.status = format!(
+                                "ピボット({value} の {agg})を {} に置きました — その時の値。元が変わったら選び直してもう一度(Ctrl+Z で戻せます)",
+                                at.a1()
+                            )
+                            .into();
+                        }
+                    }
+                    Err(e) => this.status = e.into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Python in Calc(発注者提案 2026-08-04)。**コードは文書に入れない** —
     /// マクロと違い「開く=実行」の経路が無い。いまの表を一時 xlsx に写し、
     /// office_sheet(pysheet)で b(ブック)と s(いまのシート)を束縛して
@@ -3305,7 +3548,7 @@ calc の隣に置いてください)"
         "data-from-text", "text-column", "goal-seek", "data-external-links",
         "insshape", "instext", "inssparkline", "python", "addcomment",
         "trace-prec", "trace-dep", "remove-arrows", "insrecommend",
-        "instable", "table-tpl", "inssymbol",
+        "instable", "table-tpl", "inssymbol", "pivot-insert",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -3643,6 +3886,43 @@ calc の隣に置いてください)"
                 } else {
                     let (a, b) = self.sel_rect();
                     self.insert_chart(a, b, cx);
+                }
+            }
+            // ピボットテーブル = polars が裏方。結果は「その時の値」で右に置く
+            // (元が変わったら選び直してもう一度 — 開く=再計算の仕掛けは持たない)
+            "pivot-insert" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status =
+                        "元の表を範囲で選んでください(1行目が見出し)".into();
+                } else {
+                    let (a, b) = self.sel_rect();
+                    if b.row <= a.row {
+                        self.status = "見出しの下にデータの行が要ります".into();
+                    } else {
+                        let headers: Vec<String> = (a.col..=b.col)
+                            .map(|c| {
+                                let v = self
+                                    .sheet()
+                                    .get(Pos::new(a.row, c))
+                                    .map(|x| x.value.display())
+                                    .unwrap_or_default();
+                                if v.is_empty() { col_name(c) } else { v }
+                            })
+                            .collect();
+                        self.status = format!(
+                            "行に並べる見出し(カンマ区切り可): {}",
+                            headers.join(" / ")
+                        ).into();
+                        self.pivot_pend = Some(PivotPend {
+                            a,
+                            b,
+                            headers,
+                            rows_sel: Vec::new(),
+                            cols_sel: Vec::new(),
+                        });
+                        self.prompt = Some(("pivot-rows", Editor::new("")));
+                    }
                 }
             }
             // 表の挿入 = 選択に表の書式(見出しの帯+縞々+外枠)を掛ける
@@ -4690,6 +4970,47 @@ out = "\x1e".join("\x1f".join(row) for row in rows)
 sys.stdout.buffer.write(out.encode("utf-8"))
 "#;
 
+/// ピボットの台本(polars)。指図は JSON、答えは CSV 取り込みと同じ
+/// 区切りの印(\x1e 行 / \x1f 欄)で返す。
+const PIVOT_PY: &str = r#"
+import json, sys
+import polars as pl
+
+spec = json.load(open(sys.argv[1], encoding="utf-8"))
+headers = spec["headers"]
+data = {h: [row[i] for row in spec["rows"]] for i, h in enumerate(headers)}
+df = pl.DataFrame(data)
+val, agg = spec["value"], spec["agg"]
+if agg != "個数":
+    # 数にならないものは null(集計から外れる)
+    df = df.with_columns(pl.col(val).cast(pl.Float64, strict=False))
+idx, cols = spec["index"], spec["columns"]
+if cols:
+    fn = {"合計": "sum", "平均": "mean", "個数": "len", "最大": "max", "最小": "min"}[agg]
+    out = df.pivot(cols, index=idx, values=val, aggregate_function=fn, sort_columns=True).sort(idx)
+else:
+    e = {
+        "合計": pl.sum(val),
+        "平均": pl.mean(val),
+        "個数": pl.len().alias(val),
+        "最大": pl.max(val),
+        "最小": pl.min(val),
+    }[agg]
+    out = df.group_by(idx).agg(e).sort(idx)
+
+def s(v):
+    if v is None:
+        return ""
+    if isinstance(v, float):
+        return "%g" % v
+    return str(v)
+
+lines = ["\x1f".join(out.columns)]
+for row in out.rows():
+    lines.append("\x1f".join(s(v) for v in row))
+sys.stdout.buffer.write("\x1e".join(lines).encode("utf-8"))
+"#;
+
 fn col_name(c: u32) -> String {
     Pos::new(0, c).a1().trim_end_matches('1').to_string()
 }
@@ -5316,6 +5637,9 @@ impl Render for Calc {
                     "「{}」を何に置き換える?",
                     self.find_term.as_deref().unwrap_or("")
                 ),
+                "pivot-rows" => "ピボット 1/3 — 行に並べる見出し(カンマ区切り可)".to_string(),
+                "pivot-cols" => "ピボット 2/3 — 列に広げる見出し(空 Enter = なし)".to_string(),
+                "pivot-val" => "ピボット 3/3 — 値にする見出しと集計".to_string(),
                 _ => String::new(),
             };
             // キャレットは | で見せる(writer の検索欄と同じ割り切り)
@@ -5342,6 +5666,8 @@ impl Render for Calc {
                         "py" => "b=ブック s=シート / @計算 =PY(…)セルを評価 / @名前 実行 @名前 net @save @list @del",
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
+                        "pivot-rows" | "pivot-cols" => "使える見出しは下の状態行に出ています。Enter で次へ / Esc で取消",
+                        "pivot-val" => "例: 金額 合計。集計は 合計/平均/個数/最大/最小(省けば合計)",
                         _ => "Enter で決定 / Esc で取消",
                     }))
         });
@@ -5951,6 +6277,109 @@ mod clipboard_tests {
         assert_eq!(tsv_grid("a\tb\r\nc\td\r\n"),
                    vec![vec!["a".to_string(), "b".into()], vec!["c".into(), "d".into()]]);
         assert_eq!(tsv_grid("1"), vec![vec!["1".to_string()]]);
+    }
+}
+
+#[cfg(test)]
+mod pivot_tests {
+    use super::*;
+
+    #[test]
+    fn 見出しの列挙はカンマでも読点でも空白でも() {
+        assert_eq!(split_fields("部署, 月"), vec!["部署", "月"]);
+        assert_eq!(split_fields("部署、月 区分"), vec!["部署", "月", "区分"]);
+        assert!(split_fields("  ").is_empty());
+    }
+
+    #[test]
+    fn 値と集計の読み取り() {
+        let hs = vec!["部署".to_string(), "金額".to_string()];
+        assert_eq!(
+            parse_pivot_val("金額 合計", &hs).unwrap(),
+            ("金額".to_string(), "合計")
+        );
+        assert_eq!(parse_pivot_val("金額", &hs).unwrap().1, "合計", "省けば合計");
+        assert_eq!(parse_pivot_val("金額 平均", &hs).unwrap().1, "平均");
+        assert!(parse_pivot_val("売上 合計", &hs).is_err(), "無い見出しは断る");
+        assert!(parse_pivot_val("", &hs).is_err(), "空は断る");
+    }
+
+    #[test]
+    fn 指図のjsonは逃がしが効く() {
+        let json = pivot_spec_json(
+            &["部\"署".to_string()],
+            &[vec!["営\\業".to_string()]],
+            &["部\"署".to_string()],
+            &[],
+            "部\"署",
+            "合計",
+        );
+        assert!(json.contains("部\\\"署"), "二重引用符が逃げていない: {json}");
+        assert!(json.contains("営\\\\業"), "バックスラッシュが逃げていない: {json}");
+    }
+
+    #[test]
+    fn 台本が実際にpolarsで回る() {
+        // .venv が無い機械では黙って飛ぶ(HIKITSUGI の作法)
+        let py = ["../.venv/bin/python", ".venv/bin/python"]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .find(|p| p.exists());
+        let Some(py) = py else { return };
+        let dir = std::env::temp_dir().join(format!("jo-pivot-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let headers: Vec<String> =
+            ["部署", "月", "金額"].iter().map(|s| s.to_string()).collect();
+        let rows: Vec<Vec<String>> = [
+            ["営業", "1月", "100"],
+            ["営業", "1月", "50"],
+            ["総務", "1月", "30"],
+            ["営業", "2月", "70"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|s| s.to_string()).collect())
+        .collect();
+        let run = |spec: String| -> Vec<Vec<String>> {
+            let json_path = dir.join("pivot.json");
+            let py_path = dir.join("pivot.py");
+            std::fs::write(&json_path, spec).unwrap();
+            std::fs::write(&py_path, PIVOT_PY).unwrap();
+            let o = std::process::Command::new(&py)
+                .arg(&py_path)
+                .arg(&json_path)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+            String::from_utf8_lossy(&o.stdout)
+                .split('\u{1e}')
+                .map(|row| row.split('\u{1f}').map(|f| f.to_string()).collect())
+                .collect()
+        };
+        // 部署×月の合計(クロス表)
+        let g = run(pivot_spec_json(
+            &headers,
+            &rows,
+            &["部署".to_string()],
+            &["月".to_string()],
+            "金額",
+            "合計",
+        ));
+        assert_eq!(g[0], vec!["部署", "1月", "2月"], "見出しの形が違う: {g:?}");
+        assert_eq!(g[1], vec!["営業", "150", "70"]);
+        // 無い組み合わせ: 合計は 0(空の合計)。平均などは null → 空欄になる
+        assert_eq!(g[2], vec!["総務", "30", "0"]);
+        // 部署ごとの個数(列に広げない)
+        let g = run(pivot_spec_json(
+            &headers,
+            &rows,
+            &["部署".to_string()],
+            &[],
+            "金額",
+            "個数",
+        ));
+        assert_eq!(g[0], vec!["部署", "金額"]);
+        assert_eq!(g[1], vec!["営業", "3"]);
+        assert_eq!(g[2], vec!["総務", "1"]);
     }
 }
 

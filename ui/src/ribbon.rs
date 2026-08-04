@@ -290,7 +290,7 @@ pub const CALC: &[Tab] = &[
         c("python", "Python", "python"),
     ]},
     Tab { name: "ピボットテーブル", cmds: &[
-        x("ピボットテーブルを挿入", "pivot-insert"),
+        c("pivot-insert", "ピボットテーブルを挿入", "pivot-insert"),
         x("更新", "pivot-refresh"),
         x("すべて更新", "pivot-refresh-all"),
         x("選択する", "pivot-select"),
