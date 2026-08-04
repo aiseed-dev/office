@@ -919,6 +919,34 @@ impl Document {
         self.paragraphs().nth(target.start).map(|p| p.align).unwrap_or_default()
     }
 
+    /// 読み込み後の整え: 空 run を除き、同じ書式の隣り合う run を繋ぐ
+    /// (本文・表のセル・ヘッダー・フッターの全段落)。
+    /// Word の編集は同じ書式でも run を細切れにする(校正・rsid)。
+    /// モデルを軽く保つのが主目的で、雛形の「{{差し込み口}}」が
+    /// 道具の目に割れて見える事故の保険にもなる(docxtpl 0.20 は多くの
+    /// 分断を自力で繋ぐと実測した — が、賭けにはしない)。
+    /// 書式の違う分断は繋がない(書式は据え置きの家訓どおり)
+    pub fn heal_runs(&mut self) {
+        fn heal(p: &mut Paragraph) {
+            let pt = p.runs.first().map(|r| r.size_pt).unwrap_or(10.5);
+            normalize_runs(&mut p.runs, pt);
+        }
+        for b in &mut self.blocks {
+            match b {
+                Block::Para(p) => heal(p),
+                Block::Table(t) => {
+                    for row in &mut t.rows {
+                        for c in row {
+                            c.paragraphs.iter_mut().for_each(heal);
+                        }
+                    }
+                }
+            }
+        }
+        self.header.paragraphs.iter_mut().for_each(heal);
+        self.footer.paragraphs.iter_mut().for_each(heal);
+    }
+
     /// カーソル位置の記入欄(sdt)が本文のどこからどこまでかを返す。
     /// 太字などで run が割れていても、同じ欄が続く限り一つに繋げる。
     /// 欄でない場所なら None。名前の付け替え(欄まるごと)に使う

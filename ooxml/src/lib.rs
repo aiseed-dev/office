@@ -257,6 +257,9 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
             }
         }
     }
+    // Word の編集で細切れになった同書式の run を読みで繋ぐ
+    // (編集で際限なく増やさない・雛形の {{ }} の保険)
+    doc.heal_runs();
     Ok((doc, rep))
 }
 

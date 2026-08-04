@@ -226,7 +226,10 @@ fn find_python() -> std::path::PathBuf {
 /// 記入欄へ**名前で**書く fill / fill_one、読む extract、名前と値の一覧
 /// fields を渡す(記入=出口と吸い上げ=入口の対)。鍵は docx の w:tag
 /// (フォームタブの「名前」釦で付ける)。無い名前は例外で断る —
-/// ラベルの字を探して隣に書く走査より、名前が様式の背骨(発注者 2026-08-05)
+/// ラベルの字を探して隣に書く走査より、名前が様式の背骨(発注者 2026-08-05)。
+/// もう一車線が雛形: render(辞書)= docxtpl の {{名前}} / {%tr %} 差し込み、
+/// tpl_fields()= 差し込み口の一覧。往復する様式は記入欄、出して終わりの
+/// 量産文書(通知書・契約書)は雛形、の使い分け(SEKKEI 参照)
 fn macro_script(
     in_d: &std::path::Path,
     out_d: &std::path::Path,
@@ -307,14 +310,40 @@ def fields():
         if t:
             out.append((t, _text(sdt)))
     return out
+def _tpl():
+    try:
+        from docxtpl import DocxTemplate
+    except ImportError:
+        raise SystemExit('docxtpl がありません(pip install docxtpl。.venv があればそちらへ)')
+    return DocxTemplate(IN)
+def render(ctx):
+    # 雛形({{名前}} と {%tr for %} の行くり返し)に辞書を差し込む。
+    # 以後の d は差し込み済みの文書になり、そのまま保存される
+    global d
+    t = _tpl()
+    try:
+        t.render(ctx)
+    except Exception as e:
+        raise SystemExit('雛形が壊れています(タグの置き方や全角の {{ }} を確かめてください): %s' % e)
+    d = t.docx
+    return d
+def tpl_fields():
+    # 雛形の差し込み口({{名前}})の一覧 — 雛形の仕様書。壊れていれば断る
+    t = _tpl()
+    try:
+        return sorted(t.get_undeclared_template_variables())
+    except Exception as e:
+        raise SystemExit('雛形が壊れています: %s' % e)
 "#;
     format!(
         concat!(
             "import docx\n",
-            "d = docx.Document({in_d:?})\n",
+            "IN = {in_d:?}\n",
+            "d = docx.Document(IN)\n",
             "{fill}",
             "# ---- 利用者のコード(d = python-docx の文書 / fill(名前, 値)・\
-             extract(名前)・fields() = 記入欄) ----\n",
+             extract(名前)・fields() = 記入欄 / render(辞書)・tpl_fields() = \
+             {{{{ }}}} の雛形) ----\n",
             "{code}\n",
             "# ----\n",
             "d.save({out_d:?})\n"
@@ -4591,7 +4620,7 @@ impl Writer {
                 self.status = "マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
                                直します(台本の d が python-docx の文書。\
                                fill(名前, 値)=記入・extract(名前)=読む・\
-                               fields()=名前と値の一覧)"
+                               fields()=一覧・render(辞書)=雛形差し込み)"
                     .into();
             }
             // プラグインの管理。置き場の .py を一覧し、マクロと同じ檻で実行
@@ -8798,6 +8827,162 @@ mod menu_run_tests {
         std::fs::write(&py_path, script).unwrap();
         let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
         assert!(!o.status.success(), "extract が無い名前で通ってしまう");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// render(辞書)= docxtpl の雛形差し込みが台本から使える。
+    /// 雛形は Word の編集を模して {{担当者}} を run 分断で割っておき、
+    /// writer の読み書き(heal_runs)を通してから差し込む。
+    /// docxtpl が無い環境では黙って飛ばす
+    #[test]
+    fn 雛形のrenderが差し込む() {
+        let py = if std::path::Path::new("../.venv/bin/python").exists() {
+            std::path::PathBuf::from("../.venv/bin/python")
+        } else {
+            find_python()
+        };
+        let ok = std::process::Command::new(&py)
+            .args(["-c", "import docx, docxtpl"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("docxtpl が無いので飛ばす");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("jo-render-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let tpl = dir.join("tpl.docx");
+        // 雛形: 差し込み口3つ+行くり返しの表。{{担当者}} は割っておく
+        let mk = format!(
+            r#"import docx
+d = docx.Document()
+d.add_paragraph("{{{{顧客名}}}} 様")
+p = d.add_paragraph("")
+p.add_run("担当: {{{{担当")
+p.add_run("者}}}}")
+tb = d.add_table(rows=4, cols=2)
+tb.cell(0, 0).text = "品名"; tb.cell(0, 1).text = "数量"
+tb.cell(1, 0).text = "{{%tr for m in 明細 %}}"
+tb.cell(2, 0).text = "{{{{m.品名}}}}"; tb.cell(2, 1).text = "{{{{m.数量}}}}"
+tb.cell(3, 0).text = "{{%tr endfor %}}"
+d.save({tpl:?})
+"#,
+            tpl = tpl.to_string_lossy()
+        );
+        let mk_py = dir.join("mk.py");
+        std::fs::write(&mk_py, mk).unwrap();
+        let o = std::process::Command::new(&py).arg(&mk_py).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        // writer の読み書きを通す(分断は heal_runs が繋ぐ)
+        let bytes = std::fs::read(&tpl).unwrap();
+        let (tdoc, _) = ooxml::read(std::io::Cursor::new(bytes.clone())).unwrap();
+        let healed = dir.join("healed.docx");
+        let f = std::fs::File::create(&healed).unwrap();
+        ooxml::write_with(
+            &tdoc,
+            Some(std::io::Cursor::new(bytes)),
+            std::io::BufWriter::new(f),
+        )
+        .unwrap();
+        // 台本: 差し込み口を報告してから差し込む
+        let code = r#"print(tpl_fields())
+render({"顧客名": "青森県庁", "担当者": "山田",
+        "明細": [{"品名": "防火戸", "数量": 3}, {"品名": "枠", "数量": 6}]})
+"#;
+        let out_d = dir.join("out.docx");
+        let py_path = dir.join("run.py");
+        std::fs::write(&py_path, macro_script(&healed, &out_d, code)).unwrap();
+        let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+        for name in ["顧客名", "担当者", "明細"] {
+            assert!(stdout.contains(name), "tpl_fields に{name}が無い: {stdout}");
+        }
+        // 差し込み結果を writer 側で読んで確かめる
+        let (doc2, _) =
+            ooxml::read(std::io::Cursor::new(std::fs::read(&out_d).unwrap())).unwrap();
+        let body = doc2.body_text();
+        assert!(body.contains("青森県庁 様"), "顧客名が入らない: {body}");
+        assert!(body.contains("担当: 山田"), "割れた欄に入らない: {body}");
+        let cells: Vec<String> = doc2
+            .tables()
+            .flat_map(|t| &t.rows)
+            .flatten()
+            .flat_map(|c| &c.paragraphs)
+            .flat_map(|p| &p.runs)
+            .map(|r| r.text.clone())
+            .collect();
+        let joined = cells.join("|");
+        assert!(
+            joined.contains("防火戸") && joined.contains("枠"),
+            "行くり返しが効かない: {joined}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 実物様式(機構の実施要領様式)が writer の読み書きに通り、
+    /// python-docx と docxtpl がそのまま読めることを見る。
+    /// 様式や道具が無い環境では黙って飛ばす(失敗にはしない)
+    #[test]
+    fn 実物様式が読み書きと雛形の道具に通る() {
+        let src = std::path::Path::new(
+            "/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki",
+        );
+        let Ok(rd) = std::fs::read_dir(src) else { return };
+        let py = if std::path::Path::new("../.venv/bin/python").exists() {
+            std::path::PathBuf::from("../.venv/bin/python")
+        } else {
+            find_python()
+        };
+        let ok = std::process::Command::new(&py)
+            .args(["-c", "import docx, docxtpl"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("jo-yoshiki-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut n = 0;
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("docx") {
+                continue;
+            }
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            let bytes = std::fs::read(&p).unwrap();
+            let (doc, _) = ooxml::read(std::io::Cursor::new(bytes.clone()))
+                .unwrap_or_else(|e| panic!("{name} が読めない: {e}"));
+            let out = dir.join(&name);
+            let f = std::fs::File::create(&out).unwrap();
+            ooxml::write_with(
+                &doc,
+                Some(std::io::Cursor::new(bytes)),
+                std::io::BufWriter::new(f),
+            )
+            .unwrap_or_else(|e| panic!("{name} が書けない: {e}"));
+            // 保存し直したものを python-docx と docxtpl で開く
+            let check = format!(
+                "import docx\nfrom docxtpl import DocxTemplate\n\
+                 docx.Document({out:?})\n\
+                 print(sorted(DocxTemplate({out:?}).get_undeclared_template_variables()))",
+                out = out.to_string_lossy()
+            );
+            let py_path = dir.join("check.py");
+            std::fs::write(&py_path, check).unwrap();
+            let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
+            assert!(
+                o.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            n += 1;
+        }
+        eprintln!("実物様式 {n} 件が通った");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
