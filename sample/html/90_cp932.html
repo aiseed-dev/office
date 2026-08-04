@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="ja">
-<head><meta charset="shift_jis"><title>90 文字コード</title></head>
+<head><meta charset="shift_jis"><title>90 文字コード(宣言あり)</title></head>
 <body>
-<h1>受入 90: CP932 の頁は正直に断ること</h1>
-<p>この頁はわざと CP932(Shift_JIS)で保存してある。UTF-8 しか
-読まない段階の writer は、化けた字を見せずに「読めない(文字コードが
-UTF-8 でない)」と言って止まれば合格。黙って豆腐を並べたら不合格。</p>
-<p>丸数字や機種依存文字も入れてある: ①②③ 髙 﨑</p>
+<h1>受入 90: CP932 の頁(charset 宣言あり)を読む</h1>
+<p>この頁は CP932(Shift_JIS)で保存され、meta charset で宣言してある。
+化けた字が1つも無く読めれば合格。UTF-8 と決めつけて豆腐や化けを
+見せたら不合格。</p>
+<p>機種依存文字(Windows-31J 拡張)も化けないこと: ①②③ 髙 﨑 ㈱</p>
+<p>波線と長音の落とし穴: ～ ー 。この2字が入れ替わったり
+消えたりしないこと。</p>
 </body>
 </html>
