@@ -8433,8 +8433,13 @@ mod menu_run_tests {
         "insequation",
     ];
 
+    /// AI の宛先は共有の設定(~/.config/office/ai.txt)。触る試験が並走すると
+    /// 保存と復元が交錯して稀に落ちるので、同時には走らせない
+    static AI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[gpui::test]
     fn 全部の釦が落ちずに通る(cx: &mut gpui::TestAppContext) {
+        let _ai = AI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // AI の宛先は覚える設定なので、試験で変えたら戻す
         let keep_ai = ui::ai::backend();
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
@@ -8504,6 +8509,7 @@ mod menu_run_tests {
             .collect();
         files.sort();
         assert!(!files.is_empty(), "見本が無い: {}", dir.display());
+        let _ai = AI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let keep_ai = ui::ai::backend();
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         for f in files {
@@ -8651,6 +8657,7 @@ mod menu_run_tests {
     /// 実際にモデルへ繋ぐ試験はしない(手元に居るとは限らないので)
     #[gpui::test]
     fn aiは宛先が無ければ理由を言う(cx: &mut gpui::TestAppContext) {
+        let _ai = AI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let keep = ui::ai::backend();
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         ui::ai::set_backend(ui::ai::Backend::ClaudeApi);
