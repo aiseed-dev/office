@@ -43,7 +43,7 @@ fn font_data() -> &'static [u8] {
     })
 }
 use sheet::model::{Borders, CellFormat, HAlign};
-use sheet::{recalc, Book, Cell, Pos, Value};
+use sheet::{recalc, recalc_book, Book, Cell, Pos, Value};
 use ui::{handler, ribbon, HasEditor};
 
 const ROW_H: f32 = 24.0;
@@ -891,7 +891,7 @@ impl Calc {
             if idx < self.book.sheets.len() {
                 redo.push((idx, self.book.sheets[idx].clone()));
                 self.book.sheets[idx] = prev;
-                recalc(&mut self.book.sheets[idx]);
+                recalc_book(&mut self.book, idx);
             }
         }
         self.redo_stack.push(redo);
@@ -914,7 +914,7 @@ impl Calc {
             if idx < self.book.sheets.len() {
                 undo.push((idx, self.book.sheets[idx].clone()));
                 self.book.sheets[idx] = next;
-                recalc(&mut self.book.sheets[idx]);
+                recalc_book(&mut self.book, idx);
             }
         }
         self.undo_stack.push(undo);
@@ -1512,7 +1512,7 @@ impl Calc {
             }
             _ => return,
         };
-        recalc(&mut self.book.sheets[self.active]);
+        recalc_book(&mut self.book, self.active);
         self.dirty = true;
         self.sync_input();
         self.status = match mode {
@@ -1689,7 +1689,7 @@ impl Calc {
         let mut cell = Cell::input(v);
         cell.fmt = fmt;
         self.book.sheets[self.active].set(p, cell);
-        recalc(&mut self.book.sheets[self.active]);
+        recalc_book(&mut self.book, self.active);
         self.dirty = true;
         self.sync_input();
         self.status = format!("{} に入れました", p.a1()).into();
@@ -1721,7 +1721,7 @@ impl Calc {
                             .is_some() as usize;
                     }
                 }
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.sync_input();
                 self.status = format!("{n} セルを消去しました(中身も書式も)").into();
@@ -1754,7 +1754,7 @@ impl Calc {
                 let c = self.cursor.col;
                 self.book.sheets[self.active].sort_by_column(c, id == "sort-asc", true);
                 self.dirty = true;
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.status = format!(
                     "{} 列で{}に並べ替えました",
                     Pos::new(0, c).a1().trim_end_matches('1'),
@@ -1787,7 +1787,7 @@ impl Calc {
                 };
                 match r {
                     Ok(n) => {
-                        recalc(&mut self.book.sheets[self.active]);
+                        recalc_book(&mut self.book, self.active);
                         self.dirty = true;
                         self.anchor = None;
                         self.sync_input();
@@ -1999,7 +1999,7 @@ impl Calc {
                 let s = &mut self.book.sheets[self.active];
                 s.names.retain(|(n, _)| *n != text);
                 s.names.push((text.clone(), range.clone()));
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.status = format!("名前「{text}」= {range}(式の中で使えます)").into();
             }
@@ -2150,7 +2150,7 @@ impl Calc {
                         n += 1;
                     }
                 }
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.sync_input();
                 self.status =
@@ -2398,7 +2398,7 @@ impl Calc {
                     by,
                     &vals,
                 );
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.sync_input();
                 self.status = format!(
@@ -2496,7 +2496,7 @@ impl Calc {
                     cell.fmt = fmt;
                     self.sheet_mut().set(p, cell);
                 }
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.sync_input();
                 self.find_term = Some(find.clone());
@@ -2925,7 +2925,7 @@ impl Calc {
                         }
                     }
                 }
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.sync_input();
                 self.status = format!(
@@ -2996,7 +2996,7 @@ impl Calc {
                     Pos::new(start, a.col),
                     &g,
                 );
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.status = format!(
                     "続きを {} 行足しました({n} 欄。よく確かめてください — AI の当て推量です。Ctrl+Z で1手)",
@@ -3025,7 +3025,7 @@ impl Calc {
                 }
                 self.checkpoint();
                 let n = paste_values_text(&mut self.book.sheets[self.active], at, &g);
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.status = format!(
                     "表を {} に置きました({} 行 {n} 欄。Ctrl+Z で1手)",
@@ -3044,7 +3044,7 @@ impl Calc {
                     let mut cell = Cell::input(&out);
                     cell.fmt = fmt;
                     self.book.sheets[self.active].set(p, cell);
-                    recalc(&mut self.book.sheets[self.active]);
+                    recalc_book(&mut self.book, self.active);
                     self.dirty = true;
                     self.sync_input();
                     let shown = self
@@ -3074,7 +3074,7 @@ impl Calc {
     /// いまの計算方法で再計算する(手動なら何もしない — 「計算」で回す)
     fn recalc_if_auto(&mut self) {
         if self.auto_calc {
-            recalc(&mut self.book.sheets[self.active]);
+            recalc_book(&mut self.book, self.active);
         }
     }
 
@@ -3114,8 +3114,7 @@ impl Calc {
         let mut cell = Cell::input(&text);
         cell.fmt = fmt;
         self.sheet_mut().set(cur, cell);
-        let s = self.sheet_mut();
-        recalc(s);
+        recalc_book(&mut self.book, self.active);
         self.dirty = true;
         // 中身を変えたらコピーの破線は消す(Excel と同じ)
         self.clip_range = None;
@@ -3260,9 +3259,7 @@ impl Calc {
         self.encrypt_pw = None;
         match sheet::xlsx::read(std::io::Cursor::new(bytes)) {
             Ok((mut book, rep)) => {
-                for s in &mut book.sheets {
-                    recalc(s);
-                }
+                sheet::recalc_all(&mut book);
                 self.notes = rep
                     .unsupported
                     .iter()
@@ -3397,9 +3394,7 @@ impl Calc {
         };
         match sheet::xlsx::read(std::io::Cursor::new(raw)) {
             Ok((mut book, _rep)) => {
-                for sh in &mut book.sheets {
-                    recalc(sh);
-                }
+                sheet::recalc_all(&mut book);
                 self.release_lock();
                 self.locked_by = None;
                 self.book = book;
@@ -3582,7 +3577,7 @@ impl Calc {
                 }
             }
         }
-        recalc(&mut self.book.sheets[self.active]);
+        recalc_book(&mut self.book, self.active);
         self.dirty = true;
         self.sync_input();
         n
@@ -3712,7 +3707,7 @@ impl Calc {
         self.checkpoint();
         let at = self.cursor;
         let n = paste_grid(&mut self.book.sheets[self.active], at, &grid, shift);
-        recalc(&mut self.book.sheets[self.active]);
+        recalc_book(&mut self.book, self.active);
         self.dirty = true;
         self.sync_input();
         self.status = format!("{n} セルを貼り付けました(書式は据え置き)").into();
@@ -3953,7 +3948,7 @@ impl Calc {
             }
         }
         self.dirty = true;
-        recalc(&mut self.book.sheets[self.active]);
+        recalc_book(&mut self.book, self.active);
     }
 
     /// 選んだ範囲を結合する。**値は消さない** — 左上以外の値は隠れるだけで、
@@ -3988,7 +3983,7 @@ impl Calc {
         let p = self.cursor;
         f(&mut self.book.sheets[self.active], p);
         self.dirty = true;
-        recalc(&mut self.book.sheets[self.active]);
+        recalc_book(&mut self.book, self.active);
     }
 
     /// 小数点以下の桁を増減する。
@@ -4387,7 +4382,7 @@ impl Calc {
                                     def.size = (h, w);
                                     let at = def.dest;
                                     this.place_pivot_grid(si, at, &grid, &kinds);
-                                    recalc(&mut this.book.sheets[si]);
+                                    recalc_book(&mut this.book, si);
                                     let (value, agg) = (def.value.clone(), def.agg.clone());
                                     this.book.pivots.push(def);
                                     this.dirty = true;
@@ -4432,7 +4427,7 @@ impl Calc {
                                     def.dest = dest;
                                     def.size = (h, w);
                                     this.place_pivot_grid(si, dest, &grid, &kinds);
-                                    recalc(&mut this.book.sheets[si]);
+                                    recalc_book(&mut this.book, si);
                                     this.book.pivots[pi] = def;
                                     this.dirty = true;
                                     this.sync_input();
@@ -4600,9 +4595,7 @@ calc の隣に置いてください)"
                     Ok((bytes, out)) => {
                         match sheet::xlsx::read(std::io::Cursor::new(bytes)) {
                             Ok((mut book, rep)) => {
-                                for sh in &mut book.sheets {
-                                    recalc(sh);
-                                }
+                                sheet::recalc_all(&mut book);
                                 this.checkpoint_book();
                                 this.book = book;
                                 if this.active >= this.book.sheets.len() {
@@ -4767,7 +4760,7 @@ calc の隣に置いてください)"
                             for (p, d) in spills {
                                 this.py_spills.insert((i, p), d);
                             }
-                            recalc(&mut this.book.sheets[i]);
+                            recalc_book(&mut this.book, i);
                             total += n;
                             conflicts += c;
                         }
@@ -4882,7 +4875,7 @@ calc の隣に置いてください)"
                         this.checkpoint();
                         let at = this.cursor;
                         let n = paste_values_text(&mut this.book.sheets[this.active], at, &grid);
-                        recalc(&mut this.book.sheets[this.active]);
+                        recalc_book(&mut this.book, this.active);
                         this.dirty = true;
                         this.sync_input();
                         this.status = format!(
@@ -5286,7 +5279,7 @@ calc の隣に置いてください)"
                                 cell.fmt = fmt;
                                 this.book.sheets[this.active].set(*p, cell);
                             }
-                            recalc(&mut this.book.sheets[this.active]);
+                            recalc_book(&mut this.book, this.active);
                             this.dirty = true;
                             this.sync_input();
                             this.solver = None;
@@ -5327,7 +5320,7 @@ calc の隣に置いてください)"
                 let mut cell = Cell::input(&format!("{x}"));
                 cell.fmt = fmt;
                 self.sheet_mut().set(var, cell);
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.sync_input();
                 self.status = format!(
@@ -5617,7 +5610,7 @@ calc の隣に置いてください)"
                             n += 1;
                         }
                     }
-                    recalc(&mut self.book.sheets[self.active]);
+                    recalc_book(&mut self.book, self.active);
                     self.dirty = true;
                     self.status = format!("{n} セルを埋めました").into();
                 }
@@ -6199,7 +6192,7 @@ calc の隣に置いてください)"
                             cell.value = Value::Bool(false);
                             self.book.sheets[self.active].set(*p, cell);
                         }
-                        recalc(&mut self.book.sheets[self.active]);
+                        recalc_book(&mut self.book, self.active);
                         self.dirty = true;
                         self.sync_input();
                     }
@@ -6955,7 +6948,7 @@ calc の隣に置いてください)"
                     } else {
                         self.checkpoint();
                         add_total_row(&mut self.book.sheets[self.active], a, b);
-                        recalc(&mut self.book.sheets[self.active]);
+                        recalc_book(&mut self.book, self.active);
                         self.dirty = true;
                         self.status = format!(
                             "{} 行目に合計(=SUM)を足しました。式なので元が変われば追従します(Ctrl+Z で戻せます)",
@@ -7080,9 +7073,9 @@ calc の隣に置いてください)"
                             None => {}
                             Some(Ok((p, mut other))) => {
                                 this.checkpoint();
+                                sheet::recalc_all(&mut other);
                                 let mut n = 0usize;
                                 for mut sh in other.sheets.drain(..) {
-                                    recalc(&mut sh);
                                     // 式は計算結果の値に(他所の参照を持ち込まない)
                                     for c in sh.cells.values_mut() {
                                         c.formula = None;
@@ -7391,7 +7384,7 @@ calc の隣に置いてください)"
                 let c = self.cursor.col;
                 self.book.sheets[self.active].sort_by_column(c, true, true);
                 self.dirty = true;
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 self.status = format!("{} 列で並べ替えました", Pos::new(0, c).a1()
                     .trim_end_matches('1')).into();
             }
@@ -7400,7 +7393,7 @@ calc の隣に置いてください)"
                 self.checkpoint();
                 let n = self.book.sheets[self.active].remove_duplicate_rows(true);
                 self.dirty = true;
-                recalc(&mut self.book.sheets[self.active]);
+                recalc_book(&mut self.book, self.active);
                 // 何件消したかを黙らない
                 self.status = format!("重複した {n} 行を削除しました").into();
             }
@@ -7418,7 +7411,8 @@ calc の隣に置いてください)"
                     "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE CONCAT TEXT \
                                   SUBSTITUTE FIND SEARCH VALUE TEXTJOIN REPT CHAR CODE \
                                   UNICHAR UNICODE PROPER EXACT CLEAN FIXED YEN NUMBERVALUE \
-                                  LENB LEFTB RIGHTB MIDB ASC JIS DATESTRING(和暦)",
+                                  LENB LEFTB RIGHTB MIDB ASC JIS DATESTRING(和暦) \
+                                  PHONETIC(ふりがな — 読んだ xlsx の rPh を引く)",
                     "fn-logical" => "IF IFS SWITCH AND OR NOT TRUE FALSE ISBLANK ISERROR IFERROR \
                                      IFNA ISNA ISERR ISLOGICAL ISNONTEXT ISNUMBER ISTEXT NA",
                     "fn-datetime" => "TODAY NOW DATE DATEVALUE YEAR MONTH DAY WEEKDAY \
@@ -7607,7 +7601,7 @@ impl EntityInputHandler for Calc {
                     cell.formula = None;
                     cell.value = Value::Bool(!b);
                     self.book.sheets[self.active].set(p, cell);
-                    recalc(&mut self.book.sheets[self.active]);
+                    recalc_book(&mut self.book, self.active);
                     self.dirty = true;
                     self.sync_input();
                     self.status = format!(

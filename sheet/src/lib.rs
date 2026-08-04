@@ -11,5 +11,5 @@ pub mod styles;
 pub mod theme;
 pub mod xlsx;
 
-pub use calc::recalc;
+pub use calc::{recalc, recalc_all, recalc_book};
 pub use model::{Book, Cell, Pos, Sheet, Value};

@@ -24,7 +24,7 @@ use pyo3::types::{PyDate, PyDateTime, PyTime};
 
 use sheet::calc::date_serial;
 use sheet::model::format_value;
-use sheet::{recalc, xlsx, Cell, Pos, Value};
+use sheet::{recalc_all, recalc_book, xlsx, Cell, Pos, Value};
 
 /// ブックの中身。Book と Sheet が同じものを見るために1枚挟む。
 struct Inner {
@@ -114,9 +114,7 @@ impl PyBook {
             .map_err(|e| PyIOError::new_err(format!("{path}: 読めない: {e}")))?;
         let (mut book, rep) = xlsx::read(std::io::Cursor::new(&bytes))
             .map_err(|e| PyIOError::new_err(format!("{path}: xlsx として読めない: {e}")))?;
-        for s in &mut book.sheets {
-            recalc(s);
-        }
+        recalc_all(&mut book);
         Ok(PyBook {
             inner: Arc::new(Mutex::new(Inner {
                 book,
@@ -130,9 +128,7 @@ impl PyBook {
     /// (図形・テーマ・印刷設定・文書情報)を原本から持ち越す。
     fn save(&self, path: &str) -> PyResult<()> {
         let mut g = lock(&self.inner)?;
-        for s in &mut g.book.sheets {
-            recalc(s);
-        }
+        recalc_all(&mut g.book);
         let mut buf = std::io::Cursor::new(Vec::new());
         let r = match &g.original {
             Some(bytes) => xlsx::write_with(&g.book, Some(std::io::Cursor::new(bytes)), &mut buf),
@@ -197,9 +193,7 @@ impl PyBook {
     /// 明示的にやり直したいとき用)。
     fn recalc(&self) -> PyResult<()> {
         let mut g = lock(&self.inner)?;
-        for s in &mut g.book.sheets {
-            recalc(s);
-        }
+        recalc_all(&mut g.book);
         Ok(())
     }
 }
@@ -218,6 +212,18 @@ impl PySheet {
             .idx_sheet(self.idx)
             .ok_or_else(|| PyKeyError::new_err("このシートはもうブックに無い"))?;
         f(s)
+    }
+
+    /// 書き換えてから、**ブック全体の文脈で**このシートを再計算する
+    /// (INDIRECT("別の表!A1") も解ける)
+    fn with_calc<T>(&self, f: impl FnOnce(&mut sheet::Sheet) -> PyResult<T>) -> PyResult<T> {
+        let mut g = lock(&self.inner)?;
+        let s = g
+            .idx_sheet(self.idx)
+            .ok_or_else(|| PyKeyError::new_err("このシートはもうブックに無い"))?;
+        let r = f(s)?;
+        recalc_book(&mut g.book, self.idx);
+        Ok(r)
     }
 }
 
@@ -280,7 +286,7 @@ impl PySheet {
                 }
             }
         };
-        self.with(|s| {
+        self.with_calc(|s| {
             let mut fmt = s.get(p).map(|c| c.fmt.clone()).unwrap_or_default();
             if fmt.number_format.is_none() {
                 if let Some(df) = date_fmt {
@@ -290,7 +296,6 @@ impl PySheet {
             let mut cell = cell;
             cell.fmt = fmt;
             s.set(p, cell);
-            recalc(s);
             Ok(())
         })
     }
@@ -340,9 +345,8 @@ impl PySheet {
     /// 行を挿す。`at` は画面で見える行番号(1起点)。その行の位置に空行が入り、
     /// 下の行と**残った式の参照**が下がる(明細の行を増やす操作)。
     fn insert_row(&self, at: u32) -> PyResult<()> {
-        self.with(|s| {
+        self.with_calc(|s| {
             s.insert_row(row0(at)?);
-            recalc(s);
             Ok(())
         })
     }
@@ -350,9 +354,8 @@ impl PySheet {
     /// 行を抜く(1起点)。抜いた行を指していた式は #REF! になる — 黙って
     /// 別のセルを指すより良い。
     fn remove_row(&self, at: u32) -> PyResult<()> {
-        self.with(|s| {
+        self.with_calc(|s| {
             s.remove_row(row0(at)?);
-            recalc(s);
             Ok(())
         })
     }
@@ -360,9 +363,8 @@ impl PySheet {
     /// 列を挿す。`at` は列の文字("C" なら C 列の位置に空列が入る)。
     fn insert_col(&self, at: &str) -> PyResult<()> {
         let c = col0(at)?;
-        self.with(|s| {
+        self.with_calc(|s| {
             s.insert_col(c);
-            recalc(s);
             Ok(())
         })
     }
@@ -370,9 +372,8 @@ impl PySheet {
     /// 列を抜く(列の文字で指す)。
     fn remove_col(&self, at: &str) -> PyResult<()> {
         let c = col0(at)?;
-        self.with(|s| {
+        self.with_calc(|s| {
             s.remove_col(c);
-            recalc(s);
             Ok(())
         })
     }

@@ -41,39 +41,58 @@ fn attr_un(e: &BytesStart, want: &str) -> Option<String> {
     })
 }
 
-/// sharedStrings.xml → 文字列表
+/// sharedStrings.xml → 文字列表と、そのふりがな。
 ///
 /// 日本語の xlsx には**ふりがな**(`<rPh>`)が入る。その中にも `<t>` があるので、
 /// 素直に全部の `<t>` を拾うと「提案見積書テイアンミツモリショ」になる。
-/// 欧米の実装が落としがちな箇所。ふりがなは本文ではないので混ぜない。
-fn parse_shared(xml: &str) -> (Vec<String>, usize) {
+/// 欧米の実装が落としがちな箇所。ふりがなは本文には混ぜず、**別に持って**
+/// 保存で書き戻す(PHONETIC 関数もこれを読む)。
+fn parse_shared(xml: &str) -> (Vec<String>, Vec<Option<String>>) {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
     let (mut out, mut cur) = (Vec::new(), String::new());
+    let (mut rubies, mut ruby) = (Vec::new(), String::new());
     let (mut in_t, mut in_si, mut in_rph) = (false, false, false);
-    let mut ruby = 0usize;
+    let mut in_rt = false; // rPh の中の <t>
     let mut buf = Vec::new();
     loop {
         match r.read_event_into(&mut buf) {
             Ok(Event::Eof) | Err(_) => break,
             Ok(Event::Start(e)) => match local(e.name().as_ref()) {
-                b"si" => { in_si = true; cur.clear() }
-                b"rPh" => { in_rph = true; ruby += 1 }
+                b"si" => {
+                    in_si = true;
+                    cur.clear();
+                    ruby.clear();
+                }
+                b"rPh" => in_rph = true,
                 b"t" if in_si && !in_rph => in_t = true,
+                b"t" if in_rph => in_rt = true,
                 _ => {}
             },
             Ok(Event::Text(t)) if in_t => cur.push_str(&t.unescape().unwrap_or_default()),
+            Ok(Event::Text(t)) if in_rt => ruby.push_str(&t.unescape().unwrap_or_default()),
             Ok(Event::End(e)) => match local(e.name().as_ref()) {
-                b"t" => in_t = false,
+                b"t" => {
+                    in_t = false;
+                    in_rt = false;
+                }
                 b"rPh" => in_rph = false,
-                b"si" => { in_si = false; out.push(std::mem::take(&mut cur)) }
+                b"si" => {
+                    in_si = false;
+                    out.push(std::mem::take(&mut cur));
+                    rubies.push(if ruby.is_empty() {
+                        None
+                    } else {
+                        Some(std::mem::take(&mut ruby))
+                    });
+                }
                 _ => {}
             },
             _ => {}
         }
         buf.clear();
     }
-    (out, ruby)
+    (out, rubies)
 }
 
 /// `<mergeCell ref="A1:B2"/>` を結合として持つ(読み飛ばすと保存で消える)。
@@ -588,8 +607,8 @@ fn parse_comments(xml: &str) -> Vec<(Pos, String)> {
     out
 }
 
-fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat],
-               name: &str, rep: &mut Report) -> Sheet {
+fn parse_sheet(xml: &str, shared: &[String], rubies: &[Option<String>],
+               styles: &[crate::model::CellFormat], name: &str, rep: &mut Report) -> Sheet {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
     let mut sh = Sheet::new(name);
@@ -674,9 +693,17 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
                 b"c" => {
                     if let Some(p) = pos.take() {
                         let value = match ty.as_str() {
-                            "s" => v.trim().parse::<usize>().ok()
-                                .and_then(|i| shared.get(i).cloned())
-                                .map(Value::Text).unwrap_or(Value::Empty),
+                            "s" => {
+                                let i = v.trim().parse::<usize>().ok();
+                                // ふりがな(rPh)はセルに紐づけて持つ
+                                if let Some(r) =
+                                    i.and_then(|i| rubies.get(i).cloned()).flatten()
+                                {
+                                    sh.phonetics.insert(p, r);
+                                }
+                                i.and_then(|i| shared.get(i).cloned())
+                                    .map(Value::Text).unwrap_or(Value::Empty)
+                            }
                             "b" => Value::Bool(v.trim() == "1"),
                             "e" => Value::Error(v.trim().to_string()),
                             "str" | "inlineStr" => Value::Text(v.trim().to_string()),
@@ -733,19 +760,14 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
         dxfs = parse_dxfs(&s);
     }
 
-    let shared = {
+    let (shared, rubies) = {
         let mut s = String::new();
         match zip.by_name("xl/sharedStrings.xml") {
             Ok(mut f) => {
                 let _ = f.read_to_string(&mut s);
-                let (v, ruby) = parse_shared(&s);
-                if ruby > 0 {
-                    // ふりがなは読み飛ばした(本文には混ぜない)。持ち越しは K4 の課題
-                    for _ in 0..ruby { rep.note("ふりがな(rPh。本文には混ぜず、保存時に落ちる)") }
-                }
-                v
+                parse_shared(&s)
             }
-            Err(_) => Vec::new(),
+            Err(_) => (Vec::new(), Vec::new()),
         }
     };
     // シート名(workbook.xml の並び順)と、名前の定義
@@ -854,7 +876,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
         let mut s = String::new();
         if let Ok(mut f) = zip.by_name(path) { let _ = f.read_to_string(&mut s); }
         let name = names.get(i).cloned().unwrap_or_else(|| format!("Sheet{}", i + 1));
-        let mut sh = parse_sheet(&s, &shared, &styles, &name, &mut rep);
+        let mut sh = parse_sheet(&s, &shared, &rubies, &styles, &name, &mut rep);
         sh.hidden = hiddens.get(i).copied().unwrap_or(false);
         // このシートの rels(ハイパーリンクの先・コメントの部品への道)
         let rels_path = {
@@ -1755,15 +1777,26 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     let o: zip::write::FileOptions<'_, ()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    // 共有文字列を集める
+    // 共有文字列を集める(ふりがなも添える — 落とすと日本語の宝が消える)。
+    // 同じ字で違う読みの2セルは、先に出た読みで代表(表は字で引くため)
     let mut shared: Vec<String> = Vec::new();
+    let mut shared_ruby: Vec<Option<String>> = Vec::new();
     let mut idx = std::collections::HashMap::new();
     for sh in &book.sheets {
-        for c in sh.cells.values() {
+        for (p, c) in &sh.cells {
             if let Value::Text(t) = &c.value {
-                if !idx.contains_key(t) {
-                    idx.insert(t.clone(), shared.len());
-                    shared.push(t.clone());
+                let ruby = sh.phonetics.get(p);
+                match idx.get(t) {
+                    None => {
+                        idx.insert(t.clone(), shared.len());
+                        shared.push(t.clone());
+                        shared_ruby.push(ruby.cloned());
+                    }
+                    Some(&i) => {
+                        if shared_ruby[i].is_none() {
+                            shared_ruby[i] = ruby.cloned();
+                        }
+                    }
                 }
             }
         }
@@ -2109,8 +2142,20 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     }
     put("xl/styles.xml", &styles_xml)?;
 
-    let si: String = shared.iter()
-        .map(|s| format!("<si><t xml:space=\"preserve\">{}</t></si>", esc(s)))
+    let si: String = shared
+        .iter()
+        .zip(&shared_ruby)
+        .map(|(s, ruby)| match ruby {
+            Some(r) => format!(
+                "<si><t xml:space=\"preserve\">{}</t>\
+                 <rPh sb=\"0\" eb=\"{}\"><t>{}</t></rPh>\
+                 <phoneticPr fontId=\"0\"/></si>",
+                esc(s),
+                s.chars().count(),
+                esc(r)
+            ),
+            None => format!("<si><t xml:space=\"preserve\">{}</t></si>", esc(s)),
+        })
         .collect();
     put("xl/sharedStrings.xml", &format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

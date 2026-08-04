@@ -29,8 +29,9 @@
 - 実物の様式(検査の材料)は
   `/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/` にある。
   **無い環境ではテストは黙って飛ぶ**(失敗はしない)。可能ならコピーして持つ
-- Python 検証は miniforge の `.venv`(polars / python-docx)。無ければ
-  `conda create -p .venv python polars python-docx`
+- Python 検証は miniforge の `.venv`(polars / python-docx / docxtpl)。無ければ
+  `conda create -p .venv python polars python-docx` + `pip install docxtpl`
+  (docxtpl は conda-forge に無いことがあるので pip で)
 
 ## GPUI の踏み跡(再発させない)
 
@@ -421,8 +422,19 @@ fill(名前, 値)/fill_one(writer の macro_script)— w:tag で欄を引いて
 2026-08-05 続き(発注者「基幹現代化への対応 1〜2 を形にして」):
 前置きに extract(名前)=値を読む と fields()=(名前, 値) の一覧 を追加。
 fill=出口 / extract・fields=入口 の対(SEKKEI の記入欄の節)。
-※マクロ台本を書く AI への system(fill/extract/fields だけ使う・rows で
-なめる等)は未着手。実物様式(機構の実施要領様式1〜5)での一本通しも未。
+
+2026-08-05 さらに(発注者の docxtpl 提案 →「すすめて」): **雛形の車線を追加**。
+前置きに render(辞書)= docxtpl の {{名前}} / {%tr %} 差し込み、
+tpl_fields()= 差し込み口の一覧。ooxml::read の出口に kumihan::heal_runs
+(同書式の細切れ run を読みで繋ぐ — モデルの衛生+雛形の {{ }} の保険)。
+docxtpl 0.20.2 を .venv に追加(薄い包み。止まっても自前で持てる規模)。
+実測: run 分断3種(同書式・太字違い・波括弧の途中)は docxtpl が自力で
+繋いだ。壊れ方の本命は {%tr %} の置き方(行ごと構文になる — for/明細/endfor
+の3行構成が正)と全角の{{ }}。render の断り文言にその旨を入れてある。
+試験: 雛形の一本通し(分断→writer 読み書き→render→表の行くり返しまで)+
+実物様式7件(機構)が writer 読み書き→python-docx/docxtpl に通ること。
+※マクロ台本を書く AI への system(fill/extract/fields/render だけ使う・
+rows でなめる等)は未着手。実物様式への名前付け(発注者と GUI で)も未。
 
 **writer の画面(2026-08-04。発注者が画像で指示)**: デスクトップ版の
 額縁に合わせた — クイックアクセス行+下線タブ+下のステータスバー、
@@ -571,9 +583,25 @@ ISEVEN/ISODD/COUNTBLANK/SUMSQ。
   半角カナ=1 — Excel 日本語ロケールの数え方。古い帳票の定番)、
   **ASC / JIS**(全半角。濁点は ASC で2文字に割れ、JIS で1文字に組み直る —
   往復の試験あり)、**DATESTRING**(和暦 令和08年08月05日。改元日の境まで試験)
-残: PHONETIC(xlsx の phonetic run をモデルが読んでいない — 読みからの実装)、
-INDIRECT の別シート、FILTER 等を式の中に混ぜる形(配列演算の一般化)、
-和暦の**表示形式**(ggge 系 — DATESTRING はできた)。
+**上の残4件も同日に完了(発注者「続けて」)**:
+- **和暦の表示形式**: format_date が g/gg/ggg(R/令/令和)と e/ee(和暦年)を
+  描く。元号表は calc::era_of に一本化(DATESTRING と同じ道)
+- **配列の入れ子**: SUM(FILTER(…))・COUNTA(UNIQUE(…)) 等、**関数の引数の場**は
+  通る(args の try_array_arg。入れ子のスピル式 =SORT(FILTER(…)) も可)。
+  裸の式の場(=SEQUENCE(3)+1)はまだ #配列単独 — 実装したら dan3 の試験の
+  期待値を差し替えること(SUM(SEQUENCE) の試験は今回それで直した)
+- **PHONETIC**: sharedStrings の rPh を読んで Sheet.phonetics(Pos→読み)に持ち、
+  **保存で書き戻す**(前は「保存時に落ちる」と注記していた — 注記は消した)。
+  PHONETIC 関数は読みが無ければ字そのもの(Excel の約束)。
+  同じ字で違う読みの2セルは先勝ち(共有文字列表は字で引くため)
+- **INDIRECT の別シート**: 器から作った — recalc(1枚)は残し、
+  **recalc_book(book, i)**(他シートを読み取りで見せる)と
+  **recalc_all(book)**(間接参照があれば2周)を新設。P に others、
+  参照の答えは RefAns(At=自シートの範囲 / Rect=別シートの値の写し / Bad)。
+  '台帳'!A1 の引用も剥く。**1枚だけの再計算では変わらず #REF!**(正直)。
+  calc は機械置換32+手直し4(commit・開く3経路・外部リンク取り込み)、
+  pysheet は recalc_all / with_calc(書き換え→ブック文脈で再計算)へ。
+  単票のままの recalc はソルバー・ゴールシークの複製と新規ブックの見本だけ
 
 小さい残件: 変換下線の位置の実機確認、表入りのヘッダー・フッターの編集。
 暗号化の Agile 方式(Word/Excel 2013+ の既定)を実装(2026-08-04、発注者

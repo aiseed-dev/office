@@ -336,6 +336,9 @@ pub struct Sheet {
     /// (drawing・rels・media)ごと書き出す。読んだ画像と持ち場を分ける —
     /// 混ぜると保存で二重になる(writer と同じ構図)
     pub images_new: Vec<SheetImage>,
+    /// セルのふりがな(xlsx の rPh)。**日本語の xlsx の宝** — 欧米の実装が
+    /// 落としがちなので、読んで持ち、保存で書き戻す。PHONETIC 関数が読む
+    pub phonetics: BTreeMap<Pos, String>,
     /// 動的配列のスピル(起点 → 高さ, 幅)。=FILTER 等があふれた先の記録。
     /// 再計算はここを見て前回の影を消してから置き直す(残骸を残さない)。
     /// xlsx へは独自部品 xl/joSpill.xml で往復(joPivot と同じ作法) —
@@ -1091,8 +1094,10 @@ fn format_date(n: f64, code: &str) -> Option<String> {
     }
     let datey = bare.contains('y') || bare.contains('d') || bare.contains('h')
         || bare.contains('a') // 曜日(aaa)
+        || bare.contains('e') // 和暦の年
+        || bare.contains('g') // 元号
         || (bare.contains('m') && bare.contains('s'));
-    if !datey || bare.contains('g') || bare.contains('e') || n < 0.0 {
+    if !datey || n < 0.0 {
         return None;
     }
 
@@ -1173,6 +1178,20 @@ fn format_date(n: f64, code: &str) -> Option<String> {
                             out.push_str("曜日");
                         }
                     }
+                    // 和暦: g=R gg=令 ggg=令和 / e=年(ee=0詰め)。明治より前は西暦
+                    'g' => match crate::calc::era_of(days) {
+                        Some((era, initial, _)) => out.push_str(match *len {
+                            1 => initial,
+                            2 => &era[..era.char_indices().nth(1).map(|(i, _)| i)
+                                .unwrap_or(era.len())],
+                            _ => era,
+                        }),
+                        None => {}
+                    },
+                    'e' => match crate::calc::era_of(days) {
+                        Some((_, _, ey)) => out.push_str(&pad(ey, *len)),
+                        None => out.push_str(&y.to_string()),
+                    },
                     _ => return None, // 知らない字は描けない — 黙って崩さない
                 }
                 if c.is_ascii_alphabetic() {
