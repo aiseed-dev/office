@@ -1135,6 +1135,26 @@ impl Calc {
                 self.size_grip_at(x, y)
             );
         }
+        // 描画の道具が出ていれば筆が最優先(セルは触らない)
+        if let Some(t) = self.tool {
+            if x >= self.head_w() && y >= self.head_h() {
+                if t == 2 {
+                    // 消しゴム: なぞった線を1筆消す
+                    match self.ink_at(x, y) {
+                        Some(i) => {
+                            self.checkpoint();
+                            self.sheet_mut().shapes_new.remove(i);
+                            self.dirty = true;
+                            self.status = "1筆消しました(Ctrl+Z で戻せます)".into();
+                        }
+                        None => self.status = "線の上をなぞってください".into(),
+                    }
+                } else {
+                    self.ink_cur = Some(vec![(x, y)]);
+                }
+                return;
+            }
+        }
         // 浮いている図形が最優先(セルの上に描かれているので)
         if let Some((i, (sx, sy), corner)) = self.shape_at(x, y) {
             self.commit();
@@ -1243,6 +1263,26 @@ impl Calc {
 
     /// 押したまま動いた。通り過ぎたセルまで選択を広げる。
     fn mouse_drag_at(&mut self, x: f32, y: f32) {
+        if self.tool == Some(2) {
+            // 消しゴムはなぞっている間ずっと効く
+            if let Some(i) = self.ink_at(x, y) {
+                self.checkpoint();
+                self.sheet_mut().shapes_new.remove(i);
+                self.dirty = true;
+            }
+            return;
+        }
+        if let Some(pts) = &mut self.ink_cur {
+            // 近すぎる点は捨てる(点の数を抑える)
+            let far = pts
+                .last()
+                .map(|(lx, ly)| (x - lx).abs() + (y - ly).abs() > 2.0)
+                .unwrap_or(true);
+            if far {
+                pts.push((x, y));
+            }
+            return;
+        }
         if let Some((is_col, start)) = self.head_drag {
             // 見出しから始めた選択は、どこを通っても列・行の選択のまま
             if is_col {
@@ -1274,6 +1314,10 @@ impl Calc {
 
     /// 離した。ドラッグ選択はここで確定する。
     fn mouse_up(&mut self) {
+        if let Some(pts) = self.ink_cur.take() {
+            self.finish_ink(pts);
+            return;
+        }
         if std::env::var_os("JO_MOUSE_LOG").is_some() {
             eprintln!(
                 "up size_drag={} moved={:?}",
@@ -1867,6 +1911,10 @@ impl Calc {
         self.pivot_pend = None; // 聞き取り途中のピボット・小計は Esc でやめる
         self.sub_pend = None;
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
+        if self.tool.take().is_some() {
+            self.ink_cur = None;
+            self.status = "セルの操作に戻りました".into();
+        }
         if self.solver.take().is_some()
             || self.slicer.take().is_some()
             || self.prompt.take().is_some()
@@ -2567,6 +2615,71 @@ impl Calc {
     /// 数式バーの内容をセルへ。**入力規則(list)に合わない値は入れない**
     /// (Excel と同じ)。false を返したら呼び側は移動しないこと —
     /// 打った文字が黙って消える。Esc でセルの保存内容に戻せる。
+    /// 描いた1筆(格子の px の列)を図形(折れ線)にして置く。
+    /// **既にある図形の仕組みに乗せる** — xlsx へは custGeom で入り、
+    /// Excel でも線に見え、消しゴムも移動も Ctrl+Z も全部そのまま効く
+    fn finish_ink(&mut self, pts: Vec<(f32, f32)>) {
+        if pts.len() < 2 {
+            return; // 点を打っただけ(線にならない)
+        }
+        let (mut x0, mut y0) = (f32::MAX, f32::MAX);
+        let (mut x1, mut y1) = (f32::MIN, f32::MIN);
+        for (x, y) in &pts {
+            x0 = x0.min(*x);
+            y0 = y0.min(*y);
+            x1 = x1.max(*x);
+            y1 = y1.max(*y);
+        }
+        let (w, h) = ((x1 - x0).max(4.0), (y1 - y0).max(4.0));
+        // 錨は左上の点があるセル。そこからのずらしで位置を覚える
+        let at = self.cell_at(x0, y0).unwrap_or(self.view);
+        let (ox, oy) = self.cell_origin_px(at).unwrap_or((self.head_w(), self.head_h()));
+        let marker = self.tool == Some(1);
+        self.checkpoint();
+        self.sheet_mut().shapes_new.push(sheet::model::SheetShape {
+            at,
+            dx_px: x0 - ox,
+            dy_px: y0 - oy,
+            width_px: w,
+            height_px: h,
+            kind: if marker { "marker".into() } else { "ink".into() },
+            fill: None,
+            line: Some(if marker { "FFD54A".into() } else { "1B1B1B".into() }),
+            points: pts
+                .iter()
+                .map(|(x, y)| ((x - x0) / w, (y - y0) / h))
+                .collect(),
+            ..Default::default()
+        });
+        self.dirty = true;
+        self.status = if marker {
+            "蛍光ペンで引きました(Ctrl+Z で戻せます)".into()
+        } else {
+            "ペンで描きました(Ctrl+Z で戻せます)".into()
+        };
+    }
+
+    /// この位置にある手描きの線(いちばん上のもの)。消しゴムが使う
+    fn ink_at(&self, x: f32, y: f32) -> Option<usize> {
+        let sh = self.sheet();
+        for (i, sp) in sh.shapes_new.iter().enumerate().rev() {
+            if !matches!(sp.kind.as_str(), "ink" | "marker" | "spark") {
+                continue;
+            }
+            let Some((ox, oy)) = self.cell_origin_px(sp.at) else { continue };
+            let (x0, y0) = (ox + sp.dx_px, oy + sp.dy_px);
+            let near = if sp.kind == "marker" { 7.0 } else { 4.0 };
+            let hit = sp.points.iter().any(|(px_, py_)| {
+                let (cx, cy) = (x0 + px_ * sp.width_px, y0 + py_ * sp.height_px);
+                (cx - x).abs() <= near && (cy - y).abs() <= near
+            });
+            if hit {
+                return Some(i);
+            }
+        }
+        None
+    }
+
     /// いまの計算方法で再計算する(手動なら何もしない — 「計算」で回す)
     fn recalc_if_auto(&mut self) {
         if self.auto_calc {
@@ -7037,7 +7150,12 @@ impl gpui::Element for InputSink {
                 } else if c.size_drag.is_some() {
                     c.size_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
-                } else if c.drag.is_some() || c.head_drag.is_some() {
+                } else if c.drag.is_some()
+                    || c.head_drag.is_some()
+                    || c.ink_cur.is_some()
+                    || c.tool == Some(2)
+                {
+                    // 筆と消しゴムもここを通る(描きかけ・なぞり)
                     c.mouse_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
                 }
@@ -8290,6 +8408,33 @@ impl Render for Calc {
                 this.add_sheet();
                 cx.notify()
             })));
+        // 描きかけの1筆(点の粒で見せる。離すと1本の線になる)
+        let ink_preview: Vec<gpui::AnyElement> = self
+            .ink_cur
+            .as_ref()
+            .map(|pts| {
+                let marker = self.tool == Some(1);
+                let (sz, col) = if marker {
+                    (9.0, rgb(0xFFD54A))
+                } else {
+                    (2.5, rgb(0x1B1B1B))
+                };
+                pts.iter()
+                    .map(|(x, y)| {
+                        div()
+                            .absolute()
+                            .left(px(x - sz / 2.0))
+                            .top(px(y - sz / 2.0))
+                            .w(px(sz))
+                            .h(px(sz))
+                            .rounded_full()
+                            .bg(col)
+                            .into_any_element()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // 見張り(ウォッチウィンドウ)。控えたセルの値を下に並べる
         let watch_bar = (!self.watch.is_empty()).then(|| {
             let mut w = div().flex().flex_row().flex_wrap().gap_3()
@@ -9391,6 +9536,7 @@ impl Render for Calc {
                        }
                    }))
                    .child(grid)
+                   .children(ink_preview)
                    .children({
                        // 浮かぶ画像(グラフ)。錨のセルが見えている間だけ描く。
                        // マウスは受けない(セルの操作を遮らない)

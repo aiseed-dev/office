@@ -434,7 +434,8 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
         None => String::new(),
     };
     // 形: 折れ線(spark)は custGeom、他は prstGeom
-    let geom = if sp.kind == "spark" && !sp.points.is_empty() {
+    let poly = matches!(sp.kind.as_str(), "spark" | "ink" | "marker");
+    let geom = if poly && !sp.points.is_empty() {
         let mut path = String::new();
         for (i, (x, y)) in sp.points.iter().enumerate() {
             let (px_, py_) = ((x * 10000.0) as i64, (y * 10000.0) as i64);

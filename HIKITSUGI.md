@@ -266,7 +266,13 @@ mutter の装飾ぶれで座標が滑り不安定 — タブ描画の目視と w
 書式を掛けるだけ)・シートの表示(Sheet.hidden を新設。workbook.xml の
 state="hidden" と往復。原文へは patch_sheet_states で属性差し替え)・
 ウォッチウィンドウ(watch: Vec<(シート, セル)>。値は下の帯に生きて出る)・
-描画3種(writer と同じ tool の入切。筆の実装は残件 — 釦と道具の状態まで)。
+描画3種(writer と同じ tool の入切)。**筆も実装済み**(2026-08-04): 1筆を
+SheetShape の折れ線(kind="ink" / "marker")として置く — 既にある図形の
+仕組みに丸ごと乗るので custGeom で xlsx に入り(Excel でも線)、PDF にも出て、
+Ctrl+Z も効く。描きかけは点の粒で見せ、離すと1本の線になる。消しゴムは
+ink_at の近傍判定で1筆消す。※罠: 移動の受け口(on_mouse_event の
+MouseMoveEvent)は drag 系が立っている時だけ mouse_drag_at を呼んでいた —
+筆と消しゴムの条件を足さないと「道具は出ているのに描けない」になる。
 **calc 139/145**。残る6つは方針で灰色維持(表オブジェクト2・RTL2・
 テーマ色2 = a:theme の読みが要る。writer と同根)。
 両アプリの窓の移動・終了確認(別糸)・スクロール・クリップボード。

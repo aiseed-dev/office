@@ -344,7 +344,8 @@ pub struct SheetShape {
     pub height_px: f32,
     /// 図形の種類(xlsx の prstGeom の名前):
     /// rect / roundRect / ellipse / rightArrow / diamond / line。
-    /// "spark" は折れ線(points を使う。xlsx へは custGeom で書く)
+    /// "spark"(スパークライン)・"ink"(ペン)・"marker"(蛍光ペン)は
+    /// 折れ線(points を使う。xlsx へは custGeom で書く = Excel でも線に見える)
     pub kind: String,
     /// 塗り RRGGBB(無ければ塗らない)
     pub fill: Option<String>,
@@ -419,7 +420,8 @@ impl SheetShape {
                 h / 2.0
             ),
             "line" => format!(r#"<line x1="{x0}" y1="{y0}" x2="{x1}" y2="{y1}" {style}/>"#),
-            "spark" => {
+            // 手描きの線(ペン=細い / 蛍光ペン=太くて薄い)も同じ折れ線
+            "spark" | "ink" | "marker" => {
                 // 正規化した点を大きさに展開した折れ線(塗らない)
                 let pts = self
                     .points
@@ -429,7 +431,14 @@ impl SheetShape {
                     })
                     .collect::<Vec<_>>()
                     .join(" ");
-                format!(r#"<polyline points="{pts}" fill="none" stroke="{line}" stroke-width="1.5"/>"#)
+                let (w_, o_) = match self.kind.as_str() {
+                    "marker" => (9.0, 0.45), // 蛍光ペンは太く薄く
+                    "ink" => (2.2, 1.0),
+                    _ => (1.5, 1.0),
+                };
+                format!(
+                    r#"<polyline points="{pts}" fill="none" stroke="{line}" stroke-width="{w_}" stroke-opacity="{o_}" stroke-linecap="round" stroke-linejoin="round"/>"#
+                )
             }
             _ => format!(
                 r#"<rect x="{x0}" y="{y0}" width="{}" height="{}" {style}/>"#,

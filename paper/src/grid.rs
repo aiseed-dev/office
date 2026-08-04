@@ -384,7 +384,7 @@ pub fn sheet_to_pdf<W: Write>(
                     (x, y_top - h / 2.0),
                 ],
                 "line" => vec![(x, y_top), (x + w, y_top - h)],
-                "spark" => sp
+                "spark" | "ink" | "marker" => sp
                     .points
                     .iter()
                     .map(|(px_, py_)| (x + px_ * w, y_top - py_ * h))
@@ -396,7 +396,7 @@ pub fn sheet_to_pdf<W: Write>(
                     (x, y_top - h),
                 ],
             };
-            let closed = sp.kind != "line" && sp.kind != "spark";
+            let closed = !matches!(sp.kind.as_str(), "line" | "spark" | "ink" | "marker");
             l1.add_line(Line {
                 points: pts
                     .into_iter()
