@@ -122,7 +122,7 @@ READY = {
         "solver": "solver",
         "insshape": "insshape", "instext": "instext",
         "inssmartart": "inssmartart", "insequation": "insequation",
-        "insslicer": "insslicer",
+        "insslicer": "insslicer", "inscheckbox": "inscheckbox",
         "inssparkline": "inssparkline", "co-addcomment": "addcomment",
         "coauth-mode": "coauth-mode", "co-delcomment": "co-delcomment",
         "co-showcomment": "co-showcomment", "co-chat": "co-chat",

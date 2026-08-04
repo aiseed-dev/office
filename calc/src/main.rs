@@ -4802,7 +4802,7 @@ calc の隣に置いてください)"
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
-        "inssmartart", "insequation", "insslicer",
+        "inssmartart", "insequation", "insslicer", "inscheckbox",
         "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
         "co-history", "plug-macros", "plug-manage",
         "prot-doc", "prot-encrypt", "prot-sign",
@@ -5448,6 +5448,53 @@ calc の隣に置いてください)"
                     self.status =
                         "プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)"
                             .into();
+                }
+            }
+            // チェックボックス(セルの部品)。空のセルに FALSE を置くと
+            // ☑/☐ で見え、空白キーで切り替わる(Excel では TRUE/FALSE の値)
+            "inscheckbox" => {
+                self.commit();
+                let (a, b) = self.sel_rect();
+                let mut empties = Vec::new();
+                let mut bools = 0usize;
+                let mut skipped = 0usize;
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        let p = Pos::new(r, c);
+                        match self.sheet().get(p).map(|x| &x.value) {
+                            None | Some(Value::Empty) => empties.push(p),
+                            Some(Value::Bool(_)) => bools += 1,
+                            _ => skipped += 1,
+                        }
+                    }
+                }
+                if empties.is_empty() && bools == 0 {
+                    self.status =
+                        "空のセルを選んでください(中身のあるセルは潰しません)".into();
+                } else {
+                    if !empties.is_empty() {
+                        self.checkpoint();
+                        for p in &empties {
+                            let mut cell =
+                                self.sheet().get(*p).cloned().unwrap_or_default();
+                            cell.formula = None;
+                            cell.value = Value::Bool(false);
+                            self.book.sheets[self.active].set(*p, cell);
+                        }
+                        recalc(&mut self.book.sheets[self.active]);
+                        self.dirty = true;
+                        self.sync_input();
+                    }
+                    let skip_note = if skipped > 0 {
+                        format!("。中身のある {skipped} セルは触っていません")
+                    } else {
+                        String::new()
+                    };
+                    self.status = format!(
+                        "チェックボックスを {} 個置きました(空白キーで切替。Excel では TRUE/FALSE で見えます{skip_note})",
+                        empties.len()
+                    )
+                    .into();
                 }
             }
             // スライサー。カーソルの列の一意な値を釦で並べ、押して絞る。
@@ -6459,6 +6506,36 @@ impl EntityInputHandler for Calc {
     fn unmark_text(&mut self, _w: &mut Window, _cx: &mut Context<Self>) { handler::unmark(self) }
     fn replace_text_in_range(&mut self, r: Option<Range<usize>>, text: &str,
                              _w: &mut Window, cx: &mut Context<Self>) {
+        // 空白キーはチェックボックス(Bool のセル)の切替。打ちかけ・板・
+        // 小窓が無いときだけ(文字としての空白を奪わない)
+        if text == " " && self.prompt.is_none() && self.solver.is_none() && !self.editing() {
+            if let Some(Value::Bool(b)) =
+                self.sheet().get(self.cursor).map(|c| c.value.clone())
+            {
+                if self.sheet().protected {
+                    self.status =
+                        "シートが保護されています(保護タブの「保護」で解除)".into();
+                } else {
+                    self.checkpoint();
+                    let p = self.cursor;
+                    let mut cell = self.sheet().get(p).cloned().unwrap_or_default();
+                    cell.formula = None;
+                    cell.value = Value::Bool(!b);
+                    self.book.sheets[self.active].set(p, cell);
+                    recalc(&mut self.book.sheets[self.active]);
+                    self.dirty = true;
+                    self.sync_input();
+                    self.status = format!(
+                        "{} = {}(空白キーで切替)",
+                        p.a1(),
+                        if b { "☐" } else { "☑" }
+                    )
+                    .into();
+                }
+                cx.notify();
+                return;
+            }
+        }
         handler::replace(self, r, text);
         cx.notify();
     }
@@ -7376,6 +7453,14 @@ impl Render for Calc {
                             cell.and_then(|x| x.fmt.number_format.as_deref())))
                 } else {
                     sheet::model::format_value(&v, cell.and_then(|x| x.fmt.number_format.as_deref()))
+                };
+                // Bool のセルはチェックボックスとして見せる(☑/☐。
+                // 空白キーで切替。Excel では TRUE/FALSE の値で見える)
+                let shown = match v {
+                    Value::Bool(b) if !self.show_formulas => {
+                        if b { "☑".to_string() } else { "☐".to_string() }
+                    }
+                    _ => shown,
                 };
                 let is_num = matches!(v, Value::Number(_));
                 let is_err = matches!(v, Value::Error(_));
