@@ -118,7 +118,7 @@ pub const WRITER: &[Tab] = &[
         c("hyphenation", "ハイフン設定の変更", "hyphenation"),
         c("watermark", "透かしを編集する", "watermark"),
         c("pagecolor", "ページ色の変更", "pagecolor"),
-        x("配色の変更", "colorschemas"),
+        c("colorschemas", "配色の変更", "colorschemas"),
     ]},
     Tab { name: "参考資料", cmds: &[
         c("toc", "目次", "contents"),
@@ -163,7 +163,7 @@ pub const WRITER: &[Tab] = &[
         c("zoom100", "100%に拡大する", "zoom100"),
         c("zoom-in", "拡大", "zoom-in"),
         c("zoom-out", "縮小", "zoom-out"),
-        x("複数ページ", "multipage"),
+        c("multipage", "複数ページ", "multipage"),
         c("darkmode", "ダークモード", "darkmode"),
         c("ruler", "ルーラー", "ruler"),
         c("show-toolbar", "ツールバーを常に表示する", "show-toolbar"),

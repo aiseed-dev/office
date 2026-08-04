@@ -493,6 +493,8 @@ fn word_boundary(text: &str, pos: usize, forward: bool) -> usize {
 }
 
 const PX_PER_MM: f32 = 96.0 / 25.4;
+/// 見開きのページの間の空き(mm)
+const PAGE_GAP_MM: f32 = 8.0;
 /// gpui の文字は行の高さが既定で黄金比(1.618×文字サイズ)なので、
 /// グリフは div の頭から余白の半分ぶん下に描かれる。自前で引く線
 /// (変換の下線・下線・取り消し線・蛍光ペン)はそのぶん下げて
@@ -616,6 +618,10 @@ struct Writer {
     /// URL を開く板
     url_open: bool,
     url_ed: Editor,
+    /// いまの配色(レイアウト > 配色の変更)
+    theme: usize,
+    /// 複数ページ(見開き。画面だけの見え方 — 紙は1ページずつのまま)
+    multipage: bool,
     /// 記入欄の選択肢を聞く板(コンボ・ドロップダウンを挿すとき)
     sd_open: bool,
     sd_ed: Editor,
@@ -883,6 +889,8 @@ impl Writer {
             fm_ed: Editor::new(""),
             url_open: false,
             url_ed: Editor::new(""),
+            theme: 0,
+            multipage: false,
             sd_open: false,
             sd_ed: Editor::new(""),
             sd_kind: kumihan::SdtKind::Text,
@@ -1209,6 +1217,12 @@ impl Writer {
             height_mm: self.pg.h_mm,
             margin_mm: self.pg.left_mm,
         }).1;
+        // 複数ページ(見開き)。**画面だけ**の折り方 — PDF は 1ページずつ
+        // (save_pdf は組み直してから写す)。縦書きとは併せない
+        if self.multipage && !self.page.vertical {
+            let offs = self.page_offsets.clone();
+            kumihan::fold_pages(&mut self.page, &self.pg, &offs, 2, PAGE_GAP_MM);
+        }
         let total = self.total_pages();
         self.header_lines =
             kumihan::layout_hf(&self.doc.header, &m, &self.pg, LINE_MM, 1, total, false);
@@ -1991,6 +2005,7 @@ impl Writer {
             "nav" | "show-left" => self.nav_open,
             "show-toolbar" => self.show_toolbar,
             "show-statusbar" => self.show_statusbar,
+            "multipage" => self.multipage,
             "show-right" => self.rp_open,
             "ruler" => self.ruler,
             "darkmode" => self.dark,
@@ -2534,6 +2549,13 @@ impl Writer {
 
     /// PDF として保存。保存先の選択は**別の糸**(rfd は同期)。
     fn save_pdf(&mut self, cx: &mut Context<Self>) {
+        // 見開きは画面だけの見え方。紙は1ページずつなので組み直してから写す
+        if self.multipage {
+            let keep = self.multipage;
+            self.multipage = false;
+            self.relayout_keep();
+            self.multipage = keep;
+        }
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new()
                 .add_filter("PDF", &["pdf"])
@@ -3063,7 +3085,21 @@ impl Writer {
 
     /// クリックした画素位置(編集領域からの相対)にカーソルを置く。
     /// 文書の下端(紙の座標 mm)。1ページに満たなくても紙1枚ぶんは白い
+    /// 紙の見た目の幅(mm。見開きなら2枚ぶん)
+    fn paper_w_mm(&self) -> f32 {
+        if self.multipage && !self.page.vertical {
+            self.pg.w_mm * 2.0 + PAGE_GAP_MM
+        } else {
+            self.pg.w_mm
+        }
+    }
+
     fn content_mm(&self) -> f32 {
+        if self.multipage && !self.page.vertical {
+            // 2枚ずつの段。ページ数の半分(切り上げ)ぶんの高さ
+            let pages = self.page_offsets.len().max(1);
+            return (pages.div_ceil(2)) as f32 * self.pg.h_mm;
+        }
         if self.page.vertical {
             // 縦書きは物理ページに畳んであるので、ページ数で決まる
             let pages = self.page.lines.iter()
@@ -3309,7 +3345,8 @@ impl Writer {
         "controls", "form-text", "form-combo", "form-dropdown", "form-checkbox",
         "form-radio", "form-image", "form-email", "form-phone", "form-complex",
         "form-signature",
-        "nav", "fit-page", "fit-width", "zoom100",
+        "colorschemas",
+        "nav", "fit-page", "fit-width", "zoom100", "multipage",
         "show-toolbar", "show-statusbar", "show-left", "show-right",
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
@@ -4357,6 +4394,48 @@ impl Writer {
                 self.status =
                     "選択肢をカンマ区切りで打って Enter(例: 赤,青,黄)".into();
             }
+            // 配色。**その時の値で塗る**(テーマ部品は作らない — Word で
+            // 開いても同じ色に見える正直な形)。見出しの色と紙の色を組で当てる
+            "colorschemas" => {
+                // (名前, 見出しの色, 紙の色)
+                const THEMES: &[(&str, &str, Option<&str>)] = &[
+                    ("標準", "1B1B1B", None),
+                    ("藍", "165E83", None),
+                    ("緑", "1B6E3C", None),
+                    ("臙脂", "8E3A46", None),
+                    ("藍(生成りの紙)", "165E83", Some("FBF7EE")),
+                    ("墨(灰の紙)", "2E3338", Some("F2F2F0")),
+                ];
+                self.flush_target();
+                self.doc_undo = Some(self.doc.clone());
+                self.theme = (self.theme + 1) % THEMES.len();
+                let (name, head, paper) = THEMES[self.theme];
+                // 見出しの段落の字に色を当てる(段落ごとの範囲で塗る)
+                let mut at = 0usize;
+                let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+                for p in self.doc.paragraphs() {
+                    let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+                    if matches!(p.style, kumihan::ParaStyle::Heading(_)) && len > 0 {
+                        ranges.push(at..at + len);
+                    }
+                    at += len + 1;
+                }
+                let n = ranges.len();
+                for r in ranges {
+                    let c = head.to_string();
+                    self.doc.apply_char_format(r, move |f| {
+                        f.color = (c != "1B1B1B").then(|| c.clone())
+                    });
+                }
+                self.doc.page_color = paper.map(str::to_string);
+                self.dirty = true;
+                self.relayout_keep();
+                self.status = format!(
+                    "配色「{name}」にしました(見出し {n} 箇所と紙の色。\
+                     Ctrl+Z で1手で戻せます)"
+                )
+                .into();
+            }
             // 表示(本家の表示タブ)。見え方だけを変える — 文書は変わらない
             "nav" => {
                 self.nav_open = !self.nav_open;
@@ -4364,6 +4443,19 @@ impl Writer {
                     "ナビゲーション: 見出しを押すとそこへ飛びます".into()
                 } else {
                     "".into()
+                };
+            }
+            "multipage" => {
+                if self.doc.vertical {
+                    self.status = "縦書きでは見開きにしません(初版の約束)".into();
+                    return;
+                }
+                self.multipage = !self.multipage;
+                self.relayout();
+                self.status = if self.multipage {
+                    "見開き(2ページ並べ)にしました。印刷は1ページずつです".into()
+                } else {
+                    "1ページずつの表示に戻しました".into()
                 };
             }
             "fit-page" => self.fit_zoom(false),
@@ -5637,7 +5729,7 @@ impl Render for Writer {
         };
         let mut paper = div().absolute()
             .left(px(28.0)).top(px(14.0 - self.scroll_mm * pxmm))
-            .w(px(self.pg.w_mm * pxmm)).h(px(self.content_mm() * pxmm))
+            .w(px(self.paper_w_mm() * pxmm)).h(px(self.content_mm() * pxmm))
             .bg(paper_bg).shadow_lg();
 
         // ルーラー(10mm ごとの目盛り。余白の位置が分かる)

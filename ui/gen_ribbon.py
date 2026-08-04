@@ -78,6 +78,7 @@ READY = {
         "copy": "copy", "cut": "cut", "paste": "paste",
         "align-left": "align-left", "align-right": "align-right",
         "align-dist": "align-dist", "ruby": "ruby", "direction": "direction",
+        "colorschemas": "colorschemas", "multipage": "multipage",
         "controls": "controls", "form-text": "form-text",
         "form-combo": "form-combo", "form-dropdown": "form-dropdown",
         "form-checkbox": "form-checkbox", "form-radio": "form-radio",

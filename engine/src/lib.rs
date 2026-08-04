@@ -1627,6 +1627,58 @@ pub fn fold_vertical(sheet: &mut Sheet, pg: &PageSetup, y0_mm: f32, line_mm: f32
     sheet.breaks = (1..=max_page).map(|k| k as f32 * pg.h_mm).collect();
 }
 
+/// 複数ページ(見開き)。巻物のページを横 n 枚ずつ並べる(画面だけの
+/// 見え方 — 紙は1ページずつのまま)。offsets は paginate が出したページの
+/// 頭(巻物の y)。gap はページの間の空き mm。
+/// **座標を変えるだけ**なので、描く側も当たり判定も無変更で効く
+pub fn fold_pages(sheet: &mut Sheet, pg: &PageSetup, offsets: &[f32], n: usize, gap: f32) {
+    if n <= 1 || offsets.len() <= 1 {
+        return;
+    }
+    let step = pg.w_mm + gap;
+    // 巻物の y → (ページ番号, ページ内の y)
+    let page_of = |y: f32| -> (usize, f32) {
+        let mut k = 0usize;
+        for (i, o) in offsets.iter().enumerate() {
+            if y >= *o - 0.01 {
+                k = i;
+            }
+        }
+        (k, y - offsets[k])
+    };
+    let shift = |y: f32| -> (f32, f32) {
+        let (k, inner) = page_of(y);
+        // 横は列、縦は段(行送りの巻物ではなく物理ページの高さで積む)
+        ((k % n) as f32 * step, (k / n) as f32 * pg.h_mm + inner)
+    };
+    for line in &mut sheet.lines {
+        let (dx, ny) = shift(line.y_mm);
+        line.y_mm = ny;
+        for c in &mut line.cells {
+            c.x_mm += dx;
+        }
+    }
+    for r in &mut sheet.rules {
+        let (dx, ny) = shift(r[1]);
+        let h = r[3] - r[1];
+        r[0] += dx;
+        r[2] += dx;
+        r[1] = ny;
+        r[3] = ny + h;
+    }
+    for (_, b) in &mut sheet.images {
+        let (dx, ny) = shift(b[1]);
+        b[0] += dx;
+        b[1] = ny;
+    }
+    for cb in &mut sheet.cell_boxes {
+        let (dx, ny) = shift(cb.top_mm);
+        cb.x_mm += dx;
+        cb.top_mm = ny;
+    }
+    sheet.breaks.clear();
+}
+
 pub fn fold_columns(sheet: &mut Sheet, pg: &PageSetup, y0_mm: f32) {
     let n = pg.cols();
     if n <= 1 {
