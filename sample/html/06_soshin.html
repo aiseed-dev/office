@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>06 送信</title></head>
+<body>
+
+<h1>受入 06: POST の往復(段階③)</h1>
+
+<p>先に見本サーバーを立てておく:
+<b>python3 sample/catalog_server.py</b>(127.0.0.1:8765)。</p>
+
+<p>下の注文を「注文を送る」で送ると、サーバーが
+<b>「受け付けました(受付番号 N・明細 2 行)」</b>の頁を返す。
+その頁が文書として読めれば合格。番号は送るたびに増える。</p>
+
+<form method="post" action="http://127.0.0.1:8765/order">
+
+<p>社名: <input name="company" size="30" value="例示工務店">
+担当: <input name="person" size="12" value="見本太郎"></p>
+
+<table>
+<tr><th>品番</th><th>数量</th></tr>
+<tr><td><input name="c1" size="8" value="A-101"></td>
+    <td><input name="q1" size="6" value="10"></td></tr>
+<tr><td><input name="c2" size="8" value="B-201"></td>
+    <td><input name="q2" size="6" value="5"></td></tr>
+</table>
+
+<p><input type="submit" value="注文を送る"></p>
+
+</form>
+
+<p>おまけの試験: 品番を「Z-999」に書き換えて送ると、サーバーは
+その行を受けず「読めなかった行は受けていません」と言う —
+それも文書として読めること。</p>
+
+</body>
+</html>

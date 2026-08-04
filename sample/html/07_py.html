@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>07 ページの Python</title></head>
+<body>
+
+<h1>受入 07: ページの Python(段階④)</h1>
+
+<p>この頁には Python が載っている。合格の条件は<b>順番が大事</b>:</p>
+
+<ol>
+<li><b>開いただけでは何も実行されない</b>(金額と合計は空のまま。
+    帳簿に「ページの Python×1(明示の操作で実行)」の類が出る)</li>
+<li>数量を書き換えてから<b>明示の操作</b>(実行の釦なり板なり)で回すと、
+    bubblewrap の檻の中で計算され、金額と合計が埋まる</li>
+<li>檻の無い機械では実行を断る(そう言う)</li>
+</ol>
+
+<form method="post" action="http://127.0.0.1:8765/order">
+
+<table>
+<tr><th>品名</th><th>単価</th><th>数量</th><th>金額</th></tr>
+<tr><td>ボールペン(黒)</td><td>160円</td>
+    <td><input name="数量1" size="6" value="10"></td>
+    <td><input name="金額1" size="10"></td></tr>
+<tr><td>コピー用紙A4</td><td>550円</td>
+    <td><input name="数量2" size="6" value="2"></td>
+    <td><input name="金額2" size="10"></td></tr>
+<tr><td>合計</td><td></td><td></td>
+    <td><input name="合計" size="10"></td></tr>
+</table>
+
+</form>
+
+<script type="py">
+# ページの Python。form = 記入欄の名前→値の辞書。
+# 書き戻しの作法(form への代入で紙面に戻る)は実装時に確定 — ここは仮置き。
+tanka = {"1": 160, "2": 550}
+total = 0
+for n, price in tanka.items():
+    qty = int(form.get(f"数量{n}") or 0)
+    form[f"金額{n}"] = qty * price
+    total += qty * price
+form["合計"] = total
+</script>
+
+<p>初期値(数量 10 と 2)のままなら、金額は 1600 と 1100、
+合計は 2700 になるはず。</p>
+
+</body>
+</html>

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>05 記入欄</title></head>
+<body>
+
+<h1>受入 05: form の表示と記入(段階②)</h1>
+
+<p>この頁は<b>送らない</b>。記入欄が紙の上の枠として見え、
+中に日本語が書ける(IME・undo が効く)ことまでが合格。
+送信の試験は 06 で行う。</p>
+
+<form method="get" action="/dummy">
+
+<h2>1行の記入欄(input)</h2>
+
+<p>社名: <input name="company" size="30" placeholder="例示工務店"></p>
+
+<p>担当(初期値入り — 「見本太郎」が最初から入っていること):
+<input name="person" size="12" value="見本太郎"></p>
+
+<h2>送る釦(submit)</h2>
+
+<p>釦は「見本を送る」の名札で見えること。この頁では押しても
+どこへも飛ばなくてよい(行き先はダミー):
+<input type="submit" value="見本を送る"></p>
+
+</form>
+
+<p>form のあとの段落。枠の外に戻っていること。</p>
+
+</body>
+</html>

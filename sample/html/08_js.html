@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><title>08 JS の読み飛ばし</title>
+<script>
+/* この JS は実行されないこと。alert が出たら不合格 */
+alert("実行されてはいけない");
+</script>
+</head>
+<body>
+
+<h1>受入 08: JS は実行しない・読み飛ばす</h1>
+
+<p>この頁には script が2つ載っている(head に1つ、この下に1つ)。
+合格の条件:</p>
+
+<ul>
+<li>警告の小窓も、書き換えられた文章も<b>出ない</b>(実行しない)</li>
+<li>script の中身のコードが<b>本文に混ざって見えない</b>(読み飛ばす)</li>
+<li>帳簿に「script×2」の類が出る(黙って落とさない)</li>
+</ul>
+
+<script>
+document.body.innerHTML = "<p>この文章が見えたら不合格</p>";
+</script>
+
+<p>script のあとの段落。<b>この行が最後の文章として読めれば合格</b> —
+上の script の中身(document.〜)が紙面に出ていないこと。</p>
+
+</body>
+</html>

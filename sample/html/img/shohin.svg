@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">
+  <rect width="160" height="120" fill="#f6f8fa"/>
+  <rect x="40" y="52" width="80" height="10" rx="5" fill="#2e5fa3"/>
+  <polygon points="120,52 138,57 120,62" fill="#2e5fa3"/>
+  <text x="80" y="106" text-anchor="middle" font-size="12"
+        fill="#333" font-family="sans-serif">ボールペン(青)</text>
+</svg>

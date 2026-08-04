@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>02 表と癒し</title></head>
+<body>
+
+<h1>受入 02: 表(th/td)と閉じ忘れの癒し</h1>
+
+<p>下に同じ中身の表が2つある。1つ目は正しい HTML、2つ目は
+td と tr の閉じを省いた HTML(実物の Web によくある形)。
+<b>2つが同じ 3×3 の表に見えれば合格</b> — p/li/tr/td の自動閉じの試験。</p>
+
+<h2>正しい書き方の表</h2>
+
+<table>
+<tr><th>品番</th><th>品名</th><th>単価</th></tr>
+<tr><td>A-101</td><td>ボールペン(黒)</td><td>160円</td></tr>
+<tr><td>B-201</td><td>コピー用紙A4</td><td>550円</td></tr>
+</table>
+
+<h2>閉じを省いた表(td・tr を閉じない)</h2>
+
+<table>
+<tr><th>品番<th>品名<th>単価
+<tr><td>A-101<td>ボールペン(黒)<td>160円
+<tr><td>B-201<td>コピー用紙A4<td>550円
+</table>
+
+<p>表のあとの段落。表に飲み込まれず、普通の段落として見えること。</p>
+
+</body>
+</html>
