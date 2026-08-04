@@ -7672,7 +7672,58 @@ impl Render for Calc {
                         div().absolute()
                             .left(px(0.0)).bottom(px(-GRIP)).w_full().h(px(GRIP * 2.0))
                             .cursor_row_resize()
-                    })));
+                    }))
+                    // グループ化の +/-(アウトラインの縁)。直前で終わる
+                    // かたまりの頭金の行に置く(Excel の「集計行が下」の形)
+                    .children({
+                        let sh = self.sheet();
+                        r.checked_sub(1).and_then(|pr| {
+                            let lv = *sh.row_outline.get(&pr).unwrap_or(&0);
+                            // かたまりが r の直前で**終わっている**ときだけ
+                            // (続きの行に印を出さない)
+                            if lv == 0 || *sh.row_outline.get(&r).unwrap_or(&0) >= lv {
+                                return None;
+                            }
+                            let mut start = pr;
+                            while start > 0
+                                && *sh.row_outline.get(&(start - 1)).unwrap_or(&0) >= lv
+                            {
+                                start -= 1;
+                            }
+                            let hidden = sh.row_hidden.contains(&pr);
+                            Some(div()
+                                .id(SharedString::from(format!("gut{r}")))
+                                .absolute().left(px(1.0)).top(px((rh - 11.0) / 2.0))
+                                .w(px(11.0)).h(px(11.0)).rounded_sm()
+                                .border_1().border_color(rgb(0x8FA3AE))
+                                .bg(gpui::white())
+                                .flex().items_center().justify_center()
+                                .text_size(px(9.0)).text_color(rgb(0x1B6E3C))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(rgb(0xEAF5EE)))
+                                .child(if hidden { "+" } else { "−" })
+                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.checkpoint();
+                                    for i in start..=pr {
+                                        if hidden {
+                                            this.sheet_mut().row_hidden.remove(&i);
+                                        } else {
+                                            this.sheet_mut().row_hidden.insert(i);
+                                        }
+                                    }
+                                    this.dirty = true;
+                                    this.status = if hidden {
+                                        "詳細を表示しました(+/− でいつでも)".into()
+                                    } else {
+                                        "詳細を畳みました(+ で開きます)".into()
+                                    };
+                                    cx.notify()
+                                })))
+                        })
+                    }));
             for c in self.visible_cols() {
                 let p = Pos::new(r, c);
                 let cell = self.sheet().get(p);
