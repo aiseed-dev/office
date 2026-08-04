@@ -127,6 +127,25 @@ impl SdtKind {
             _ => None,
         }
     }
+
+    /// docx の tag から(種類, 名前)を解く。「jo:email」は種類だけ
+    /// (名前は印のまま)、「jo:email:連絡先」は種類+名前 —
+    /// 「名前」釦で付けた名とうちだけの種類の印を、一つの w:tag で両立させる形
+    pub fn split_tag(tag: &str) -> Option<(SdtKind, String)> {
+        use SdtKind as K;
+        for k in [K::Email, K::Phone, K::Complex, K::Signature] {
+            let m = k.as_tag();
+            if tag == m {
+                return Some((k, tag.to_string()));
+            }
+            if let Some(rest) = tag.strip_prefix(m).and_then(|r| r.strip_prefix(':')) {
+                if !rest.is_empty() {
+                    return Some((k, rest.to_string()));
+                }
+            }
+        }
+        None
+    }
 }
 
 impl CharFormat {

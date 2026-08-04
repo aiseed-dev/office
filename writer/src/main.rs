@@ -238,7 +238,11 @@ def _sdts(name):
     for sdt in d.element.iter(qn('w:sdt')):
         pr = sdt.find(qn('w:sdtPr'))
         tag = pr.find(qn('w:tag')) if pr is not None else None
-        if tag is not None and tag.get(qn('w:val')) == name:
+        if tag is None:
+            continue
+        t = tag.get(qn('w:val')) or ''
+        # 「jo:email:連絡先」= writer 独自の種類の印+名前。名前でも引ける
+        if t == name or (t.startswith('jo:') and t.split(':', 2)[-1] == name):
             es.append(sdt)
     return es
 def _put(sdt, value):
@@ -8659,6 +8663,112 @@ mod menu_run_tests {
                 assert!(kinds.contains(&want), "「{id}」で {want:?} が入らない: {kinds:?}");
             });
         }
+    }
+
+    /// マクロの fill(名前, 値) が名前つき記入欄に本当に書く。
+    /// 檻の外で同じ台本を回す(bwrap の無い試験環境でも通る)。
+    /// python-docx が無い環境では黙って飛ばす
+    #[test]
+    fn マクロのfillが名前の記入欄に書く() {
+        let py = if std::path::Path::new("../.venv/bin/python").exists() {
+            std::path::PathBuf::from("../.venv/bin/python")
+        } else {
+            find_python()
+        };
+        let ok = std::process::Command::new(&py)
+            .args(["-c", "import docx"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("python-docx が無いので飛ばす");
+            return;
+        }
+        // 名前「氏名」の記入欄(8..17)と、独自種類メールに名前「連絡先」を
+        // 付けた欄(26..35。w:tag は jo:email:連絡先 に合成される)を持つ docx
+        let mut doc = Document::plain("氏名: 未記入\n宛先: 未記入", SIZE_PT);
+        doc.apply_char_format(8..17, |f| {
+            f.sdt = Some(Box::new(kumihan::Sdt {
+                kind: kumihan::SdtKind::Text,
+                alias: "氏名".into(),
+                tag: "氏名".into(),
+                items: Vec::new(),
+            }))
+        });
+        doc.apply_char_format(26..35, |f| {
+            f.sdt = Some(Box::new(kumihan::Sdt {
+                kind: kumihan::SdtKind::Email,
+                alias: "連絡先".into(),
+                tag: "連絡先".into(),
+                items: Vec::new(),
+            }))
+        });
+        let dir =
+            std::env::temp_dir().join(format!("jo-fill-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let (in_d, out_d) = (dir.join("in.docx"), dir.join("out.docx"));
+        let f = std::fs::File::create(&in_d).unwrap();
+        ooxml::write_with(&doc, None::<std::io::Cursor<Vec<u8>>>, std::io::BufWriter::new(f))
+            .unwrap();
+        let py_path = dir.join("run.py");
+        let script = macro_script(
+            &in_d,
+            &out_d,
+            "fill(\"氏名\", \"山田太郎\")\nfill(\"連絡先\", \"y@example.jp\")",
+        );
+        std::fs::write(&py_path, script).unwrap();
+        let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let (doc2, _) =
+            ooxml::read(std::io::Cursor::new(std::fs::read(&out_d).unwrap())).unwrap();
+        let body: String = doc2
+            .paragraphs()
+            .flat_map(|p| &p.runs)
+            .map(|r| r.text.as_str())
+            .collect();
+        assert!(body.contains("山田太郎"), "記入されていない: {body}");
+        assert!(body.contains("y@example.jp"), "合成 tag の欄に書けない: {body}");
+        // 記入しても欄(w:tag)は生きている — もう一度 fill できる
+        let tags: Vec<_> = doc2
+            .paragraphs()
+            .flat_map(|p| &p.runs)
+            .filter_map(|r| r.fmt.sdt.as_ref().map(|s| s.tag.clone()))
+            .collect();
+        assert!(tags.contains(&"氏名".to_string()), "欄が消えた: {tags:?}");
+        // 無い名前は黙って空振りせず、ことばで断る
+        let script = macro_script(&in_d, &out_d, "fill(\"住所\", \"x\")");
+        std::fs::write(&py_path, script).unwrap();
+        let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
+        assert!(!o.status.success(), "無い名前で通ってしまう");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains("住所"), "断りに名前が出ない: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 「名前」釦で記入欄に名前が付く(docx の w:tag。マクロの fill の鍵)
+    #[gpui::test]
+    fn 記入欄に名前を付けられる(cx: &mut gpui::TestAppContext) {
+        let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
+        w.update(cx, |this, cx| {
+            this.set_doc(Document::plain("", SIZE_PT));
+            this.run_cmd("form-text", cx); // 欄が入りカーソルは欄の直後
+            this.run_cmd("form-name", cx); // 名前の板が開く
+            assert!(this.sd_open && this.sd_naming, "名前の板が開かない");
+            this.sd_ed = Editor::new("氏名");
+            this.sd_commit();
+            let tags: Vec<_> = this
+                .doc
+                .paragraphs()
+                .flat_map(|p| &p.runs)
+                .filter_map(|r| r.fmt.sdt.as_ref().map(|s| s.tag.clone()))
+                .collect();
+            assert!(tags.contains(&"氏名".to_string()), "名前が付かない: {tags:?}");
+            // 欄の外で押すと板は開かず、ことばで断る
+            this.set_doc(Document::plain("ただの字", SIZE_PT));
+            this.ed.move_to(0, false);
+            this.run_cmd("form-name", cx);
+            assert!(!this.sd_open, "欄が無いのに板が開く");
+        });
     }
 }
 

@@ -813,10 +813,14 @@ fn sdt_pr_elem(
         b"tag" => {
             if let Some(v) = attr(e, "val") {
                 let s = sd.get_or_insert_with(Default::default);
-                if let Some(k) = K::from_tag(&v) {
+                // 「jo:email:連絡先」= うちだけの種類の印+名前(名前釦)。
+                // 解いてモデルの tag には名前だけを持つ(書く側が組み直す)
+                if let Some((k, name)) = K::split_tag(&v) {
                     s.kind = k;
+                    s.tag = name;
+                } else {
+                    s.tag = v;
                 }
-                s.tag = v;
             }
         }
         b"comboBox" => sd.get_or_insert_with(Default::default).kind = K::Combo,
@@ -1744,9 +1748,18 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
                 if !sd.alias.is_empty() {
                     pr.push_str(&format!(r#"<w:alias w:val="{}"/>"#, esc(&sd.alias)));
                 }
-                let tag = if sd.tag.is_empty() { sd.kind.as_tag() } else { &sd.tag };
+                // うちだけの種類は印(jo:*)が要る。名前も付いていたら
+                // 「jo:email:連絡先」に合成する(読む側の split_tag と対)
+                let marker = sd.kind.as_tag();
+                let tag = if sd.tag.is_empty() || sd.tag == marker {
+                    marker.to_string()
+                } else if marker.is_empty() {
+                    sd.tag.clone()
+                } else {
+                    format!("{marker}:{}", sd.tag)
+                };
                 if !tag.is_empty() {
-                    pr.push_str(&format!(r#"<w:tag w:val="{}"/>"#, esc(tag)));
+                    pr.push_str(&format!(r#"<w:tag w:val="{}"/>"#, esc(&tag)));
                 }
                 match sd.kind {
                     K::Combo | K::Dropdown => {
@@ -3288,6 +3301,41 @@ mod sdt_round_tests {
         assert_eq!(sd.alias, "氏名");
         assert_eq!(sd.kind, SdtKind::Text);
         assert_eq!(r.text, "山田 太郎", "欄の中身が違う: {}", r.text);
+    }
+
+    #[test]
+    fn 独自の種類は名前を付けても種類ごと往復する() {
+        // うちだけの種類(jo:email)+「名前」釦の名は、
+        // w:tag「jo:email:連絡先」に合成して両立させる
+        let mut d = Document::plain("宛先: 未記入", 10.5);
+        d.apply_char_format(8..17, |f| {
+            f.sdt = Some(Box::new(Sdt {
+                kind: SdtKind::Email,
+                alias: "連絡先".into(),
+                tag: "連絡先".into(),
+                ..Default::default()
+            }))
+        });
+        let mut buf = Vec::new();
+        write(&d, Cursor::new(&mut buf)).unwrap();
+        let (back, _) = read(Cursor::new(&buf)).unwrap();
+        let p = back.paragraphs().next().unwrap();
+        let r = p.runs.iter().find(|r| r.fmt.sdt.is_some()).expect("欄が無い");
+        let sd = r.fmt.sdt.as_ref().unwrap();
+        assert_eq!(sd.kind, SdtKind::Email, "種類が落ちた(印が消えた?)");
+        assert_eq!(sd.tag, "連絡先", "名前が落ちた");
+        // 名前の無い独自種類は、昔どおり印だけ(既存の文書を壊さない)
+        let mut d2 = Document::plain("宛先: 未記入", 10.5);
+        d2.apply_char_format(8..17, |f| {
+            f.sdt = Some(Box::new(Sdt { kind: SdtKind::Email, ..Default::default() }))
+        });
+        let mut buf2 = Vec::new();
+        write(&d2, Cursor::new(&mut buf2)).unwrap();
+        let (back2, _) = read(Cursor::new(&buf2)).unwrap();
+        let p2 = back2.paragraphs().next().unwrap();
+        let r2 = p2.runs.iter().find(|r| r.fmt.sdt.is_some()).expect("欄が無い");
+        assert_eq!(r2.fmt.sdt.as_ref().unwrap().kind, SdtKind::Email);
+        assert_eq!(r2.fmt.sdt.as_ref().unwrap().tag, "jo:email");
     }
 
     #[test]
