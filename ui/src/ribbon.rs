@@ -118,6 +118,18 @@ pub const WRITER: &[Tab] = &[
         c("tof", "図表目次", "tof"),
         c("tof-update", "図表目次の更新", "tof-update"),
     ]},
+    Tab { name: "フォーム", cmds: &[
+        x("テキストフィールド", "form-text"),
+        x("コンボボックス", "form-combo"),
+        x("ドロップダウン", "form-dropdown"),
+        x("チェックボックス", "form-checkbox"),
+        x("ラジオボタン", "form-radio"),
+        x("画像", "form-image"),
+        x("メールアドレス", "form-email"),
+        x("電話番号", "form-phone"),
+        x("複合フィールド", "form-complex"),
+        x("署名", "form-signature"),
+    ]},
     Tab { name: "ヘッダー/フッター", cmds: &[
         c("edit-header", "ヘッダーの編集", "edit-header"),
         c("edit-footer", "フッターの編集", "edit-footer"),
@@ -277,6 +289,28 @@ pub const CALC: &[Tab] = &[
         x("詳細の非表示", "hide-details"),
         c("python", "Python", "python"),
     ]},
+    Tab { name: "ピボットテーブル", cmds: &[
+        x("ピボットテーブルを挿入", "pivot-insert"),
+        x("更新", "pivot-refresh"),
+        x("すべて更新", "pivot-refresh-all"),
+        x("選択する", "pivot-select"),
+        x("総計", "pivot-totals"),
+        x("小計", "pivot-subtotals"),
+        x("空行", "pivot-blank"),
+        x("レポートのレイアウト", "pivot-layout"),
+    ]},
+    Tab { name: "表のデザイン", cmds: &[
+        x("ヘッダー行", "td-header"),
+        x("合計行", "td-total"),
+        x("縞模様の行", "td-band-row"),
+        x("最初の列", "td-first"),
+        x("最後の列", "td-last"),
+        x("縞模様の列", "td-band-col"),
+        x("フィルタのボタン", "td-filter"),
+        c("rem-duplicates", "重複データを削除", "td-remdup"),
+        x("範囲に変換する", "td-torange"),
+        x("テーブルのサイズ変更", "td-resize"),
+    ]},
     Tab { name: "コラボレーション", cmds: &[
         x("共同編集モード", "coauth-mode"),
         c("addcomment", "コメントを追加", "co-addcomment"),
@@ -324,6 +358,12 @@ mod tests {
                     "タブが無い: {want}"
                 );
             }
+        }
+        for want in ["フォーム"] {
+            assert!(WRITER.iter().any(|t| t.name == want), "writer にタブが無い: {want}");
+        }
+        for want in ["ピボットテーブル", "表のデザイン"] {
+            assert!(CALC.iter().any(|t| t.name == want), "calc にタブが無い: {want}");
         }
     }
 

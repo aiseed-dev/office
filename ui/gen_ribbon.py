@@ -113,6 +113,7 @@ READY = {
         "goal-seek": "goal-seek", "data-external-links": "data-external-links",
         "insshape": "insshape", "instext": "instext",
         "inssparkline": "inssparkline", "co-addcomment": "addcomment",
+        "td-remdup": "rem-duplicates",
         "trace-prec": "trace-prec", "trace-dep": "trace-dep",
         "remove-arrows": "remove-arrows", "insrecommend": "insrecommend",
         "instable": "instable", "table-tpl": "table-tpl",
@@ -261,6 +262,34 @@ def label_of(app_loc, prefix, slot):
 # 除外(共同編集・保護・プラグイン)はそもそも入れない。
 # 全部入れる(発注者確定 2026-08-04): 共同編集・保護・プラグインも
 # 場所は本家どおり。実装しないものは灰色のまま(ready の嘘は無し)
+# アプリ固有の追加タブ(本家の位置に挿す)。(タブ名, 直前に置くタブ名, cmds)
+APP_TABS = {
+    "documenteditor": [
+        ("フォーム", "参考資料", [
+            ("form-text", "テキストフィールド"), ("form-combo", "コンボボックス"),
+            ("form-dropdown", "ドロップダウン"), ("form-checkbox", "チェックボックス"),
+            ("form-radio", "ラジオボタン"), ("form-image", "画像"),
+            ("form-email", "メールアドレス"), ("form-phone", "電話番号"),
+            ("form-complex", "複合フィールド"), ("form-signature", "署名"),
+        ]),
+    ],
+    "spreadsheeteditor": [
+        ("ピボットテーブル", "データ", [
+            ("pivot-insert", "ピボットテーブルを挿入"), ("pivot-refresh", "更新"),
+            ("pivot-refresh-all", "すべて更新"), ("pivot-select", "選択する"),
+            ("pivot-totals", "総計"), ("pivot-subtotals", "小計"),
+            ("pivot-blank", "空行"), ("pivot-layout", "レポートのレイアウト"),
+        ]),
+        ("表のデザイン", "ピボットテーブル", [
+            ("td-header", "ヘッダー行"), ("td-total", "合計行"),
+            ("td-band-row", "縞模様の行"), ("td-first", "最初の列"),
+            ("td-last", "最後の列"), ("td-band-col", "縞模様の列"),
+            ("td-filter", "フィルタのボタン"), ("td-remdup", "重複データを削除"),
+            ("td-torange", "範囲に変換する"), ("td-resize", "テーブルのサイズ変更"),
+        ]),
+    ],
+}
+
 COMMON_TAIL = {
     "collaboration": [
         ("coauth-mode", "共同編集モード"), ("co-addcomment", "コメントを追加"),
@@ -352,6 +381,13 @@ def tabs_of(app, prefix):
             out.append(entry)
         else:
             out.insert(at, entry)
+    # アプリ固有のタブ(本家の位置: 指定タブの直後)
+    for (name, after, cmds) in APP_TABS.get(app, []):
+        entry = (name, [c for c, _ in cmds])
+        for c, label in cmds:
+            DYN_LABELS[c] = label
+        at = next((i + 1 for i, (n, _) in enumerate(out) if n == after), len(out))
+        out.insert(at, entry)
     # 全部入れる: 共同編集・保護は表示の前、プラグインは末尾(本家の並び)
     for key, cmds in [
         ("collaboration", COMMON_TAIL["collaboration"]),
@@ -472,6 +508,12 @@ mod tests {
                     "タブが無い: {want}"
                 );
             }
+        }
+        for want in ["フォーム"] {
+            assert!(WRITER.iter().any(|t| t.name == want), "writer にタブが無い: {want}");
+        }
+        for want in ["ピボットテーブル", "表のデザイン"] {
+            assert!(CALC.iter().any(|t| t.name == want), "calc にタブが無い: {want}");
         }
     }
 
