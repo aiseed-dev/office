@@ -248,6 +248,13 @@ sample/catalog_server.py の catalog.html / order.html が各段階の受入試�
 「文書として組んで見せ、form を書けるようにし、POST する」こと
 (SEKKEI の同名の節。ブラウザ化の坂には登らない、も同節)。
 sdkjs のタグ対応表は部分的な参考にはなるが、目的が違うことを忘れない。
+**追補(発注者確定 2026-08-04): Pyodide / PyScript もやる**(SEKKEI の
+改訂を参照 — 手元の動きが無いと受け入れられない)。writer 側への含意:
+段階④として、ページに載った Python(`<script type="py">` 等)を
+**明示の操作で** bubblewrap の檻で回す(Python in Calc と同じ作法・
+同じ実装が使える — calc/src/main.rs の run_python_inner 一族)。
+開く=実行なしは不変。JS の script は今までどおり読み飛ばして帳簿へ。
+ブラウザ向けの WASM ランタイムはサーバー同梱の話で、writer には関係ない。
 
 残る灰色3と、実装して分かった見立て:
 - **コンテンツコントロール(sdt)** — 入力部品の設計から。いまは中の
