@@ -75,6 +75,8 @@ READY = {
         "co-addcomment": "co-addcomment", "co-delcomment": "co-delcomment",
         "co-showcomment": "co-showcomment",
         "coauth-mode": "coauth-mode", "prot-doc": "prot-doc",
+        "copy": "copy", "cut": "cut", "paste": "paste",
+        "align-left": "align-left", "align-right": "align-right",
         "co-chat": "co-chat", "co-history": "co-history",
         "plug-macros": "plug-macros", "plug-manage": "plug-manage",
         "prot-encrypt": "prot-encrypt", "prot-sign": "prot-sign",
@@ -381,6 +383,21 @@ def tabs_of(app, prefix):
         # 目次も class 注入。Euro-Office では参考資料の先頭にある
         if tab == "links" and app == "documenteditor" and "contents" not in slots:
             slots.insert(0, "contents")
+        # ホームはデスクトップ版の並び(2026-08-04 発注者)。
+        # クリップボードと左右揃えも本家どおり出す
+        if tab == "home" and app == "documenteditor":
+            slots = ["copy", "cut", "paste", "fontname", "fontsize", "incfont",
+                     "decfont", "changecase", "bold", "italic", "underline",
+                     "strikeout", "superscript", "subscript", "highlight",
+                     "fontcolor", "clearstyle", "markers", "numbering",
+                     "multilevels", "decoffset", "incoffset", "linespace",
+                     "direction", "align-left", "align-center", "align-right",
+                     "align-just", "hidenchars", "paracolor", "borders",
+                     "styles", "replace", "select-all"]
+            for c, l in [("copy", "コピー"), ("cut", "切り取り"),
+                         ("paste", "貼り付け"), ("align-left", "左揃え"),
+                         ("align-right", "右揃え")]:
+                DYN_LABELS[c] = l
         # ヘッダー・フッター類はタブを畳んで挿入タブへ(デスクトップ版の場所)
         if tab == "ins" and app == "documenteditor":
             at = slots.index("insequation") if "insequation" in slots else len(slots)

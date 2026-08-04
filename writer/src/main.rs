@@ -460,6 +460,8 @@ struct Writer {
     hist_open: bool,
     /// プラグインの板(置き場の .py 一覧)
     plug_open: bool,
+    /// リボンの絵釦に乗ったときの説明(下のステータスバーに出す)
+    hover_hint: Option<&'static str>,
     /// 暗号化のパスワード。Some なら保存で ECMA-376 Standard に包む
     encrypt_pw: Option<String>,
     /// パスワードの板。pw_pending が Some なら「開くために聞いている」
@@ -677,6 +679,7 @@ impl Writer {
             bm_ed: Editor::new(""),
             hist_open: false,
             plug_open: false,
+            hover_hint: None,
             encrypt_pw: None,
             pw_open: false,
             pw_ed: Editor::new(""),
@@ -2598,6 +2601,7 @@ impl Writer {
         "crossref", "co-addcomment", "co-delcomment", "co-showcomment",
         "prot-doc", "coauth-mode", "co-history", "co-chat",
         "plug-macros", "plug-manage", "prot-encrypt", "prot-sign",
+        "copy", "cut", "paste",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2732,7 +2736,7 @@ impl Writer {
             "open", "save", "pdf", "zoom-in", "zoom-out", "ruler", "darkmode",
             "line-numbers", "hidenchars", "selectall", "spell", "wordcount",
             "co-showcomment", "replace", "prot-doc", "coauth-mode",
-            "co-history", "co-chat", "prot-encrypt", "prot-sign",
+            "co-history", "co-chat", "prot-encrypt", "prot-sign", "copy",
         ];
         if self.protected() && !READONLY_OK.contains(&id) {
             self.status =
@@ -3506,6 +3510,27 @@ impl Writer {
                     Err(e) => self.status = format!("署名できません: {e}").into(),
                 }
             }
+            // クリップボード(リボンから。Ctrl+C/X/V と同じ実体)
+            "copy" | "cut" => {
+                let e = self.editor_ref();
+                let sel = e.selection();
+                if sel.is_empty() {
+                    self.status = "選択がありません".into();
+                } else if let Some(t) = e.text().get(sel).map(str::to_string) {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(t));
+                    if id == "cut" {
+                        self.editor().insert("");
+                        self.on_edited();
+                        self.status = "切り取りました".into();
+                    } else {
+                        self.status = "コピーしました".into();
+                    }
+                }
+            }
+            "paste" => match cx.read_from_clipboard().and_then(|i| i.text()) {
+                Some(text) if !text.is_empty() => handler::replace(self, None, &text),
+                _ => self.status = "貼り付けるものがありません".into(),
+            },
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -4098,43 +4123,165 @@ impl Render for Writer {
                     cx.notify()
                 })));
 
-        let mut cmds = div().flex().flex_row().flex_wrap().gap_1().items_center()
-            .px_3().py_2().bg(th_cmd_bg)
+        let mut cmds = div().flex().flex_col().gap_0p5()
+            .px_3().py_1().bg(th_cmd_bg)
             .border_b_1().border_color(th_cmd_border);
-        for cmd in ribbon::WRITER[self.tab].cmds {
-            if cmd.ready {
-                let id = cmd.id;
-                cmds = cmds.child(div()
-                    .id(SharedString::from(cmd.id))
-                    .px_3().py_1().rounded_md()
-                    .border_1().border_color(th_btn).text_color(th_btn)
-                    .text_size(px(12.0)).cursor_pointer()
-                    .hover(move |s| s.bg(th_btn_hover))
-                    .flex().flex_row().items_center().gap_1()
-                    .children(ui::icons::find(cmd.icon).map(|_| {
-                        gpui::svg()
-                            .path(SharedString::from(format!("icons/{}.svg", cmd.icon)))
-                            .size(px(15.0))
-                            .text_color(th_btn)
-                    }))
-                    .child(cmd.label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run_cmd(id, cx); cx.notify()
-                    })));
+        if ribbon::WRITER[self.tab].name == "ホーム" {
+            // ホームは本家の形: 2段・絵だけの釦・群の区切り線。
+            // 釦の名前は乗ったときに下のステータスバーへ出す(hover_hint)
+            const ROW1: &[&str] = &[
+                "copy", "cut", "‖", "fontname", "fontsize", "incfont", "decfont",
+                "changecase", "‖", "markers", "numbering", "multilevels",
+                "decoffset", "incoffset", "linespace", "direction", "‖",
+                "parastyle",
+            ];
+            const ROW2: &[&str] = &[
+                "paste", "selectall", "‖", "bold", "italic", "underline",
+                "strikeout", "superscript", "subscript", "highlight", "fontcolor",
+                "clearstyle", "‖", "align-left", "align-center", "align-right",
+                "align-just", "hidenchars", "paracolor", "borders", "‖",
+                "replace",
+            ];
+            let size_now = self.doc.size_at(self.ed.selection()).unwrap_or(SIZE_PT);
+            let size_disp = if size_now.fract() == 0.0 {
+                format!("{}", size_now as i32)
             } else {
-                // 未実装。押せるように見せない
-                cmds = cmds.child(div().px_3().py_1().rounded_md()
-                    .border_1().border_color(th_gray_border)
-                    .text_color(th_gray_fg).text_size(px(12.0))
-                    .flex().flex_row().items_center().gap_1()
-                    .children(ui::icons::find(cmd.icon).map(|_| {
-                        gpui::svg()
-                            .path(SharedString::from(format!("icons/{}.svg", cmd.icon)))
-                            .size(px(15.0))
-                            .text_color(th_gray_fg)
-                    }))
-                    .child(cmd.label));
+                format!("{size_now}")
+            };
+            for ids in [ROW1, ROW2] {
+                let mut row = div().flex().flex_row().items_center().gap_0p5();
+                for id in ids {
+                    if *id == "‖" {
+                        row = row.child(div().w(px(1.0)).h(px(22.0))
+                            .bg(th_cmd_border).mx_1());
+                        continue;
+                    }
+                    // コンボ風(フォント名と大きさは今の値を見せる)
+                    if *id == "fontname" || *id == "fontsize" {
+                        let cid: &'static str =
+                            if *id == "fontname" { "fontname" } else { "fontsize" };
+                        let text = if cid == "fontname" {
+                            self.font_name.to_string()
+                        } else {
+                            size_disp.clone()
+                        };
+                        row = row.child(div()
+                            .id(SharedString::from(format!("h-{cid}")))
+                            .flex().flex_row().items_center().gap_1()
+                            .px_2().h(px(26.0))
+                            .w(px(if cid == "fontname" { 150.0 } else { 56.0 }))
+                            .rounded_sm().border_1().border_color(th_cmd_border)
+                            .text_size(px(12.0)).text_color(th_top_fg)
+                            .cursor_pointer()
+                            .hover(move |st| st.bg(th_btn_hover))
+                            .child(div().flex_1().whitespace_nowrap()
+                                .overflow_hidden().child(SharedString::from(text)))
+                            .child(div().text_size(px(9.0)).text_color(th_tab_idle)
+                                .child("▼"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.run_cmd(cid, cx);
+                                cx.notify()
+                            })));
+                        continue;
+                    }
+                    let Some(cmd) = ribbon::WRITER[self.tab]
+                        .cmds
+                        .iter()
+                        .find(|c| c.id == *id || (!c.ready && c.icon == *id))
+                        .copied()
+                    else {
+                        continue;
+                    };
+                    let label = cmd.label;
+                    let icon = cmd.icon;
+                    let hoverable = cx.listener(move |this: &mut Writer, on: &bool, _, cx| {
+                        if *on {
+                            this.hover_hint = Some(label);
+                        } else if this.hover_hint == Some(label) {
+                            this.hover_hint = None;
+                        }
+                        cx.notify()
+                    });
+                    let has_icon = ui::icons::find(icon).is_some();
+                    let mut b = div()
+                        .id(SharedString::from(format!("h-{icon}")))
+                        .h(px(26.0)).rounded_sm()
+                        .flex().items_center().justify_center()
+                        .on_hover(hoverable);
+                    b = if has_icon { b.w(px(26.0)) } else { b.px_1p5() };
+                    if cmd.ready {
+                        let cid = cmd.id;
+                        b = b.cursor_pointer()
+                            .hover(move |st| st.bg(th_btn_hover))
+                            .children(has_icon.then(|| {
+                                gpui::svg()
+                                    .path(SharedString::from(format!("icons/{icon}.svg")))
+                                    .size(px(18.0))
+                                    .text_color(th_top_fg)
+                            }))
+                            .children((!has_icon).then(|| {
+                                div().text_size(px(10.5)).text_color(th_btn)
+                                    .child(label)
+                            }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.run_cmd(cid, cx);
+                                cx.notify()
+                            }));
+                    } else {
+                        // 未実装。押せるように見せない
+                        b = b.children(has_icon.then(|| {
+                            gpui::svg()
+                                .path(SharedString::from(format!("icons/{icon}.svg")))
+                                .size(px(18.0))
+                                .text_color(th_gray_fg)
+                        }))
+                        .children((!has_icon).then(|| {
+                            div().text_size(px(10.5)).text_color(th_gray_fg)
+                                .child(label)
+                        }));
+                    }
+                    row = row.child(b);
+                }
+                cmds = cmds.child(row);
             }
+        } else {
+            let mut row = div().flex().flex_row().flex_wrap().gap_1().items_center().py_1();
+            for cmd in ribbon::WRITER[self.tab].cmds {
+                if cmd.ready {
+                    let id = cmd.id;
+                    row = row.child(div()
+                        .id(SharedString::from(cmd.id))
+                        .px_3().py_1().rounded_md()
+                        .border_1().border_color(th_btn).text_color(th_btn)
+                        .text_size(px(12.0)).cursor_pointer()
+                        .hover(move |s| s.bg(th_btn_hover))
+                        .flex().flex_row().items_center().gap_1()
+                        .children(ui::icons::find(cmd.icon).map(|_| {
+                            gpui::svg()
+                                .path(SharedString::from(format!("icons/{}.svg", cmd.icon)))
+                                .size(px(15.0))
+                                .text_color(th_btn)
+                        }))
+                        .child(cmd.label)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.run_cmd(id, cx); cx.notify()
+                        })));
+                } else {
+                    // 未実装。押せるように見せない
+                    row = row.child(div().px_3().py_1().rounded_md()
+                        .border_1().border_color(th_gray_border)
+                        .text_color(th_gray_fg).text_size(px(12.0))
+                        .flex().flex_row().items_center().gap_1()
+                        .children(ui::icons::find(cmd.icon).map(|_| {
+                            gpui::svg()
+                                .path(SharedString::from(format!("icons/{}.svg", cmd.icon)))
+                                .size(px(15.0))
+                                .text_color(th_gray_fg)
+                        }))
+                        .child(cmd.label));
+                }
+            }
+            cmds = cmds.child(row);
         }
         let bar = div().flex().flex_col().child(top).child(tabs).child(cmds);
 
@@ -4165,11 +4312,14 @@ impl Render for Writer {
             .child(SharedString::from(format!("{cur_page}/{total_pages} ページ")))
             .child(SharedString::from(format!("文字数 {nchars}")))
             .child(div().flex_1().whitespace_nowrap().overflow_hidden()
-                .child(SharedString::from(format!(
-                    "{}{}",
-                    if self.dirty { "● " } else { "" },
-                    self.status
-                ))))
+                .child(SharedString::from(match self.hover_hint {
+                    Some(h) => h.to_string(),
+                    None => format!(
+                        "{}{}",
+                        if self.dirty { "● " } else { "" },
+                        self.status
+                    ),
+                })))
             .child(sb_btn("sb-spell", "スペル").on_click(cx.listener(|this, _, _, cx| {
                 this.run_cmd("spell", cx);
                 cx.notify()

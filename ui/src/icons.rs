@@ -95,6 +95,18 @@ pub static ICONS: &[(&str, &[u8])] = &[
 ];
 
 /// slot id からアイコンの中身を引く。
+/// 自作のアイコン(Euro-Office に無い分を同じ流儀で描いた。
+/// extract_icons.py の再生成はこの表を消さないこと)
+pub static OWN_ICONS: &[(&str, &[u8])] = &[
+    ("markers", include_bytes!("../icons/markers.svg")),
+    ("align-left", include_bytes!("../icons/align-left.svg")),
+    ("align-right", include_bytes!("../icons/align-right.svg")),
+    ("hidenchars", include_bytes!("../icons/hidenchars.svg")),
+];
+
 pub fn find(id: &str) -> Option<&'static [u8]> {
-    ICONS.iter().find(|(k, _)| *k == id).map(|(_, v)| *v)
+    ICONS.iter()
+        .chain(OWN_ICONS.iter())
+        .find(|(k, _)| *k == id)
+        .map(|(_, v)| *v)
 }
