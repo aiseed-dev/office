@@ -466,6 +466,21 @@ cx.observe_window_bounds で動かす・伸ばすたびに書く — 閉じる�
 - **Wayland は位置の復元が効かない**(プロトコルが客に位置指定を許さない)。
   大きさは効く。控えが壊れることもない — そういうものとして受け入れる
 
+**pysheet: datetime の受け口(2026-08-05、Fable の指摘「帳票では日付セルへの
+datetime 代入が頻出」→ 発注者「まず、これをやるのがいい」)**:
+`s["A1"] = datetime.date(2026, 8, 5)` が Excel の通し番号になる
+(date / datetime / time の3種。datetime は date の子なので判定順に注意)。
+- 通し番号の規約は sheet::calc::date_serial に**一本化**(DATE 関数と pysheet が
+  同じ道を通る。別々に持つと必ずずれる)。test.py は =YEAR(G1) で規約の一致を検査
+- セルに表示形式が無いときだけ yyyy/m/d(時刻は h:mm)を付ける。
+  帳票の日付セルには元の形式が付いているので、それに従う(据え置きの原則)
+- pyo3 0.29 + abi3 の罠: PyDateAccess/PyTimeAccess は limited API では**存在しない**
+  → 属性(year/month/day…)の getattr で読む。downcast は cast に改名されている
+- 置けない型は TypeError で型名を言って断る(黙って str にしない)
+- 既知の残件: format_value が日付書式(yyyy 等)を描けないので、display() と
+  calc の画面では通し番号のまま見える。ファイルは正しいので Excel では日付で出る。
+  書式の描画対応は関数拡充(TEXT)と同じ土俵でやるのが良い
+
 小さい残件: 変換下線の位置の実機確認、表入りのヘッダー・フッターの編集。
 暗号化の Agile 方式(Word/Excel 2013+ の既定)を実装(2026-08-04、発注者
 「作れますか」→「やって」): ooxml/src/crypt.rs の後半。SHA-512 の鍵導出を

@@ -360,6 +360,12 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 /// Excel の日付の通し番号(1899-12-30 起点)と 1970 起点の橋。
 const EXCEL_EPOCH_DAYS: i64 = 25569;
 
+/// 暦の日付 → Excel の通し番号。DATE 関数と pysheet(datetime の受け口)が
+/// **同じ規約を通るための一本道** — 別々に持つと必ずずれる。
+pub fn date_serial(y: i64, m: i64, d: i64) -> i64 {
+    days_from_civil(y, m, d) + EXCEL_EPOCH_DAYS
+}
+
 /// いまの機械の暦での「今日」の通し番号と、時刻(日の割合)。
 /// 時計は系の TZ 環境(日本なら JST)に従う — libc の localtime を使う
 /// chrono に頼らず、TZ のずれは環境変数 JO_TZ_OFF_HOURS で補える(既定 +9)。
@@ -601,7 +607,7 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
         }
         "DATE" => {
             let g = |i: usize| a.get(i).map(|v| v.as_number() as i64).unwrap_or(0);
-            Value::Number((days_from_civil(g(0), g(1), g(2)) + EXCEL_EPOCH_DAYS) as f64)
+            Value::Number(date_serial(g(0), g(1), g(2)) as f64)
         }
         "YEAR" | "MONTH" | "DAY" => {
             let serial = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;

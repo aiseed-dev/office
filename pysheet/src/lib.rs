@@ -18,9 +18,11 @@
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use pyo3::exceptions::{PyIOError, PyIndexError, PyKeyError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyIndexError, PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyDate, PyDateTime, PyTime};
 
+use sheet::calc::date_serial;
 use sheet::model::format_value;
 use sheet::{recalc, xlsx, Cell, Pos, Value};
 
@@ -63,12 +65,26 @@ fn to_out(v: &Value) -> Option<Out> {
     }
 }
 
-/// Python から受ける値。bool を数より先に見る(Python の bool は int の子)。
-#[derive(FromPyObject)]
-enum In {
-    Bool(bool),
-    Num(f64),
-    Text(String),
+/// 数の入ったセル(書式は呼び側で付け直す)。
+fn num_cell(n: f64) -> Cell {
+    Cell { formula: None, value: Value::Number(n), fmt: Default::default() }
+}
+
+/// date/datetime の年月日 → Excel の通し番号(日の部分)。
+/// abi3 では C の accessor が使えないので、属性(year/month/day)で読む
+fn date_days(v: &Bound<'_, PyAny>) -> PyResult<i64> {
+    let g = |n: &str| -> PyResult<i64> { v.getattr(n)?.extract() };
+    Ok(date_serial(g("year")?, g("month")?, g("day")?))
+}
+
+/// time/datetime の時刻 → 日の割合(0.0〜)。
+fn time_frac(v: &Bound<'_, PyAny>) -> PyResult<f64> {
+    let g = |n: &str| -> PyResult<i64> { v.getattr(n)?.extract() };
+    Ok((g("hour")? as f64 * 3600.0
+        + g("minute")? as f64 * 60.0
+        + g("second")? as f64
+        + g("microsecond")? as f64 / 1e6)
+        / 86400.0)
 }
 
 /// xlsx のブック。
@@ -227,25 +243,51 @@ impl PySheet {
     /// セルに置く。**書式(罫線・結合・表示形式)は据え置き** — それが存在理由。
     ///
     /// - 数・bool はそのまま値になる
+    /// - `datetime.date` / `datetime.datetime` / `datetime.time` は Excel の
+    ///   通し番号(1899-12-30 起点。DATE 関数と同じ一本道)になる。
+    ///   セルに表示形式が無いときだけ日付の形式を付ける(数字の羅列で見せない)。
+    ///   帳票の日付セルには元の表示形式が付いているので、それに従う
     /// - 文字列は「calc で打ったのと同じ」解釈: `"=SUM(A1:A3)"` は式、
     ///   `"123"` は数、それ以外は文字
     /// - None は中身を消す(罫線だけのセルは枠として残る)
     ///
     /// 置いたらこのシートは再計算される。
-    fn __setitem__(&self, key: &str, value: Option<In>) -> PyResult<()> {
+    fn __setitem__(&self, key: &str, value: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         let p = parse_ref(key)?;
+        // (セルの中身, セルに表示形式が無いときに付ける形式)
+        let (cell, date_fmt): (Cell, Option<&str>) = match &value {
+            None => (Cell::default(), None),
+            // datetime は date の子なので、必ず datetime を先に見る
+            Some(v) => {
+                if v.cast::<PyDateTime>().is_ok() {
+                    (num_cell(date_days(v)? as f64 + time_frac(v)?), Some("yyyy/m/d h:mm"))
+                } else if v.cast::<PyDate>().is_ok() {
+                    (num_cell(date_days(v)? as f64), Some("yyyy/m/d"))
+                } else if v.cast::<PyTime>().is_ok() {
+                    (num_cell(time_frac(v)?), Some("h:mm"))
+                } else if let Ok(b) = v.extract::<bool>() {
+                    // bool を数より先に見る(Python の bool は int の子)
+                    (Cell { formula: None, value: Value::Bool(b), fmt: Default::default() }, None)
+                } else if let Ok(n) = v.extract::<f64>() {
+                    (num_cell(n), None)
+                } else if let Ok(t) = v.extract::<String>() {
+                    (Cell::input(&t), None)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "セルに置けるのは 数・bool・文字列・datetime/date/time・None。渡されたのは {}",
+                        v.get_type().name().map(|n| n.to_string()).unwrap_or_default()
+                    )));
+                }
+            }
+        };
         self.with(|s| {
-            let fmt = s.get(p).map(|c| c.fmt.clone()).unwrap_or_default();
-            let mut cell = match value {
-                None => Cell::default(),
-                Some(In::Bool(b)) => {
-                    Cell { formula: None, value: Value::Bool(b), fmt: Default::default() }
+            let mut fmt = s.get(p).map(|c| c.fmt.clone()).unwrap_or_default();
+            if fmt.number_format.is_none() {
+                if let Some(df) = date_fmt {
+                    fmt.number_format = Some(df.into());
                 }
-                Some(In::Num(n)) => {
-                    Cell { formula: None, value: Value::Number(n), fmt: Default::default() }
-                }
-                Some(In::Text(t)) => Cell::input(&t),
-            };
+            }
+            let mut cell = cell;
             cell.fmt = fmt;
             s.set(p, cell);
             recalc(s);

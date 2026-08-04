@@ -47,6 +47,27 @@ check(s["A1"] is None, "None で消えない")
 s["F1"] = "123"
 check(s["F1"] == 123, "数字だけの文字列が数にならない(calc で打ったのと違う)")
 
+# --- datetime は Excel の通し番号になる(帳票の日付セルの定番)----------------
+import datetime
+EPOCH = datetime.date(1899, 12, 30)   # Excel の通し番号の起点
+d = datetime.date(2026, 8, 5)
+s["G1"] = d
+check(s["G1"] == (d - EPOCH).days, f"date が通し番号にならない: {s['G1']}")
+s["G2"] = "=YEAR(G1)"
+s["G3"] = "=MONTH(G1)"
+check((s["G2"], s["G3"]) == (2026, 8),
+      f"通し番号が DATE 関数の規約とずれている: YEAR={s['G2']} MONTH={s['G3']}")
+s["G4"] = datetime.datetime(2026, 8, 5, 18, 0, 0)
+check(abs(s["G4"] - ((d - EPOCH).days + 0.75)) < 1e-9,
+      f"datetime の時刻が日の割合にならない: {s['G4']}")
+s["G5"] = datetime.time(6, 0)
+check(abs(s["G5"] - 0.25) < 1e-9, f"time が日の割合にならない: {s['G5']}")
+try:
+    s["G6"] = object()
+    check(False, "置けない型を黙って受けた")
+except TypeError:
+    pass
+
 # --- 行の出し入れで式の参照も動く(明細行を増やす操作)------------------------
 b3 = office_sheet.Book()
 t = b3[0]
