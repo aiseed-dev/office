@@ -153,7 +153,7 @@ pub const WRITER: &[Tab] = &[
     ]},
     Tab { name: "保護", cmds: &[
         c("prot-encrypt", "暗号化する", "prot-encrypt"),
-        x("デジタル署名を追加", "prot-sign"),
+        c("prot-sign", "デジタル署名を追加", "prot-sign"),
         c("prot-doc", "保護", "prot-doc"),
     ]},
     Tab { name: "表示", cmds: &[

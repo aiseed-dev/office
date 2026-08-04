@@ -230,6 +230,64 @@ fn plugins_dir() -> PathBuf {
         .join(".config/office/plugins")
 }
 
+/// 署名の鍵の置き場。~/.config/office/sign.key(秘密鍵の種 32 バイト)
+fn sign_key_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".config/office/sign.key")
+}
+
+/// 署名の鍵を読む。無ければ作る(/dev/urandom の種。0600 で置く)
+fn load_or_make_key() -> Result<ed25519_dalek::SigningKey, String> {
+    let kp = sign_key_path();
+    if let Ok(bytes) = std::fs::read(&kp) {
+        let seed: [u8; 32] = bytes
+            .get(..32)
+            .and_then(|b| b.try_into().ok())
+            .ok_or("鍵ファイルが壊れています(~/.config/office/sign.key)")?;
+        return Ok(ed25519_dalek::SigningKey::from_bytes(&seed));
+    }
+    let mut seed = [0u8; 32];
+    use std::io::Read as _;
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut seed))
+        .map_err(|e| format!("乱数が取れません: {e}"))?;
+    if let Some(dir) = kp.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&kp)
+        .and_then(|mut f| f.write_all(&seed))
+        .map_err(|e| format!("鍵が置けません: {e}"))?;
+    Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
+}
+
+fn to_hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok())
+        .collect()
+}
+
+/// 署名の添え書きの置き場。文書の隣の 名前.docx.sig
+fn sig_path_for(p: &std::path::Path) -> PathBuf {
+    let mut os = p.as_os_str().to_owned();
+    os.push(".sig");
+    PathBuf::from(os)
+}
+
 fn lock_identity() -> String {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -2539,7 +2597,7 @@ impl Writer {
         "pen", "highlighter", "eraser", "track-changes", "dropcap", "hyphenation",
         "crossref", "co-addcomment", "co-delcomment", "co-showcomment",
         "prot-doc", "coauth-mode", "co-history", "co-chat",
-        "plug-macros", "plug-manage", "prot-encrypt",
+        "plug-macros", "plug-manage", "prot-encrypt", "prot-sign",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2674,7 +2732,7 @@ impl Writer {
             "open", "save", "pdf", "zoom-in", "zoom-out", "ruler", "darkmode",
             "line-numbers", "hidenchars", "selectall", "spell", "wordcount",
             "co-showcomment", "replace", "prot-doc", "coauth-mode",
-            "co-history", "co-chat", "prot-encrypt",
+            "co-history", "co-chat", "prot-encrypt", "prot-sign",
         ];
         if self.protected() && !READONLY_OK.contains(&id) {
             self.status =
@@ -3373,6 +3431,80 @@ impl Writer {
                 } else {
                     "暗号化: パスワードを打って Enter(次の保存から効きます)".into()
                 };
+            }
+            // デジタル署名。**隣の .sig への添え書き**(Ed25519)。
+            // Word の署名欄には出ない独自方式 — そう言って出す。
+            // 有効なら報告だけ、無効・未署名なら(作り直して)署名する
+            "prot-sign" => {
+                use ed25519_dalek::{Signer as _, Verifier as _};
+                let Some(p) = self.path.clone() else {
+                    self.status =
+                        "まだファイルになっていません(先に保存してください)".into();
+                    return;
+                };
+                if self.dirty {
+                    self.status =
+                        "未保存の変更があります。保存してから署名してください".into();
+                    return;
+                }
+                let bytes = match std::fs::read(&p) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.status = format!("読めません: {e}").into();
+                        return;
+                    }
+                };
+                let sp = sig_path_for(&p);
+                // 既にある署名を検める
+                if let Ok(txt) = std::fs::read_to_string(&sp) {
+                    let field = |k: &str| -> Option<String> {
+                        txt.lines()
+                            .find(|l| l.starts_with(k))
+                            .map(|l| l[k.len()..].trim().to_string())
+                    };
+                    let ok = (|| -> Option<(String, bool)> {
+                        let signer = field("signer:")?;
+                        let vk: [u8; 32] =
+                            unhex(&field("pubkey:")?)?.try_into().ok()?;
+                        let sg: [u8; 64] = unhex(&field("sig:")?)?.try_into().ok()?;
+                        let vk = ed25519_dalek::VerifyingKey::from_bytes(&vk).ok()?;
+                        let sig = ed25519_dalek::Signature::from_bytes(&sg);
+                        Some((signer, vk.verify(&bytes, &sig).is_ok()))
+                    })();
+                    if let Some((signer, true)) = ok {
+                        self.status = format!(
+                            "署名は有効です — {signer} が署名した時のままの中身です"
+                        )
+                        .into();
+                        return;
+                    }
+                }
+                // 無い・壊れている・中身が変わった → 署名し(直し)て添える
+                match load_or_make_key() {
+                    Ok(key) => {
+                        let sig = key.sign(&bytes);
+                        let txt = format!(
+                            "office-sign v1\nsigner: {}\npubkey: {}\nsig: {}\n",
+                            lock_identity(),
+                            to_hex(key.verifying_key().as_bytes()),
+                            to_hex(&sig.to_bytes())
+                        );
+                        match std::fs::write(&sp, txt) {
+                            Ok(_) => {
+                                self.status = format!(
+                                    "署名しました — 隣の {} に添え書き(独自方式。\
+                                     Word の署名欄には出ません。もう一度押すと検めます)",
+                                    sp.file_name().unwrap_or_default().to_string_lossy()
+                                )
+                                .into();
+                            }
+                            Err(e) => {
+                                self.status = format!("署名が置けません: {e}").into()
+                            }
+                        }
+                    }
+                    Err(e) => self.status = format!("署名できません: {e}").into(),
+                }
             }
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
