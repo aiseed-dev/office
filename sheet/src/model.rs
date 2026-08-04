@@ -258,6 +258,14 @@ pub struct Sheet {
     pub default_col_width: Option<f32>,
     /// 行の高さ(pt)。無い行は既定。列幅と同じ構図
     pub row_height: BTreeMap<u32, f32>,
+    /// 行のグループ化(アウトライン)の深さ 1〜7(xlsx の outlineLevel)。
+    /// 載っていない行は 0。列も同じ構図
+    pub row_outline: BTreeMap<u32, u8>,
+    pub col_outline: BTreeMap<u32, u8>,
+    /// 畳んで見えなくした行・列(xlsx の hidden)。**絞り込みと違って
+    /// 保存に残る** — 畳んだ台帳は畳んだまま次の人に渡る
+    pub row_hidden: std::collections::BTreeSet<u32>,
+    pub col_hidden: std::collections::BTreeSet<u32>,
     /// 名前の定義(名前, 参照 "A1" か "A1:B2")。式の中で名前が使える。
     /// workbook.xml の definedNames と往復する
     pub names: Vec<(String, String)>,

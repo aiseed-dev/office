@@ -693,14 +693,38 @@ impl Calc {
         self.frozen = f;
     }
 
-    /// 画面に出ている行の並び(絞り込み中はその行だけ)。描画と当たり判定で共有する。
+    /// 画面に出ている行の並び(絞り込み中はその行だけ。グループ化で畳んだ行は
+    /// 飛ばす)。描画と当たり判定で共有する。
     fn visible_rows(&self) -> Vec<u32> {
+        let hidden = &self.sheet().row_hidden;
         match &self.filter {
-            Some((col, v)) => {
-                self.matching_rows(*col, v).into_iter().take(ROWS as usize).collect()
+            Some((col, v)) => self
+                .matching_rows(*col, v)
+                .into_iter()
+                .filter(|r| !hidden.contains(r))
+                .take(ROWS as usize)
+                .collect(),
+            None => {
+                // 畳んだ行のぶん多めに見て、画面の行数まで詰める
+                let extra = hidden.len() as u32;
+                grid_rows(self.frozen, self.view, ROWS + extra)
+                    .into_iter()
+                    .filter(|r| !hidden.contains(r))
+                    .take(ROWS as usize)
+                    .collect()
             }
-            None => grid_rows(self.frozen, self.view, ROWS),
         }
+    }
+
+    /// 画面に出ている列の並び(畳んだ列は飛ばす)。visible_rows と同じ役割。
+    fn visible_cols(&self) -> Vec<u32> {
+        let hidden = &self.sheet().col_hidden;
+        let extra = hidden.len() as u32;
+        grid_cols(self.frozen, self.view, COLS + extra)
+            .into_iter()
+            .filter(|c| !hidden.contains(c))
+            .take(COLS as usize)
+            .collect()
     }
 
     /// 格子の中の位置(px、格子領域の左上原点)からセルを逆算する。
@@ -714,7 +738,7 @@ impl Calc {
 
     /// この x はどの列の上か(見出し・セルのどちらでも)。
     fn col_at(&self, x: f32) -> Option<u32> {
-        let cols: Vec<(u32, f32)> = grid_cols(self.frozen, self.view, COLS)
+        let cols: Vec<(u32, f32)> = self.visible_cols()
             .into_iter()
             .map(|c| (c, self.col_px(c)))
             .collect();
@@ -763,7 +787,7 @@ impl Calc {
     /// ずれると別の境界を掴んでしまう。
     fn size_grip_at(&self, x: f32, y: f32) -> Option<(bool, u32)> {
         if y < ROW_H && x >= HEAD_W {
-            let cols: Vec<(u32, f32)> = grid_cols(self.frozen, self.view, COLS)
+            let cols: Vec<(u32, f32)> = self.visible_cols()
                 .into_iter()
                 .map(|c| (c, self.col_px(c)))
                 .collect();
@@ -1054,7 +1078,7 @@ impl Calc {
     fn range_px(&self, a: Pos, b: Pos) -> Option<(f32, f32, f32, f32)> {
         let (mut x0, mut x1) = (None, None);
         let mut x = HEAD_W;
-        for c in grid_cols(self.frozen, self.view, COLS) {
+        for c in self.visible_cols() {
             let w = self.col_px(c);
             if c >= a.col && c <= b.col {
                 if x0.is_none() {
@@ -1083,7 +1107,7 @@ impl Calc {
     fn cell_origin_px(&self, p: Pos) -> Option<(f32, f32)> {
         let mut x = HEAD_W;
         let mut cfound = false;
-        for c in grid_cols(self.frozen, self.view, COLS) {
+        for c in self.visible_cols() {
             if c == p.col {
                 cfound = true;
                 break;
@@ -3705,6 +3729,7 @@ calc の隣に置いてください)"
         "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout",
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
+        "group", "ungroup", "hide-details", "show-details",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -4078,6 +4103,147 @@ calc の隣に置いてください)"
                             cols_sel: Vec::new(),
                         });
                         self.prompt = Some(("pivot-rows", Editor::new("")));
+                    }
+                }
+            }
+            // グループ化(アウトライン)。行か列かは選択の形で決める:
+            // 見出しから列をまるごと選んでいれば列、それ以外は選択の行。
+            // 深さは xlsx の outlineLevel と往復し、畳みも保存に残る
+            "group" | "ungroup" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status =
+                        "まとめたい行(または列)を選んでください(見出しの番号を撫でる)"
+                            .into();
+                } else {
+                    let (a, b) = self.sel_rect();
+                    let (rows_ext, cols_ext) = self.sheet().extent();
+                    let whole_rows = a.row == 0 && b.row + 1 >= rows_ext.max(1);
+                    let on_cols = whole_rows && !(a.col == 0 && b.col + 1 >= cols_ext.max(1));
+                    self.checkpoint();
+                    let add = id == "group";
+                    let sh = self.sheet_mut();
+                    if on_cols {
+                        for c in a.col..=b.col {
+                            let l = sh.col_outline.get(&c).copied().unwrap_or(0);
+                            let nl = if add { (l + 1).min(7) } else { l.saturating_sub(1) };
+                            if nl == 0 {
+                                sh.col_outline.remove(&c);
+                                sh.col_hidden.remove(&c);
+                            } else {
+                                sh.col_outline.insert(c, nl);
+                            }
+                        }
+                    } else {
+                        for r in a.row..=b.row {
+                            let l = sh.row_outline.get(&r).copied().unwrap_or(0);
+                            let nl = if add { (l + 1).min(7) } else { l.saturating_sub(1) };
+                            if nl == 0 {
+                                sh.row_outline.remove(&r);
+                                sh.row_hidden.remove(&r);
+                            } else {
+                                sh.row_outline.insert(r, nl);
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                    let what = if on_cols {
+                        format!("{}〜{}列", col_name(a.col), col_name(b.col))
+                    } else {
+                        format!("{}〜{}行", a.row + 1, b.row + 1)
+                    };
+                    self.status = if add {
+                        format!(
+                            "{what}をグループ化しました(深さ+1。「詳細の非表示」で畳めます。Ctrl+Z で戻せます)"
+                        )
+                        .into()
+                    } else {
+                        format!("{what}のグループ化を1段解きました(Ctrl+Z で戻せます)").into()
+                    };
+                }
+            }
+            // 詳細の非表示=グループ化した行(列)を畳む / 詳細の表示=開く。
+            // 対象は選択、無ければカーソルの行が属するグループのひとつながり
+            "hide-details" | "show-details" => {
+                self.commit();
+                let hide = id == "hide-details";
+                let (a, b) = self.sel_rect();
+                let (rows_ext, cols_ext) = self.sheet().extent();
+                let whole_rows =
+                    self.anchor.is_some() && a.row == 0 && b.row + 1 >= rows_ext.max(1);
+                let on_cols = whole_rows && !(a.col == 0 && b.col + 1 >= cols_ext.max(1));
+                if on_cols {
+                    let sh = self.sheet();
+                    let targets: Vec<u32> = (a.col..=b.col)
+                        .filter(|c| sh.col_outline.contains_key(c))
+                        .collect();
+                    if targets.is_empty() {
+                        self.status =
+                            "選択にグループ化した列がありません(先にグループ化)".into();
+                    } else {
+                        self.checkpoint();
+                        let sh = self.sheet_mut();
+                        for c in &targets {
+                            if hide {
+                                sh.col_hidden.insert(*c);
+                            } else {
+                                sh.col_hidden.remove(c);
+                            }
+                        }
+                        self.dirty = true;
+                        self.status = format!(
+                            "{} 列を{}(Ctrl+Z で戻せます)",
+                            targets.len(),
+                            if hide { "畳みました" } else { "開きました" }
+                        )
+                        .into();
+                    }
+                } else {
+                    // 行: 選択、または カーソルの行が属するグループのひとつながり
+                    let (r0, r1) = if self.anchor.is_some() {
+                        (a.row, b.row)
+                    } else {
+                        let sh = self.sheet();
+                        let at = self.cursor.row;
+                        if !sh.row_outline.contains_key(&at) {
+                            self.status = "グループ化した行の上で押してください(先に データ > グループ化)".into();
+                            cx.notify();
+                            return;
+                        }
+                        let mut lo = at;
+                        while lo > 0 && sh.row_outline.contains_key(&(lo - 1)) {
+                            lo -= 1;
+                        }
+                        let mut hi = at;
+                        while sh.row_outline.contains_key(&(hi + 1)) {
+                            hi += 1;
+                        }
+                        (lo, hi)
+                    };
+                    let sh = self.sheet();
+                    let targets: Vec<u32> =
+                        (r0..=r1).filter(|r| sh.row_outline.contains_key(r)).collect();
+                    if targets.is_empty() {
+                        self.status =
+                            "選択にグループ化した行がありません(先に データ > グループ化)"
+                                .into();
+                    } else {
+                        self.checkpoint();
+                        let sh = self.sheet_mut();
+                        for r in &targets {
+                            if hide {
+                                sh.row_hidden.insert(*r);
+                            } else {
+                                sh.row_hidden.remove(r);
+                            }
+                        }
+                        self.dirty = true;
+                        self.status = format!(
+                            "{} 行を{}(Ctrl+Z で戻せます)",
+                            targets.len(),
+                            if hide { "畳みました" } else { "開きました" }
+                        )
+                        .into();
                     }
                 }
             }
@@ -5545,7 +5711,7 @@ impl Render for Calc {
                    .border_r_1().border_b_1().border_color(rgb(0xD5DBE0)));
         let (sel_a, sel_b) = self.sel_rect();
         let has_sel = self.anchor.is_some();
-        for c in grid_cols(self.frozen, self.view, COLS) {
+        for c in self.visible_cols() {
             // 選択に入っている列の見出しは色を変える(いまどこを選んでいるかの道標)
             let on = has_sel && (sel_a.col..=sel_b.col).contains(&c) || c == self.cursor.col;
             head = head.child(div().w(px(self.col_px(c))).h(px(ROW_H))
@@ -5586,7 +5752,7 @@ impl Render for Calc {
                             .left(px(0.0)).bottom(px(-GRIP)).w_full().h(px(GRIP * 2.0))
                             .cursor_row_resize()
                     })));
-            for c in grid_cols(self.frozen, self.view, COLS) {
+            for c in self.visible_cols() {
                 let p = Pos::new(r, c);
                 let cell = self.sheet().get(p);
                 // 結合に呑まれた位置は空で描く(値は左上のセルにだけある)
@@ -5822,7 +5988,7 @@ impl Render for Calc {
                 .map(|e| if e.0.is_empty() && e.1.is_empty() { SEP_H } else { ITEM_H })
                 .sum::<f32>() + 10.0;
             let grid_w = HEAD_W
-                + grid_cols(self.frozen, self.view, COLS)
+                + self.visible_cols()
                     .iter()
                     .map(|c| self.col_px(*c))
                     .sum::<f32>();

@@ -87,19 +87,26 @@ fn merge(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
     }
 }
 
-/// `<row r="3" ht="27.5" customHeight="1">` — 指定のある行だけ持つ。
+/// `<row r="3" ht="27.5" customHeight="1" outlineLevel="1" hidden="1">` —
+/// 指定のある行だけ持つ(高さ・グループ化の深さ・畳み)。
 fn row_height(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
-    let custom = attr(e, "customHeight").as_deref() == Some("1");
-    if !custom {
+    let Some(r) = attr(e, "r").and_then(|v| v.parse::<u32>().ok()) else { return };
+    if r < 1 {
         return;
     }
-    if let (Some(r), Some(h)) = (
-        attr(e, "r").and_then(|v| v.parse::<u32>().ok()),
-        attr(e, "ht").and_then(|v| v.parse::<f32>().ok()),
-    ) {
-        if r >= 1 {
-            sh.row_height.insert(r - 1, h);
+    let r0 = r - 1;
+    if attr(e, "customHeight").as_deref() == Some("1") {
+        if let Some(h) = attr(e, "ht").and_then(|v| v.parse::<f32>().ok()) {
+            sh.row_height.insert(r0, h);
         }
+    }
+    if let Some(l) = attr(e, "outlineLevel").and_then(|v| v.parse::<u8>().ok()) {
+        if l > 0 {
+            sh.row_outline.insert(r0, l);
+        }
+    }
+    if matches!(attr(e, "hidden").as_deref(), Some("1") | Some("true")) {
+        sh.row_hidden.insert(r0);
     }
 }
 
@@ -109,7 +116,8 @@ fn row_height(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
 /// 16,384 個の col になって保存が肥大する。
 fn col_width(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
     let g = |k: &str| attr(e, k).and_then(|v| v.parse::<f32>().ok());
-    if let (Some(min), Some(max), Some(w)) = (g("min"), g("max"), g("width")) {
+    let (Some(min), Some(max)) = (g("min"), g("max")) else { return };
+    if let Some(w) = g("width") {
         if max - min > 1000.0 {
             sh.default_col_width = Some(w);
             return;
@@ -117,6 +125,21 @@ fn col_width(e: &quick_xml::events::BytesStart, sh: &mut Sheet) {
         for c in (min as u32)..=(max as u32) {
             if c >= 1 {
                 sh.col_width.insert(c - 1, w);
+            }
+        }
+    }
+    // グループ化の深さと畳み(幅の指定が無い col でも来る)
+    let level = attr(e, "outlineLevel").and_then(|v| v.parse::<u8>().ok()).unwrap_or(0);
+    let hidden = matches!(attr(e, "hidden").as_deref(), Some("1") | Some("true"));
+    if (level > 0 || hidden) && max - min <= 1000.0 {
+        for c in (min as u32)..=(max as u32) {
+            if c >= 1 {
+                if level > 0 {
+                    sh.col_outline.insert(c - 1, level);
+                }
+                if hidden {
+                    sh.col_hidden.insert(c - 1);
+                }
             }
         }
     }
@@ -1764,9 +1787,26 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         ws.push_attribute(("xmlns", NS));
         ws.push_attribute(("xmlns:r", RNS));
         w.write_event(Event::Start(ws)).unwrap();
-        // 列幅。読んだものを返す(捨てると帳票の形が変わる)。
-        // 同じ幅が並ぶ区間は1つの col にまとめる
-        if !sh.col_width.is_empty() || sh.default_col_width.is_some() {
+        // グループ化があるときは sheetFormatPr に深さの最大を書く
+        // (Excel のアウトライン欄の 1 2 3 釦がこれを見る)。cols より前が作法
+        if !sh.row_outline.is_empty() || !sh.col_outline.is_empty() {
+            let mut fp = BytesStart::new("sheetFormatPr");
+            fp.push_attribute(("defaultRowHeight", "15"));
+            if let Some(m) = sh.row_outline.values().max() {
+                fp.push_attribute(("outlineLevelRow", m.to_string().as_str()));
+            }
+            if let Some(m) = sh.col_outline.values().max() {
+                fp.push_attribute(("outlineLevelCol", m.to_string().as_str()));
+            }
+            w.write_event(Event::Empty(fp)).unwrap();
+        }
+        // 列幅・列のグループ化。読んだものを返す(捨てると帳票の形が変わる)。
+        // 同じ指定が並ぶ区間は1つの col にまとめる
+        if !sh.col_width.is_empty()
+            || sh.default_col_width.is_some()
+            || !sh.col_outline.is_empty()
+            || !sh.col_hidden.is_empty()
+        {
             w.write_event(Event::Start(BytesStart::new("cols"))).unwrap();
             if let Some(dw) = sh.default_col_width {
                 let mut e = BytesStart::new("col");
@@ -1775,23 +1815,53 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 e.push_attribute(("width", dw.to_string().as_str()));
                 w.write_event(Event::Empty(e)).unwrap();
             }
-            let mut it = sh.col_width.iter().peekable();
-            while let Some((c0, wd)) = it.next() {
-                let mut c1 = *c0;
-                while let Some((cn, wn)) = it.peek() {
-                    if **cn == c1 + 1 && (**wn - *wd).abs() < 1e-6 {
-                        c1 = **cn;
-                        it.next();
-                    } else {
-                        break;
+            // 列ごとの指定(幅・深さ・畳み)をひとつの走査にまとめる
+            let mut marks: std::collections::BTreeSet<u32> =
+                sh.col_width.keys().copied().collect();
+            marks.extend(sh.col_outline.keys().copied());
+            marks.extend(sh.col_hidden.iter().copied());
+            let spec = |c: u32| {
+                (
+                    sh.col_width.get(&c).copied(),
+                    sh.col_outline.get(&c).copied(),
+                    sh.col_hidden.contains(&c),
+                )
+            };
+            let same = |a: &(Option<f32>, Option<u8>, bool), b: &(Option<f32>, Option<u8>, bool)| {
+                a.1 == b.1
+                    && a.2 == b.2
+                    && match (a.0, b.0) {
+                        (Some(x), Some(y)) => (x - y).abs() < 1e-6,
+                        (None, None) => true,
+                        _ => false,
                     }
+            };
+            let cols: Vec<u32> = marks.into_iter().collect();
+            let mut i = 0;
+            while i < cols.len() {
+                let c0 = cols[i];
+                let sp = spec(c0);
+                let mut c1 = c0;
+                while i + 1 < cols.len() && cols[i + 1] == c1 + 1 && same(&spec(cols[i + 1]), &sp)
+                {
+                    c1 = cols[i + 1];
+                    i += 1;
                 }
                 let mut e = BytesStart::new("col");
                 e.push_attribute(("min", (c0 + 1).to_string().as_str()));
                 e.push_attribute(("max", (c1 + 1).to_string().as_str()));
-                e.push_attribute(("width", wd.to_string().as_str()));
-                e.push_attribute(("customWidth", "1"));
+                if let Some(wd) = sp.0 {
+                    e.push_attribute(("width", wd.to_string().as_str()));
+                    e.push_attribute(("customWidth", "1"));
+                }
+                if let Some(l) = sp.1 {
+                    e.push_attribute(("outlineLevel", l.to_string().as_str()));
+                }
+                if sp.2 {
+                    e.push_attribute(("hidden", "1"));
+                }
                 w.write_event(Event::Empty(e)).unwrap();
+                i += 1;
             }
             w.write_event(Event::End(BytesEnd::new("cols"))).unwrap();
         }
@@ -1799,12 +1869,22 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
 
         let mut rows: std::collections::BTreeMap<u32, Vec<(&Pos, &Cell)>> = Default::default();
         for (p, c) in &sh.cells { rows.entry(p.row).or_default().push((p, c)); }
+        // 中身が無くてもグループ化・畳みのある行は <row> を出す(捨てない)
+        for r in sh.row_outline.keys().chain(sh.row_hidden.iter()) {
+            rows.entry(*r).or_default();
+        }
         for (r, cells) in rows {
             let mut row = BytesStart::new("row");
             row.push_attribute(("r", (r + 1).to_string().as_str()));
             if let Some(h) = sh.row_height.get(&r) {
                 row.push_attribute(("ht", h.to_string().as_str()));
                 row.push_attribute(("customHeight", "1"));
+            }
+            if let Some(l) = sh.row_outline.get(&r) {
+                row.push_attribute(("outlineLevel", l.to_string().as_str()));
+            }
+            if sh.row_hidden.contains(&r) {
+                row.push_attribute(("hidden", "1"));
             }
             w.write_event(Event::Start(row)).unwrap();
             for (p, c) in cells {
@@ -2816,6 +2896,34 @@ mod script_roundtrip_tests {
         buf2.set_position(0);
         let (b3, _) = read(buf2).expect("読めない");
         assert_eq!(b3.scripts.len(), 1, "二往復で二重になった");
+    }
+
+    #[test]
+    fn グループ化と畳みが往復する() {
+        let mut b = Book::new();
+        let s = &mut b.sheets[0];
+        s.set(Pos::parse("A1").unwrap(), Cell::input("見出し"));
+        s.set(Pos::parse("A5").unwrap(), Cell::input("x"));
+        s.row_outline.insert(1, 1);
+        s.row_outline.insert(2, 2);
+        s.row_outline.insert(3, 1); // 行4: 中身の無い行(それでも消えない)
+        s.row_hidden.insert(2);
+        s.col_outline.insert(2, 1);
+        s.col_outline.insert(3, 1);
+        s.col_hidden.insert(3);
+        s.col_width.insert(2, 20.0);
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let s = &back.sheets[0];
+        assert_eq!(s.row_outline.get(&1), Some(&1));
+        assert_eq!(s.row_outline.get(&2), Some(&2));
+        assert_eq!(s.row_outline.get(&3), Some(&1), "中身の無い行の深さが消えた");
+        assert!(s.row_hidden.contains(&2), "畳んだ行が開いてしまう");
+        assert_eq!(s.col_outline.get(&2), Some(&1));
+        assert!(s.col_hidden.contains(&3));
+        assert_eq!(s.col_width.get(&2), Some(&20.0), "幅と深さの同居で幅が消えた");
     }
 
     #[test]

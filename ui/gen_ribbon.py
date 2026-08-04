@@ -120,6 +120,8 @@ READY = {
         "td-band-row": "td-band-row", "td-band-col": "td-band-col",
         "td-first": "td-first", "td-last": "td-last",
         "td-filter": "td-filter",
+        "group": "group", "ungroup": "ungroup",
+        "show-details": "show-details", "hide-details": "hide-details",
         "pivot-insert": "pivot-insert",
         "pivot-refresh": "pivot-refresh", "pivot-refresh-all": "pivot-refresh-all",
         "pivot-select": "pivot-select", "pivot-totals": "pivot-totals",

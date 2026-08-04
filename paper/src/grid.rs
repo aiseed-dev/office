@@ -71,11 +71,17 @@ pub fn sheet_to_pdf<W: Write>(
         .map_err(|e| e.to_string())?;
     let mut l = doc.get_page(page).get_layer(layer);
 
-    // 列の幅と左端(文書の指定に従う)。印刷範囲の左端が原点
+    // 列の幅と左端(文書の指定に従う)。印刷範囲の左端が原点。
+    // グループ化で畳んだ列は幅ゼロ(画面と同じく出さない)
     let ncols = (c1 - c0).max(1);
     let col_mm: Vec<f32> = (c0..c0 + ncols)
-        .map(|c| grid.col_width.get(&c).copied().or(grid.default_col_width)
-            .map(|w| w * MM_PER_CHW).unwrap_or(COL_MM) * scale)
+        .map(|c| {
+            if grid.col_hidden.contains(&c) {
+                return 0.0;
+            }
+            grid.col_width.get(&c).copied().or(grid.default_col_width)
+                .map(|w| w * MM_PER_CHW).unwrap_or(COL_MM) * scale
+        })
         .collect();
     let mut col_x = vec![0.0f32];
     for w in &col_mm {
@@ -87,8 +93,11 @@ pub fn sheet_to_pdf<W: Write>(
         .filter(|i| col_x[*i as usize + 1] > usable_w + 0.1)
         .count() as u32;
 
-    // 行の高さ(pt → mm)。指定のない行は既定
+    // 行の高さ(pt → mm)。指定のない行は既定。畳んだ行は高さゼロ=出さない
     let row_mm = |r: u32| -> f32 {
+        if grid.row_hidden.contains(&r) {
+            return 0.0;
+        }
         grid.row_height.get(&r).map(|pt| pt * 25.4 / 72.0).unwrap_or(ROW_MM) * scale
     };
     let usable = paper.height_mm - mt - mb;
@@ -152,6 +161,9 @@ pub fn sheet_to_pdf<W: Write>(
             let p = sheet::Pos::new(r, c);
             let x = ml + col_x[(c - c0) as usize];
             let cw = col_mm[(c - c0) as usize];
+            if cw <= 0.0 {
+                continue; // 畳んだ列(幅ゼロ)は中身も描かない
+            }
             let Some(cell) = grid.cells.get(&p) else { continue };
 
             // 塗りと文字色。条件付き書式は画面と同じ規則で上書きする
@@ -256,6 +268,10 @@ pub fn sheet_to_pdf<W: Write>(
     let mut page_no = 1u32;
     draw_col_heads(&l);
     for r in r0..r1.max(r0 + 1) {
+        // 畳んだ行は紙にも出さない(画面と同じ)
+        if grid.row_hidden.contains(&r) {
+            continue;
+        }
         let rh = row_mm(r);
         // 改ページ(rowBreaks: この行から新しい紙)か、紙が尽きたら次のページ
         let break_here = y_used > 0.0 && grid.row_breaks.contains(&r);
