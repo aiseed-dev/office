@@ -988,11 +988,17 @@ impl Calc {
     fn visible_cols(&self) -> Vec<u32> {
         let hidden = &self.sheet().col_hidden;
         let extra = hidden.len() as u32;
-        grid_cols(self.frozen, self.view, COLS + extra)
+        let mut v: Vec<u32> = grid_cols(self.frozen, self.view, COLS + extra)
             .into_iter()
             .filter(|c| !hidden.contains(c))
             .take(COLS as usize)
-            .collect()
+            .collect();
+        if self.sheet().rtl {
+            // 右から左のシートは列を逆順に並べる。**描画も当たり判定も
+            // この一点を通る**ので、掴む場所と見える場所がずれない
+            v.reverse();
+        }
+        v
     }
 
     /// 格子の中の位置(px、格子領域の左上原点)からセルを逆算する。
@@ -5003,6 +5009,7 @@ calc の隣に置いてください)"
         "prot-doc", "prot-encrypt", "prot-sign",
         "zoom-in", "zoom-out", "formula-bar", "show-headings", "show-zeros",
         "subscript", "align-just", "text-orient", "calc-mode",
+        "td-torange", "td-resize", "rtl-sheet", "direction",
         "insert-function", "cell-styles", "sheet-view", "watch",
         "pen", "highlighter", "eraser",
     ];
@@ -8233,6 +8240,11 @@ impl Render for Calc {
                         stack = stack.child(SharedString::from(ch.to_string()));
                     }
                     row = row.child(stack);
+                } else if f.rtl_text {
+                    // 右横書き: 1字ずつ右から並べる(昔の看板の書き方)。
+                    // ラテン文字の bidi は扱わない — 日本語の右横書きのため
+                    let rev: String = shown.chars().rev().collect();
+                    row = row.child(d.justify_end().child(SharedString::from(rev)));
                 } else {
                     row = row.child(d.child(SharedString::from(shown)));
                 }

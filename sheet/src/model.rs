@@ -191,6 +191,9 @@ pub struct CellFormat {
     pub subscript: bool,
     /// 文字の回転(xlsx の alignment textRotation。度。90=縦向き)
     pub rotation: Option<i32>,
+    /// 右横書き(xlsx の alignment readingOrder="2")。
+    /// **日本語の右横書き** — 昔の看板や横額の書き方。1字ずつ右から並べる
+    pub rtl_text: bool,
     pub valign: VAlign,
     /// 折り返して全体を表示
     pub wrap: bool,
@@ -274,6 +277,11 @@ pub struct Sheet {
     /// 保存に残る** — 畳んだ台帳は畳んだまま次の人に渡る
     pub row_hidden: std::collections::BTreeSet<u32>,
     pub col_hidden: std::collections::BTreeSet<u32>,
+    /// この表にある表オブジェクト(xlsx の table)
+    pub tables: Vec<TableDef>,
+    /// 右から左へ並べる(xlsx の sheetView rightToLeft)。
+    /// **日本語も右から書くことがある**(右横書き)— 発注者 2026-08-04
+    pub rtl: bool,
     /// 隠しシート(xlsx の workbook.xml の sheet state="hidden")。
     /// 隠しても中身も式も生きている — 見えなくなるだけ
     pub hidden: bool,
@@ -618,6 +626,54 @@ pub struct BookProps {
     pub subject: String,
     pub keywords: String,
     pub description: String,
+}
+
+/// 表オブジェクト(xlsx の table。範囲に名前と性質を付けたもの)。
+/// **方針変更 2026-08-04(発注者)**: 前は「持たない」としていたが、
+/// 範囲に変換・サイズ変更は表そのものが無いと成り立たないので持つことにした。
+/// 見た目(帯・縞々)は書式として掛かる — 表を外しても書式は残る(Excel と同じ)
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableDef {
+    /// 表の名前(式から使える。空白は入れられない)
+    pub name: String,
+    /// 範囲(左上, 右下)。見出し行を含む
+    pub a: Pos,
+    pub b: Pos,
+    /// 見出し行がある(1行目が見出し)
+    pub header: bool,
+    /// 合計行がある(最後の行が合計)
+    pub totals: bool,
+    pub banded_rows: bool,
+    pub banded_cols: bool,
+    pub first_col: bool,
+    pub last_col: bool,
+    /// 見出しに絞り込みの釦を出す
+    pub filter: bool,
+}
+
+impl Default for TableDef {
+    fn default() -> Self {
+        TableDef {
+            name: "テーブル1".into(),
+            a: Pos::new(0, 0),
+            b: Pos::new(0, 0),
+            header: true,
+            totals: false,
+            banded_rows: true,
+            banded_cols: false,
+            first_col: false,
+            last_col: false,
+            filter: true,
+        }
+    }
+}
+
+impl TableDef {
+    /// この位置は表の中か
+    pub fn contains(&self, p: Pos) -> bool {
+        (self.a.row..=self.b.row).contains(&p.row)
+            && (self.a.col..=self.b.col).contains(&p.col)
+    }
 }
 
 #[derive(Debug, Clone, Default)]

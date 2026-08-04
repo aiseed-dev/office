@@ -232,6 +232,48 @@ enum DrawKind {
 
 /// drawing(xl/drawings/drawingN.xml)から、画像と図形の錨を拾う。
 /// 返すのは (置き場所のセル, 幅EMU, 高さEMU, 中身)。
+/// `xl/tables/tableN.xml` を読む。範囲が読めなければ None(黙って作らない)。
+fn parse_table(xml: &str) -> Option<crate::model::TableDef> {
+    let attr_of = |elem: &str, key: &str| -> Option<String> {
+        let i = xml.find(&format!("<{elem}"))?;
+        let rest = &xml[i..];
+        let e = rest.find('>')?;
+        let tag = &rest[..e];
+        let k = format!("{key}=\"");
+        let a = tag.find(&k)? + k.len();
+        let b = tag[a..].find('"')? + a;
+        Some(tag[a..b].to_string())
+    };
+    let r = attr_of("table", "ref")?;
+    let (a, b) = match r.split_once(':') {
+        Some((x, y)) => (Pos::parse(x)?, Pos::parse(y)?),
+        None => {
+            let p = Pos::parse(&r)?;
+            (p, p)
+        }
+    };
+    let num = |elem: &str, k: &str, d: u32| -> u32 {
+        attr_of(elem, k).and_then(|v| v.parse().ok()).unwrap_or(d)
+    };
+    let on = |k: &str| -> bool {
+        matches!(attr_of("tableStyleInfo", k).as_deref(), Some("1") | Some("true"))
+    };
+    Some(crate::model::TableDef {
+        name: attr_of("table", "displayName")
+            .or_else(|| attr_of("table", "name"))
+            .unwrap_or_else(|| "テーブル".into()),
+        a,
+        b,
+        header: num("table", "headerRowCount", 1) > 0,
+        totals: num("table", "totalsRowCount", 0) > 0,
+        banded_rows: on("showRowStripes"),
+        banded_cols: on("showColumnStripes"),
+        first_col: on("showFirstColumn"),
+        last_col: on("showLastColumn"),
+        filter: xml.contains("<autoFilter"),
+    })
+}
+
 fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
@@ -593,6 +635,10 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
                     };
                     sh.print_gridlines = on("gridLines");
                     sh.print_headings = on("headings");
+                }
+                // 右から左へ並べるシート(日本語の右横書きにも使う)
+                b"sheetView" => {
+                    sh.rtl = matches!(attr(&e, "rightToLeft").as_deref(), Some("1") | Some("true"));
                 }
                 // シートの保護。sheet="0" と書く道具は保護していない扱い
                 b"sheetProtection" => {
@@ -976,6 +1022,19 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                 for (p, t) in parse_comments(&cs) {
                     sh.comments.insert(p, t);
                 }
+            }
+        }
+        // 表オブジェクト(xlsx の table)。範囲に変換・サイズ変更のために持つ
+        for (_, ty, target, _) in rels.iter().filter(|(_, t, _, _)| t.ends_with("/table")) {
+            let tpath = resolve_target(target);
+            let mut tx = String::new();
+            if let Ok(mut f) = zip.by_name(&tpath) {
+                let _ = f.read_to_string(&mut tx);
+            }
+            if let Some(t) = parse_table(&tx) {
+                sh.tables.push(t);
+            } else {
+                rep.note("表オブジェクト(範囲が読めない)");
             }
         }
         // 画像(drawing)。**表示のために**読む — 保存は原文の持ち越しが担うので、
@@ -1608,6 +1667,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     carried.push((name, patched.into_bytes()));
                     continue;
                 }
+                if name.starts_with("xl/tables/") {
+                    continue; // 表オブジェクトはモデルから作り直す
+                }
                 if name == "docProps/core.xml" {
                     // ブックの情報はこちらのモデルが正。原文の他の欄は残す
                     let s = String::from_utf8_lossy(&buf).to_string();
@@ -1843,8 +1905,22 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             Some(s) => s.clone(),
             None => CT.replace("__SHEETS__", &overrides),
         };
+        // 表オブジェクトの宣言は作り直す(減ったときに空の宣言を残さない)
+        while let Some(i) = ct.find(r#"<Override PartName="/xl/tables/"#) {
+            if let Some(j) = ct[i..].find("/>") {
+                ct.replace_range(i..i + j + 2, "");
+            } else {
+                break;
+            }
+        }
+        let n_tables: usize = book.sheets.iter().map(|s| s.tables.len()).sum();
         let has_comments = book.sheets.iter().any(|s| !s.comments.is_empty());
         let mut add = String::new();
+        for n in 1..=n_tables {
+            add.push_str(&format!(
+                r#"<Override PartName="/xl/tables/table{n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>"#
+            ));
+        }
         if has_comments && !ct.contains("Extension=\"vml\"") {
             add.push_str(r#"<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>"#);
         }
@@ -1968,6 +2044,15 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         ws.push_attribute(("xmlns", NS));
         ws.push_attribute(("xmlns:r", RNS));
         w.write_event(Event::Start(ws)).unwrap();
+        // 右から左へ並べるシート(日本語の右横書き)。schema では先頭
+        if sh.rtl {
+            w.write_event(Event::Start(BytesStart::new("sheetViews"))).unwrap();
+            let mut sv = BytesStart::new("sheetView");
+            sv.push_attribute(("rightToLeft", "1"));
+            sv.push_attribute(("workbookViewId", "0"));
+            w.write_event(Event::Empty(sv)).unwrap();
+            w.write_event(Event::End(BytesEnd::new("sheetViews"))).unwrap();
+        }
         // グループ化があるときは sheetFormatPr に深さの最大を書く
         // (Excel のアウトライン欄の 1 2 3 釦がこれを見る)。cols より前が作法
         if !sh.row_outline.is_empty() || !sh.col_outline.is_empty() {
@@ -2195,6 +2280,18 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 body.insert_str(pos, r#"<drawing r:id="rIdDRW"/>"#);
             }
         }
+        // 表オブジェクトへの参照(schema では最後の方)
+        if !sh.tables.is_empty() {
+            let base: usize = book.sheets[..i].iter().map(|s| s.tables.len()).sum();
+            let mut tp = format!(r#"<tableParts count="{}">"#, sh.tables.len());
+            for k in 0..sh.tables.len() {
+                tp.push_str(&format!(r#"<tablePart r:id="rIdTBL{}"/>"#, base + k + 1));
+            }
+            tp.push_str("</tableParts>");
+            if let Some(pos) = body.rfind("</worksheet>") {
+                body.insert_str(pos, &tp);
+            }
+        }
         // コメントの図形(VML)への参照は一番後ろ
         if !sh.comments.is_empty() {
             if let Some(pos) = body.rfind("</worksheet>") {
@@ -2209,6 +2306,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         let orig = orig_sheet_rels.get(i).cloned().flatten();
         if !sh.links.is_empty() || !sh.comments.is_empty() || orig.is_some()
             || !sh.images_new.is_empty() || !sh.shapes_new.is_empty()
+            || !sh.tables.is_empty()
         {
             let mut inner = String::new();
             if let Some(o) = &orig {
@@ -2216,6 +2314,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     if ty.ends_with("/hyperlink")
                         || ty.ends_with("/comments")
                         || ty.ends_with("/vmlDrawing")
+                        || ty.ends_with("/table")
                     {
                         continue;
                     }
@@ -2239,6 +2338,15 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     i + 1
                 ));
             }
+            {
+                let base: usize = book.sheets[..i].iter().map(|s| s.tables.len()).sum();
+                for k in 0..sh.tables.len() {
+                    let n = base + k + 1;
+                    inner.push_str(&format!(
+                        r#"<Relationship Id="rIdTBL{n}" Type="{RNS}/table" Target="../tables/table{n}.xml"/>"#
+                    ));
+                }
+            }
             if !sh.comments.is_empty() {
                 inner.push_str(&format!(
                     r#"<Relationship Id="rIdCM" Type="{RNS}/comments" Target="../comments{}.xml"/>"#,
@@ -2251,6 +2359,65 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             }
             put(&format!("xl/worksheets/_rels/sheet{}.xml.rels", i + 1), &format!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{inner}</Relationships>"))?;
+        }
+        // 表オブジェクトの部品
+        {
+            let base: usize = book.sheets[..i].iter().map(|s| s.tables.len()).sum();
+            for (k, t) in sh.tables.iter().enumerate() {
+                let n = base + k + 1;
+                let r = if t.a == t.b {
+                    t.a.a1()
+                } else {
+                    format!("{}:{}", t.a.a1(), t.b.a1())
+                };
+                // 列の名前は見出し行から。空なら「列N」(Excel は空名を嫌う)
+                let mut cols = String::new();
+                for (ci, c) in (t.a.col..=t.b.col).enumerate() {
+                    let nm = if t.header {
+                        sh.get(Pos::new(t.a.row, c))
+                            .map(|x| x.value.display())
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or_else(|| format!("列{}", ci + 1))
+                    } else {
+                        format!("列{}", ci + 1)
+                    };
+                    cols.push_str(&format!(
+                        r#"<tableColumn id="{}" name="{}"/>"#,
+                        ci + 1,
+                        esc(&nm)
+                    ));
+                }
+                let b01 = |v: bool| if v { "1" } else { "0" };
+                let xml = format!(
+                    concat!(
+                        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+                        r#"<table xmlns="{ns}" id="{n}" name="{nm}" displayName="{nm}" ref="{r}""#,
+                        r#" headerRowCount="{hdr}" totalsRowCount="{tot}">"#,
+                        r#"{af}<tableColumns count="{cnt}">{cols}</tableColumns>"#,
+                        r#"<tableStyleInfo name="TableStyleMedium2" showFirstColumn="{fc}""#,
+                        r#" showLastColumn="{lc}" showRowStripes="{rs}" showColumnStripes="{cs}"/>"#,
+                        r#"</table>"#
+                    ),
+                    ns = NS,
+                    n = n,
+                    nm = esc(&t.name),
+                    r = r,
+                    hdr = if t.header { 1 } else { 0 },
+                    tot = if t.totals { 1 } else { 0 },
+                    af = if t.filter {
+                        format!(r#"<autoFilter ref="{r}"/>"#)
+                    } else {
+                        String::new()
+                    },
+                    cnt = (t.b.col - t.a.col + 1),
+                    cols = cols,
+                    fc = b01(t.first_col),
+                    lc = b01(t.last_col),
+                    rs = b01(t.banded_rows),
+                    cs = b01(t.banded_cols),
+                );
+                put(&format!("xl/tables/table{n}.xml"), &xml)?;
+            }
         }
         // コメントの本体と、Excel がコメントに使う最小の VML 図形
         if !sh.comments.is_empty() {
@@ -3124,6 +3291,76 @@ mod script_roundtrip_tests {
         let sp = &back.sheets[0].shapes[0];
         assert!((sp.dx_px - 30.0).abs() < 0.2, "colOff が往復しない: {}", sp.dx_px);
         assert!((sp.dy_px - 12.0).abs() < 0.2, "rowOff が往復しない: {}", sp.dy_px);
+    }
+
+    #[test]
+    fn 表オブジェクトと右横書きが往復する() {
+        let mut b = Book::new();
+        for (r, row) in [["部署", "金額"], ["営業", "100"]].iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                b.sheets[0].set(Pos::new(r as u32, c as u32), Cell::input(v));
+            }
+        }
+        b.sheets[0].tables.push(crate::model::TableDef {
+            name: "売上表".into(),
+            a: Pos::new(0, 0),
+            b: Pos::new(1, 1),
+            totals: true,
+            banded_cols: true,
+            first_col: true,
+            ..Default::default()
+        });
+        b.sheets[0].rtl = true;
+        let p = Pos::parse("A1").unwrap();
+        let mut c = b.sheets[0].get(p).cloned().unwrap();
+        c.fmt.rtl_text = true;
+        b.sheets[0].set(p, c);
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let t = back.sheets[0].tables.first().expect("表が往復しない");
+        assert_eq!(t.name, "売上表");
+        assert_eq!((t.a, t.b), (Pos::new(0, 0), Pos::new(1, 1)), "範囲が違う");
+        assert!(t.header && t.totals && t.first_col && t.banded_cols, "性質が往復しない");
+        assert!(back.sheets[0].rtl, "右から左が往復しない");
+        assert!(back.sheets[0].get(p).unwrap().fmt.rtl_text, "右横書きが往復しない");
+    }
+
+    #[test]
+    fn 表を外すと部品も宣言も消える() {
+        // 表つきで書いたものを読み、表を外して書き直す(範囲に変換の道)
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].tables.push(crate::model::TableDef {
+            a: Pos::new(0, 0),
+            b: Pos::new(1, 1),
+            ..Default::default()
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).unwrap();
+        buf.set_position(0);
+        let (mut back, _) = read(buf).unwrap();
+        assert_eq!(back.sheets[0].tables.len(), 1);
+        back.sheets[0].tables.clear();
+        // 原本を持ち越しながら書き直す(実際の保存と同じ道)
+        let orig = {
+            let mut b2 = Cursor::new(Vec::new());
+            write(&b, &mut b2).unwrap();
+            b2.set_position(0);
+            b2
+        };
+        let mut out = Cursor::new(Vec::new());
+        write_with(&back, Some(orig), &mut out).unwrap();
+        let bytes = out.into_inner();
+        let (again, _) = read(Cursor::new(bytes.clone())).unwrap();
+        assert!(again.sheets[0].tables.is_empty(), "外した表が残っている");
+        // 宣言も残っていない(残ると Excel が壊れたと言う)
+        let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut ct = String::new();
+        use std::io::Read as _;
+        z.by_name("[Content_Types].xml").unwrap().read_to_string(&mut ct).unwrap();
+        assert!(!ct.contains("/xl/tables/"), "Content_Types に宣言が残っている");
     }
 
     #[test]

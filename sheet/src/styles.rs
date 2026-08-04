@@ -162,7 +162,9 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
                     let va = attr(&e, "vertical").map(|v| VAlign::from_xlsx(&v));
                     let wrap = attr(&e, "wrapText").as_deref() == Some("1");
                     let rot = attr(&e, "textRotation").and_then(|v| v.parse::<i32>().ok());
+                    let rtl_text = attr(&e, "readingOrder").as_deref() == Some("2");
                     let mut f = resolve(x, &fonts, &fills, &borders, &numfmts, a, rot);
+                    f.rtl_text = rtl_text;
                     f.valign = va.unwrap_or_default();
                     f.wrap = wrap;
                     xfs.push(f);
@@ -204,6 +206,7 @@ fn resolve(
         strike: f.strike,
         subscript: f.subscript,
         rotation: rot,
+        rtl_text: false,
         size_c: f.size_c,
         valign: VAlign::default(),
         wrap: false,
@@ -326,7 +329,8 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
     let mut fills: Vec<Option<String>> = vec![None, None]; // 0=none 1=gray125 は予約席
     let mut borders: Vec<Borders> = vec![Borders::NONE];
     let mut numfmts: Vec<String> = Vec::new();
-    let mut xfs: Vec<(usize, usize, usize, usize, HAlign, VAlign, bool, Option<i32>)> =
+    #[allow(clippy::type_complexity)]
+    let mut xfs: Vec<(usize, usize, usize, usize, HAlign, VAlign, bool, Option<i32>, bool)> =
         Vec::new();
 
     for f in &order {
@@ -348,7 +352,7 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
             }
             None => 0,
         };
-        xfs.push((fi, fl, bi, ni, f.align, f.valign, f.wrap, f.rotation));
+        xfs.push((fi, fl, bi, ni, f.align, f.valign, f.wrap, f.rotation, f.rtl_text));
     }
 
     let mut s = String::from(
@@ -411,7 +415,7 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
     s.push_str("</borders>");
     s.push_str("<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>");
     s.push_str(&format!("<cellXfs count=\"{}\">", xfs.len()));
-    for (fi, fl, bi, ni, al, va, wrap, rot) in &xfs {
+    for (fi, fl, bi, ni, al, va, wrap, rot, rtl) in &xfs {
         // applyX を付けないと読み手が無視することがある
         s.push_str(&format!(
             "<xf numFmtId=\"{ni}\" fontId=\"{fi}\" fillId=\"{fl}\" borderId=\"{bi}\" xfId=\"0\"\
@@ -429,6 +433,9 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
         }
         if let Some(r) = rot {
             attrs.push_str(&format!(" textRotation=\"{r}\""));
+        }
+        if *rtl {
+            attrs.push_str(" readingOrder=\"2\"");
         }
         if attrs.is_empty() {
             s.push_str("/>");
