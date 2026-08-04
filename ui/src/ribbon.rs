@@ -69,7 +69,7 @@ pub const WRITER: &[Tab] = &[
         c("decoffset", "インデントを減らす", "decoffset"),
         c("incoffset", "インデントを増やす", "incoffset"),
         c("linespace", "段落の行間", "linespace"),
-        x("テキスト方向", "direction"),
+        c("direction", "テキスト方向", "direction"),
         c("align-left", "左揃え", "align-left"),
         c("align-center", "中央揃え", "align-center"),
         c("align-right", "右揃え", "align-right"),

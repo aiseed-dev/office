@@ -77,7 +77,7 @@ READY = {
         "coauth-mode": "coauth-mode", "prot-doc": "prot-doc",
         "copy": "copy", "cut": "cut", "paste": "paste",
         "align-left": "align-left", "align-right": "align-right",
-        "align-dist": "align-dist", "ruby": "ruby",
+        "align-dist": "align-dist", "ruby": "ruby", "direction": "direction",
         "co-chat": "co-chat", "co-history": "co-history",
         "plug-macros": "plug-macros", "plug-manage": "plug-manage",
         "prot-encrypt": "prot-encrypt", "prot-sign": "prot-sign",

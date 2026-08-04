@@ -103,6 +103,7 @@ pub static OWN_ICONS: &[(&str, &[u8])] = &[
     ("align-right", include_bytes!("../icons/align-right.svg")),
     ("align-dist", include_bytes!("../icons/align-dist.svg")),
     ("ruby", include_bytes!("../icons/ruby.svg")),
+    ("direction", include_bytes!("../icons/direction.svg")),
     ("hidenchars", include_bytes!("../icons/hidenchars.svg")),
     ("instable", include_bytes!("../icons/instable.svg")),
     ("insertimage", include_bytes!("../icons/insimage.svg")),

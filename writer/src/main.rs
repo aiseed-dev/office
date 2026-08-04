@@ -806,12 +806,24 @@ impl Writer {
         // 段組みなら1段の行長で組み、ページの物理座標へ折る。
         // 折った後の座標は画面もクリックも PDF もそのまま使える
         let y0 = self.pg.top_mm + 4.0;
-        self.page = layout(
-            &self.doc,
-            &m,
-            &Frame { measure_mm: self.pg.column_measure_mm(), line_height_mm: LINE_MM, y0_mm: y0 },
-        );
-        kumihan::fold_columns(&mut self.page, &self.pg, y0);
+        if self.doc.vertical {
+            // 縦書き: 行長 = 紙の縦の使い幅で組み、右からの列へ写す(K4)
+            let measure =
+                (self.pg.h_mm - self.pg.top_mm - self.pg.bottom_mm - 8.0).max(20.0);
+            self.page = layout(
+                &self.doc,
+                &m,
+                &Frame { measure_mm: measure, line_height_mm: LINE_MM, y0_mm: y0 },
+            );
+            kumihan::fold_vertical(&mut self.page, &self.pg, y0, LINE_MM);
+        } else {
+            self.page = layout(
+                &self.doc,
+                &m,
+                &Frame { measure_mm: self.pg.column_measure_mm(), line_height_mm: LINE_MM, y0_mm: y0 },
+            );
+            kumihan::fold_columns(&mut self.page, &self.pg, y0);
+        }
         self.refresh_hf();
     }
 
@@ -1892,7 +1904,7 @@ impl Writer {
             Target::Cell { table, row, col } => Some((table, row, col)),
         };
         let mut hit: Option<(f32, f32, f32)> = None;
-        for line in self.page.lines.iter().filter(|l| match want {
+        for (li, line) in self.page.lines.iter().enumerate().filter(|(_, l)| match want {
             None => l.from_body,
             Some(id) => l.cell == Some(id),
         }) {
@@ -1913,7 +1925,13 @@ impl Writer {
                 .or_else(|| line.cells.last())
                 .map(|c| c.size_pt)
                 .unwrap_or(SIZE_PT);
-            hit = Some((self.pg.left_mm + x, line.y_mm, pt));
+            hit = if self.page.vertical {
+                // 縦書き: x は列、y は上からの距離(スクロール追従がこれを見る)
+                let col = self.page.vert_x.get(li).copied().unwrap_or(0.0);
+                Some((col, line.y_mm + x, pt))
+            } else {
+                Some((self.pg.left_mm + x, line.y_mm, pt))
+            };
         }
         hit.unwrap_or((
             self.pg.left_mm,
@@ -2519,18 +2537,38 @@ impl Writer {
     fn relayout_keep(&mut self) {
         let m = Metrics::new(&self.font_bytes).expect("フォント");
         let y0 = self.pg.top_mm + 4.0;
-        self.page = layout(
-            &self.doc,
-            &m,
-            &Frame { measure_mm: self.pg.column_measure_mm(), line_height_mm: LINE_MM, y0_mm: y0 },
-        );
-        kumihan::fold_columns(&mut self.page, &self.pg, y0);
+        if self.doc.vertical {
+            // 縦書き: 行長 = 紙の縦の使い幅で組み、右からの列へ写す(K4)
+            let measure =
+                (self.pg.h_mm - self.pg.top_mm - self.pg.bottom_mm - 8.0).max(20.0);
+            self.page = layout(
+                &self.doc,
+                &m,
+                &Frame { measure_mm: measure, line_height_mm: LINE_MM, y0_mm: y0 },
+            );
+            kumihan::fold_vertical(&mut self.page, &self.pg, y0, LINE_MM);
+        } else {
+            self.page = layout(
+                &self.doc,
+                &m,
+                &Frame { measure_mm: self.pg.column_measure_mm(), line_height_mm: LINE_MM, y0_mm: y0 },
+            );
+            kumihan::fold_columns(&mut self.page, &self.pg, y0);
+        }
         self.refresh_hf();
     }
 
     /// クリックした画素位置(編集領域からの相対)にカーソルを置く。
     /// 文書の下端(紙の座標 mm)。1ページに満たなくても紙1枚ぶんは白い
     fn content_mm(&self) -> f32 {
+        if self.page.vertical {
+            // 縦書きは物理ページに畳んであるので、ページ数で決まる
+            let pages = self.page.lines.iter()
+                .map(|l| (l.y_mm / self.pg.h_mm) as usize)
+                .max()
+                .unwrap_or(0);
+            return ((pages + 1) as f32) * self.pg.h_mm;
+        }
         self.page.lines.last().map(|l| l.y_mm + 30.0).unwrap_or(0.0).max(self.pg.h_mm)
     }
 
@@ -2595,6 +2633,46 @@ impl Writer {
         }
         // 本文をクリックした。セルを編集していたら本文へ戻る
         self.switch_target(Target::Body);
+
+        if self.page.vertical {
+            // 縦書き: 列(x)で行を選び、字は y で選ぶ
+            let vx = (rel_x - 28.0) / pxmm; // 紙の絶対 x(mm)
+            let mut best: Option<(f32, usize)> = None;
+            for (i, line) in self.page.lines.iter().enumerate() {
+                if !line.from_body || line.cells.is_empty() {
+                    continue;
+                }
+                let cx = self.page.vert_x.get(i).copied().unwrap_or(0.0)
+                    + LINE_MM / 2.0;
+                let top = line.y_mm;
+                let bot = line.y_mm
+                    + line.cells.last().map(|c| c.x_mm + c.w_mm).unwrap_or(0.0);
+                let dx = (vx - cx).abs();
+                let dy = if y_mm < top {
+                    top - y_mm
+                } else if y_mm > bot {
+                    y_mm - bot
+                } else {
+                    0.0
+                };
+                let d = dx + dy * 0.5;
+                if best.map_or(true, |(bd, _)| d < bd) {
+                    best = Some((d, i));
+                }
+            }
+            let Some((_, i)) = best else { return };
+            let line = &self.page.lines[i];
+            let mut byte = line.byte0;
+            let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
+            for c in &line.cells {
+                if y_mm < line.y_mm + c.x_mm + c.w_mm / 2.0 {
+                    break;
+                }
+                byte = line.byte0 + (c.off + c.ch.len_utf8()) - base;
+            }
+            self.ed.move_to(byte.min(self.ed.text().len()), extend);
+            return;
+        }
 
         // 一番近いベースラインの本文行を選ぶ(クリックは字の少し上に落ちる)
         let target = y_mm + LINE_MM * 0.3;
@@ -2724,7 +2802,7 @@ impl Writer {
         "bold", "italic", "underline", "strikeout", "fontcolor",
         "superscript", "subscript", "highlight", "clearstyle",
         "align-left", "align-center", "align-right", "align-just", "align-dist",
-        "ruby",
+        "ruby", "direction",
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
         "instable", "inssymbol", "replace", "changecase", "blankpage",
@@ -2945,6 +3023,25 @@ impl Writer {
             "align-just" => self.set_align(Align::Justify),
             // 均等割付(日本語一級)。最後の行も行長いっぱいに字間を配る
             "align-dist" => self.set_align(Align::Distribute),
+            // 縦書き(K4)。sectPr の textDirection=tbRl と往復。
+            // 初版の約束: 表・段組みは縦にならず、ASCII は1字ずつ縦に積む
+            "direction" => {
+                self.flush_target();
+                self.doc.vertical = !self.doc.vertical;
+                self.dirty = true;
+                self.relayout();
+                self.status = if self.doc.vertical {
+                    let caveat = if self.doc.tables().next().is_some() {
+                        "表は初版では縦になりません。"
+                    } else {
+                        ""
+                    };
+                    format!("縦書きにしました(右の列から左へ。{caveat}保存で docx にも入ります)")
+                        .into()
+                } else {
+                    "横書きに戻しました".into()
+                };
+            }
             // ルビ(日本語一級)。選んだ字の上に半分の大きさで読みを振る
             "ruby" => {
                 self.switch_target(Target::Body);
@@ -5108,8 +5205,72 @@ impl Render for Writer {
         }
 
         // 未確定(変換中)の下線は、行が持つバイト位置(byte0)で結ぶ
-        for line in &self.page.lines {
+        for (li, line) in self.page.lines.iter().enumerate() {
             if line.cells.is_empty() {
+                continue;
+            }
+            if self.page.vertical {
+                // 縦書き: 列の x に1字ずつ正立で置く。選択は縦の帯、
+                // キャレットは横棒(変換下線は初版では出さない)
+                let colx = self.page.vert_x.get(li).copied().unwrap_or(0.0);
+                let mine = match self.target {
+                    Target::Body => line.from_body,
+                    Target::Cell { table, row, col } => {
+                        line.cell == Some((table, row, col))
+                    }
+                };
+                let (ls, le) = (line.byte0, line.byte_end());
+                let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
+                let yr = |upto: usize| -> f32 {
+                    line.cells.iter()
+                        .find(|c| c.off - base >= upto)
+                        .map(|c| c.x_mm)
+                        .or_else(|| line.cells.last().map(|c| c.x_mm + c.w_mm))
+                        .unwrap_or(0.0)
+                };
+                let selr = self.ed.selection();
+                if mine && !selr.is_empty() && selr.start < le && selr.end > ls {
+                    let a = selr.start.max(ls) - ls;
+                    let b = selr.end.min(le) - ls;
+                    paper = paper.child(div().absolute()
+                        .left(px(colx * pxmm))
+                        .top(px((line.y_mm + yr(a)) * pxmm))
+                        .w(px(LINE_MM * 0.9 * pxmm))
+                        .h(px((yr(b) - yr(a)).max(1.5) * pxmm))
+                        .bg(gpui::Rgba { r: 0.40, g: 0.60, b: 0.85, a: 0.35 }));
+                }
+                if mine {
+                    let cur = self.ed.cursor();
+                    if cur >= ls && cur <= le {
+                        paper = paper.child(div().absolute()
+                            .left(px(colx * pxmm))
+                            .top(px((line.y_mm + yr(cur - ls)) * pxmm))
+                            .w(px(LINE_MM * 0.9 * pxmm))
+                            .h(px(1.5))
+                            .bg(rgb(0x165E83)));
+                    }
+                }
+                for c in &line.cells {
+                    let spt = c.size_pt * 96.0 / 72.0 * self.zoom;
+                    let mut d = div().absolute()
+                        .left(px(colx * pxmm))
+                        .top(px((line.y_mm + c.x_mm) * pxmm))
+                        .text_size(px(spt))
+                        .font_family(c.font.clone().map(SharedString::from)
+                            .unwrap_or_else(|| self.font_name.clone()))
+                        .whitespace_nowrap()
+                        .child(SharedString::from(c.ch.to_string()));
+                    if c.fmt.bold {
+                        d = d.font_weight(gpui::FontWeight::BOLD);
+                    }
+                    d = match &c.fmt.color {
+                        Some(cl) => d.text_color(gpui::Rgba {
+                            r: hex(cl, 0), g: hex(cl, 1), b: hex(cl, 2), a: 1.0,
+                        }),
+                        None => d.text_color(rgb(0x1B1B1B)),
+                    };
+                    paper = paper.child(d);
+                }
                 continue;
             }
             let pt = line.cells[0].size_pt;
@@ -5309,8 +5470,8 @@ impl Render for Writer {
                     .child(SharedString::from(line.text())));
             }
         }
-        // キャレット。その場の文字の大きさに合わせて描く
-        {
+        // キャレット。その場の文字の大きさに合わせて描く(縦書きは行の側)
+        if !self.page.vertical {
             let sz = caret_pt * 96.0 / 72.0 * self.zoom;
             paper = paper.child(div().absolute()
                 .left(px(cx_mm * pxmm))

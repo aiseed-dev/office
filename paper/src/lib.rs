@@ -156,6 +156,21 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
         let y_roll = line.y_mm - offsets[k - 1];
         // PDF の原点は左下。紙面の y は上からなので裏返す
         let y = paper.height_mm - y_roll;
+        if sheet.vertical {
+            // 縦書き: 1字ずつ、列の x(絶対 mm)に正立で置く。
+            // 字の腰は「上からの距離 + だいたいの上がり」で合わせる
+            let colx = sheet.vert_x.get(i).copied().unwrap_or(0.0);
+            for c in &line.cells {
+                let em = c.size_pt * 0.3528;
+                let cy = paper.height_mm - (y_roll + c.x_mm + em * 0.85);
+                let txt = c.ch.to_string();
+                l.use_text(&txt, c.size_pt, Mm(colx), Mm(cy), &font);
+                if c.fmt.bold {
+                    l.use_text(&txt, c.size_pt, Mm(colx + 0.12), Mm(cy), &font);
+                }
+            }
+            continue;
+        }
         // **同じ書式の連なり**ごとに打つ(部分書式)。書体の実体は1つなので、
         // 大きさと飾りだけが変わる(太字は少しずらして二度打つ合成 —
         // 太字の実体を持っていないものを持っている顔をしない)

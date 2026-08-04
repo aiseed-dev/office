@@ -334,6 +334,9 @@ pub struct Document {
     pub protection: Option<String>,
     /// 文書の情報(docx の docProps/core.xml)。作成者・タイトルなど
     pub props: CoreProps,
+    /// 縦書き(docx の sectPr の textDirection=tbRl)。
+    /// 組みは fold_vertical が行を右からの列へ写す(K4)
+    pub vertical: bool,
 }
 
 /// 文書の情報(core properties)。空の欄は書かない
@@ -882,7 +885,7 @@ impl Document {
         Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, props: Default::default(),
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, props: Default::default(), vertical: false,
             blocks: text
                 .split('\n')
                 .map(|p| Block::Para(Paragraph {
@@ -954,6 +957,10 @@ impl Line {
 #[derive(Debug, Clone, Default)]
 pub struct Sheet {
     pub lines: Vec<Line>,
+    /// 縦書きか。真なら vert_x が行ごとの「列の左肩の x(絶対 mm)」を持ち、
+    /// Cell.x_mm は「上からの距離」の意味になる。描く側は1字ずつ置く
+    pub vertical: bool,
+    pub vert_x: Vec<f32>,
     /// ここで新しいページを始める、という y(巻物の座標)。
     /// 紙に写す側([`paper`]相当)がこれを見て強制的に頁を割る
     pub breaks: Vec<f32>,
@@ -1500,6 +1507,49 @@ pub fn layout_hf(
 /// x は段の位置へずらし済み。だから画面もクリックもキャレットも PDF も、
 /// 座標を使う側は**何も変えずに**そのまま写せる。
 /// ページの頭には breaks を置くので、紙に写す側はそこで頁を割る。
+/// 縦書き(K4)。横に組んだ巻物を、右から左への列に写す。
+/// 行 k → 右から k 本目の列。vert_x[i] が列の左肩の x(絶対 mm)、
+/// Line.y_mm はその物理ページの本文の上端、Cell.x_mm は上からの距離。
+/// ルビの行(基底より 0.45 行ぶん上)は基底の列の右肩に寄る。
+/// 約物は縦用の字形へ置き換える(フォントの vert の近似)。
+/// 初版の約束: 表・段組みとの併用はしない(呼ぶ側が避ける)。
+/// 明示の改ページは列送りに畳まれる(頁の頭には来ない)
+pub fn fold_vertical(sheet: &mut Sheet, pg: &PageSetup, y0_mm: f32, line_mm: f32) {
+    sheet.vertical = true;
+    let usable_w = (pg.w_mm - pg.left_mm - pg.right_mm).max(line_mm);
+    let cpp = (usable_w / line_mm).floor().max(1.0) as usize; // 1頁の列数
+    let right = pg.w_mm - pg.right_mm;
+    sheet.breaks.clear();
+    sheet.vert_x = Vec::with_capacity(sheet.lines.len());
+    let mut max_page = 0usize;
+    for line in &mut sheet.lines {
+        let col_f = (line.y_mm - y0_mm) / line_mm;
+        let col = col_f.round().max(0.0) as usize;
+        let frac = col as f32 - col_f; // ルビなら正(基底の右へ)
+        let (page, cip) = (col / cpp, col % cpp);
+        max_page = max_page.max(page);
+        sheet.vert_x.push(right - (cip as f32 + 1.0) * line_mm + frac * line_mm);
+        line.y_mm = page as f32 * pg.h_mm + pg.top_mm;
+        for c in &mut line.cells {
+            c.ch = match c.ch {
+                '、' => '︑',
+                '。' => '︒',
+                'ー' => '丨',
+                '「' => '﹁',
+                '」' => '﹂',
+                '『' => '﹃',
+                '』' => '﹄',
+                '(' => '︵',
+                ')' => '︶',
+                '…' => '︙',
+                other => other,
+            };
+        }
+    }
+    // ページの頭(物理座標)。紙に写す側がこの目印で頁を割る
+    sheet.breaks = (1..=max_page).map(|k| k as f32 * pg.h_mm).collect();
+}
+
 pub fn fold_columns(sheet: &mut Sheet, pg: &PageSetup, y0_mm: f32) {
     let n = pg.cols();
     if n <= 1 {
@@ -2140,6 +2190,36 @@ mod list_tests {
 }
 
 #[cfg(test)]
+mod vertical_tests {
+    use super::*;
+
+    #[test]
+    fn 縦書きは右の列から左へ進み字は上から下へ() {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let d = Document::plain("一行目の文。\n二行目。", 10.5);
+        let pg = PageSetup::default();
+        let y0 = pg.top_mm + 4.0;
+        let measure = pg.h_mm - pg.top_mm - pg.bottom_mm - 8.0;
+        let mut sheet = layout(&d, &m,
+            &Frame { measure_mm: measure, line_height_mm: 6.0, y0_mm: y0 });
+        fold_vertical(&mut sheet, &pg, y0, 6.0);
+        assert!(sheet.vertical);
+        assert_eq!(sheet.vert_x.len(), sheet.lines.len());
+        // 1列目は右端の近く、2列目はその左
+        let right = pg.w_mm - pg.right_mm;
+        assert!((sheet.vert_x[0] - (right - 6.0)).abs() < 0.5,
+            "1列目が右端に無い: {}", sheet.vert_x[0]);
+        assert!(sheet.vert_x[1] < sheet.vert_x[0], "2列目が左に来ていない");
+        // 字は上から下(Cell.x_mm が増える)
+        let cs = &sheet.lines[0].cells;
+        assert!(cs[0].x_mm < cs[1].x_mm, "字が上から下に並んでいない");
+        // 約物が縦用に置き換わる
+        assert!(cs.iter().any(|c| c.ch == '︒'), "句点が縦用でない");
+    }
+}
+
+#[cfg(test)]
 mod ruby_tests {
     use super::*;
 
@@ -2264,7 +2344,7 @@ mod table_layout_tests {
             }],
             ..Default::default()
         };
-        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, props: Default::default(), blocks: vec![] };
+        let mut d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, props: Default::default(), vertical: false, blocks: vec![] };
         d.blocks.push(Block::Table(Table {
             col_mm: vec![],
             rows: vec![vec![cell(&"あ".repeat(30)), cell("短い")]],
@@ -2304,7 +2384,7 @@ mod merge_layout_tests {
         let data = font::load(font::for_document(None).unwrap().0).unwrap();
         let m = Metrics::new(&data).unwrap();
         let d = Document {
-            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, props: Default::default(),
+            font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, props: Default::default(), vertical: false,
             blocks: vec![Block::Table(Table { col_mm: vec![], rows })],
         };
         layout(&d, &m, &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 })
@@ -2381,7 +2461,7 @@ mod gridcol_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, props: Default::default(),
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, props: Default::default(), vertical: false,
             blocks: vec![Block::Table(Table {
                 col_mm,
                 rows: vec![vec![cell("項目"), cell("値")]],
