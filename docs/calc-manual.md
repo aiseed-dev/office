@@ -76,6 +76,10 @@ xlsx を開いて、直して、保存する表計算アプリ。式も計算す
 | 論理 | IF, AND, OR, NOT, IFERROR, ISBLANK, ISERROR |
 | 検索 | VLOOKUP, HLOOKUP, INDEX, MATCH |
 
+エラー(`#N/A` 等)は引数から式へそのまま伝わる。ただし IFERROR は
+第1引数のエラーを受けて第2引数に落ち、IF は選ばなかった側の
+エラーを踏まない(`=IFERROR(VLOOKUP(…),"")` で「見つからない」を空欄にできる)。
+
 これに加えて **`=PY(…)` で自分の関数を Python で書ける** —
 [Python の章](#セル関数を-python-で書く-pyudf)へ。
 

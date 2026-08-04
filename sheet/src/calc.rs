@@ -465,9 +465,13 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
         _ => {}
     }
     let a: Vec<Value> = args.iter().flat_map(|g| g.values().iter().cloned()).collect();
-    // 引数にエラーがあればそれを返す(黙って0として数えない)
-    if let Some(e) = a.iter().find(|v| matches!(v, Value::Error(_))) {
-        return Ok(e.clone());
+    // 引数にエラーがあればそれを返す(黙って0として数えない)。
+    // ただしエラーを受けて働く関数(IFERROR・ISERROR・ISBLANK・IF)は素通しする —
+    // ここで弾くと IFERROR が第2引数に落ちられない
+    if !matches!(name, "IFERROR" | "ISERROR" | "ISBLANK" | "IF") {
+        if let Some(e) = a.iter().find(|v| matches!(v, Value::Error(_))) {
+            return Ok(e.clone());
+        }
     }
     let nums = |a: &[Value]| -> Vec<f64> {
         a.iter().filter(|v| !v.is_empty()).map(|v| v.as_number()).collect()
@@ -555,9 +559,11 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
         "ISBLANK" => Value::Bool(a.first().map(|v| v.is_empty()).unwrap_or(true)),
         "ISERROR" => Value::Bool(matches!(a.first(), Some(Value::Error(_)))),
         "IFERROR" => {
-            // 元の引数を見る必要があるので、頭のエラー弾きより前に効かせたいが、
-            // ここでは第2引数を返すだけにしてある(呼ぶ前に弾かれるため要注意)
-            a.first().cloned().unwrap_or(Value::Empty)
+            // 第1引数がエラーなら第2引数(無ければ空)に落とす
+            match a.first() {
+                Some(Value::Error(_)) => a.get(1).cloned().unwrap_or(Value::Empty),
+                v => v.cloned().unwrap_or(Value::Empty),
+            }
         }
         "ABS" => Value::Number(a.first().map(|v| v.as_number().abs()).unwrap_or(0.0)),
         "ROUND" => {
@@ -568,6 +574,11 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
         }
         "INT" => Value::Number(a.first().map(|v| v.as_number().floor()).unwrap_or(0.0)),
         "IF" => {
+            // 条件のエラーは伝える。選ばなかった側のエラーは踏まない
+            // (引数は先に評価済みなので、値の段階で無視するのが遅延評価の代わり)
+            if let Some(e @ Value::Error(_)) = a.first() {
+                return Ok(e.clone());
+            }
             let c = matches!(a.first(), Some(Value::Bool(true)))
                 || a.first().map(|v| v.as_number() != 0.0).unwrap_or(false);
             if c {
@@ -945,6 +956,21 @@ mod tests {
     }
 
     #[test]
+    fn 外した検索をiferrorで受けられる() {
+        // 実測で出た形: 見つからない VLOOKUP を IFERROR・IF で受ける
+        let sh = s(&[
+            ("A2", "りんご"), ("B2", "100"),
+            ("A3", "みかん"), ("B3", "80"),
+            ("C1", "=IFERROR(VLOOKUP(\"zzz\",A2:B3,2),\"\")"),
+            ("C2", "=IFERROR(VLOOKUP(\"みかん\",A2:B3,2),\"\")"),
+            ("C3", "=IF(ISBLANK(G4),\"\",VLOOKUP(\"zzz\",A2:B3,2))"),
+        ]);
+        assert_eq!(v(&sh, "C1"), "", "外れたら第2引数に落ちる");
+        assert_eq!(v(&sh, "C2"), "80", "当たればそのまま");
+        assert_eq!(v(&sh, "C3"), "", "使わない側のエラーを踏まない");
+    }
+
+    #[test]
     fn 見積書の計算ができる() {
         // 事務で実際に使う形: 単価×数量、小計、消費税、合計
         let sh = s(&[
@@ -1073,6 +1099,23 @@ mod more_fn_tests {
     fn 空とエラーを見分けられる() {
         assert_eq!(eval("=ISBLANK(A9)", &[]), Value::Bool(true));
         assert_eq!(eval("=ISBLANK(A1)", &[("A1", 5.0)]), Value::Bool(false));
+    }
+
+    #[test]
+    fn エラーを受けて働く関数() {
+        // IFERROR は第1引数のエラーを捕まえて第2引数に落ちる
+        // (以前は引数の先行エラー弾きで #N/A が素通りしていた)
+        assert_eq!(eval("=IFERROR(MOD(1,0),\"×\")", &[]), Value::Text("×".into()));
+        assert_eq!(eval("=IFERROR(A1,\"×\")", &[("A1", 5.0)]), Value::Number(5.0));
+        // ISERROR も同じ弾きで壊れていた(エラーを見て TRUE を返せなかった)
+        assert_eq!(eval("=ISERROR(MOD(1,0))", &[]), Value::Bool(true));
+        assert_eq!(eval("=ISERROR(1)", &[]), Value::Bool(false));
+        // IF は選ばなかった側のエラーを踏まない。条件のエラーは伝える
+        assert_eq!(eval("=IF(1,\"可\",MOD(1,0))", &[]), Value::Text("可".into()));
+        assert_eq!(eval("=IF(0,MOD(1,0),\"否\")", &[]), Value::Text("否".into()));
+        assert_eq!(eval("=IF(MOD(1,0),1,2)", &[]), Value::Error("#DIV/0!".into()));
+        // 選んだ側がエラーならそのまま伝える
+        assert_eq!(eval("=IF(1,MOD(1,0),\"否\")", &[]), Value::Error("#DIV/0!".into()));
     }
 
     #[test]
