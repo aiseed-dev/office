@@ -8111,16 +8111,45 @@ fn main() {
             .add_fonts(vec![std::borrow::Cow::Borrowed(font_data())])
             .expect("フォント登録");
         cx.bind_keys(ui::bindings("jo_edit"));
-        let bounds = Bounds::centered(None, size(px(900.0), px(1000.0)), cx);
+        // 前に閉じたときの姿で開く。控えが無ければ既定の大きさで中央に
+        let saved = ui::winstate::load("writer");
+        let bounds = match saved {
+            Some(st) => Bounds::new(gpui::point(px(st.x), px(st.y)), size(px(st.w), px(st.h))),
+            None => Bounds::centered(None, size(px(900.0), px(1000.0)), cx),
+        };
+        let wb = if saved.is_some_and(|st| st.maximized) {
+            WindowBounds::Maximized(bounds)
+        } else {
+            WindowBounds::Windowed(bounds)
+        };
         let arg2 = arg.clone();
         cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(wb),
                 ..Default::default()
             },
             move |window, cx| {
                 let view = cx.new(|cx| Writer::new(arg2.clone(), cx));
                 window.focus(&view.focus_handle(cx), cx);
+                // 動かす・伸ばすたびに控える — 閉じる経路が何本あっても漏れない。
+                // 全画面は控えない(次も全画面で開くと出口が分かりにくい)
+                view.update(cx, |_, cx| {
+                    cx.observe_window_bounds(window, |_, window, _| {
+                        let wb = window.window_bounds();
+                        if matches!(wb, WindowBounds::Fullscreen(_)) {
+                            return;
+                        }
+                        let b = wb.get_bounds();
+                        ui::winstate::save("writer", ui::winstate::WinState {
+                            x: f32::from(b.origin.x),
+                            y: f32::from(b.origin.y),
+                            w: f32::from(b.size.width),
+                            h: f32::from(b.size.height),
+                            maximized: matches!(wb, WindowBounds::Maximized(_)),
+                        });
+                    })
+                    .detach();
+                });
                 // WM からの「閉じる」(Alt+F4 等)も同じ確認を通す。
                 // 書きかけがあれば「まだ閉じない」と答え、確認は別の糸で出す
                 let v = view.clone();

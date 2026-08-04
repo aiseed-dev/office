@@ -16,6 +16,7 @@ pub use lang::model::Endpoint;
 pub use lang::ai;
 pub mod icons;
 pub mod ribbon;
+pub mod winstate;
 
 use std::ops::Range;
 

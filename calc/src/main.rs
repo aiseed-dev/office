@@ -10283,16 +10283,45 @@ fn main() {
             .add_fonts(vec![std::borrow::Cow::Borrowed(font_data())])
             .expect("フォント登録");
         cx.bind_keys(ui::bindings("jo_edit"));
-        let bounds = Bounds::centered(None, size(px(1060.0), px(820.0)), cx);
+        // 前に閉じたときの姿で開く。控えが無ければ既定の大きさで中央に
+        let saved = ui::winstate::load("calc");
+        let bounds = match saved {
+            Some(st) => Bounds::new(gpui::point(px(st.x), px(st.y)), size(px(st.w), px(st.h))),
+            None => Bounds::centered(None, size(px(1060.0), px(820.0)), cx),
+        };
+        let wb = if saved.is_some_and(|st| st.maximized) {
+            WindowBounds::Maximized(bounds)
+        } else {
+            WindowBounds::Windowed(bounds)
+        };
         let arg2 = arg.clone();
         cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(wb),
                 ..Default::default()
             },
             move |window, cx| {
                 let view = cx.new(|cx| Calc::new(arg2.clone(), cx));
                 window.focus(&view.focus_handle(cx), cx);
+                // 動かす・伸ばすたびに控える — 閉じる経路が何本あっても漏れない。
+                // 全画面は控えない(次も全画面で開くと出口が分かりにくい)
+                view.update(cx, |_, cx| {
+                    cx.observe_window_bounds(window, |_, window, _| {
+                        let wb = window.window_bounds();
+                        if matches!(wb, WindowBounds::Fullscreen(_)) {
+                            return;
+                        }
+                        let b = wb.get_bounds();
+                        ui::winstate::save("calc", ui::winstate::WinState {
+                            x: f32::from(b.origin.x),
+                            y: f32::from(b.origin.y),
+                            w: f32::from(b.size.width),
+                            h: f32::from(b.size.height),
+                            maximized: matches!(wb, WindowBounds::Maximized(_)),
+                        });
+                    })
+                    .detach();
+                });
                 // WM からの「閉じる」(Alt+F4 等)も同じ確認を通す。
                 // 書きかけがあれば「まだ閉じない」と答え、確認は別の糸で出す
                 let v = view.clone();
@@ -10940,6 +10969,154 @@ mod pivot_tests {
         let Some((g, _)) = run_py(spec) else { return };
         assert_eq!(g[2][0], "", "繰り返しの部署が空欄にならない: {g:?}");
         assert_eq!(g[2][1], "二");
+    }
+}
+
+/// **メニューの釦を全部おして、落ちないか・繋がっているかを見る。**
+/// writer の menu_run_tests と同じ作法 — リボンに ready で並ぶものは
+/// ここで実際に run_cmd を通す(ダイアログを開くものだけは外す)。
+/// GUI は起こさない — gpui の試験用の場で Calc を作って叩く
+#[cfg(test)]
+mod menu_run_tests {
+    use super::*;
+
+    /// ファイル選択の窓を開く釦。**試験では押さない** —
+    /// rfd は実際に窓を出しに行くので、画面の無い試験では返ってこない
+    /// (writer で踏んで確かめた轍。実機での確認に回す)
+    const DIALOG: &[&str] = &[
+        "open", "save", "pdf", "plug-macros", "insimage", "data-from-text",
+        "data-external-links",
+    ];
+
+    /// 空の表だと何も起きない釦があるので、見本の小さな表を入れて選ぶ
+    fn seed(this: &mut Calc) {
+        if this.sheet().cells.is_empty() {
+            for (a1, v) in [
+                ("A1", "品名"), ("B1", "数量"), ("C1", "単価"),
+                ("A2", "防火戸"), ("B2", "4"), ("C2", "125000"),
+                ("A3", "点検口"), ("B3", "2"), ("C3", "8000"),
+                ("D2", "=B2*C2"), ("D3", "=B3*C3"),
+            ] {
+                this.sheet_mut().set(Pos::parse(a1).unwrap(), Cell::input(v));
+            }
+            recalc(this.sheet_mut());
+        }
+        this.cursor = Pos::parse("A1").unwrap();
+        this.anchor = Some(Pos::parse("D3").unwrap());
+    }
+
+    #[gpui::test]
+    fn 全部の釦が落ちずに通る(cx: &mut gpui::TestAppContext) {
+        // AI の宛先は覚える設定なので、試験で変えたら戻す
+        let keep_ai = ui::ai::backend();
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        for tab in ui::ribbon::CALC {
+            for cmd in tab.cmds {
+                if !cmd.ready || DIALOG.contains(&cmd.id) {
+                    continue;
+                }
+                let (id, label) = (cmd.id, cmd.label);
+                c.update(cx, |this, cx| {
+                    seed(this);
+                    this.run_cmd(id, cx);
+                    let st = this.status.to_string();
+                    assert!(
+                        !st.contains("未配線"),
+                        "「{label}」({id}) が未配線: {st}"
+                    );
+                });
+            }
+        }
+        ui::ai::set_backend(keep_ai);
+    }
+
+    /// 押すと入切する釦は、2回押すと元に戻る(1手で戻せる家訓)
+    #[gpui::test]
+    fn 入切の釦は二度おすと戻る(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        let state = |this: &Calc, id: &str| -> bool {
+            match id {
+                "show-formulas" => this.show_formulas,
+                "show-gridlines" => this.gridlines,
+                "co-showcomment" => this.show_comments,
+                "formula-bar" => this.show_formula_bar,
+                "show-headings" => this.show_headers,
+                "show-zeros" => this.show_zeros,
+                "freeze" => this.frozen.is_some(),
+                "rtl-sheet" => this.sheet().rtl,
+                _ => unreachable!(),
+            }
+        };
+        for id in [
+            "show-formulas", "show-gridlines", "co-showcomment", "formula-bar",
+            "show-headings", "show-zeros", "freeze", "rtl-sheet",
+        ] {
+            c.update(cx, |this, cx| {
+                seed(this);
+                // freeze は A1 では効かない仕様(固定する位置が要る)
+                this.cursor = Pos::parse("B2").unwrap();
+                this.anchor = None;
+                let before = state(this, id);
+                this.run_cmd(id, cx);
+                assert_ne!(before, state(this, id), "「{id}」を押しても変わらない");
+                this.run_cmd(id, cx);
+                assert_eq!(before, state(this, id), "「{id}」が元に戻らない");
+            });
+        }
+    }
+
+    /// **見本のブックを開いた状態でも**全部の釦が通る。
+    /// 空のブックと違い、式・結合・列幅・条件付き書式が入っているので
+    /// 「前提があるときの道」も通る(sample/*.xlsx が検査の材料)。
+    /// 見本は写しを開く — 署名やチャットが隣にファイルを添えるため、
+    /// 追跡している見本の隣を汚さない
+    #[gpui::test]
+    fn 見本を開いても全部の釦が通る(cx: &mut gpui::TestAppContext) {
+        let dir = std::path::Path::new("../sample");
+        let dir = if dir.exists() {
+            dir.to_path_buf()
+        } else {
+            std::path::Path::new("sample").to_path_buf()
+        };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return; // 見本が無い環境では黙って飛ばす(失敗にはしない)
+        };
+        let mut files: Vec<std::path::PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("xlsx"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "見本が無い: {}", dir.display());
+        let work = std::env::temp_dir().join(format!("jo-menu-{}", std::process::id()));
+        std::fs::create_dir_all(&work).unwrap();
+        let keep_ai = ui::ai::backend();
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        for f in files {
+            let copy = work.join(f.file_name().unwrap());
+            std::fs::copy(&f, &copy).unwrap();
+            c.update(cx, |this, _| this.open(copy.clone()));
+            for tab in ui::ribbon::CALC {
+                for cmd in tab.cmds {
+                    if !cmd.ready || DIALOG.contains(&cmd.id) {
+                        continue;
+                    }
+                    let (id, label) = (cmd.id, cmd.label);
+                    let name = f.file_name().unwrap().to_string_lossy().to_string();
+                    c.update(cx, |this, cx| {
+                        this.run_cmd(id, cx);
+                        let st = this.status.to_string();
+                        assert!(
+                            !st.contains("未配線"),
+                            "{name} で「{label}」({id}) が未配線: {st}"
+                        );
+                    });
+                }
+            }
+            c.update(cx, |this, _| this.release_lock());
+        }
+        ui::ai::set_backend(keep_ai);
+        let _ = std::fs::remove_dir_all(&work);
     }
 }
 
