@@ -402,6 +402,12 @@ struct Writer {
     hist_open: bool,
     /// プラグインの板(置き場の .py 一覧)
     plug_open: bool,
+    /// 暗号化のパスワード。Some なら保存で ECMA-376 Standard に包む
+    encrypt_pw: Option<String>,
+    /// パスワードの板。pw_pending が Some なら「開くために聞いている」
+    pw_open: bool,
+    pw_ed: Editor,
+    pw_pending: Option<PathBuf>,
     /// マクロで置き換える直前の文書(Ctrl+Z で1手で戻すため)
     doc_undo: Option<Document>,
     /// チャット(文書の隣の申し送り帳)の板と入力欄
@@ -438,7 +444,9 @@ impl HasEditor for Writer {
     fn editor(&mut self) -> &mut Editor {
         // 置換・ヘッダーの板が開いている間、入力(IME含む)はそちらへ入る。
         // 別の入力部品を作らず、同じ Editor と結線を使い回す
-        if self.find_open {
+        if self.pw_open {
+            &mut self.pw_ed
+        } else if self.find_open {
             if self.find_field == 0 { &mut self.find_ed } else { &mut self.repl_ed }
         } else if self.hf_edit.is_some() {
             &mut self.hf_ed
@@ -455,7 +463,9 @@ impl HasEditor for Writer {
         }
     }
     fn editor_ref(&self) -> &Editor {
-        if self.find_open {
+        if self.pw_open {
+            &self.pw_ed
+        } else if self.find_open {
             if self.find_field == 0 { &self.find_ed } else { &self.repl_ed }
         } else if self.hf_edit.is_some() {
             &self.hf_ed
@@ -472,8 +482,8 @@ impl HasEditor for Writer {
         }
     }
     fn on_edited(&mut self) {
-        if self.find_open {
-            // 検索欄への打鍵は文書を変えない
+        if self.pw_open || self.find_open {
+            // パスワード・検索欄への打鍵は文書を変えない
             return;
         }
         if self.chat_open {
@@ -609,6 +619,10 @@ impl Writer {
             bm_ed: Editor::new(""),
             hist_open: false,
             plug_open: false,
+            encrypt_pw: None,
+            pw_open: false,
+            pw_ed: Editor::new(""),
+            pw_pending: None,
             doc_undo: None,
             chat_open: false,
             chat_ed: Editor::new(""),
@@ -961,6 +975,65 @@ impl Writer {
         }
     }
 
+    /// パスワードの板の Enter。開き待ちがあれば解いて開き、
+    /// 無ければ「次の保存から暗号化」を決める(空なら解除)
+    fn pw_commit(&mut self) {
+        let pw = self.pw_ed.text().to_string();
+        if let Some(p) = self.pw_pending.take() {
+            let bytes = match std::fs::read(&p) {
+                Ok(b) => b,
+                Err(e) => {
+                    self.pw_open = false;
+                    self.status = format!("開けません: {e}").into();
+                    return;
+                }
+            };
+            match ooxml::crypt::decrypt(&bytes, &pw) {
+                Ok(plain) => {
+                    self.pw_open = false;
+                    self.open_plain(p.clone(), plain);
+                    if self.path.as_deref() == Some(p.as_path()) {
+                        self.encrypt_pw = Some(pw);
+                        self.status = format!(
+                            "{}(保存も同じパスワードで暗号化します)",
+                            self.status
+                        )
+                        .into();
+                    }
+                }
+                Err(e) => {
+                    // 板は開いたまま。打ち直せる
+                    self.pw_pending = Some(p);
+                    self.pw_ed = Editor::new("");
+                    self.status = e.into();
+                }
+            }
+        } else {
+            self.pw_open = false;
+            if pw.is_empty() {
+                self.encrypt_pw = None;
+                self.status = "暗号化しません(次の保存から普通の docx)".into();
+            } else {
+                self.encrypt_pw = Some(pw);
+                self.dirty = true;
+                self.status = "次の保存から、このパスワードで暗号化します\
+                               (AES-128。Word や LibreOffice でも開けます)"
+                    .into();
+            }
+        }
+    }
+
+    /// 原本の中身(暗号化されていれば解いた平文)。部品の持ち越しに使う
+    fn original_plain(&self) -> Option<Vec<u8>> {
+        let bytes = std::fs::read(self.path.as_ref()?).ok()?;
+        if ooxml::crypt::is_encrypted(&bytes) {
+            let pw = self.encrypt_pw.as_ref()?;
+            ooxml::crypt::decrypt(&bytes, pw).ok()
+        } else {
+            Some(bytes)
+        }
+    }
+
     /// 読み取り専用の保護が掛かっているか(保護タブの「保護」で入切)
     fn protected(&self) -> bool {
         self.doc.protection.is_some()
@@ -983,12 +1056,9 @@ impl Writer {
         let _ = std::fs::create_dir_all(&dir);
         let in_d = dir.join("in.docx");
         let out_d = dir.join("out.docx");
-        // 複製は保存と同じ道で作る(原本の部品も持ち越す)
-        let original: Option<std::io::Cursor<Vec<u8>>> = self
-            .path
-            .as_ref()
-            .and_then(|old| std::fs::read(old).ok())
-            .map(std::io::Cursor::new);
+        // 複製は保存と同じ道で作る(原本の部品も持ち越す。暗号化は解いて)
+        let original: Option<std::io::Cursor<Vec<u8>>> =
+            self.original_plain().map(std::io::Cursor::new);
         let doc_out = self.doc_for_save();
         let w = std::fs::File::create(&in_d)
             .map_err(|e| e.to_string())
@@ -1197,7 +1267,27 @@ impl Writer {
     /// (保存すると名前を聞く。元へ戻したいなら同じ名前で保存する — 
     /// 黙って元のファイルを書き戻したりしない)
     fn open_version(&mut self, q: &std::path::Path) {
-        match std::fs::File::open(q).map_err(|e| e.to_string()).and_then(ooxml::read) {
+        let bytes = match std::fs::read(q) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("控えが読めません: {e}").into();
+                return;
+            }
+        };
+        let bytes = if ooxml::crypt::is_encrypted(&bytes) {
+            match self.encrypt_pw.as_ref().map(|pw| ooxml::crypt::decrypt(&bytes, pw)) {
+                Some(Ok(b)) => b,
+                _ => {
+                    self.status =
+                        "控えは暗号化されています(いまのパスワードでは解けません)"
+                            .into();
+                    return;
+                }
+            }
+        } else {
+            bytes
+        };
+        match ooxml::read(std::io::Cursor::new(bytes)) {
             Ok((doc, rep)) => {
                 self.release_lock();
                 self.locked_by = None;
@@ -1303,15 +1393,36 @@ impl Writer {
     }
 
     fn open(&mut self, p: PathBuf) {
+        let bytes = match std::fs::read(&p) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("開けません: {e}").into();
+                return;
+            }
+        };
+        if ooxml::crypt::is_encrypted(&bytes) {
+            // 板でパスワードを聞き、Enter(pw_commit)が続きをやる
+            self.pw_pending = Some(p);
+            self.pw_open = true;
+            self.pw_ed = Editor::new("");
+            self.status =
+                "この文書は暗号化されています。パスワードを打って Enter".into();
+            return;
+        }
+        self.open_plain(p, bytes);
+    }
+
+    /// 平文(zip)の docx を読み込む。open と pw_commit の共通の続き
+    fn open_plain(&mut self, p: PathBuf, bytes: Vec<u8>) {
         self.target = Target::Body;
         // 前の文書の板が残っていると、打鍵が新しい文書のヘッダーを潰す
         self.hf_edit = None;
         self.track = false;
         self.track_base = None;
-        match std::fs::File::open(&p)
-            .map_err(|e| e.to_string())
-            .and_then(ooxml::read)
-        {
+        // 前の文書のパスワードを引きずらない(暗号化して開いた時だけ
+        // pw_commit が後から入れ直す)
+        self.encrypt_pw = None;
+        match ooxml::read(std::io::Cursor::new(bytes)) {
             Ok((doc, rep)) => {
                 self.notes = rep
                     .unsupported
@@ -1398,19 +1509,30 @@ impl Writer {
         self.flush_target();
         // 元のファイルの部品(画像・スタイル・ヘッダー等)を持ち越す。
         // 上書き保存では読み終えてから書く(同じファイルを同時に開かない)
-        let original: Option<std::io::Cursor<Vec<u8>>> = self
-            .path
-            .as_ref()
-            .and_then(|old| std::fs::read(old).ok())
-            .map(std::io::Cursor::new);
+        let original: Option<std::io::Cursor<Vec<u8>>> =
+            self.original_plain().map(std::io::Cursor::new);
         let doc_out = self.doc_for_save();
         // バージョン履歴: 上書きの前に、いままでの中身を控えとして残す
         if p.exists() {
             self.keep_version(&p);
         }
-        match kumihan::atomic::save(&p, |f| {
-            ooxml::write_with(&doc_out, original, std::io::BufWriter::new(f))
-        }) {
+        let saved = if let Some(pw) = self.encrypt_pw.clone() {
+            // 暗号化は zip 丸ごとが単位 — 一度メモリへ書いてから包む
+            let mut plain = Vec::new();
+            ooxml::write_with(&doc_out, original, std::io::Cursor::new(&mut plain))
+                .and_then(|_| ooxml::crypt::encrypt(&plain, &pw))
+                .and_then(|enc| {
+                    kumihan::atomic::save(&p, |mut f| {
+                        use std::io::Write as _;
+                        f.write_all(&enc).map_err(|e| e.to_string())
+                    })
+                })
+        } else {
+            kumihan::atomic::save(&p, |f| {
+                ooxml::write_with(&doc_out, original, std::io::BufWriter::new(f))
+            })
+        };
+        match saved {
             Ok(_) => {
                 let caveat = if self.notes.is_empty() {
                     ""
@@ -1418,8 +1540,10 @@ impl Writer {
                     // 読めなかった要素は本文から消えている。黙って保存しない
                     "(読めなかった要素は本文に戻りません)"
                 };
+                let enc_note =
+                    if self.encrypt_pw.is_some() { "(暗号化)" } else { "" };
                 self.status = format!(
-                    "保存しました — {}{caveat}",
+                    "保存しました — {}{enc_note}{caveat}",
                     p.file_name().unwrap_or_default().to_string_lossy()
                 )
                 .into();
@@ -2415,7 +2539,7 @@ impl Writer {
         "pen", "highlighter", "eraser", "track-changes", "dropcap", "hyphenation",
         "crossref", "co-addcomment", "co-delcomment", "co-showcomment",
         "prot-doc", "coauth-mode", "co-history", "co-chat",
-        "plug-macros", "plug-manage",
+        "plug-macros", "plug-manage", "prot-encrypt",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2550,7 +2674,7 @@ impl Writer {
             "open", "save", "pdf", "zoom-in", "zoom-out", "ruler", "darkmode",
             "line-numbers", "hidenchars", "selectall", "spell", "wordcount",
             "co-showcomment", "replace", "prot-doc", "coauth-mode",
-            "co-history", "co-chat",
+            "co-history", "co-chat", "prot-encrypt",
         ];
         if self.protected() && !READONLY_OK.contains(&id) {
             self.status =
@@ -3232,6 +3356,24 @@ impl Writer {
                     .into();
                 }
             }
+            // 暗号化。パスワードを決めると、保存で ECMA-376 Standard
+            // (AES-128)の複合ファイルに包む。空 Enter で解除
+            "prot-encrypt" => {
+                if self.pw_open {
+                    self.pw_open = false;
+                    return;
+                }
+                self.pw_pending = None;
+                self.pw_open = true;
+                self.pw_ed = Editor::new("");
+                self.status = if self.encrypt_pw.is_some() {
+                    "暗号化は入っています。新しいパスワードを打って Enter\
+                    (空のまま Enter で暗号化をやめる)"
+                        .into()
+                } else {
+                    "暗号化: パスワードを打って Enter(次の保存から効きます)".into()
+                };
+            }
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -3346,6 +3488,13 @@ impl Writer {
             return;
         }
         if self.menu_at.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if self.pw_open {
+            self.pw_open = false;
+            self.pw_pending = None;
+            self.status = "".into();
             cx.notify();
             return;
         }
@@ -3468,6 +3617,11 @@ impl Writer {
         cx.notify();
     }
     fn enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
+        if self.pw_open {
+            self.pw_commit();
+            cx.notify();
+            return;
+        }
         if self.find_open {
             self.find_next();
         } else if self.bm_open {
@@ -4644,6 +4798,40 @@ impl Render for Writer {
             Some(d)
         };
 
+        // パスワードの板(伏せ字。開く時と暗号化を決める時の両方)
+        let pw_panel = if !self.pw_open {
+            None
+        } else {
+            let text = self.pw_ed.text();
+            let before = text[..self.pw_ed.cursor().min(text.len())].chars().count();
+            let total = text.chars().count();
+            let masked = format!(
+                "{}|{}",
+                "●".repeat(before),
+                "●".repeat(total - before)
+            );
+            let title = if self.pw_pending.is_some() {
+                "パスワード — この文書は暗号化されています"
+            } else {
+                "暗号化 — パスワードを決めて Enter(空で解除。Esc で取りやめ)"
+            };
+            Some(div().absolute().left(px(16.0)).top(px(8.0)).w(px(380.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child(SharedString::from(title.to_string())))
+                .child(div().px_2().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).bg(gpui::white())
+                    .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(masked)))
+                .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
+                    .child("方式は ECMA-376 Standard(AES-128)。\
+                            Word や LibreOffice でも開けます。\
+                            パスワードを忘れると誰にも開けません")))
+        };
+
         // プラグインの板(置き場の .py 一覧。押すと檻の中で実行)
         let plug_panel = if !self.plug_open {
             None
@@ -5060,6 +5248,7 @@ impl Render for Writer {
                     .children(hist_panel)
                     .children(chat_panel)
                     .children(plug_panel)
+                    .children(pw_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)

@@ -22,11 +22,12 @@ hunspell が macOS・Chrome・Adobe に入れたのは、もっと緩い免許�
 
 ## 取り込んでいるもの
 
-| もの | 免許 | どこ |
+| もの | ライセンス | どこ |
 |---|---|---|
 | **GPUI**(zed-industries) | Apache-2.0 | `vendor/zed/crates/gpui` |
 | **hyphenation**(crate)+ TeX の分綴パターン(hyph-en-us) | コードは Apache-2.0/MIT。パターンは各言語の自由なライセンス(crate の patterns/ に原文) | `engine` の依存。英語のハイフネーションに使う |
 | **resvg / usvg / tiny-skia**(crate) | MIT / Apache-2.0 | `ui` の依存。SVG を高精細の画像に直して貼るのに使う |
+| **cfb / aes / sha1**(crate) | MIT / Apache-2.0 | `ooxml` の依存。docx の暗号化(ECMA-376 Standard)に使う |
 
 Apache-2.0 は GPLv3 系へ一方向に両立するので、AGPL-3.0 の本体に取り込める
 (逆はできない)。
@@ -51,7 +52,7 @@ docx の `w:rFonts`、xlsx の `<font><name>` に名前が入っているので�
 
 ## 派生しているもの
 
-| もの | 免許 | 何を |
+| もの | ライセンス | 何を |
 |---|---|---|
 | **Euro-Office / ONLYOFFICE web-apps** | AGPL-3.0 | `ui/src/ribbon.rs` の**タブ名とボタン名** |
 | **同上** | AGPL-3.0 | `ui/icons/*.svg` の**アイコン**(88個) |
@@ -70,7 +71,7 @@ docx の `w:rFonts`、xlsx の `<font><name>` に名前が入っているので�
 
 ## 検査に使っているもの(配布物には入らない)
 
-| もの | 免許・条件 |
+| もの | ライセンス・条件 |
 |---|---|
 | **青空文庫** のテキスト | 著作権消滅の作品のみ。`lang/corpus/fetch.py` が目録の `作品著作権フラグ` を見て、「あり」の928作品を除外する |
 | **SCOWL / Moby / WordNet**(`/usr/share/dict/words`) | OS 側の `hunspell-en-us` などを読むだけ。同梱しない |

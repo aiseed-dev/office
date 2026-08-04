@@ -152,7 +152,7 @@ pub const WRITER: &[Tab] = &[
         c("co-history", "バージョン履歴", "co-history"),
     ]},
     Tab { name: "保護", cmds: &[
-        x("暗号化する", "prot-encrypt"),
+        c("prot-encrypt", "暗号化する", "prot-encrypt"),
         x("デジタル署名を追加", "prot-sign"),
         c("prot-doc", "保護", "prot-doc"),
     ]},

@@ -9,6 +9,10 @@ description = "OOXML(docx)の読み書き。全部は実装しない — 読め�
 kumihan = { path = "../engine" }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 quick-xml = "0.36"
+# 暗号化(ECMA-376 Standard Encryption)。cfb は複合ファイルの容れ物
+cfb = "0.10"
+aes = "0.8"
+sha1 = "0.10"
 
 [dev-dependencies]
 sheet = { path = "../sheet" }

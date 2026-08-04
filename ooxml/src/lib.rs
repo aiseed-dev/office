@@ -11,6 +11,8 @@
 //! 表は日本の事務様式の本体なので、v0 から入れる(実物8件すべてに表があった)。
 //! 画像・ヘッダ/フッタ・スタイル定義は**未対応として報告する**。
 
+pub mod crypt;
+
 use std::io::{Cursor, Read, Seek, Write};
 
 use kumihan::{Align, Block, Cellbox, CharFormat, Comment, Document, ListKind, ParaStyle,

@@ -77,6 +77,7 @@ READY = {
         "coauth-mode": "coauth-mode", "prot-doc": "prot-doc",
         "co-chat": "co-chat", "co-history": "co-history",
         "plug-macros": "plug-macros", "plug-manage": "plug-manage",
+        "prot-encrypt": "prot-encrypt",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
