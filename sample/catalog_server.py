@@ -36,6 +36,18 @@ tr:hover td { background: #f4f8fc; }              /* 動き: CSS の宣言だけ
 summary { cursor: pointer; font-size: 1.2rem; font-weight: bold;
           margin: 1rem 0 0.3rem; }
 details { border-left: 3px solid #dce6f1; padding-left: 0.8rem; }
+/* 商品はカードで陳列 — 絵で選べるように。動きは全部 CSS の宣言 */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+         gap: 0.7rem; margin: 0.5rem 0 1.2rem; }
+.card { border: 1px solid #bbb; border-radius: 6px; padding: 0.5rem;
+        display: block; cursor: pointer; background: #fff; }
+.card:hover { border-color: #4c7baf; box-shadow: 0 1px 4px #0002; }
+.card:has(:checked) { outline: 3px solid #4c7baf; }   /* 選んだ札が光る */
+.card img { width: 100%; height: auto; display: block; }
+.card .nm { font-weight: bold; margin-top: 0.3rem; }
+.card .ds { color: #555; font-size: 0.85rem; }
+.card .pr { text-align: right; font-size: 1.05rem; margin-top: 0.2rem; }
+td.best, th.best { background: #e2efda; }             /* いちばん安い列 */
 </style>"""
 
 
@@ -45,10 +57,54 @@ def page(title, body):
             f"<body>{body}</body></html>").encode("utf-8")
 
 
+"""商品の絵 — サーバーが SVG を生成する(標準ライブラリのまま)。
+分類ごとの形+商品の色(品名の(黒)(赤)…から拾う)。写真の代わりの見本。"""
+INK = {"黒": "#222", "赤": "#c0392b", "青": "#2e5fa3", "黄": "#e0b400", "桃": "#e08bb0"}
+
+def svg_product(code):
+    p = next((p for p in PRODUCTS if p[0] == code), None)
+    if p is None:
+        return None
+    _, cat, name, _, _ = p
+    ink = next((v for k, v in INK.items() if f"({k})" in name), "#4c7baf")
+    g = ""
+    if cat == "筆記具":       # 軸+ペン先。インクの色がそのまま見える
+        g = (f'<rect x="40" y="52" width="80" height="10" rx="5" fill="{ink}"/>'
+             f'<polygon points="120,52 138,57 120,62" fill="{ink}"/>')
+    elif cat == "紙製品":     # 紙の重なり
+        g = ('<rect x="50" y="30" width="60" height="50" fill="#fff" stroke="#999"/>'
+             '<rect x="56" y="24" width="60" height="50" fill="#fff" stroke="#999"/>'
+             f'<rect x="62" y="18" width="60" height="50" fill="#fdfdf5" stroke="{ink}"/>')
+    elif cat == "ファイル・収納":  # フォルダ
+        g = (f'<path d="M40 34 h30 l8 8 h42 v40 h-80 z" fill="{ink}" opacity="0.85"/>'
+             '<rect x="40" y="46" width="80" height="36" fill="#fff" opacity="0.25"/>')
+    elif cat == "事務機器":   # 計器の箱と釦
+        g = (f'<rect x="55" y="22" width="50" height="66" rx="6" fill="{ink}" opacity="0.9"/>'
+             '<rect x="62" y="30" width="36" height="14" fill="#eef"/>'
+             + "".join(f'<circle cx="{68+dx*12}" cy="{56+dy*12}" r="4" fill="#eef"/>'
+                       for dy in range(3) for dx in range(3)))
+    else:                     # 梱包・雑貨: テープの輪
+        g = (f'<circle cx="80" cy="52" r="30" fill="{ink}" opacity="0.85"/>'
+             '<circle cx="80" cy="52" r="14" fill="#fff"/>')
+    short = html.escape(name if len(name) <= 11 else name[:10] + "…")
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">'
+            f'<rect width="160" height="120" fill="#f6f8fa"/>{g}'
+            f'<text x="80" y="106" text-anchor="middle" font-size="12" '
+            f'fill="#333" font-family="sans-serif">{short}</text></svg>').encode("utf-8")
+
+
+def card(p):
+    code, _, name, desc, price = p
+    return (f'<label class="card"><img src="/img/{code}.svg" alt="{html.escape(name)}">'
+            f'<div class="nm">{html.escape(name)}</div>'
+            f'<div class="ds">{code}・{html.escape(desc)}</div>'
+            f'<div class="pr">{price:,}円</div>'
+            f'<input type="checkbox" name="c" value="{code}"> 比べる</label>')
+
+
 def catalog_page(q=""):
-    """カタログ。「動き」は2層とも実行コードなし —
-    検索はサーバー側 Python がページを組み直す(form の GET)、
-    分類の開閉は details/summary(HTML の宣言)。"""
+    """カタログ。商品はカードで陳列 — 絵と値段で選べる。「動き」は
+    検索・比較=サーバー側 Python(form の往復)、開閉・選択の光り=CSS の宣言。"""
     hit = [p for p in PRODUCTS
            if not q or q in p[0] or q in p[2] or q in p[3]]
     b = ["<h1>事務用品カタログ(2026年秋)</h1>",
@@ -61,23 +117,47 @@ def catalog_page(q=""):
     if q:
         b.append(f"<p>「{html.escape(q)}」で {len(hit)} 品目 — "
                  "<a href=\"/catalog.html\">すべて見る</a></p>")
+    b.append("<form method=\"get\" action=\"/compare\">"
+             "<p>迷ったら札を選んで → <input type=\"submit\" value=\"選んだ商品を比べる\"></p>")
     cats = []
     for p in hit:
         if p[1] not in cats:
             cats.append(p[1])
     for cat in cats:
-        b.append(f"<details open><summary>{html.escape(cat)}</summary>")
-        b.append("<table><tr><th>品番</th><th>品名</th><th>説明</th>"
-                 "<th class=\"num\">単価(税抜)</th></tr>")
-        for code, c, name, desc, price in hit:
-            if c == cat:
-                b.append(f"<tr><td>{code}</td><td>{html.escape(name)}</td>"
-                         f"<td>{html.escape(desc)}</td>"
-                         f"<td class=\"num\">{price:,}円</td></tr>")
-        b.append("</table></details>")
+        b.append(f"<details open><summary>{html.escape(cat)}</summary>"
+                 "<div class=\"cards\">")
+        b.extend(card(p) for p in hit if p[1] == cat)
+        b.append("</div></details>")
+    b.append("</form>")
     if not hit:
         b.append("<p>該当なし。</p>")
     return page("事務用品カタログ", "".join(b))
+
+
+def compare_page(codes):
+    """選んだ商品を並べて見せる。どれがいちばん安いかはサーバーが教える。"""
+    sel = [p for p in PRODUCTS if p[0] in codes]
+    if not sel:
+        return page("比較", "<h1>比較</h1><p>商品が選ばれていません。"
+                    "<a href=\"/catalog.html\">カタログへ戻る</a></p>")
+    cheapest = min(p[4] for p in sel)
+    def row(head, f):
+        cells = "".join(
+            f"<td class=\"{'best' if p[4] == cheapest else ''}\">{f(p)}</td>"
+            for p in sel)
+        return f"<tr><th>{head}</th>{cells}</tr>"
+    b = [f"<h1>比較({len(sel)}点)</h1>",
+         "<table>",
+         row("", lambda p: f'<img src="/img/{p[0]}.svg" alt="" width="120">'),
+         row("品名", lambda p: html.escape(p[2])),
+         row("品番・分類", lambda p: f"{p[0]}・{html.escape(p[1])}"),
+         row("説明", lambda p: html.escape(p[3])),
+         row("単価(税抜)", lambda p: f"<b>{p[4]:,}円</b>"
+             +("(いちばん安い)" if p[4] == cheapest else "")),
+         "</table>",
+         "<p><a href=\"/catalog.html\">カタログへ戻る</a> / "
+         "<a href=\"/order.html\">注文書へ</a></p>"]
+    return page("比較", "".join(b))
 
 
 def order_page():
@@ -151,6 +231,21 @@ class Handler(BaseHTTPRequestHandler):
             qs = urllib.parse.urlparse(self.path).query
             q = urllib.parse.parse_qs(qs).get("q", [""])[0].strip()
             self.reply_html(catalog_page(q))
+        elif self.path.split("?")[0] == "/compare":
+            qs = urllib.parse.urlparse(self.path).query
+            codes = set(urllib.parse.parse_qs(qs).get("c", []))
+            self.reply_html(compare_page(codes))
+        elif self.path.startswith("/img/") and self.path.endswith(".svg"):
+            body = svg_product(self.path[5:-4])
+            if body is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif self.path == "/order.html":
             self.reply_html(order_page())
         elif self.path == "/orders":
