@@ -495,6 +495,103 @@ fn word_boundary(text: &str, pos: usize, forward: bool) -> usize {
 const PX_PER_MM: f32 = 96.0 / 25.4;
 /// 見開きのページの間の空き(mm)
 const PAGE_GAP_MM: f32 = 8.0;
+
+/// `|語《よみ》` の記法をほどき、(素の文, [(本文の範囲, 読み)]) を返す。
+/// 範囲は base からのバイト位置(差し込む先の頭)。
+/// pywashi と同じ記法なので、あちらの資産とも行き来できる
+fn strip_ruby_marks(src: &str, base: usize) -> (String, Vec<(std::ops::Range<usize>, String)>) {
+    let mut plain = String::with_capacity(src.len());
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(i) = rest.find('|').or_else(|| rest.find('｜')) {
+        let mark_len = rest[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        let after = &rest[i + mark_len..];
+        let Some(o) = after.find('《') else {
+            plain.push_str(&rest[..i + mark_len]);
+            rest = after;
+            continue;
+        };
+        let Some(c) = after[o..].find('》') else {
+            plain.push_str(&rest[..i + mark_len]);
+            rest = after;
+            continue;
+        };
+        plain.push_str(&rest[..i]);
+        let word = &after[..o];
+        let yomi = &after[o + '《'.len_utf8()..o + c];
+        let start = base + plain.len();
+        plain.push_str(word);
+        out.push((start..base + plain.len(), yomi.to_string()));
+        rest = &after[o + c + '》'.len_utf8()..];
+    }
+    plain.push_str(rest);
+    (plain, out)
+}
+
+/// AI に頼む仕事。**返事をどう使うかまで決めてから頼む**
+/// (使い道の決まっていない答えは受け取らない)
+#[derive(Clone, Debug)]
+enum AiJob {
+    /// 選択(無ければ全文)を要約して、頭に置く
+    Summary,
+    /// 選択を書き直して置き換える(整える・敬語・やさしく)
+    Rewrite(&'static str, &'static str),
+    /// 選択を訳して置き換える
+    Translate,
+    /// 選択にふりがな(ルビ)を振る
+    Furigana,
+    /// カーソルの後ろへ続きを書く
+    Continue,
+    /// 選択を表にして、その場に置く
+    Table,
+    /// 自由に頼む(答えはカーソルの位置へ挿す)
+    Ask(String),
+}
+
+impl AiJob {
+    /// モデルへの言いつけ(system)と、何を渡すか
+    fn prompt(&self) -> (&'static str, &'static str) {
+        match self {
+            AiJob::Summary => (
+                "あなたは日本語の文書を扱う道具です。渡された文章の要点を、                 箇条書きではなく2〜4文の日本語でまとめてください。                 前置き・後書き・見出しは書かず、要約の本文だけを返します。",
+                "次の文章を要約してください。",
+            ),
+            AiJob::Rewrite(sys, ask) => (sys, ask),
+            AiJob::Translate => (
+                "あなたは翻訳の道具です。日本語なら英語へ、それ以外なら日本語へ                 訳します。訳文だけを返し、説明や引用符は付けません。",
+                "次を訳してください。",
+            ),
+            AiJob::Furigana => (
+                "あなたは日本語のふりがなを付ける道具です。渡された文章のうち、                 読みが難しい漢字の語にだけ、|語《よみ》 の形でふりがなを付けて                 返します。文字そのものは1字も変えず、《》以外は足しません。                 やさしい語には付けません。本文だけを返します。",
+                "次にふりがなを付けてください。",
+            ),
+            AiJob::Continue => (
+                "あなたは日本語の文書を書き継ぐ道具です。渡された文章の続きを、                 同じ調子・同じ文体で2〜4文だけ書きます。前置きは書かず、                 続きの本文だけを返します。",
+                "次の文章の続きを書いてください。",
+            ),
+            AiJob::Table => (
+                "あなたは文章を表に整える道具です。渡された文章から表を作り、                 各行を | で区切った形(1行目は見出し)だけを返します。                 説明・前置き・記号の罫線は書きません。",
+                "次を表にしてください。",
+            ),
+            AiJob::Ask(_) => (
+                "あなたは日本語の文書を扱う道具です。頼まれたことに対する答えの                 本文だけを返します。前置き・後書き・見出しは書きません。",
+                "",
+            ),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            AiJob::Summary => "要約",
+            AiJob::Rewrite(_, _) => "書き直し",
+            AiJob::Translate => "翻訳",
+            AiJob::Furigana => "ふりがな",
+            AiJob::Continue => "続き",
+            AiJob::Table => "表",
+            AiJob::Ask(_) => "頼み",
+        }
+    }
+}
 /// gpui の文字は行の高さが既定で黄金比(1.618×文字サイズ)なので、
 /// グリフは div の頭から余白の半分ぶん下に描かれる。自前で引く線
 /// (変換の下線・下線・取り消し線・蛍光ペン)はそのぶん下げて
@@ -620,6 +717,11 @@ struct Writer {
     url_ed: Editor,
     /// いまの配色(レイアウト > 配色の変更)
     theme: usize,
+    /// AI に自由に頼む板
+    ai_open: bool,
+    ai_ed: Editor,
+    /// AI が働いている間は真(二重に頼まない)
+    ai_busy: bool,
     /// 複数ページ(見開き。画面だけの見え方 — 紙は1ページずつのまま)
     multipage: bool,
     /// 記入欄の選択肢を聞く板(コンボ・ドロップダウンを挿すとき)
@@ -694,6 +796,8 @@ impl HasEditor for Writer {
             &mut self.rb_ed
         } else if self.sd_open {
             &mut self.sd_ed
+        } else if self.ai_open {
+            &mut self.ai_ed
         } else if self.chat_open {
             &mut self.chat_ed
         } else {
@@ -723,6 +827,8 @@ impl HasEditor for Writer {
             &self.rb_ed
         } else if self.sd_open {
             &self.sd_ed
+        } else if self.ai_open {
+            &self.ai_ed
         } else if self.chat_open {
             &self.chat_ed
         } else {
@@ -735,7 +841,8 @@ impl HasEditor for Writer {
             return;
         }
         if self.chat_open || self.file_field.is_some() || self.rb_open
-            || self.url_open || self.fm_field.is_some() || self.sd_open {
+            || self.url_open || self.fm_field.is_some() || self.sd_open
+            || self.ai_open {
             // チャット・文書の情報・ルビの入力欄。打鍵は(確定まで)文書を変えない
             return;
         }
@@ -890,6 +997,9 @@ impl Writer {
             url_open: false,
             url_ed: Editor::new(""),
             theme: 0,
+            ai_open: false,
+            ai_ed: Editor::new(""),
+            ai_busy: false,
             multipage: false,
             sd_open: false,
             sd_ed: Editor::new(""),
@@ -1892,6 +2002,153 @@ impl Writer {
         })
         .detach();
         self.status = format!("取りに行っています… {}", self.url_ed.text()).into();
+    }
+
+    /// AI に頼んで、返事を文書に反映する。**別の糸で待つ**(画面は止めない)。
+    /// 反映は必ず doc_undo に控えてから = **Ctrl+Z の1手で戻る**。
+    /// 宛先が使えなければ理由を言う(黙って空にしない)
+    fn ai_go(&mut self, job: AiJob, cx: &mut Context<Self>) {
+        if self.protected() {
+            self.status =
+                "読み取り専用で保護されています(保護タブの「保護」で解除できます)".into();
+            return;
+        }
+        if self.ai_busy {
+            self.status = "いま考えています(終わるまでお待ちください)".into();
+            return;
+        }
+        let back = ui::ai::backend();
+        if let Err(e) = ui::ai::ready(back) {
+            self.status = format!("AI: {e}").into();
+            return;
+        }
+        self.switch_target(Target::Body);
+        self.flush_target();
+        let sel = self.ed.selection();
+        let text = self.ed.text().to_string();
+        // 渡すもの: 選択があればそこ、無ければ全文(続きはカーソルまで)
+        let body = match &job {
+            AiJob::Continue => text[..sel.end.min(text.len())].to_string(),
+            AiJob::Ask(_) if sel.is_empty() => String::new(),
+            _ if sel.is_empty() => text.clone(),
+            _ => text[sel.clone()].to_string(),
+        };
+        if body.trim().is_empty() && !matches!(job, AiJob::Ask(_)) {
+            self.status = "文章がありません(打つか、選んでから押してください)".into();
+            return;
+        }
+        let (sys, ask) = job.prompt();
+        let user = match &job {
+            AiJob::Ask(q) => {
+                if body.trim().is_empty() {
+                    q.clone()
+                } else {
+                    format!("{q}\n\n---\n{body}")
+                }
+            }
+            _ => format!("{ask}\n\n---\n{body}"),
+        };
+        let (sys, job2) = (sys.to_string(), job.clone());
+        self.ai_busy = true;
+        self.status = format!(
+            "AI({})に{}を頼んでいます…",
+            back.label(),
+            job.label()
+        )
+        .into();
+        let task = cx
+            .background_executor()
+            .spawn(async move { ui::ai::ask(back, &sys, &user) });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.ai_busy = false;
+                match r {
+                    Ok(out) => this.ai_apply(job2, sel, out, cx),
+                    Err(e) => this.status = format!("AI: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 返事を文書へ入れる。**1手で戻せる**(doc_undo に控える)
+    fn ai_apply(
+        &mut self,
+        job: AiJob,
+        sel: std::ops::Range<usize>,
+        out: String,
+        _cx: &mut Context<Self>,
+    ) {
+        let out = out.trim().to_string();
+        if out.is_empty() {
+            self.status = "AI: 答えが空でした(何もしていません)".into();
+            return;
+        }
+        self.doc_undo = Some(self.doc.clone());
+        let label = job.label();
+        match job {
+            // 要約は文書の頭に、印つきの段落として置く
+            AiJob::Summary => {
+                let text = self.ed.text().to_string();
+                let joined = format!("【要約】{out}\n\n{text}");
+                self.ed = Editor::new(&joined);
+                self.doc.set_body_text(self.ed.text(), SIZE_PT);
+            }
+            // 置き換え(選択が無ければ全文)
+            AiJob::Rewrite(_, _) | AiJob::Translate | AiJob::Table => {
+                let out = if matches!(job, AiJob::Table) {
+                    // | 区切りの行を、読みやすい字の表に直す(表の挿入は次の課題)
+                    out.lines()
+                        .map(|l| {
+                            l.trim().trim_matches('|').replace('|', "　")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    out
+                };
+                let r = if sel.is_empty() { 0..self.ed.text().len() } else { sel };
+                self.ed.move_to(r.start, false);
+                self.ed.move_to(r.end, true);
+                self.ed.insert(&out);
+                self.doc.set_body_text(self.ed.text(), SIZE_PT);
+            }
+            // 続き・自由な頼みは、カーソル(選択の終わり)の後ろへ
+            AiJob::Continue | AiJob::Ask(_) => {
+                let at = sel.end.min(self.ed.text().len());
+                self.ed.move_to(at, false);
+                self.ed.insert(&format!("\n{out}"));
+                self.doc.set_body_text(self.ed.text(), SIZE_PT);
+            }
+            // ふりがなは |語《よみ》 を**うちのルビ**に直して振る
+            AiJob::Furigana => {
+                let base = if sel.is_empty() { 0 } else { sel.start };
+                let (plain, rubies) = strip_ruby_marks(&out, base);
+                let r = if sel.is_empty() { 0..self.ed.text().len() } else { sel };
+                self.ed.move_to(r.start, false);
+                self.ed.move_to(r.end, true);
+                self.ed.insert(&plain);
+                self.doc.set_body_text(self.ed.text(), SIZE_PT);
+                let n = rubies.len();
+                for (range, yomi) in rubies {
+                    self.doc.apply_char_format(range, move |f| {
+                        f.ruby = Some(yomi.clone())
+                    });
+                }
+                self.dirty = true;
+                self.relayout_keep();
+                self.status =
+                    format!("ふりがなを {n} 箇所に振りました(Ctrl+Z で1手で戻せます)")
+                        .into();
+                return;
+            }
+        }
+        self.dirty = true;
+        self.relayout();
+        self.status =
+            format!("AI の{label}を入れました(Ctrl+Z で1手で戻せます)").into();
     }
 
     /// 記入欄(コンテンツコントロール)を挿す。選択があればそれを欄にし、
@@ -3346,6 +3603,8 @@ impl Writer {
         "form-radio", "form-image", "form-email", "form-phone", "form-complex",
         "form-signature",
         "colorschemas",
+        "ai-where", "ai-summary", "ai-rewrite", "ai-polite", "ai-plain",
+        "ai-translate", "ai-furigana", "ai-continue", "ai-table", "ai-ask",
         "nav", "fit-page", "fit-width", "zoom100", "multipage",
         "show-toolbar", "show-statusbar", "show-left", "show-right",
         "incfont", "decfont", "markers", "numbering",
@@ -4436,6 +4695,67 @@ impl Writer {
                 )
                 .into();
             }
+            // ---- AI(モデルに任せる変換と生成の道具箱)----
+            // 宛先は人が選ぶ。押すたびに 手元 → Claude(定額)→ Claude(API)
+            "ai-where" => {
+                let now = ui::ai::backend();
+                let next = now.next();
+                ui::ai::set_backend(next);
+                let ok = ui::ai::ready(next);
+                self.status = match ok {
+                    Ok(_) => format!("AI の宛先: {}(覚えました)", next.label()).into(),
+                    Err(e) => format!(
+                        "AI の宛先: {} — ただし今は使えません: {e}",
+                        next.label()
+                    )
+                    .into(),
+                };
+            }
+            "ai-summary" => self.ai_go(AiJob::Summary, cx),
+            "ai-rewrite" => self.ai_go(
+                AiJob::Rewrite(
+                    "あなたは日本語の文章を整える道具です。意味を変えず、\
+                     読みやすく簡潔に書き直します。本文だけを返します。",
+                    "次の文章を、意味を変えずに読みやすく書き直してください。",
+                ),
+                cx,
+            ),
+            "ai-polite" => self.ai_go(
+                AiJob::Rewrite(
+                    "あなたは日本語の文章を整える道具です。内容を変えずに、\
+                     仕事の文書にふさわしい丁寧な言い方(です・ます)へ直します。\
+                     本文だけを返します。",
+                    "次の文章を、内容を変えずに丁寧な言い方へ直してください。",
+                ),
+                cx,
+            ),
+            "ai-plain" => self.ai_go(
+                AiJob::Rewrite(
+                    "あなたは日本語の文章をやさしくする道具です。難しい言葉を\
+                     やさしい言葉に置き換え、一文を短くします。内容は変えません。\
+                     本文だけを返します。",
+                    "次の文章を、内容を変えずにやさしい日本語へ直してください。",
+                ),
+                cx,
+            ),
+            "ai-translate" => self.ai_go(AiJob::Translate, cx),
+            "ai-furigana" => self.ai_go(AiJob::Furigana, cx),
+            "ai-continue" => self.ai_go(AiJob::Continue, cx),
+            "ai-table" => self.ai_go(AiJob::Table, cx),
+            "ai-ask" => {
+                if self.ai_open {
+                    self.ai_open = false;
+                    return;
+                }
+                self.ai_ed = Editor::new("");
+                self.ai_open = true;
+                self.find_open = false;
+                self.status = format!(
+                    "AI({})に頼む: 用件を打って Enter(選んだ字があれば一緒に渡します)",
+                    ui::ai::backend().label()
+                )
+                .into();
+            }
             // 表示(本家の表示タブ)。見え方だけを変える — 文書は変わらない
             "nav" => {
                 self.nav_open = !self.nav_open;
@@ -4660,9 +4980,10 @@ impl Writer {
             cx.notify();
             return;
         }
-        if self.rb_open || self.sd_open {
+        if self.rb_open || self.sd_open || self.ai_open {
             self.rb_open = false;
             self.sd_open = false;
+            self.ai_open = false;
             self.status = "".into();
             cx.notify();
             return;
@@ -4776,6 +5097,12 @@ impl Writer {
             self.rb_commit();
         } else if self.sd_open {
             self.sd_commit();
+        } else if self.ai_open {
+            let q = self.ai_ed.text().to_string();
+            self.ai_open = false;
+            if !q.trim().is_empty() {
+                self.ai_go(AiJob::Ask(q), cx);
+            }
         } else {
             self.editor().insert("\n");
             self.on_edited();
@@ -7108,6 +7435,31 @@ impl Render for Writer {
             Some(d)
         };
 
+        // AI に頼む板
+        let ai_panel = if !self.ai_open {
+            None
+        } else {
+            let mut t = self.ai_ed.text().to_string();
+            let cur = self.ai_ed.cursor().min(t.len());
+            t.insert(cur, '|');
+            Some(div().absolute().left(px(16.0)).top(px(8.0)).w(px(460.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child(SharedString::from(format!(
+                        "AI に頼む — 宛先 {}(Esc で取りやめ)",
+                        ui::ai::backend().label()
+                    ))))
+                .child(div().px_2().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).bg(rgb(0xFFFFFF))
+                    .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(t)))
+                .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
+                    .child("答えはカーソルの位置に入ります。Ctrl+Z で1手で戻せます")))
+        };
+
         // 記入欄の選択肢を聞く板
         let sd_panel = if !self.sd_open {
             None
@@ -7572,6 +7924,7 @@ impl Render for Writer {
                     .children(pw_panel)
                     .children(rb_panel)
                     .children(sd_panel)
+                    .children(ai_panel)
                     .children(url_panel)
                     .children(fm_panel)
                     .children(lk_panel)
@@ -7895,6 +8248,8 @@ mod menu_run_tests {
 
     #[gpui::test]
     fn 全部の釦が落ちずに通る(cx: &mut gpui::TestAppContext) {
+        // AI の宛先は覚える設定なので、試験で変えたら戻す
+        let keep_ai = ui::ai::backend();
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         for tab in ui::ribbon::WRITER {
             for cmd in tab.cmds {
@@ -7918,6 +8273,7 @@ mod menu_run_tests {
                 });
             }
         }
+        ui::ai::set_backend(keep_ai);
     }
 
     /// 押すと入切する釦は、2回押すと元に戻る(1手で戻せる家訓)
@@ -7961,6 +8317,7 @@ mod menu_run_tests {
             .collect();
         files.sort();
         assert!(!files.is_empty(), "見本が無い: {}", dir.display());
+        let keep_ai = ui::ai::backend();
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         for f in files {
             w.update(cx, |this, _| this.open(f.clone()));
@@ -7982,6 +8339,7 @@ mod menu_run_tests {
                 }
             }
         }
+        ui::ai::set_backend(keep_ai);
     }
 
     /// **押した結果が本当に文書に出るか。** status だけ見ても
@@ -8102,6 +8460,25 @@ mod menu_run_tests {
         });
     }
 
+    /// AI は**宛先が使えないときに正直に断る**(黙って空にしない)。
+    /// 実際にモデルへ繋ぐ試験はしない(手元に居るとは限らないので)
+    #[gpui::test]
+    fn aiは宛先が無ければ理由を言う(cx: &mut gpui::TestAppContext) {
+        let keep = ui::ai::backend();
+        let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
+        ui::ai::set_backend(ui::ai::Backend::ClaudeApi);
+        if ui::ai::ready(ui::ai::Backend::ClaudeApi).is_err() {
+            w.update(cx, |this, cx| {
+                this.set_doc(Document::plain("本文です。", SIZE_PT));
+                this.run_cmd("ai-summary", cx);
+                let st = this.status.to_string();
+                assert!(st.starts_with("AI:"), "断りの言葉が出ない: {st}");
+                assert!(!this.ai_busy, "断ったのに考え中のまま");
+            });
+        }
+        ui::ai::set_backend(keep);
+    }
+
     /// 記入欄(フォーム)は押した種類の欄が本当に入る
     #[gpui::test]
     fn フォームの釦が記入欄を入れる(cx: &mut gpui::TestAppContext) {
@@ -8127,6 +8504,44 @@ mod menu_run_tests {
                     .collect();
                 assert!(kinds.contains(&want), "「{id}」で {want:?} が入らない: {kinds:?}");
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod ruby_mark_tests {
+    use super::strip_ruby_marks;
+
+    #[test]
+    fn ルビ記法をほどいて位置と読みが出る() {
+        let (plain, rubies) = strip_ruby_marks("今日は|組版《くみはん》の話。", 0);
+        assert_eq!(plain, "今日は組版の話。");
+        assert_eq!(rubies.len(), 1);
+        let (r, yomi) = &rubies[0];
+        assert_eq!(yomi, "くみはん");
+        assert_eq!(&plain[r.clone()], "組版", "位置がずれている");
+    }
+
+    #[test]
+    fn 全角の縦棒も受ける() {
+        let (plain, rubies) = strip_ruby_marks("｜漢字《かんじ》です", 0);
+        assert_eq!(plain, "漢字です");
+        assert_eq!(rubies[0].1, "かんじ");
+    }
+
+    #[test]
+    fn 差し込む先の頭からの位置になる() {
+        let (_, rubies) = strip_ruby_marks("|漢字《かんじ》", 100);
+        assert_eq!(rubies[0].0.start, 100, "base が効いていない");
+    }
+
+    #[test]
+    fn 記法が壊れていても本文を落とさない() {
+        for src in ["|語《よみ", "ただの|棒", "《よみ》だけ", "|"] {
+            let (plain, _) = strip_ruby_marks(src, 0);
+            for c in src.chars().filter(|c| !"|｜".contains(*c)) {
+                assert!(plain.contains(c), "字が落ちた: {src} → {plain}");
+            }
         }
     }
 }

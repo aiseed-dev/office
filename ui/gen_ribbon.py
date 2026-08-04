@@ -81,6 +81,11 @@ READY = {
         "align-left": "align-left", "align-right": "align-right",
         "align-dist": "align-dist", "ruby": "ruby", "direction": "direction",
         "colorschemas": "colorschemas", "multipage": "multipage",
+        "ai-where": "ai-where", "ai-summary": "ai-summary",
+        "ai-rewrite": "ai-rewrite", "ai-polite": "ai-polite",
+        "ai-plain": "ai-plain", "ai-translate": "ai-translate",
+        "ai-furigana": "ai-furigana", "ai-continue": "ai-continue",
+        "ai-table": "ai-table", "ai-ask": "ai-ask",
         "controls": "controls", "form-text": "form-text",
         "form-combo": "form-combo", "form-dropdown": "form-dropdown",
         "form-checkbox": "form-checkbox", "form-radio": "form-radio",
@@ -356,6 +361,15 @@ COMMON_TAIL = {
     "plugins": [
         ("plug-macros", "マクロ"), ("plug-manage", "プラグインの管理"),
     ],
+    # AI タブ(2026-08-04 発注者確定)。**モデルに任せる変換と生成の道具箱**。
+    # 校正はレビューに置いたまま(言語の普通の機能なので)
+    "ai": [
+        ("ai-where", "宛先"), ("ai-summary", "要約"), ("ai-rewrite", "書き直す"),
+        ("ai-polite", "敬語にする"), ("ai-plain", "やさしく"),
+        ("ai-translate", "翻訳"), ("ai-furigana", "ふりがな"),
+        ("ai-continue", "続きを書く"), ("ai-table", "表にする"),
+        ("ai-ask", "頼む"),
+    ],
 }
 
 DYNAMIC = {
@@ -382,6 +396,7 @@ DYNAMIC = {
 TAB_NAME_KEYS = {"draw": "Draw", "headerfooter": "HeaderFooter",
                  "review": "Review", "view": "View",
                  "collaboration": "共同編集", "protect": "保護",
+                 "ai": "AI",
                  "plugins": "プラグイン"}
 
 
@@ -470,6 +485,7 @@ def tabs_of(app, prefix):
         ("collaboration", COMMON_TAIL["collaboration"]),
         ("protect", COMMON_TAIL["protect"]),
         ("plugins", COMMON_TAIL["plugins"]),
+        ("ai", COMMON_TAIL["ai"]),
     ]:
         if key == "collaboration" and app == "documenteditor":
             # 変更履歴は本家どおりバージョン履歴の手前
@@ -479,7 +495,7 @@ def tabs_of(app, prefix):
         for c, label in cmds:
             DYN_LABELS[c] = label
         view_at = next((i for i, (n, _) in enumerate(out) if n == "表示"), len(out))
-        if key == "plugins":
+        if key in ("plugins", "ai"):
             out.append(entry)
         else:
             out.insert(view_at, entry)

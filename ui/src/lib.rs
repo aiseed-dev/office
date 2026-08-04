@@ -13,6 +13,7 @@
 pub use lang::ja::{furigana, proof};
 pub use lang::{check, spell, Language, Target};
 pub use lang::model::Endpoint;
+pub use lang::ai;
 pub mod icons;
 pub mod ribbon;
 

@@ -147,6 +147,89 @@ fn post(ep: &Endpoint, body: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// https で POST して本文を返す(AI の宛先が外のときだけ使う)。
+/// **鍵は呼ぶ側が渡す** — この関数はどこにも控えない
+pub fn post_https(
+    host: &str,
+    path: &str,
+    body: &str,
+    headers: &[(&str, &str)],
+) -> Result<String, String> {
+    use std::io::{BufRead as _, Read as _, Write as _};
+    let sock = TcpStream::connect((host, 443))
+        .map_err(|e| format!("繋がりません({host}): {e}"))?;
+    sock.set_read_timeout(Some(Duration::from_secs(120))).ok();
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("ホスト名が変です: {host}"))?;
+    let conn = rustls::ClientConnection::new(std::sync::Arc::new(cfg), name)
+        .map_err(|e| e.to_string())?;
+    let mut st = rustls::StreamOwned::new(conn, sock);
+    let mut req = format!(
+        "POST {path} HTTP/1.0\r\nHost: {host}\r\nContent-Type: application/json\r\n"
+    );
+    for (k, v) in headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    req.push_str(&format!(
+        "Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.as_bytes().len()
+    ));
+    st.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    let mut r = BufReader::new(st);
+    let mut status = String::new();
+    r.read_line(&mut status).map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if r.read_line(&mut line).map_err(|e| e.to_string())? == 0 || line.trim().is_empty() {
+            break;
+        }
+    }
+    let mut out = String::new();
+    r.read_to_string(&mut out).map_err(|e| e.to_string())?;
+    if !status.contains(" 200") {
+        return Err(format!("{}: {}", status.trim(), head(&out, 200)));
+    }
+    Ok(out)
+}
+
+/// JSON から `"鍵":"…"` の値を1つ取り出す(完全な処理系は持たない)。
+/// Claude の応答は content[0].text なので、text を引けば足りる
+pub fn extract_text_field(raw: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{key}\"");
+    let i = raw.find(&pat)?;
+    let rest = &raw[i + pat.len()..];
+    let q = rest.find('"')?;
+    let mut out = String::new();
+    let mut it = rest[q + 1..].chars();
+    while let Some(c) = it.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match it.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => {}
+                'u' => {
+                    let h: String = it.by_ref().take(4).collect();
+                    if let Some(ch) =
+                        u32::from_str_radix(&h, 16).ok().and_then(char::from_u32)
+                    {
+                        out.push(ch);
+                    }
+                }
+                o => out.push(o),
+            },
+            o => out.push(o),
+        }
+    }
+    None
+}
+
 /// OpenAI互換の応答から content を取り出す(JSON の完全な処理系は持たない)。
 pub fn extract_content(raw: &str) -> Option<String> {
     let key = "\"content\"";

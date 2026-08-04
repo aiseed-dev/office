@@ -7,6 +7,10 @@ license.workspace = true
 # gpui に依存しない。画面が無くても回せることがこのクレートの存在理由。
 # 青空文庫の17,000作品を窓越しには測れない。
 [dependencies]
+# AI の宛先(Claude API)。定額の CLI 経由なら要らないが、
+# API を選んだときのために https を持つ
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
 
 [[bin]]
 name = "furigana-bench"
