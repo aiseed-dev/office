@@ -51,6 +51,82 @@ pub struct CharFormat {
     /// ルビ(ふりがな)。この run の字の上に半分の大きさで振る。
     /// field と同じ理由でここに持つ — run の切り貼りが面倒を見てくれる
     pub ruby: Option<String>,
+    /// 記入欄(docx の w:sdt = コンテンツコントロール)。
+    /// **ここに持つと欄の中を普通に打てる** — 中で run が割れても、
+    /// 両方が同じ欄を名乗るので欄は保たれる(field・ruby と逆で、
+    /// 分割で落とさない。欄の中の編集は欄の中身だから)
+    pub sdt: Option<Box<Sdt>>,
+}
+
+/// 記入欄の中身(docx の w:sdtPr)。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Sdt {
+    pub kind: SdtKind,
+    /// 画面に出す名前(w:alias)
+    pub alias: String,
+    /// 機械で引く名前(w:tag)
+    pub tag: String,
+    /// 選ばせる欄の選択肢(コンボ・ドロップダウン)
+    pub items: Vec<String>,
+}
+
+/// 記入欄の種類。docx の sdtPr の子要素に対応する
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SdtKind {
+    #[default]
+    Text,
+    /// 選べる+打てる(w:comboBox)
+    Combo,
+    /// 選ぶだけ(w:dropDownList)
+    Dropdown,
+    /// ☐ / ☑(w14:checkbox)
+    Checkbox,
+    /// 絵(w:picture)
+    Picture,
+    /// 日付(w:date)
+    Date,
+    /// 以下はうちの区別(docx では text として往復し、tag に印を残す)
+    Email,
+    Phone,
+    Complex,
+    Signature,
+}
+
+impl SdtKind {
+    /// 画面に出す呼び名
+    pub fn label(self) -> &'static str {
+        match self {
+            SdtKind::Text => "テキスト",
+            SdtKind::Combo => "コンボ",
+            SdtKind::Dropdown => "ドロップダウン",
+            SdtKind::Checkbox => "チェック",
+            SdtKind::Picture => "画像",
+            SdtKind::Date => "日付",
+            SdtKind::Email => "メール",
+            SdtKind::Phone => "電話",
+            SdtKind::Complex => "複合",
+            SdtKind::Signature => "署名",
+        }
+    }
+    /// docx の tag に残す印(うちの区別を往復させるため)
+    pub fn as_tag(self) -> &'static str {
+        match self {
+            SdtKind::Email => "jo:email",
+            SdtKind::Phone => "jo:phone",
+            SdtKind::Complex => "jo:complex",
+            SdtKind::Signature => "jo:signature",
+            _ => "",
+        }
+    }
+    pub fn from_tag(tag: &str) -> Option<SdtKind> {
+        match tag {
+            "jo:email" => Some(SdtKind::Email),
+            "jo:phone" => Some(SdtKind::Phone),
+            "jo:complex" => Some(SdtKind::Complex),
+            "jo:signature" => Some(SdtKind::Signature),
+            _ => None,
+        }
+    }
 }
 
 impl CharFormat {

@@ -616,6 +616,10 @@ struct Writer {
     /// URL を開く板
     url_open: bool,
     url_ed: Editor,
+    /// 記入欄の選択肢を聞く板(コンボ・ドロップダウンを挿すとき)
+    sd_open: bool,
+    sd_ed: Editor,
+    sd_kind: kumihan::SdtKind,
     /// ルビの板(選んだ字に読みを振る)
     rb_open: bool,
     rb_ed: Editor,
@@ -682,6 +686,8 @@ impl HasEditor for Writer {
             &mut self.fm_ed
         } else if self.rb_open {
             &mut self.rb_ed
+        } else if self.sd_open {
+            &mut self.sd_ed
         } else if self.chat_open {
             &mut self.chat_ed
         } else {
@@ -709,6 +715,8 @@ impl HasEditor for Writer {
             &self.fm_ed
         } else if self.rb_open {
             &self.rb_ed
+        } else if self.sd_open {
+            &self.sd_ed
         } else if self.chat_open {
             &self.chat_ed
         } else {
@@ -721,7 +729,7 @@ impl HasEditor for Writer {
             return;
         }
         if self.chat_open || self.file_field.is_some() || self.rb_open
-            || self.url_open || self.fm_field.is_some() {
+            || self.url_open || self.fm_field.is_some() || self.sd_open {
             // チャット・文書の情報・ルビの入力欄。打鍵は(確定まで)文書を変えない
             return;
         }
@@ -875,6 +883,9 @@ impl Writer {
             fm_ed: Editor::new(""),
             url_open: false,
             url_ed: Editor::new(""),
+            sd_open: false,
+            sd_ed: Editor::new(""),
+            sd_kind: kumihan::SdtKind::Text,
             rb_open: false,
             rb_ed: Editor::new(""),
             rb_range: 0..0,
@@ -1867,6 +1878,110 @@ impl Writer {
         })
         .detach();
         self.status = format!("取りに行っています… {}", self.url_ed.text()).into();
+    }
+
+    /// 記入欄(コンテンツコントロール)を挿す。選択があればそれを欄にし、
+    /// 無ければ空欄の字を置いて欄にする。**中は普通に打てる**(欄は保たれる)
+    fn insert_sdt(&mut self, kind: kumihan::SdtKind, items: Vec<String>) {
+        use kumihan::SdtKind as K;
+        self.switch_target(Target::Body);
+        let sel = self.ed.selection();
+        // 欄の初期の中身(選択があればその字)
+        let range = if sel.is_empty() {
+            let init = match kind {
+                K::Checkbox => "☐".to_string(),
+                K::Dropdown | K::Combo => {
+                    items.first().cloned().unwrap_or_else(|| "　　　　".into())
+                }
+                K::Date => std::process::Command::new("date")
+                    .arg("+%Y年%-m月%-d日")
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_else(|| "　　　　".into()),
+                K::Picture => "[画像]".to_string(),
+                _ => "　　　　".to_string(),
+            };
+            let at = self.ed.cursor();
+            self.ed.insert(&init);
+            self.on_edited();
+            at..at + init.len()
+        } else {
+            sel
+        };
+        let alias = kind.label().to_string();
+        let tag = kind.as_tag().to_string();
+        self.doc.set_body_text(self.ed.text(), SIZE_PT);
+        self.doc.apply_char_format(range.clone(), move |f| {
+            f.sdt = Some(Box::new(kumihan::Sdt {
+                kind,
+                alias: alias.clone(),
+                tag: tag.clone(),
+                items: items.clone(),
+            }))
+        });
+        self.dirty = true;
+        self.relayout_keep();
+        self.ed.move_to(range.end, false);
+        self.status = format!(
+            "{}の記入欄を入れました(中は普通に打てます。保存で docx の\
+             コンテンツコントロールに)",
+            kind.label()
+        )
+        .into();
+    }
+
+    /// いる場所の記入欄(あれば)
+    fn sdt_at(&self) -> Option<kumihan::Sdt> {
+        self.doc
+            .char_format_at(self.ed.selection())
+            .sdt
+            .as_deref()
+            .cloned()
+    }
+
+    /// 選択肢の板の Enter(コンボ・ドロップダウンを挿す)
+    fn sd_commit(&mut self) {
+        self.sd_open = false;
+        let items: Vec<String> = self
+            .sd_ed
+            .text()
+            .split(&[',', '、', '/'][..])
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if items.is_empty() {
+            self.status = "選択肢がありません(カンマ区切りで打ってください)".into();
+            return;
+        }
+        self.insert_sdt(self.sd_kind, items);
+    }
+
+    /// チェックの欄を切り替える(☐ ⇄ ☑)。カーソルがその欄にあるとき
+    fn toggle_checkbox(&mut self) -> bool {
+        let Some(sd) = self.sdt_at() else { return false };
+        if sd.kind != kumihan::SdtKind::Checkbox {
+            return false;
+        }
+        // カーソルの前後の1字を見て入れ替える
+        let text = self.ed.text().to_string();
+        let cur = self.ed.cursor();
+        let (s0, e0) = match text[..cur].char_indices().next_back() {
+            Some((i, c)) if c == '☐' || c == '☑' => (i, cur),
+            _ => match text[cur..].chars().next() {
+                Some(c) if c == '☐' || c == '☑' => (cur, cur + c.len_utf8()),
+                _ => return false,
+            },
+        };
+        let now = &text[s0..e0];
+        let next = if now == "☑" { "☐" } else { "☑" };
+        self.ed.move_to(s0, false);
+        self.ed.move_to(e0, true);
+        self.ed.insert(next);
+        self.on_edited();
+        self.status = format!("チェックを {next} にしました").into();
+        true
     }
 
     /// 入切の釦が「いま入っているか」。押した結果が画面に残るものは、
@@ -3191,6 +3306,9 @@ impl Writer {
         "superscript", "subscript", "highlight", "clearstyle",
         "align-left", "align-center", "align-right", "align-just", "align-dist",
         "ruby", "direction",
+        "controls", "form-text", "form-combo", "form-dropdown", "form-checkbox",
+        "form-radio", "form-image", "form-email", "form-phone", "form-complex",
+        "form-signature",
         "nav", "fit-page", "fit-width", "zoom100",
         "show-toolbar", "show-statusbar", "show-left", "show-right",
         "incfont", "decfont", "markers", "numbering",
@@ -4181,6 +4299,64 @@ impl Writer {
                 Some(text) if !text.is_empty() => handler::replace(self, None, &text),
                 _ => self.status = "貼り付けるものがありません".into(),
             },
+            // 記入欄(コンテンツコントロール)。フォームタブの実体でもある
+            "controls" | "form-text" | "form-image" | "form-email" | "form-phone"
+            | "form-complex" | "form-signature" | "form-date" => {
+                use kumihan::SdtKind as K;
+                let kind = match id {
+                    "form-image" => K::Picture,
+                    "form-email" => K::Email,
+                    "form-phone" => K::Phone,
+                    "form-complex" => K::Complex,
+                    "form-signature" => K::Signature,
+                    "form-date" => K::Date,
+                    _ => K::Text,
+                };
+                self.insert_sdt(kind, Vec::new());
+            }
+            // チェックの欄。**同じ釦で入切**(欄の中にカーソルがあるとき)
+            "form-checkbox" | "form-radio" => {
+                if self.toggle_checkbox() {
+                    return;
+                }
+                self.insert_sdt(kumihan::SdtKind::Checkbox, Vec::new());
+            }
+            // 選ばせる欄。選択肢を板で聞いてから挿す
+            "form-combo" | "form-dropdown" => {
+                // 既にその欄にいるなら、選択肢を順に回す(選び直し)
+                if let Some(sd) = self.sdt_at() {
+                    if !sd.items.is_empty() {
+                        let text = self.ed.text().to_string();
+                        let (pi, _) = self.cursor_para();
+                        let _ = pi;
+                        // いまの中身の次の選択肢へ
+                        if let Some(cur) =
+                            sd.items.iter().position(|it| text.contains(it.as_str()))
+                        {
+                            let now = &sd.items[cur];
+                            let next = &sd.items[(cur + 1) % sd.items.len()];
+                            if let Some(at) = text.find(now.as_str()) {
+                                self.ed.move_to(at, false);
+                                self.ed.move_to(at + now.len(), true);
+                                self.ed.insert(next);
+                                self.on_edited();
+                                self.status =
+                                    format!("「{next}」を選びました").into();
+                                return;
+                            }
+                        }
+                    }
+                }
+                self.sd_kind = if id == "form-combo" {
+                    kumihan::SdtKind::Combo
+                } else {
+                    kumihan::SdtKind::Dropdown
+                };
+                self.sd_ed = Editor::new("");
+                self.sd_open = true;
+                self.status =
+                    "選択肢をカンマ区切りで打って Enter(例: 赤,青,黄)".into();
+            }
             // 表示(本家の表示タブ)。見え方だけを変える — 文書は変わらない
             "nav" => {
                 self.nav_open = !self.nav_open;
@@ -4392,8 +4568,9 @@ impl Writer {
             cx.notify();
             return;
         }
-        if self.rb_open {
+        if self.rb_open || self.sd_open {
             self.rb_open = false;
+            self.sd_open = false;
             self.status = "".into();
             cx.notify();
             return;
@@ -4505,6 +4682,8 @@ impl Writer {
             self.fm_commit();
         } else if self.rb_open {
             self.rb_commit();
+        } else if self.sd_open {
+            self.sd_commit();
         } else {
             self.editor().insert("\n");
             self.on_edited();
@@ -5851,6 +6030,15 @@ impl Render for Writer {
                 } else {
                     (spt, stop)
                 };
+                // 記入欄(コンテンツコントロール)は薄い箱で囲む。
+                // 「ここは書き込む場所」と分かるように(Word の作法)
+                if f.sdt.is_some() {
+                    paper = paper.child(div().absolute()
+                        .left(px(sx * pxmm)).top(px(stop + spt * HALF_LEADING))
+                        .w(px(w_mm * pxmm)).h(px(spt * 1.15))
+                        .border_1().border_color(rgb(0x8FB8CE))
+                        .bg(gpui::Rgba { r: 0.55, g: 0.75, b: 0.9, a: 0.10 }));
+                }
                 // 参照(フィールド)はうっすら網掛け(Word の作法)。
                 // 「ここは計算された値」と分かるように
                 if f.field.is_some() {
@@ -6828,6 +7016,29 @@ impl Render for Writer {
             Some(d)
         };
 
+        // 記入欄の選択肢を聞く板
+        let sd_panel = if !self.sd_open {
+            None
+        } else {
+            let mut t = self.sd_ed.text().to_string();
+            let cur = self.sd_ed.cursor().min(t.len());
+            t.insert(cur, '|');
+            Some(div().absolute().left(px(16.0)).top(px(8.0)).w(px(400.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child(SharedString::from(format!(
+                        "{}の選択肢 — カンマ区切りで打って Enter(例: 赤,青,黄)",
+                        self.sd_kind.label()
+                    ))))
+                .child(div().px_2().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).bg(rgb(0xFFFFFF))
+                    .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(t))))
+        };
+
         // ルビの板(読みの入力)
         let rb_panel = if !self.rb_open {
             None
@@ -7268,6 +7479,7 @@ impl Render for Writer {
                     .children(plug_panel)
                     .children(pw_panel)
                     .children(rb_panel)
+                    .children(sd_panel)
                     .children(url_panel)
                     .children(fm_panel)
                     .children(lk_panel)

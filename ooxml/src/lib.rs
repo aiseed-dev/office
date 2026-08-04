@@ -796,6 +796,48 @@ pub fn parse_document_with(
 }
 
 /// cmts は comments.xml の中身(id → コメント)。参照をここで解決する。
+/// w:sdtPr の子要素を読んで記入欄の設定を組み立てる。返り値: 処理したか。
+/// **Start でも Empty でも同じ**(docx は空要素で書くのが普通)
+fn sdt_pr_elem(
+    name: &[u8],
+    e: &quick_xml::events::BytesStart,
+    sd: &mut Option<kumihan::Sdt>,
+) -> bool {
+    use kumihan::SdtKind as K;
+    match name {
+        b"alias" => {
+            if let Some(v) = attr(e, "val") {
+                sd.get_or_insert_with(Default::default).alias = v;
+            }
+        }
+        b"tag" => {
+            if let Some(v) = attr(e, "val") {
+                let s = sd.get_or_insert_with(Default::default);
+                if let Some(k) = K::from_tag(&v) {
+                    s.kind = k;
+                }
+                s.tag = v;
+            }
+        }
+        b"comboBox" => sd.get_or_insert_with(Default::default).kind = K::Combo,
+        b"dropDownList" => sd.get_or_insert_with(Default::default).kind = K::Dropdown,
+        b"listItem" => {
+            if let Some(v) = attr(e, "value").or_else(|| attr(e, "displayText")) {
+                sd.get_or_insert_with(Default::default).items.push(v);
+            }
+        }
+        b"checkbox" => sd.get_or_insert_with(Default::default).kind = K::Checkbox,
+        b"picture" => sd.get_or_insert_with(Default::default).kind = K::Picture,
+        b"date" => sd.get_or_insert_with(Default::default).kind = K::Date,
+        // 素の記入欄。種類が決まっていなければ Text
+        b"text" => {
+            sd.get_or_insert_with(Default::default);
+        }
+        _ => return false,
+    }
+    true
+}
+
 fn parse_document_full(
     xml: &str,
     media: &std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
@@ -845,6 +887,11 @@ fn parse_document_full(
     // 原本の root が宣言している名前空間。持ち越す原文の接頭辞をこれで包む
     let mut ns_decls: std::collections::BTreeMap<String, String> = Default::default();
     let mut in_ppr = false;
+    // 記入欄(w:sdt)。sdtPr を読んで控え、sdtContent の中の run に付ける
+    let mut sdt_depth = 0usize;
+    let mut in_sdtpr = false;
+    let mut sdt_now: Option<kumihan::Sdt> = None;
+    let mut sdt_cur: Option<Box<kumihan::Sdt>> = None;
     let mut in_text = false;
     let mut in_rpr = false;
     let mut cur = String::new();
@@ -911,7 +958,10 @@ fn parse_document_full(
                               pstyle = ParaStyle::Body; ilvl = 0;
                               para_comments.clear(); para_bookmarks.clear();
                               dropcap = false; }
-                    b"rPr" => { in_rpr = true; fmt = CharFormat::default(); }
+                    b"rPr" => {
+                        in_rpr = true;
+                        fmt = CharFormat { sdt: sdt_cur.clone(), ..Default::default() };
+                    }
                     b"pPr" => in_ppr = true,
                     b"sz" if in_rpr => {
                         if let Some(v) = attr(&e, "val") {
@@ -999,6 +1049,7 @@ fn parse_document_full(
                     }
                     // 段落の囲み枠。辺の別は持たない(あれば囲みとみなす)
                     b"pBdr" if in_ppr => boxed = true,
+                    b"r" => fmt.sdt = sdt_cur.clone(),
                     b"t" => { in_text = true; cur.clear(); }
                     // セル結合。横は列数、縦は restart/continue の区別で持つ
                     b"gridSpan" => if stack.last().is_some() {
@@ -1052,7 +1103,17 @@ fn parse_document_full(
                             last_pos = end;
                         }
                     }
-                    b"sdt" => rep.note("w:sdt"),
+                    // 記入欄(コンテンツコントロール)。殻を読んで、
+                    // 中の run に印を付ける(中身は普通の本文として読む)
+                    b"sdt" => {
+                        sdt_depth += 1;
+                    }
+                    b"sdtPr" => in_sdtpr = true,
+                    _ if in_sdtpr && sdt_pr_elem(&n, &e, &mut sdt_now) => {}
+                    b"sdtContent" => {
+                        // ここから中身。以後の run に欄の印が付く
+                        sdt_cur = sdt_now.take().map(Box::new);
+                    }
                     // 既にある変更履歴。挿入(w:ins)の中の字は本文として読み、
                     // 削除(w:del)の中(w:delText)は読まない = 確定後の姿。
                     // **保存すると履歴そのものは消える**ので、そう言う
@@ -1147,6 +1208,8 @@ fn parse_document_full(
             Ok(Event::Empty(e)) => {
                 let n = local(e.name().as_ref()).to_vec();
                 match n.as_slice() {
+                    // 記入欄の設定は空要素で来る(<w:alias w:val="…"/> 等)
+                    _ if in_sdtpr && sdt_pr_elem(&n, &e, &mut sdt_now) => {}
                     // gridCol は空要素で来る
                     b"gridCol" => if let Some(b) = stack.last_mut() {
                         if let Some(w) = attr(&e, "w").and_then(|v| v.parse::<f32>().ok()) {
@@ -1327,6 +1390,14 @@ fn parse_document_full(
             Ok(Event::End(e)) => {
                 let n = local(e.name().as_ref()).to_vec();
                 match n.as_slice() {
+                    b"sdtPr" => in_sdtpr = false,
+                    b"sdt" => {
+                        sdt_depth = sdt_depth.saturating_sub(1);
+                        if sdt_depth == 0 {
+                            sdt_cur = None;
+                            sdt_now = None;
+                        }
+                    }
                     b"t" => {
                         in_text = false;
                         if field_hide {
@@ -1665,6 +1736,44 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
                 ).as_bytes());
             }
             let ttag = if mode == 2 { "w:delText" } else { "w:t" };
+            // 記入欄(コンテンツコントロール)。run を w:sdt で包む
+            let sdt = if mode == 0 { run.fmt.sdt.as_deref() } else { None };
+            if let Some(sd) = sdt {
+                use kumihan::SdtKind as K;
+                let mut pr = String::new();
+                if !sd.alias.is_empty() {
+                    pr.push_str(&format!(r#"<w:alias w:val="{}"/>"#, esc(&sd.alias)));
+                }
+                let tag = if sd.tag.is_empty() { sd.kind.as_tag() } else { &sd.tag };
+                if !tag.is_empty() {
+                    pr.push_str(&format!(r#"<w:tag w:val="{}"/>"#, esc(tag)));
+                }
+                match sd.kind {
+                    K::Combo | K::Dropdown => {
+                        let tag = if sd.kind == K::Combo {
+                            "w:comboBox"
+                        } else {
+                            "w:dropDownList"
+                        };
+                        pr.push_str(&format!("<{tag}>"));
+                        for it in &sd.items {
+                            pr.push_str(&format!(
+                                r#"<w:listItem w:displayText="{0}" w:value="{0}"/>"#,
+                                esc(it)
+                            ));
+                        }
+                        pr.push_str(&format!("</{tag}>"));
+                    }
+                    K::Picture => pr.push_str("<w:picture/>"),
+                    K::Date => pr.push_str("<w:date/>"),
+                    // チェックは Word 2010 の拡張。素の w:text でも中身は残る
+                    K::Checkbox | K::Text | K::Email | K::Phone | K::Complex
+                    | K::Signature => pr.push_str("<w:text/>"),
+                }
+                let _ = w.get_mut().write_all(
+                    format!("<w:sdt><w:sdtPr>{pr}</w:sdtPr><w:sdtContent>").as_bytes(),
+                );
+            }
             // ルビ。基底の run を w:ruby(rt + rubyBase)で包む(Word の作法)
             let ruby_rt = if mode == 0 {
                 run.fmt.ruby.as_deref().filter(|t| !t.is_empty())
@@ -1748,6 +1857,9 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
             w.write_event(Event::End(BytesEnd::new("w:r"))).unwrap();
             if ruby_rt.is_some() {
                 let _ = w.get_mut().write_all(b"</w:rubyBase></w:ruby></w:r>");
+            }
+            if sdt.is_some() {
+                let _ = w.get_mut().write_all(b"</w:sdtContent></w:sdt>");
             }
             if mode != 0 {
                 let tag = if mode == 1 { "ins" } else { "del" };
@@ -3148,6 +3260,68 @@ mod vertical_round_tests {
         write_with(&back, Some(Cursor::new(&buf)), Cursor::new(&mut buf2)).unwrap();
         let (b2, _) = read(Cursor::new(&buf2)).unwrap();
         assert!(!b2.vertical, "横に戻したのに縦のまま");
+    }
+}
+
+#[cfg(test)]
+mod sdt_round_tests {
+    use super::*;
+    use kumihan::{Document, Sdt, SdtKind};
+
+    #[test]
+    fn 記入欄が往復する() {
+        let mut d = Document::plain("氏名: 山田 太郎", 10.5);
+        d.apply_char_format(8..21, |f| {
+            f.sdt = Some(Box::new(Sdt {
+                kind: SdtKind::Text,
+                alias: "氏名".into(),
+                ..Default::default()
+            }))
+        });
+        let mut buf = Vec::new();
+        write(&d, Cursor::new(&mut buf)).unwrap();
+        let (back, _) = read(Cursor::new(&buf)).unwrap();
+        assert_eq!(back.body_text(), "氏名: 山田 太郎", "本文が変わった");
+        let p = back.paragraphs().next().unwrap();
+        let r = p.runs.iter().find(|r| r.fmt.sdt.is_some()).expect("欄が無い");
+        let sd = r.fmt.sdt.as_ref().unwrap();
+        assert_eq!(sd.alias, "氏名");
+        assert_eq!(sd.kind, SdtKind::Text);
+        assert_eq!(r.text, "山田 太郎", "欄の中身が違う: {}", r.text);
+    }
+
+    #[test]
+    fn 選ぶ欄は選択肢ごと往復する() {
+        let mut d = Document::plain("色: 赤", 10.5);
+        d.apply_char_format(5..8, |f| {
+            f.sdt = Some(Box::new(Sdt {
+                kind: SdtKind::Dropdown,
+                alias: "色".into(),
+                items: vec!["赤".into(), "青".into()],
+                ..Default::default()
+            }))
+        });
+        let mut buf = Vec::new();
+        write(&d, Cursor::new(&mut buf)).unwrap();
+        let (back, _) = read(Cursor::new(&buf)).unwrap();
+        let p = back.paragraphs().next().unwrap();
+        let sd = p.runs.iter().find_map(|r| r.fmt.sdt.as_ref()).expect("欄が無い");
+        assert_eq!(sd.kind, SdtKind::Dropdown);
+        assert_eq!(sd.items, vec!["赤".to_string(), "青".to_string()]);
+    }
+
+    #[test]
+    fn うちだけの種類は印で往復する() {
+        let mut d = Document::plain("mail@example.jp", 10.5);
+        d.apply_char_format(0..15, |f| {
+            f.sdt = Some(Box::new(Sdt { kind: SdtKind::Email, ..Default::default() }))
+        });
+        let mut buf = Vec::new();
+        write(&d, Cursor::new(&mut buf)).unwrap();
+        let (back, _) = read(Cursor::new(&buf)).unwrap();
+        let p = back.paragraphs().next().unwrap();
+        let sd = p.runs.iter().find_map(|r| r.fmt.sdt.as_ref()).expect("欄が無い");
+        assert_eq!(sd.kind, SdtKind::Email);
     }
 }
 
