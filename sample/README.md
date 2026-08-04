@@ -43,12 +43,25 @@ python3 sample/catalog_server.py           # マスタを配る(127.0.0.1:8765)
 カタログが追従する。**繋がらなければ、そう言ってから**同梱の見本データで
 作る(黙って古いままにしない)。追跡に入っているのは同梱データ版。
 
+- **注文書.xlsx** — カタログの受け側(calc 用)。品番を打つと品名・単価が
+  右の H〜J 列(品番マスタの写し)から VLOOKUP で引かれ、金額・小計・
+  消費税・合計まで式で埋まる。品番の欄には入力規則(候補はマスタの写し)。
+  ブックにコードが2本載っていて(データ > Python の板):
+  - `@更新 net` — マスタの写しをサーバーの正本と入れ替える(価格改定・
+    新商品に追従し、金額は再計算される)
+  - `@送信 net` — 品番と数量の入った行を JSON でサーバーへ送る
+    (受付番号が返る)
+
+  開いただけでは何も実行されない。実行は毎回の明示の操作で、必ず檻
+  (bubblewrap)の中 — net の許可もその場で打ったときだけ。式の入った
+  行を増やすときは既存の行を Ctrl+C → Ctrl+V で写す。
+
 ## 作り直し
 
 サンプルは生成物。直すのは生成側で、ファイルを直接直さない。
 
 ```bash
-cargo run -p sheet --example gen_samples   # xlsx 3件
+cargo run -p sheet --example gen_samples   # xlsx 4件
 .venv/bin/python sample/gen_docs.py        # docx 3件(要 python-docx)
 .venv/bin/python sample/gen_catalog.py     # カタログ.docx
 ```

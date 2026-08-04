@@ -6,8 +6,32 @@
 //! 「開いて・直して・刷る」を試すための普通の帳票。中身はすべて架空。
 //! サンプルは生成物 — 直すのはこのファイル。
 
-use sheet::model::{Borders, CondOp, CondRule, HAlign, VAlign};
+use sheet::model::{Borders, CondOp, CondRule, HAlign, VAlign, Validation};
 use sheet::{recalc, Book, Cell, Pos};
+
+/// 品番マスタ(品番・品名・単価)。カタログ(gen_catalog.py の同梱データ)と
+/// 同じ架空の36品目。サーバー(catalog_server.py)が正本で、
+/// 注文書の @更新 net が写しをこれと入れ替える。
+const MASTER: &[(&str, &str, u32)] = &[
+    ("A-101", "ボールペン(黒)", 150), ("A-102", "ボールペン(赤)", 150),
+    ("A-103", "ボールペン(青)", 150), ("A-104", "シャープペン", 220),
+    ("A-105", "シャープ替芯", 120), ("A-106", "蛍光マーカー(黄)", 130),
+    ("A-107", "蛍光マーカー(桃)", 130), ("A-108", "油性ペン(黒)", 160),
+    ("A-109", "鉛筆HB", 480), ("A-110", "消しゴム", 90),
+    ("B-201", "コピー用紙A4", 550), ("B-202", "コピー用紙B5", 520),
+    ("B-203", "ノートA罫", 180), ("B-204", "レポート用紙A4", 250),
+    ("B-205", "付箋 75×75mm", 210), ("B-206", "付箋 75×25mm", 260),
+    ("B-207", "封筒 長形3号", 680), ("B-208", "クラフト封筒 角形2号", 750),
+    ("C-301", "クリアファイルA4", 240), ("C-302", "パイプ式ファイルA4", 780),
+    ("C-303", "個別フォルダA4", 620), ("C-304", "2穴バインダーA4", 450),
+    ("C-305", "書類トレーA4", 520), ("C-306", "マグネットバー", 330),
+    ("D-401", "電卓", 1480), ("D-402", "ホッチキス10号", 620),
+    ("D-403", "ホッチキス針10号", 110), ("D-404", "2穴パンチ", 830),
+    ("D-405", "テープカッター", 690), ("D-406", "はさみ", 420),
+    ("D-407", "カッターL型", 380), ("D-408", "スティックのり", 140),
+    ("E-501", "ガムテープ(布)", 280), ("E-502", "OPPテープ(透明)", 190),
+    ("E-503", "緩衝材", 640), ("E-504", "宅配袋(大)", 520),
+];
 
 fn head(s: &mut sheet::Sheet, cols: &[(&str, f32)]) {
     for (i, (name, w)) in cols.iter().enumerate() {
@@ -245,9 +269,173 @@ fn seiseki() -> Book {
     b
 }
 
+/// 注文書 — カタログ(writer の カタログ.docx)の受け側。
+/// 品番を打つと品名・単価が写し(H〜J 列)から引かれて金額まで計算される。
+/// @更新 net で写しをサーバーの正本と入れ替え、@送信 net で注文を送る。
+fn chumon() -> Book {
+    let mut b = Book::new();
+    let s = &mut b.sheets[0];
+    s.name = "注文書".into();
+    for (i, w) in [(0, 9.0), (1, 24.0), (2, 12.0), (3, 8.0), (4, 13.0),
+                   (5, 3.0), (6, 3.0), (7, 9.0), (8, 22.0), (9, 9.0)] {
+        s.col_width.insert(i, w);
+    }
+
+    let mut t = Cell::input("注 文 書");
+    t.fmt.bold = true;
+    t.fmt.size_c = Some(1800);
+    t.fmt.align = HAlign::Center;
+    t.fmt.valign = VAlign::Middle;
+    s.set(Pos::new(0, 0), t);
+    s.merges.push((Pos::new(0, 0), Pos::new(0, 4)));
+    s.row_height.insert(0, 30.0);
+
+    s.set(Pos::new(1, 0), Cell::input("例示文具株式会社 行(品番はカタログから)"));
+    for (row, col, label) in [
+        (2u32, 0u32, "社名"), (2, 2, "担当"), (3, 0, "電話"), (3, 2, "納品希望日"),
+    ] {
+        let mut l = Cell::input(label);
+        l.fmt.bold = true;
+        l.fmt.borders = Borders::ALL;
+        l.fmt.fill = Some("F2F2F2".into());
+        s.set(Pos::new(row, col), l);
+        let mut e = Cell::input("");
+        e.fmt.borders = Borders::ALL;
+        s.set(Pos::new(row, col + 1), e);
+    }
+
+    // 明細(6行目が見出し、7〜16行目が注文行)
+    for (i, name) in ["品番", "品名", "単価(税抜)", "数量", "金額"].iter().enumerate() {
+        let mut c = Cell::input(name);
+        c.fmt.bold = true;
+        c.fmt.fill = Some("DCE6F1".into());
+        c.fmt.borders = Borders::ALL;
+        c.fmt.align = HAlign::Center;
+        s.set(Pos::new(5, i as u32), c);
+    }
+    let filled: &[(&str, &str)] = &[("A-101", "10"), ("B-201", "5"), ("C-301", "3")];
+    for r in 0..10u32 {
+        let row = 6 + r;
+        let n = row + 1; // A1 の行番号
+        for col in 0..5u32 {
+            // 式は全行に置き、品番が空の行は空欄に畳む(IF は選ばなかった側の
+            // エラーを踏まない — 空行に #N/A は出ない)
+            let mut c = match (filled.get(r as usize), col) {
+                (Some(d), 0) => Cell::input(d.0),
+                (_, 1) => Cell::input(&format!(
+                    "=IF(ISBLANK($A{n}),\"\",VLOOKUP($A{n},$H$2:$J$40,2))")),
+                (_, 2) => Cell::input(&format!(
+                    "=IF(ISBLANK($A{n}),\"\",VLOOKUP($A{n},$H$2:$J$40,3))")),
+                (Some(d), 3) => Cell::input(d.1),
+                (_, 4) => Cell::input(&format!("=IF(ISBLANK($A{n}),\"\",C{n}*D{n})")),
+                _ => Cell::input(""),
+            };
+            c.fmt.borders = Borders::ALL;
+            if col == 2 || col == 4 {
+                c.fmt.number_format = Some("#,##0".into());
+            }
+            s.set(Pos::new(row, col), c);
+        }
+    }
+    for (row, label, formula) in [
+        (16u32, "小計", "=SUM(E7:E16)"),
+        (17, "消費税(10%)", "=ROUND(E17*0.1,0)"),
+        (18, "合計(税込)", "=E17+E18"),
+    ] {
+        let mut l = Cell::input(label);
+        l.fmt.borders = Borders::ALL;
+        l.fmt.align = HAlign::Center;
+        if row == 18 {
+            l.fmt.bold = true;
+        }
+        s.set(Pos::new(row, 3), l);
+        let mut f = Cell::input(formula);
+        f.fmt.borders = Borders::ALL;
+        f.fmt.number_format = Some("¥#,##0".into());
+        if row == 18 {
+            f.fmt.bold = true;
+        }
+        s.set(Pos::new(row, 4), f);
+    }
+    s.set(Pos::new(20, 0),
+        Cell::input("品番と数量を入れるだけ(品名・単価・金額は式が引く)。"));
+    s.set(Pos::new(21, 0),
+        Cell::input("データ > Python: @更新 net でマスタを取り直し、@送信 net で注文を送る。"));
+
+    // 品番マスタの写し(H〜J 列。印刷範囲の外)
+    for (i, name) in ["品番", "品名", "単価"].iter().enumerate() {
+        let mut c = Cell::input(name);
+        c.fmt.bold = true;
+        c.fmt.fill = Some("F2F2F2".into());
+        s.set(Pos::new(0, 7 + i as u32), c);
+    }
+    for (i, (code, name, price)) in MASTER.iter().enumerate() {
+        let row = 1 + i as u32;
+        s.set(Pos::new(row, 7), Cell::input(code));
+        s.set(Pos::new(row, 8), Cell::input(name));
+        s.set(Pos::new(row, 9), Cell::input(&price.to_string()));
+    }
+
+    // 品番の入力規則: 候補は写しの品番列(範囲参照 — @更新 に追従する)
+    s.validations.push(Validation {
+        range: (Pos::new(6, 0), Pos::new(15, 0)),
+        formula: "$H$2:$H$40".into(),
+    });
+
+    s.paper_size = Some(9); // A4
+    s.print_areas.push((Pos::new(0, 0), Pos::new(21, 4)));
+    recalc(s);
+
+    b.scripts.push((
+        "更新".into(),
+        r#"# 品番マスタの写し(H〜J 列)をサーバーの正本と入れ替える。
+# 実行は「@更新 net」(網あり檻 — 許可はその場の操作だけ)。
+URL = "http://127.0.0.1:8765/catalog.csv"
+
+import urllib.request, csv, io
+raw = urllib.request.urlopen(URL, timeout=5).read()
+rows = list(csv.reader(io.StringIO(raw.decode("utf-8"))))[1:]
+for i, r in enumerate(rows):
+    n = 2 + i
+    s[f"H{n}"] = r[0]          # 品番
+    s[f"I{n}"] = r[2]          # 品名
+    s[f"J{n}"] = int(r[4])     # 単価
+for n in range(2 + len(rows), 41):   # 減った分の残骸は消す
+    s[f"H{n}"] = None; s[f"I{n}"] = None; s[f"J{n}"] = None
+b.recalc()
+print(f"品番マスタを {len(rows)} 品目に更新しました")
+"#.into(),
+    ));
+    b.scripts.push((
+        "送信".into(),
+        r#"# 注文行(品番と数量の入った行)をサーバーへ送る。
+# 実行は「@送信 net」(網あり檻 — 許可はその場の操作だけ)。
+URL = "http://127.0.0.1:8765/order"
+
+import urllib.request, json
+lines = []
+for n in range(7, 17):
+    code, qty = s[f"A{n}"], s[f"D{n}"]
+    if code and qty:
+        lines.append({"品番": code, "数量": int(qty)})
+if not lines:
+    print("注文行がありません(品番と数量を入れてから)")
+else:
+    order = {"社名": s["B3"] or "(未記入)", "担当": s["D3"] or "", "明細": lines}
+    req = urllib.request.Request(
+        URL, json.dumps(order, ensure_ascii=False).encode("utf-8"),
+        {"Content-Type": "application/json"})
+    r = json.loads(urllib.request.urlopen(req, timeout=5).read().decode("utf-8"))
+    print(f"送信しました(受付番号 {r['受付番号']}・明細 {len(lines)} 行)")
+"#.into(),
+    ));
+    b
+}
+
 fn main() {
     std::fs::create_dir_all("sample").expect("sample/ が作れない");
     save(&mitsumori(), "sample/見積書.xlsx");
     save(&suitou(), "sample/出納帳.xlsx");
     save(&seiseki(), "sample/成績表.xlsx");
+    save(&chumon(), "sample/注文書.xlsx");
 }

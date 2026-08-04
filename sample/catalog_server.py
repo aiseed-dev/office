@@ -1,17 +1,23 @@
-# カタログの商品マスタを配る小さなサーバー(見本。中身はすべて架空)。
+# カタログの商品マスタを配り、注文を受ける小さなサーバー(見本。中身はすべて架空)。
 #
 #   python3 sample/catalog_server.py        # 127.0.0.1:8765
 #
-# GET /catalog.csv が 品番,分類,品名,説明,単価(税抜) の CSV を返す。
+# - GET /catalog.csv — 品番,分類,品名,説明,単価(税抜) の CSV(商品マスタ)
+# - POST /order      — 注文(JSON)を受けて受付番号を返す(注文書.xlsx の @送信 net)
+# - GET /orders      — 受けた注文の一覧(JSON。確認用)
+#
 # 標準ライブラリだけで動く。gen_catalog.py がここから取ってカタログを作る —
-# 「価格の正本はサーバー、docx は生成物」の分業の見本。
+# 「価格の正本はサーバー、docx / xlsx は手元」の分業の見本。
 #
 # 同梱データとの違い(マスタが動いた後、という想定):
 #   A-101〜A-103 は 150→160 に値上げ、D-401 は 1480→1380 に値下げ、
 #   E-505(結束バンド)が新商品として増えている。
 import csv
 import io
+import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+ORDERS = []  # 受けた注文(この見本ではメモリに持つだけ)
 
 PRODUCTS = [
     ("A-101", "筆記具", "ボールペン(黒)", "0.7mm・油性", 160),
@@ -67,13 +73,40 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/orders":
+            self.reply_json(ORDERS)
         else:
-            body = "GET /catalog.csv を返します(商品マスタの見本)\n".encode("utf-8")
+            body = ("GET /catalog.csv(商品マスタ)/ POST /order(注文の受付)"
+                    "/ GET /orders(受けた注文)\n").encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+    def do_POST(self):
+        if self.path != "/order":
+            self.send_response(404)
+            self.end_headers()
+            return
+        n = int(self.headers.get("Content-Length", 0))
+        try:
+            order = json.loads(self.rfile.read(n).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            self.reply_json({"error": "JSON が読めません"}, code=400)
+            return
+        ORDERS.append(order)
+        no = len(ORDERS)
+        print(f"注文を受けた(受付番号 {no}): {order}")
+        self.reply_json({"受付番号": no, "明細": len(order.get("明細", []))})
+
+    def reply_json(self, obj, code=200):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, fmt, *args):
         print("受信:", fmt % args)
