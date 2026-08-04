@@ -462,6 +462,13 @@ struct Writer {
     plug_open: bool,
     /// リボンの絵釦に乗ったときの説明(下のステータスバーに出す)
     hover_hint: Option<&'static str>,
+    /// ファイルのページ(タブ0)から戻る先のタブ
+    prev_tab: usize,
+    /// ファイルのページの右側(0=詳細情報 1=最近開いた)
+    file_view: u8,
+    /// 文書の情報で編集中の欄(0=作成者 1=タイトル 2=タグ 3=件名 4=コメント)
+    file_field: Option<u8>,
+    prop_ed: Editor,
     /// 暗号化のパスワード。Some なら保存で ECMA-376 Standard に包む
     encrypt_pw: Option<String>,
     /// パスワードの板。pw_pending が Some なら「開くために聞いている」
@@ -506,6 +513,8 @@ impl HasEditor for Writer {
         // 別の入力部品を作らず、同じ Editor と結線を使い回す
         if self.pw_open {
             &mut self.pw_ed
+        } else if self.file_field.is_some() {
+            &mut self.prop_ed
         } else if self.find_open {
             if self.find_field == 0 { &mut self.find_ed } else { &mut self.repl_ed }
         } else if self.hf_edit.is_some() {
@@ -525,6 +534,8 @@ impl HasEditor for Writer {
     fn editor_ref(&self) -> &Editor {
         if self.pw_open {
             &self.pw_ed
+        } else if self.file_field.is_some() {
+            &self.prop_ed
         } else if self.find_open {
             if self.find_field == 0 { &self.find_ed } else { &self.repl_ed }
         } else if self.hf_edit.is_some() {
@@ -546,8 +557,8 @@ impl HasEditor for Writer {
             // パスワード・検索欄への打鍵は文書を変えない
             return;
         }
-        if self.chat_open {
-            // チャットの入力欄。打鍵は文書を変えない
+        if self.chat_open || self.file_field.is_some() {
+            // チャット・文書の情報の入力欄。打鍵は(確定まで)文書を変えない
             return;
         }
         if self.protected() {
@@ -680,6 +691,10 @@ impl Writer {
             hist_open: false,
             plug_open: false,
             hover_hint: None,
+            prev_tab: 1,
+            file_view: 0,
+            file_field: None,
+            prop_ed: Editor::new(""),
             encrypt_pw: None,
             pw_open: false,
             pw_ed: Editor::new(""),
@@ -1253,6 +1268,98 @@ impl Writer {
         .detach();
     }
 
+    /// 最近開いた・保存した文書の控え(~/.config/office/recent-writer.txt)
+    fn recent_file() -> PathBuf {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join(".config/office/recent-writer.txt")
+    }
+
+    fn note_recent(p: &std::path::Path) {
+        let rf = Self::recent_file();
+        if let Some(dir) = rf.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let mut list: Vec<String> = std::fs::read_to_string(&rf)
+            .map(|s| s.lines().map(str::to_string).collect())
+            .unwrap_or_default();
+        let me = p.to_string_lossy().to_string();
+        list.retain(|x| *x != me);
+        list.insert(0, me);
+        list.truncate(12);
+        let _ = std::fs::write(&rf, list.join("\n"));
+    }
+
+    fn recent_list() -> Vec<PathBuf> {
+        std::fs::read_to_string(Self::recent_file())
+            .map(|s| s.lines().map(PathBuf::from).filter(|p| p.exists()).collect())
+            .unwrap_or_default()
+    }
+
+    /// 新しい文書。未保存の変更があるときは作らない(黙って捨てない)。
+    /// 返り値: 作ったか
+    fn new_doc(&mut self) -> bool {
+        if self.dirty {
+            self.status =
+                "未保存の変更があります。先に保存してください(Ctrl+S)".into();
+            return false;
+        }
+        self.release_lock();
+        self.locked_by = None;
+        self.path = None;
+        self.encrypt_pw = None;
+        self.notes = Vec::new();
+        self.target = Target::Body;
+        self.pg = kumihan::PageSetup::default();
+        self.set_doc(Document::plain("", SIZE_PT));
+        self.dirty = false;
+        self.status = "新しい文書です".into();
+        true
+    }
+
+    /// 名前を付けて保存(いつでもダイアログ。別の糸 — rfd は同期)
+    fn save_as(&mut self, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new().add_filter("Word文書", &["docx"]).save_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(mut p) = r {
+                    if p.extension().is_none() {
+                        p.set_extension("docx");
+                    }
+                    this.save_to(p);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 文書の情報の欄を確定する(Enter)
+    fn commit_prop(&mut self) {
+        let Some(i) = self.file_field.take() else { return };
+        if self.protected() {
+            self.status =
+                "読み取り専用で保護されています(保護タブの「保護」で解除できます)"
+                    .into();
+            return;
+        }
+        let text = self.prop_ed.text().to_string();
+        let pr = &mut self.doc.props;
+        match i {
+            0 => pr.creator = text,
+            1 => pr.title = text,
+            2 => pr.keywords = text,
+            3 => pr.subject = text,
+            _ => pr.description = text,
+        }
+        self.dirty = true;
+        self.status = "文書の情報を控えました(保存で docx に入ります)".into();
+    }
+
     /// 上書きの前に、直前の中身を控えとして残す(最大9世代)。
     /// 置き場は同じフォルダの .jo-history/<ファイル名>/<日時>.docx。
     /// 名前は**その中身を保存した日時**(ファイルの mtime)— いつの姿かが分かる
@@ -1517,6 +1624,7 @@ impl Writer {
                     )
                     .into();
                 }
+                Self::note_recent(&p);
                 self.path = Some(p);
                 self.dirty = false;
             }
@@ -1611,6 +1719,7 @@ impl Writer {
                 // 保存先のロックを取り直す(別の名前で保存したときは
                 // 新しいファイルの側を守る。同じ名前なら実質そのまま)
                 self.acquire_lock(&p);
+                Self::note_recent(&p);
                 self.path = Some(p);
                 self.dirty = false;
             }
@@ -3655,6 +3764,16 @@ impl Writer {
             cx.notify();
             return;
         }
+        if self.tab == 0 {
+            // ファイルのページ。欄 → ページの順で閉じる
+            if self.file_field.take().is_some() {
+                cx.notify();
+                return;
+            }
+            self.tab = self.prev_tab;
+            cx.notify();
+            return;
+        }
         if self.find_open {
             self.find_open = false;
             cx.notify();
@@ -3776,6 +3895,11 @@ impl Writer {
     fn enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
         if self.pw_open {
             self.pw_commit();
+            cx.notify();
+            return;
+        }
+        if self.file_field.is_some() {
+            self.commit_prop();
             cx.notify();
             return;
         }
@@ -4111,7 +4235,15 @@ impl Render for Writer {
                 // 現在地の青い下線(デスクトップ版の形)
                 .child(div().h(px(2.5)).w_full().rounded_sm()
                     .bg(if on { th_btn } else { th_tab_on_bg }))
-                .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if i == 0 && this.tab != 0 {
+                        this.prev_tab = this.tab;
+                        this.file_view = 0;
+                        this.file_field = None;
+                    }
+                    this.tab = i;
+                    cx.notify()
+                })));
         }
         tabs = tabs.child(div().flex_1())
             .child(div().id("tab-find").px_2().pb_1().text_size(px(12.0))
@@ -4164,9 +4296,59 @@ impl Render for Writer {
             ("insequation", None), ("inssymbol", None), ("‖", None),
             ("controls", None),
         ]];
+        // 残りのタブも一段(本家 Web 版の並びから起こした。2026-08-04 発注者)
+        const DRAW_ROWS: &[&[LItem]] = &[&[
+            ("pen", Some("ペン")), ("highlighter", Some("蛍光ペン")),
+            ("eraser", Some("消しゴム")),
+        ]];
+        const LAYOUT_ROWS: &[&[LItem]] = &[&[
+            ("pagemargins", Some("余白")), ("pageorient", Some("向き")),
+            ("pagesize", Some("サイズ")), ("columns", Some("段組み")),
+            ("‖", None), ("line-numbers", None), ("hyphenation", None),
+            ("‖", None), ("watermark", None), ("pagecolor", None),
+            ("‖", None), ("colorschemas", None),
+        ]];
+        const REF_ROWS: &[&[LItem]] = &[&[
+            ("toc", Some("目次")), ("toc-update", None), ("add-text", None),
+            ("‖", None), ("bookmarks", None), ("caption", None),
+            ("crossref", None), ("‖", None), ("tof", None), ("tof-update", None),
+        ]];
+        const FORM_ROWS: &[&[LItem]] = &[&[
+            ("form-text", None), ("form-combo", None), ("form-dropdown", None),
+            ("form-checkbox", None), ("form-radio", None), ("form-image", None),
+            ("form-email", None), ("form-phone", None), ("form-complex", None),
+            ("form-signature", None),
+        ]];
+        const COLLAB_ROWS: &[&[LItem]] = &[&[
+            ("coauth-mode", Some("共同編集モード")), ("‖", None),
+            ("co-addcomment", Some("コメント")), ("co-delcomment", None),
+            ("co-showcomment", None), ("‖", None), ("co-chat", Some("チャット")),
+            ("‖", None), ("track-changes", Some("変更履歴")), ("‖", None),
+            ("co-history", Some("バージョン履歴")),
+        ]];
+        const PROT_ROWS: &[&[LItem]] = &[&[
+            ("prot-encrypt", Some("暗号化")), ("prot-sign", Some("署名")),
+            ("prot-doc", Some("保護")),
+        ]];
+        const VIEW_ROWS: &[&[LItem]] = &[&[
+            ("zoom-in", Some("拡大")), ("zoom-out", Some("縮小")), ("‖", None),
+            ("ruler", None), ("darkmode", None),
+        ]];
+        const PLUG_ROWS: &[&[LItem]] = &[&[
+            ("plug-macros", Some("マクロ")),
+            ("plug-manage", Some("プラグインの管理")),
+        ]];
         let rows: Option<&[&[LItem]]> = match ribbon::WRITER[self.tab].name {
             "ホーム" => Some(HOME_ROWS),
             "挿入" => Some(INS_ROWS),
+            "描画" => Some(DRAW_ROWS),
+            "レイアウト" => Some(LAYOUT_ROWS),
+            "参考資料" => Some(REF_ROWS),
+            "フォーム" => Some(FORM_ROWS),
+            "共同編集" => Some(COLLAB_ROWS),
+            "保護" => Some(PROT_ROWS),
+            "表示" => Some(VIEW_ROWS),
+            "プラグイン" => Some(PLUG_ROWS),
             _ => None,
         };
         if let Some(rows) = rows {
@@ -4341,7 +4523,12 @@ impl Render for Writer {
             }
             cmds = cmds.child(row);
         }
-        let bar = div().flex().flex_col().child(top).child(tabs).child(cmds);
+        let bar = if self.tab == 0 {
+            // ファイルのページ(本家の File メニュー)は釦の帯を持たない
+            div().flex().flex_col().child(top).child(tabs)
+        } else {
+            div().flex().flex_col().child(top).child(tabs).child(cmds)
+        };
 
         // ---- 下のステータスバー(デスクトップ版: ページ・文字数・ズーム) ----
         let total_pages = self.page_offsets.len().max(1);
@@ -4401,6 +4588,230 @@ impl Render for Writer {
                 this.run_cmd("zoom-in", cx);
                 cx.notify()
             })));
+
+        // ---- ファイルのページ(本家の File メニュー。タブ0で全面に出す) ----
+        let filepage: Option<gpui::Div> = if self.tab != 0 {
+            None
+        } else {
+            let item_bg = th_qa_hover;
+            let mk = |id: &'static str, label: &'static str, ready: bool| {
+                let d = div().id(id).px_4().py_1p5().text_size(px(13.0));
+                if ready {
+                    d.text_color(th_top_fg)
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(item_bg))
+                } else {
+                    d.text_color(th_gray_fg)
+                }
+                .child(label)
+            };
+            let sb = div().w(px(280.0)).bg(th_top_bg)
+                .border_r_1().border_color(th_cmd_border)
+                .flex().flex_col().py_2()
+                .child(mk("f-back", "‹ 戻る", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.tab = this.prev_tab;
+                        cx.notify()
+                    })))
+                .child(div().h(px(10.0)))
+                .child(mk("f-new", "新規作成", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        if this.new_doc() {
+                            this.tab = this.prev_tab;
+                        }
+                        cx.notify()
+                    })))
+                .child(mk("f-tpl", "テンプレートから作成", false))
+                .child(mk("f-open", "開く", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.tab = this.prev_tab;
+                        this.open_dialog(cx);
+                        cx.notify()
+                    })))
+                .child(mk("f-recent", "最近開いた", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.file_view = 1;
+                        cx.notify()
+                    })))
+                .child(div().h(px(10.0)))
+                .child(mk("f-save", "保存", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.save(false, cx);
+                        cx.notify()
+                    })))
+                .child(mk("f-saveas", "名前を付けて保存", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.save_as(cx);
+                        cx.notify()
+                    })))
+                .child(mk("f-print", "印刷", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.save_pdf(cx);
+                        cx.notify()
+                    })))
+                .child(mk("f-protect", "保護する", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        if let Some(i) =
+                            ribbon::WRITER.iter().position(|t| t.name == "保護")
+                        {
+                            this.tab = i;
+                        }
+                        cx.notify()
+                    })))
+                .child(div().h(px(10.0)))
+                .child({
+                    let d = mk("f-info", "詳細情報", true).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.file_view = 0;
+                            cx.notify()
+                        }));
+                    if self.file_view == 0 { d.bg(item_bg) } else { d }
+                })
+                .child(mk("f-place", "ファイルの場所を開く", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        match this.path.as_ref().and_then(|p| p.parent()) {
+                            Some(dir) => {
+                                let _ = std::process::Command::new("xdg-open")
+                                    .arg(dir)
+                                    .spawn();
+                            }
+                            None => {
+                                this.status = "まだファイルになっていません".into();
+                            }
+                        }
+                        cx.notify()
+                    })))
+                .child(div().h(px(10.0)))
+                .child(mk("f-quit", "終了", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.request_quit(cx);
+                        cx.notify()
+                    })))
+                .child(div().flex_1())
+                .child(mk("f-opts", "詳細設定", false))
+                .child(mk("f-help", "ヘルプ", false))
+                .child(mk("f-req", "機能のリクエスト", false));
+
+            let mut pane = div().flex_1().bg(th_cmd_bg).p_8()
+                .flex().flex_col().gap_3().text_size(px(12.5))
+                .text_color(th_top_fg);
+            if self.file_view == 1 {
+                pane = pane.child(div().text_size(px(16.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child("最近開いた"));
+                let list = Self::recent_list();
+                if list.is_empty() {
+                    pane = pane.child(div().text_color(th_status)
+                        .child("(まだありません。開く・保存すると残ります)"));
+                }
+                for (i, q) in list.into_iter().enumerate() {
+                    let name = q.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let dir = q.parent()
+                        .map(|d| d.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    pane = pane.child(div()
+                        .id(SharedString::from(format!("recent-{i}")))
+                        .px_2().py_1().rounded_sm().cursor_pointer()
+                        .hover(move |s| s.bg(item_bg))
+                        .flex().flex_row().items_center().gap_2()
+                        .child(div().text_size(px(13.0))
+                            .child(SharedString::from(name)))
+                        .child(div().text_size(px(11.0)).text_color(th_status)
+                            .child(SharedString::from(dir)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.tab = this.prev_tab;
+                            this.open(q.clone());
+                            cx.notify()
+                        })));
+                }
+            } else {
+                let text = self.doc.body_text();
+                let words = text.split_whitespace().count();
+                let chars_all = text.chars().filter(|c| *c != '\n').count();
+                let paras = self.doc.paragraphs().count();
+                pane = pane.child(div().text_size(px(16.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child("文書の情報"))
+                    .child(div().text_size(px(13.5))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child("統計"));
+                for (k, v) in [
+                    ("ページ", total_pages),
+                    ("段落", paras),
+                    ("単語", words),
+                    ("文字数", nchars),
+                    ("文字数 (スペースを含む)", chars_all),
+                ] {
+                    pane = pane.child(div().flex().flex_row()
+                        .child(div().w(px(220.0)).text_color(th_status).child(k))
+                        .child(SharedString::from(format!("{v}"))));
+                }
+                pane = pane.child(div().h(px(6.0)))
+                    .child(div().text_size(px(13.5))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child("プロパティ"));
+                let pr = self.doc.props.clone();
+                let vals: [(&'static str, String, &'static str); 5] = [
+                    ("作成者", pr.creator, "著者を追加"),
+                    ("タイトル", pr.title, "テキストの追加"),
+                    ("タグ", pr.keywords, "テキストの追加"),
+                    ("件名", pr.subject, "テキストの追加"),
+                    ("コメント", pr.description, "テキストの追加"),
+                ];
+                for (i, (k, v, ph)) in vals.into_iter().enumerate() {
+                    let editing = self.file_field == Some(i as u8);
+                    let shown = if editing {
+                        let mut t = self.prop_ed.text().to_string();
+                        let cur = self.prop_ed.cursor().min(t.len());
+                        t.insert(cur, '|');
+                        t
+                    } else {
+                        v.clone()
+                    };
+                    let empty = !editing && v.is_empty();
+                    pane = pane.child(div().flex().flex_row().items_center()
+                        .child(div().w(px(220.0)).text_color(th_status).child(k))
+                        .child(div()
+                            .id(SharedString::from(format!("prop-{i}")))
+                            .w(px(320.0)).px_2().py_1().rounded_sm()
+                            .border_1()
+                            .border_color(if editing {
+                                rgb(0x1B6E3C)
+                            } else {
+                                th_cmd_border
+                            })
+                            .cursor_pointer()
+                            .whitespace_nowrap().overflow_hidden()
+                            .text_color(if empty { th_gray_fg } else { th_top_fg })
+                            .child(SharedString::from(if empty {
+                                ph.to_string()
+                            } else {
+                                shown
+                            }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let cur = match i {
+                                    0 => this.doc.props.creator.clone(),
+                                    1 => this.doc.props.title.clone(),
+                                    2 => this.doc.props.keywords.clone(),
+                                    3 => this.doc.props.subject.clone(),
+                                    _ => this.doc.props.description.clone(),
+                                };
+                                this.prop_ed = Editor::new(&cur);
+                                this.file_field = Some(i as u8);
+                                cx.notify()
+                            }))));
+                }
+                pane = pane.child(div().text_size(px(11.5)).text_color(th_status)
+                    .child("欄を押して打ち、Enter で控える(保存で docx の情報に入ります)"));
+            }
+            Some(div().flex_1().relative().overflow_hidden()
+                .child(div().absolute().inset_0().flex().flex_row()
+                    .child(sb)
+                    .child(pane))
+                .child(InputSink { view: me.clone() }))
+        };
 
         // 紙。スクロールは紙ごと上へずらすだけ(中身は全部この容器の子)。
         // ページの色は文書の設定(紙も同じ色に塗られる)
@@ -5669,7 +6080,9 @@ impl Render for Writer {
             .on_action(cx.listener(Writer::do_open))
             .on_action(cx.listener(Writer::do_quit))
             .child(bar)
-            .child(
+            .child(if let Some(fp) = filepage {
+                fp
+            } else {
                 div().flex_1().relative().overflow_hidden()
                     .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, _, cx| {
                         // 上に回すと delta は正 → 紙は頭の方へ戻る
@@ -5698,8 +6111,8 @@ impl Render for Writer {
                     .children(symbol_panel)
                     .children(proof_panel)
                     .child(InputSink { view: me })
-                    .children(menu),
-            )
+                    .children(menu)
+            })
             .child(statusbar)
     }
 }
@@ -5774,6 +6187,10 @@ impl gpui::Element for InputSink {
             let clicks = e.click_count;
             let shift = e.modifiers.shift;
             view.update(cx, |w, cx| {
+                if w.tab == 0 {
+                    // ファイルのページ。紙は無いのでキャレットも筆も動かさない
+                    return;
+                }
                 w.menu_at = None;
                 if w.tool.is_some() {
                     // 道具の間、マウスは筆になる(文字は選ばない)
