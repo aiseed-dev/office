@@ -222,6 +222,78 @@ fn find_python() -> std::path::PathBuf {
     "python3".into()
 }
 
+/// マクロ台本の全文を組む。前置きで d(python-docx の文書)のほかに、
+/// 記入欄へ**名前で**書く fill / fill_one を渡す。鍵は docx の w:tag
+/// (フォームタブの「名前」釦で付ける)。無い名前は例外で断る —
+/// ラベルの字を探して隣に書く走査より、名前が様式の背骨(発注者 2026-08-05)
+fn macro_script(
+    in_d: &std::path::Path,
+    out_d: &std::path::Path,
+    user_code: &str,
+) -> String {
+    // 記入の道具。lxml の Element は「子が無い=偽」なので is None で判定する
+    const FILL: &str = r#"from docx.oxml.ns import qn
+def _sdts(name):
+    es = []
+    for sdt in d.element.iter(qn('w:sdt')):
+        pr = sdt.find(qn('w:sdtPr'))
+        tag = pr.find(qn('w:tag')) if pr is not None else None
+        if tag is not None and tag.get(qn('w:val')) == name:
+            es.append(sdt)
+    return es
+def _put(sdt, value):
+    ct = sdt.find(qn('w:sdtContent'))
+    if ct is None:
+        raise SystemExit('記入欄の中身がありません')
+    ts = list(ct.iter(qn('w:t')))
+    v = str(value)
+    if ts:
+        ts[0].text = v
+        for t in ts[1:]:
+            t.text = ''
+    else:
+        r = ct.find('.//' + qn('w:r'))
+        if r is None:
+            p = ct.find('.//' + qn('w:p'))
+            parent = ct if p is None else p
+            r = parent.makeelement(qn('w:r'), {})
+            parent.append(r)
+        t = r.makeelement(qn('w:t'), {})
+        t.text = v
+        r.append(t)
+def fill(name, value):
+    # 同じ名前の欄すべてに書く(表紙と2枚目に同じ欄がある様式のため)
+    es = _sdts(name)
+    if not es:
+        raise SystemExit('記入欄「%s」が見つかりません(writer のフォームタブ「名前」で付けます)' % name)
+    for e in es:
+        _put(e, value)
+    return len(es)
+def fill_one(name, value):
+    # 最初の一つにだけ書く
+    es = _sdts(name)
+    if not es:
+        raise SystemExit('記入欄「%s」が見つかりません' % name)
+    _put(es[0], value)
+"#;
+    format!(
+        concat!(
+            "import docx\n",
+            "d = docx.Document({in_d:?})\n",
+            "{fill}",
+            "# ---- 利用者のコード(d = python-docx の文書 / \
+             fill(名前, 値) = 記入欄へ) ----\n",
+            "{code}\n",
+            "# ----\n",
+            "d.save({out_d:?})\n"
+        ),
+        in_d = in_d.to_string_lossy(),
+        fill = FILL,
+        out_d = out_d.to_string_lossy(),
+        code = user_code
+    )
+}
+
 /// プラグイン(.py)の置き場。~/.config/office/plugins
 fn plugins_dir() -> PathBuf {
     std::env::var_os("HOME")
@@ -728,6 +800,8 @@ struct Writer {
     sd_open: bool,
     sd_ed: Editor,
     sd_kind: kumihan::SdtKind,
+    /// 板が「選択肢」でなく「記入欄の名前」を聞いている
+    sd_naming: bool,
     /// ルビの板(選んだ字に読みを振る)
     rb_open: bool,
     rb_ed: Editor,
@@ -1004,6 +1078,7 @@ impl Writer {
             sd_open: false,
             sd_ed: Editor::new(""),
             sd_kind: kumihan::SdtKind::Text,
+            sd_naming: false,
             rb_open: false,
             rb_ed: Editor::new(""),
             rb_range: 0..0,
@@ -1448,7 +1523,8 @@ impl Writer {
     /// マクロ = **檻(bubblewrap)の中の Python** が python-docx で文書の
     /// **複製**を直し、直った複製を読み込む(失敗しても文書は無傷)。
     /// 文書にコードは載せない — 「開く=実行」を作らない設計はそのまま。
-    /// 台本の中で d が python-docx の Document。戻すのは Ctrl+Z の1手
+    /// 台本の中で d が python-docx の Document、fill(名前, 値) が
+    /// 名前つき記入欄への記入(macro_script 参照)。戻すのは Ctrl+Z の1手
     fn run_macro_file(&mut self, py_file: PathBuf, cx: &mut Context<Self>) {
         self.flush_target();
         let user_code = match std::fs::read_to_string(&py_file) {
@@ -1473,25 +1549,7 @@ impl Writer {
             self.status = format!("マクロに渡せません: {e}").into();
             return;
         }
-        let script = format!(
-            concat!(
-                "import docx
-",
-                "d = docx.Document({in_d:?})
-",
-                "# ---- 利用者のコード(d = python-docx の文書) ----
-",
-                "{code}
-",
-                "# ----
-",
-                "d.save({out_d:?})
-"
-            ),
-            in_d = in_d.to_string_lossy(),
-            out_d = out_d.to_string_lossy(),
-            code = user_code
-        );
+        let script = macro_script(&in_d, &out_d, &user_code);
         let name = py_file
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -2212,9 +2270,15 @@ impl Writer {
             .cloned()
     }
 
-    /// 選択肢の板の Enter(コンボ・ドロップダウンを挿す)
+    /// 選択肢の板の Enter(コンボ・ドロップダウンを挿す。
+    /// 名前を聞いていたときは付け替えへ)
     fn sd_commit(&mut self) {
         self.sd_open = false;
+        if self.sd_naming {
+            self.sd_naming = false;
+            self.sd_name_commit();
+            return;
+        }
         let items: Vec<String> = self
             .sd_ed
             .text()
@@ -2227,6 +2291,35 @@ impl Writer {
             return;
         }
         self.insert_sdt(self.sd_kind, items);
+    }
+
+    /// 名前の板の Enter。カーソルの記入欄の alias / tag をまるごと打ち替える
+    /// (run が割れていても sdt_range_at が一つに繋げる)
+    fn sd_name_commit(&mut self) {
+        let name = self.sd_ed.text().trim().to_string();
+        if name.is_empty() {
+            self.status = "名前がありません(記入欄はそのまま)".into();
+            return;
+        }
+        let Some(range) = self.doc.sdt_range_at(self.ed.cursor()) else {
+            self.status =
+                "記入欄が見つかりません(欄の中にカーソルを置いてください)".into();
+            return;
+        };
+        let name2 = name.clone();
+        self.doc.apply_char_format(range, move |f| {
+            if let Some(sd) = f.sdt.as_deref_mut() {
+                sd.alias = name2.clone();
+                sd.tag = name2.clone();
+            }
+        });
+        self.dirty = true;
+        self.relayout_keep();
+        self.status = format!(
+            "記入欄に名前「{name}」を付けました(docx の w:tag。\
+             マクロは fill(\"{name}\", 値) で記入できます)"
+        )
+        .into();
     }
 
     /// チェックの欄を切り替える(☐ ⇄ ☑)。カーソルがその欄にあるとき
@@ -3601,7 +3694,7 @@ impl Writer {
         "ruby", "direction",
         "controls", "form-text", "form-combo", "form-dropdown", "form-checkbox",
         "form-radio", "form-image", "form-email", "form-phone", "form-complex",
-        "form-signature",
+        "form-signature", "form-name",
         "colorschemas",
         "ai-where", "ai-summary", "ai-rewrite", "ai-polite", "ai-plain",
         "ai-translate", "ai-furigana", "ai-continue", "ai-table", "ai-ask",
@@ -4464,7 +4557,8 @@ impl Writer {
                 })
                 .detach();
                 self.status = "マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
-                               直します(台本の d が python-docx の文書)"
+                               直します(台本の d が python-docx の文書。\
+                               fill(名前, 値) で名前つき記入欄へ)"
                     .into();
             }
             // プラグインの管理。置き場の .py を一覧し、マクロと同じ檻で実行
@@ -4652,6 +4746,29 @@ impl Writer {
                 self.sd_open = true;
                 self.status =
                     "選択肢をカンマ区切りで打って Enter(例: 赤,青,黄)".into();
+            }
+            // 記入欄に名前を付ける(docx の w:alias / w:tag)。
+            // 名前がフォームの背骨 — マクロは fill(名前, 値) でこの鍵を引く
+            "form-name" => {
+                self.switch_target(Target::Body);
+                let Some(sd) = self.sdt_at() else {
+                    self.status =
+                        "名前を付ける記入欄の中にカーソルを置いてください".into();
+                    return;
+                };
+                // いまの名前を板に前置き(種類の既定名のままなら空)
+                let now = if sd.tag == sd.kind.as_tag() {
+                    String::new()
+                } else {
+                    sd.tag.clone()
+                };
+                let mut ed = Editor::new(&now);
+                ed.move_to(now.len(), false);
+                self.sd_ed = ed;
+                self.sd_naming = true;
+                self.sd_open = true;
+                self.status =
+                    "記入欄の名前を打って Enter(例: 氏名。Esc で取りやめ)".into();
             }
             // 配色。**その時の値で塗る**(テーマ部品は作らない — Word で
             // 開いても同じ色に見える正直な形)。見出しの色と紙の色を組で当てる
@@ -4983,6 +5100,7 @@ impl Writer {
         if self.rb_open || self.sd_open || self.ai_open {
             self.rb_open = false;
             self.sd_open = false;
+            self.sd_naming = false;
             self.ai_open = false;
             self.status = "".into();
             cx.notify();
@@ -5514,7 +5632,7 @@ impl Render for Writer {
             ("form-text", None), ("form-combo", None), ("form-dropdown", None),
             ("form-checkbox", None), ("form-radio", None), ("form-image", None),
             ("form-email", None), ("form-phone", None), ("form-complex", None),
-            ("form-signature", None),
+            ("form-signature", None), ("‖", None), ("form-name", Some("名前")),
         ]];
         const COLLAB_ROWS: &[&[LItem]] = &[&[
             ("coauth-mode", Some("共同編集モード")), ("‖", None),
@@ -7473,10 +7591,16 @@ impl Render for Writer {
                 .flex().flex_col().gap_2()
                 .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(0x165E83))
-                    .child(SharedString::from(format!(
-                        "{}の選択肢 — カンマ区切りで打って Enter(例: 赤,青,黄)",
-                        self.sd_kind.label()
-                    ))))
+                    .child(SharedString::from(if self.sd_naming {
+                        "記入欄の名前 — 打って Enter(例: 氏名。\
+                         マクロの fill(名前, 値) が引く鍵)"
+                            .to_string()
+                    } else {
+                        format!(
+                            "{}の選択肢 — カンマ区切りで打って Enter(例: 赤,青,黄)",
+                            self.sd_kind.label()
+                        )
+                    })))
                 .child(div().px_2().py_1().rounded_sm()
                     .border_1().border_color(rgb(0x1B6E3C)).bg(rgb(0xFFFFFF))
                     .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
@@ -7530,7 +7654,8 @@ impl Render for Writer {
             if items.is_empty() {
                 d = d.child(div().text_size(px(11.5)).text_color(rgb(0x66707A))
                     .child("(まだありません。置き場に .py を置いてください。\
-                            台本の d が python-docx の文書)"));
+                            台本の d が python-docx の文書、\
+                            fill(名前, 値) で名前つき記入欄へ)"));
             }
             for (i, q) in items.into_iter().enumerate() {
                 let name = q

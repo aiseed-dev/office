@@ -504,8 +504,21 @@ datetime 代入が頻出」→ 発注者「まず、これをやるのがいい�
   使っていて、実装したら落ちた。実装が進むたびこの試験の例は差し替えること
 - 関数一覧の釦(fn-*)も同じコミットで更新(「できないものを、できるように
   見せない」の逆 — **できるようになったものを一覧に載せ忘れない**)
-残: 第2段(統計・数学 約50)、第3段(OFFSET/INDIRECT=依存追跡、RAND=揮発、
-動的配列)、日本語系(ASC/JIS/PHONETIC/和暦)。
+**第2段も同日に完了(発注者「第2段階に進んで」)**: 84個 → **129個**。
+統計・数学・情報の45個: MEDIAN/MODE/STDEV(P)/VAR(P)(新名 STDEV.S 等も別名で受く)/
+PERCENTILE/QUARTILE(直線補間 = .INC 同等)/CORREL/SLOPE/INTERCEPT/FORECAST(対で
+見る統計は pre-flatten で形を保つ。両方が数の行だけ使う)、FACT/COMBIN/PERMUT/
+GCD/LCM(あふれは checked_mul で #NUM!)、三角・双曲線・指数対数(PI SIN〜LOG10
+DEGREES RADIANS)、CEILING/FLOOR/MROUND/EVEN/ODD/SIGN(符号違いの基準は #NUM!)、
+RAND/RANDBETWEEN(xorshift64* 自前 — 依存を増やさない。揮発性は NOW と同じ
+「recalc のたび」規則)、ISNUMBER/ISTEXT(エラーは FALSE — エラー素通し表へ)/
+ISEVEN/ISODD/COUNTBLANK/SUMSQ。
+- **字句の罠(重要)**: ATAN2 や LOG10 は「ATAN 列の 2 行目」とも読める。
+  lex を「**直後が ( なら関数名**」に直した。関数名がセル参照に化ける事故は
+  この先も増える名前(例: 将来の DAY360 など)で必ず再発するので、この規則を消さない
+- Excel の ATAN2(x,y) は数学の atan2(y,x) と**引数が逆順**(試験に明記)
+残: 第3段(OFFSET/INDIRECT=依存追跡、動的配列=スピル)、
+日本語系(ASC/JIS/PHONETIC/和暦の表示)。
 
 小さい残件: 変換下線の位置の実機確認、表入りのヘッダー・フッターの編集。
 暗号化の Agile 方式(Word/Excel 2013+ の既定)を実装(2026-08-04、発注者

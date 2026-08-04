@@ -83,9 +83,12 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
                     continue;
                 }
             }
+            // ATAN2 や LOG10 は「ATAN 列の 2 行目」とも読めてしまう —
+            // **直後が ( なら関数名**(セル参照を関数のようには呼べない)
+            let called = b.get(i).copied() == Some('(');
             match Pos::parse(&word) {
-                Some(p) => out.push(Tok::Ref(p)),
-                None => out.push(Tok::Name(word.to_ascii_uppercase())),
+                Some(p) if !called => out.push(Tok::Ref(p)),
+                _ => out.push(Tok::Name(word.to_ascii_uppercase())),
             }
             continue;
         }
@@ -406,6 +409,26 @@ pub(crate) fn weekday0(serial: i64) -> i64 {
     ((serial - EXCEL_EPOCH_DAYS).rem_euclid(7) + 4).rem_euclid(7)
 }
 
+/// RAND 用の乱数(0.0 以上 1.0 未満)。暗号用ではない(表計算の RAND も同じ)。
+/// 依存を増やさず xorshift64* を自前で持つ。種は最初の呼び出し時刻
+fn rand01() -> f64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEED: AtomicU64 = AtomicU64::new(0);
+    let mut x = SEED.load(Ordering::Relaxed);
+    if x == 0 {
+        x = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::from(d.subsec_nanos()) ^ d.as_secs())
+            .unwrap_or(0x9E37_79B9_7F4A_7C15)
+            | 1;
+    }
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    SEED.store(x, Ordering::Relaxed);
+    (x >> 11) as f64 / (1u64 << 53) as f64
+}
+
 /// いまの機械の暦での「今日」の通し番号と、時刻(日の割合)。
 /// 時計は系の TZ 環境(日本なら JST)に従う — libc の localtime を使う
 /// chrono に頼らず、TZ のずれは環境変数 JO_TZ_OFF_HOURS で補える(既定 +9)。
@@ -613,6 +636,89 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
             ns.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
             return Ok(Value::Number(if name == "LARGE" { ns[ns.len() - k] } else { ns[k - 1] }));
         }
+        "PERCENTILE" | "PERCENTILE.INC" | "QUARTILE" | "QUARTILE.INC" => {
+            // 百分位(直線補間 — Excel の PERCENTILE.INC と同じ)
+            let mut ns: Vec<f64> = args
+                .first()
+                .map(|g| {
+                    g.values()
+                        .iter()
+                        .filter(|v| matches!(v, Value::Number(_)))
+                        .map(|v| v.as_number())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let k = args.get(1).map(|g| g.first().as_number()).unwrap_or(f64::NAN);
+            let k = if name.starts_with("QUARTILE") { k / 4.0 } else { k };
+            if ns.is_empty() || !(0.0..=1.0).contains(&k) {
+                return Ok(Value::Error("#NUM!".into()));
+            }
+            ns.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+            let pos = k * (ns.len() - 1) as f64;
+            let (lo, frac) = (pos.floor() as usize, pos.fract());
+            let hi = (lo + 1).min(ns.len() - 1);
+            return Ok(Value::Number(ns[lo] + (ns[hi] - ns[lo]) * frac));
+        }
+        "CORREL" | "SLOPE" | "INTERCEPT" | "FORECAST" | "FORECAST.LINEAR" => {
+            // 対で見る統計。両方が数の行だけを使う(Excel と同じ)
+            let fc = name.starts_with("FORECAST");
+            let (ys, xs) = if fc {
+                (args.get(1), args.get(2))
+            } else {
+                (args.first(), args.get(1))
+            };
+            let (ys, xs) = (
+                ys.map(|g| g.values()).unwrap_or(&[]),
+                xs.map(|g| g.values()).unwrap_or(&[]),
+            );
+            if ys.len() != xs.len() {
+                return Ok(Value::Error("#N/A".into()));
+            }
+            let pairs: Vec<(f64, f64)> = ys
+                .iter()
+                .zip(xs)
+                .filter(|(y, x)| {
+                    matches!(y, Value::Number(_)) && matches!(x, Value::Number(_))
+                })
+                .map(|(y, x)| (y.as_number(), x.as_number()))
+                .collect();
+            let n = pairs.len() as f64;
+            if pairs.is_empty() {
+                return Ok(Value::Error("#DIV/0!".into()));
+            }
+            let (my, mx) = (
+                pairs.iter().map(|p| p.0).sum::<f64>() / n,
+                pairs.iter().map(|p| p.1).sum::<f64>() / n,
+            );
+            let sxy: f64 = pairs.iter().map(|(y, x)| (x - mx) * (y - my)).sum();
+            let sxx: f64 = pairs.iter().map(|(_, x)| (x - mx) * (x - mx)).sum();
+            let syy: f64 = pairs.iter().map(|(y, _)| (y - my) * (y - my)).sum();
+            return Ok(match name {
+                "CORREL" => {
+                    if sxx == 0.0 || syy == 0.0 {
+                        Value::Error("#DIV/0!".into())
+                    } else {
+                        Value::Number(sxy / (sxx * syy).sqrt())
+                    }
+                }
+                _ => {
+                    if sxx == 0.0 {
+                        Value::Error("#DIV/0!".into())
+                    } else {
+                        let slope = sxy / sxx;
+                        match name {
+                            "SLOPE" => Value::Number(slope),
+                            "INTERCEPT" => Value::Number(my - slope * mx),
+                            _ => {
+                                let x = args.first().map(|g| g.first().as_number())
+                                    .unwrap_or(0.0);
+                                Value::Number(my - slope * mx + slope * x)
+                            }
+                        }
+                    }
+                }
+            });
+        }
         "RANK" => {
             // RANK(値, 範囲, [順序]) — 省略は大きい方が1位。同値は同順位
             let x = args.first().map(|g| g.first().as_number()).unwrap_or(0.0);
@@ -640,7 +746,11 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
     // 引数にエラーがあればそれを返す(黙って0として数えない)。
     // ただしエラーを受けて働く関数(IFERROR・ISERROR・ISBLANK・IF)と、
     // 選ばなかった枝のエラーを踏んではいけない関数(IFS・SWITCH・CHOOSE)は素通しする
-    if !matches!(name, "IFERROR" | "ISERROR" | "ISBLANK" | "IF" | "IFS" | "SWITCH" | "CHOOSE") {
+    if !matches!(
+        name,
+        "IFERROR" | "ISERROR" | "ISBLANK" | "IF" | "IFS" | "SWITCH" | "CHOOSE"
+            | "ISNUMBER" | "ISTEXT" // エラーは数でも文字でもない → FALSE と答える
+    ) {
         if let Some(e) = a.iter().find(|v| matches!(v, Value::Error(_))) {
             return Ok(e.clone());
         }
@@ -1107,6 +1217,211 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
             Some(c) => Value::Number(c as u32 as f64),
             None => Value::Error("#VALUE!".into()),
         },
+        // ---- 統計(第2段 2026-08-05)----
+        "MEDIAN" => {
+            let mut ns = nums(&a);
+            if ns.is_empty() {
+                Value::Error("#NUM!".into())
+            } else {
+                ns.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                let m = ns.len() / 2;
+                Value::Number(if ns.len() % 2 == 1 { ns[m] } else { (ns[m - 1] + ns[m]) / 2.0 })
+            }
+        }
+        "MODE" | "MODE.SNGL" => {
+            // 最も多く現れる数。1度ずつしか現れないなら #N/A(Excel と同じ)
+            let ns = nums(&a);
+            let mut best: Option<(f64, usize)> = None;
+            for (i, x) in ns.iter().enumerate() {
+                let c = ns.iter().filter(|y| (*y - x).abs() < 1e-12).count();
+                // 同数なら先に現れた方(Excel の MODE.SNGL の癖)
+                let earlier = ns[..i].iter().any(|y| (y - x).abs() < 1e-12);
+                if c > 1 && !earlier && best.map(|(_, bc)| c > bc).unwrap_or(true) {
+                    best = Some((*x, c));
+                }
+            }
+            best.map(|(x, _)| Value::Number(x)).unwrap_or(Value::Error("#N/A".into()))
+        }
+        "STDEV" | "STDEV.S" | "STDEVP" | "STDEV.P" | "VAR" | "VAR.S" | "VARP" | "VAR.P" => {
+            let ns = nums(&a);
+            let sample = matches!(name, "STDEV" | "STDEV.S" | "VAR" | "VAR.S");
+            let need = if sample { 2 } else { 1 };
+            if ns.len() < need {
+                Value::Error("#DIV/0!".into())
+            } else {
+                let n = ns.len() as f64;
+                let mean = ns.iter().sum::<f64>() / n;
+                let ss: f64 = ns.iter().map(|x| (x - mean) * (x - mean)).sum();
+                let var = ss / if sample { n - 1.0 } else { n };
+                Value::Number(if name.starts_with("STDEV") { var.sqrt() } else { var })
+            }
+        }
+        "COUNTBLANK" => Value::Number(a.iter().filter(|v| v.is_empty()).count() as f64),
+        "SUMSQ" => Value::Number(nums(&a).iter().map(|x| x * x).sum()),
+        // ---- 数学(第2段)----
+        "FACT" => {
+            let n = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            if !(0.0..=170.0).contains(&n) {
+                Value::Error("#NUM!".into())
+            } else {
+                Value::Number((1..=n as i64).map(|i| i as f64).product())
+            }
+        }
+        "COMBIN" | "PERMUT" => {
+            let n = a.first().map(|v| v.as_number()).unwrap_or(0.0).floor();
+            let k = a.get(1).map(|v| v.as_number()).unwrap_or(0.0).floor();
+            if n < 0.0 || k < 0.0 || k > n || n > 1e15 {
+                Value::Error("#NUM!".into())
+            } else {
+                let mut r = 1.0f64;
+                for i in 0..k as i64 {
+                    r *= n - i as f64;
+                    if name == "COMBIN" {
+                        r /= (i + 1) as f64;
+                    }
+                    if !r.is_finite() {
+                        return Ok(Value::Error("#NUM!".into()));
+                    }
+                }
+                Value::Number(r.round())
+            }
+        }
+        "GCD" | "LCM" => {
+            let ns: Vec<i64> = nums(&a).iter().map(|x| x.abs().floor() as i64).collect();
+            if ns.is_empty() {
+                return Ok(Value::Error("#VALUE!".into()));
+            }
+            fn gcd(a: i64, b: i64) -> i64 {
+                if b == 0 { a } else { gcd(b, a % b) }
+            }
+            let mut acc: i64 = if name == "GCD" { 0 } else { 1 };
+            for x in ns {
+                if name == "GCD" {
+                    acc = gcd(acc, x);
+                } else {
+                    let g = gcd(acc, x);
+                    if g == 0 {
+                        acc = 0;
+                        continue;
+                    }
+                    match (acc / g).checked_mul(x) {
+                        Some(v) => acc = v,
+                        None => return Ok(Value::Error("#NUM!".into())),
+                    }
+                }
+            }
+            Value::Number(acc as f64)
+        }
+        "PI" => Value::Number(std::f64::consts::PI),
+        "SIN" | "COS" | "TAN" | "SINH" | "COSH" | "TANH" | "EXP" | "DEGREES" | "RADIANS" => {
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            Value::Number(match name {
+                "SIN" => x.sin(),
+                "COS" => x.cos(),
+                "TAN" => x.tan(),
+                "SINH" => x.sinh(),
+                "COSH" => x.cosh(),
+                "TANH" => x.tanh(),
+                "EXP" => x.exp(),
+                "DEGREES" => x.to_degrees(),
+                _ => x.to_radians(),
+            })
+        }
+        "ASIN" | "ACOS" => {
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            if !(-1.0..=1.0).contains(&x) {
+                Value::Error("#NUM!".into())
+            } else {
+                Value::Number(if name == "ASIN" { x.asin() } else { x.acos() })
+            }
+        }
+        "ATAN" => Value::Number(a.first().map(|v| v.as_number()).unwrap_or(0.0).atan()),
+        "ATAN2" => {
+            // Excel の約束: ATAN2(x, y)(数学の atan2(y, x) と引数が逆順)
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let y = a.get(1).map(|v| v.as_number()).unwrap_or(0.0);
+            if x == 0.0 && y == 0.0 {
+                Value::Error("#DIV/0!".into())
+            } else {
+                Value::Number(y.atan2(x))
+            }
+        }
+        "LN" | "LOG10" => {
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            if x <= 0.0 {
+                Value::Error("#NUM!".into())
+            } else {
+                Value::Number(if name == "LN" { x.ln() } else { x.log10() })
+            }
+        }
+        "LOG" => {
+            // LOG(数, [底]) — 底の既定は 10
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let b = a.get(1).map(|v| v.as_number()).unwrap_or(10.0);
+            if x <= 0.0 || b <= 0.0 || b == 1.0 {
+                Value::Error("#NUM!".into())
+            } else {
+                Value::Number(x.log(b))
+            }
+        }
+        "CEILING" | "FLOOR" => {
+            // 基準値の倍数へ。符号が食い違う組は #NUM!(Excel の約束)
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let s = a.get(1).map(|v| v.as_number()).unwrap_or(1.0);
+            if x > 0.0 && s < 0.0 {
+                Value::Error("#NUM!".into())
+            } else if s == 0.0 {
+                if name == "CEILING" { Value::Number(0.0) } else { Value::Error("#DIV/0!".into()) }
+            } else {
+                let q = x / s;
+                Value::Number(if name == "CEILING" { q.ceil() } else { q.floor() } * s)
+            }
+        }
+        "MROUND" => {
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let m = a.get(1).map(|v| v.as_number()).unwrap_or(0.0);
+            if m == 0.0 {
+                Value::Number(0.0)
+            } else if x.signum() * m.signum() < 0.0 {
+                Value::Error("#NUM!".into())
+            } else {
+                Value::Number((x / m).round() * m)
+            }
+        }
+        "EVEN" | "ODD" => {
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let sign = if x < 0.0 { -1.0 } else { 1.0 };
+            let m = x.abs().ceil();
+            let r = if name == "EVEN" {
+                if m % 2.0 == 0.0 { m } else { m + 1.0 }
+            } else if m % 2.0 == 1.0 {
+                m
+            } else {
+                m + 1.0
+            };
+            Value::Number(sign * r)
+        }
+        "SIGN" => {
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            Value::Number(if x == 0.0 { 0.0 } else { x.signum() })
+        }
+        "RAND" => Value::Number(rand01()),
+        "RANDBETWEEN" => {
+            let lo = a.first().map(|v| v.as_number()).unwrap_or(0.0).ceil();
+            let hi = a.get(1).map(|v| v.as_number()).unwrap_or(0.0).floor();
+            if hi < lo {
+                Value::Error("#NUM!".into())
+            } else {
+                Value::Number(lo + (rand01() * (hi - lo + 1.0)).floor().min(hi - lo))
+            }
+        }
+        // ---- 情報(第2段)----
+        "ISNUMBER" => Value::Bool(matches!(a.first(), Some(Value::Number(_)))),
+        "ISTEXT" => Value::Bool(matches!(a.first(), Some(Value::Text(_)))),
+        "ISEVEN" | "ISODD" => {
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0).abs().floor() as i64;
+            Value::Bool((x % 2 == 0) == (name == "ISEVEN"))
+        }
         "PY" => Value::Error("#PY単独".into()), // =PY(…) はセル単独でだけ使える
         _ => Value::Error("#NAME?".into()),
     })
@@ -1921,6 +2236,158 @@ mod dan1_tests {
             value_of(&mut s, "=LARGE(A1:A4,9)"),
             Value::Error("#NUM!".into())
         );
+    }
+}
+
+/// 第2段の拡充(2026-08-05)— 統計・数学で「表計算らしさ」を出す約45個。
+#[cfg(test)]
+mod dan2_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn sheet_with(cells: &[(&str, &str)]) -> Sheet {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        for (a1, v) in cells {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(v));
+        }
+        s
+    }
+
+    fn value_of(s: &mut Sheet, f: &str) -> Value {
+        s.set(Pos::parse("Z99").unwrap(), Cell::input(f));
+        recalc(s);
+        s.value(Pos::parse("Z99").unwrap())
+    }
+
+    fn n(s: &mut Sheet, f: &str) -> f64 {
+        match value_of(s, f) {
+            Value::Number(x) => x,
+            v => panic!("{f} が数でない: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn 成績処理の統計() {
+        let mut s = sheet_with(&[
+            ("A1", "70"), ("A2", "80"), ("A3", "80"), ("A4", "90"), ("A5", "100"),
+        ]);
+        assert_eq!(n(&mut s, "=MEDIAN(A1:A5)"), 80.0);
+        assert_eq!(n(&mut s, "=MEDIAN(A1:A4)"), 80.0, "偶数個は真ん中2つの平均");
+        assert_eq!(n(&mut s, "=MODE(A1:A5)"), 80.0);
+        assert_eq!(
+            value_of(&mut s, "=MODE(A1:A2)"),
+            Value::Error("#N/A".into()),
+            "重複が無ければ最頻値は無い"
+        );
+        // 母集団の分散: 平均84、偏差平方和 (196+16+16+36+256)=520 → 104
+        assert!((n(&mut s, "=VARP(A1:A5)") - 104.0).abs() < 1e-9);
+        assert!((n(&mut s, "=VAR(A1:A5)") - 130.0).abs() < 1e-9, "標本分散は n-1 で割る");
+        assert!((n(&mut s, "=STDEVP(A1:A5)") - 104.0f64.sqrt()).abs() < 1e-9);
+        assert!((n(&mut s, "=STDEV(A1:A5)") - 130.0f64.sqrt()).abs() < 1e-9);
+        assert_eq!(
+            value_of(&mut s, "=STDEV(A1)"),
+            Value::Error("#DIV/0!".into()),
+            "1個から標本標準偏差は出ない"
+        );
+        assert_eq!(n(&mut s, "=PERCENTILE(A1:A5,0.5)"), 80.0);
+        assert_eq!(n(&mut s, "=PERCENTILE(A1:A5,0.25)"), 80.0);
+        assert_eq!(n(&mut s, "=QUARTILE(A1:A5,0)"), 70.0, "第0四分位は最小");
+        assert_eq!(n(&mut s, "=QUARTILE(A1:A5,4)"), 100.0, "第4四分位は最大");
+        assert_eq!(n(&mut s, "=SUMSQ(3,4)"), 25.0);
+    }
+
+    #[test]
+    fn 相関と回帰() {
+        // y = 2x + 1 きっかり(相関1・傾き2・切片1)
+        let mut s = sheet_with(&[
+            ("A1", "1"), ("B1", "3"),
+            ("A2", "2"), ("B2", "5"),
+            ("A3", "3"), ("B3", "7"),
+        ]);
+        assert!((n(&mut s, "=CORREL(A1:A3,B1:B3)") - 1.0).abs() < 1e-12);
+        assert!((n(&mut s, "=SLOPE(B1:B3,A1:A3)") - 2.0).abs() < 1e-12);
+        assert!((n(&mut s, "=INTERCEPT(B1:B3,A1:A3)") - 1.0).abs() < 1e-12);
+        assert!((n(&mut s, "=FORECAST(10,B1:B3,A1:A3)") - 21.0).abs() < 1e-12);
+        assert_eq!(
+            value_of(&mut s, "=CORREL(A1:A3,B1:B2)"),
+            Value::Error("#N/A".into()),
+            "大きさ違いを黙って計算しない"
+        );
+    }
+
+    #[test]
+    fn 組合せと整数論() {
+        let mut s = sheet_with(&[]);
+        assert_eq!(n(&mut s, "=FACT(5)"), 120.0);
+        assert_eq!(n(&mut s, "=COMBIN(10,3)"), 120.0);
+        assert_eq!(n(&mut s, "=PERMUT(10,3)"), 720.0);
+        assert_eq!(n(&mut s, "=GCD(12,18,24)"), 6.0);
+        assert_eq!(n(&mut s, "=LCM(4,6)"), 12.0);
+        assert_eq!(value_of(&mut s, "=FACT(200)"), Value::Error("#NUM!".into()));
+    }
+
+    #[test]
+    fn 三角と対数() {
+        let mut s = sheet_with(&[]);
+        assert!((n(&mut s, "=SIN(PI()/2)") - 1.0).abs() < 1e-12);
+        assert!((n(&mut s, "=COS(0)") - 1.0).abs() < 1e-12);
+        assert!((n(&mut s, "=TAN(PI()/4)") - 1.0).abs() < 1e-12);
+        assert!((n(&mut s, "=DEGREES(PI())") - 180.0).abs() < 1e-12);
+        assert!((n(&mut s, "=RADIANS(180)") - std::f64::consts::PI).abs() < 1e-12);
+        assert!((n(&mut s, "=ASIN(1)") - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        // Excel の約束: ATAN2(x, y) で点 (1,1) は 45度
+        assert!((n(&mut s, "=ATAN2(1,1)") - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        assert!((n(&mut s, "=EXP(1)") - std::f64::consts::E).abs() < 1e-12);
+        assert!((n(&mut s, "=LN(EXP(2))") - 2.0).abs() < 1e-12);
+        assert_eq!(n(&mut s, "=LOG10(1000)"), 3.0);
+        assert_eq!(n(&mut s, "=LOG(8,2)"), 3.0);
+        assert_eq!(n(&mut s, "=LOG(100)"), 2.0, "底の既定は10");
+        assert_eq!(value_of(&mut s, "=LN(0)"), Value::Error("#NUM!".into()));
+        assert_eq!(value_of(&mut s, "=ASIN(2)"), Value::Error("#NUM!".into()));
+    }
+
+    #[test]
+    fn 丸めの一族() {
+        let mut s = sheet_with(&[]);
+        assert_eq!(n(&mut s, "=CEILING(6.1,2)"), 8.0);
+        assert_eq!(n(&mut s, "=FLOOR(6.9,2)"), 6.0);
+        assert_eq!(n(&mut s, "=CEILING(-2.5,-2)"), -4.0, "負の基準は0から遠ざかる");
+        assert_eq!(n(&mut s, "=MROUND(7,3)"), 6.0);
+        assert_eq!(n(&mut s, "=MROUND(8,3)"), 9.0);
+        assert_eq!(n(&mut s, "=EVEN(3)"), 4.0);
+        assert_eq!(n(&mut s, "=EVEN(-3)"), -4.0, "0から遠ざかる");
+        assert_eq!(n(&mut s, "=ODD(2)"), 3.0);
+        assert_eq!(n(&mut s, "=SIGN(-5)"), -1.0);
+        assert_eq!(n(&mut s, "=SIGN(0)"), 0.0);
+        assert_eq!(
+            value_of(&mut s, "=CEILING(2.5,-2)"),
+            Value::Error("#NUM!".into()),
+            "符号違いを黙って丸めない"
+        );
+    }
+
+    #[test]
+    fn 乱数は範囲に収まる() {
+        let mut s = sheet_with(&[]);
+        for _ in 0..20 {
+            let r = n(&mut s, "=RAND()");
+            assert!((0.0..1.0).contains(&r), "RAND が範囲外: {r}");
+            let d = n(&mut s, "=RANDBETWEEN(1,6)");
+            assert!((1.0..=6.0).contains(&d) && d.fract() == 0.0, "さいころが変: {d}");
+        }
+        assert_eq!(value_of(&mut s, "=RANDBETWEEN(6,1)"), Value::Error("#NUM!".into()));
+    }
+
+    #[test]
+    fn 情報関数() {
+        let mut s = sheet_with(&[("A1", "9"), ("A2", "文字")]);
+        assert_eq!(value_of(&mut s, "=ISNUMBER(A1)"), Value::Bool(true));
+        assert_eq!(value_of(&mut s, "=ISNUMBER(A2)"), Value::Bool(false));
+        assert_eq!(value_of(&mut s, "=ISNUMBER(1/0)"), Value::Bool(false), "エラーは数でない");
+        assert_eq!(value_of(&mut s, "=ISTEXT(A2)"), Value::Bool(true));
+        assert_eq!(value_of(&mut s, "=ISEVEN(4)"), Value::Bool(true));
+        assert_eq!(value_of(&mut s, "=ISODD(4)"), Value::Bool(false));
+        assert_eq!(n(&mut s, "=COUNTBLANK(A1:A5)"), 3.0);
     }
 }
 

@@ -899,6 +899,48 @@ impl Document {
         let target = self.para_range(range);
         self.paragraphs().nth(target.start).map(|p| p.align).unwrap_or_default()
     }
+
+    /// カーソル位置の記入欄(sdt)が本文のどこからどこまでかを返す。
+    /// 太字などで run が割れていても、同じ欄が続く限り一つに繋げる。
+    /// 欄でない場所なら None。名前の付け替え(欄まるごと)に使う
+    pub fn sdt_range_at(&self, pos: usize) -> Option<std::ops::Range<usize>> {
+        let mut at = 0usize;
+        for p in self.paragraphs() {
+            let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+            if pos <= at + len {
+                // 段の中の run を(始まり, 終わり, 欄)の列に開く
+                let mut spans = Vec::new();
+                let mut s = at;
+                for r in &p.runs {
+                    spans.push((s, s + r.text.len(), r.fmt.sdt.as_deref()));
+                    s += r.text.len();
+                }
+                // 直前の字の run(run_at と同じ慣習)。段落の頭では最初の run
+                let i = spans
+                    .iter()
+                    .position(|&(s0, e0, _)| pos <= e0 && (pos > s0 || s0 == at))?;
+                let want = spans[i].2?;
+                let (mut s0, mut e0) = (spans[i].0, spans[i].1);
+                for &(s1, _, sd) in spans[..i].iter().rev() {
+                    if sd == Some(want) {
+                        s0 = s1;
+                    } else {
+                        break;
+                    }
+                }
+                for &(_, e1, sd) in &spans[i + 1..] {
+                    if sd == Some(want) {
+                        e0 = e1;
+                    } else {
+                        break;
+                    }
+                }
+                return Some(s0..e0);
+            }
+            at += len + 1;
+        }
+        None
+    }
 }
 
 /// run の列を byte で二つに割る(境に掛かる run はそこで切る)。
@@ -1980,6 +2022,21 @@ mod tests {
     }
 
     const SAMPLE: &str = "日本の事務の実態は、文書ではなく様式です。その様式の定義をテキストにして、記入用の帳票・検証・データベースを全部そこから派生させます。「原本はテキスト。」と、私たちは Rust で書きます。";
+
+    #[test]
+    fn 記入欄の広がりを引ける() {
+        // 「氏名: 」(8バイト)+ 欄「山田　太郎」(15バイト)= 8..23
+        let mut d = Document::plain("氏名: 山田　太郎\n次の行", 10.5);
+        d.apply_char_format(8..23, |f| {
+            f.sdt = Some(Box::new(Sdt { tag: "氏名".into(), ..Default::default() }))
+        });
+        // 太字で run を割っても、欄は一つに繋がって返る
+        d.apply_char_format(8..14, |f| f.bold = true);
+        assert_eq!(d.sdt_range_at(12), Some(8..23), "割れた run が繋がらない");
+        assert_eq!(d.sdt_range_at(23), Some(8..23), "欄の直後(直前の字の慣習)");
+        assert_eq!(d.sdt_range_at(3), None, "欄の外");
+        assert_eq!(d.sdt_range_at(26), None, "次の段落");
+    }
 
     #[test]
     fn 行頭に句読点や閉じ括弧が来ない() {

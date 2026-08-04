@@ -144,6 +144,7 @@ pub const WRITER: &[Tab] = &[
         c("form-phone", "電話番号", "form-phone"),
         c("form-complex", "複合フィールド", "form-complex"),
         c("form-signature", "署名", "form-signature"),
+        c("form-name", "名前", "form-name"),
     ]},
     Tab { name: "共同編集", cmds: &[
         c("coauth-mode", "共同編集モード", "coauth-mode"),

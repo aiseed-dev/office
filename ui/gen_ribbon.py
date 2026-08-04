@@ -91,7 +91,7 @@ READY = {
         "form-checkbox": "form-checkbox", "form-radio": "form-radio",
         "form-image": "form-image", "form-email": "form-email",
         "form-phone": "form-phone", "form-complex": "form-complex",
-        "form-signature": "form-signature",
+        "form-signature": "form-signature", "form-name": "form-name",
         "nav": "nav", "fit-page": "fit-page", "fit-width": "fit-width",
         "zoom100": "zoom100", "show-toolbar": "show-toolbar",
         "show-statusbar": "show-statusbar", "show-left": "show-left",
@@ -336,6 +336,7 @@ APP_TABS = {
             ("form-radio", "ラジオボタン"), ("form-image", "画像"),
             ("form-email", "メールアドレス"), ("form-phone", "電話番号"),
             ("form-complex", "複合フィールド"), ("form-signature", "署名"),
+            ("form-name", "名前"),
         ]),
     ],
     "spreadsheeteditor": [

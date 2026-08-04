@@ -7411,7 +7411,9 @@ calc の隣に置いてください)"
             | "fn-lookup" | "fn-financial" | "fn-more") => {
                 let names: &str = match f {
                     "fn-math" => "SUM AVERAGE ROUND ROUNDUP ROUNDDOWN INT ABS MOD POWER SQRT \
-                                  PRODUCT SUMPRODUCT",
+                                  PRODUCT SUMPRODUCT SUMSQ CEILING FLOOR MROUND EVEN ODD SIGN \
+                                  FACT COMBIN PERMUT GCD LCM PI SIN COS TAN ASIN ACOS ATAN ATAN2 \
+                                  SINH COSH TANH EXP LN LOG LOG10 DEGREES RADIANS RAND RANDBETWEEN",
                     "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE TEXT \
                                   SUBSTITUTE FIND SEARCH VALUE TEXTJOIN REPT CHAR CODE",
                     "fn-logical" => "IF IFS SWITCH AND OR NOT TRUE FALSE ISBLANK ISERROR IFERROR",
@@ -7422,7 +7424,10 @@ calc の隣に置いてください)"
                                     ROW COLUMN ROWS COLUMNS(照合は完全一致)",
                     "fn-financial" => "PMT PV FV NPER(RATE のような反復解はまだ)",
                     "fn-more" => "SUMIF SUMIFS COUNTIF COUNTIFS AVERAGEIF AVERAGEIFS \
-                                  MINIFS MAXIFS COUNTA TRUNC RANK LARGE SMALL — 一覧は各族の釦で",
+                                  MINIFS MAXIFS COUNTA COUNTBLANK TRUNC RANK LARGE SMALL \
+                                  MEDIAN MODE STDEV STDEVP VAR VARP PERCENTILE QUARTILE \
+                                  CORREL SLOPE INTERCEPT FORECAST \
+                                  ISNUMBER ISTEXT ISEVEN ISODD — 一覧は各族の釦で",
                     _ => "SUM AVERAGE COUNT MAX MIN IF SUMIF COUNTIF VLOOKUP TODAY",
                 };
                 self.status = format!("使える関数: {names}").into();
