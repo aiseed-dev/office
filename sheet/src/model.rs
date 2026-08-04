@@ -670,6 +670,18 @@ impl Sheet {
             .iter()
             .map(|(r, h)| (if *r >= at { r + 1 } else { *r }, *h))
             .collect();
+        // グループ化の深さと畳みも一緒に動かす(置き去りにすると
+        // 別の行が畳まれて見える)
+        self.row_outline = self
+            .row_outline
+            .iter()
+            .map(|(r, l)| (if *r >= at { r + 1 } else { *r }, *l))
+            .collect();
+        self.row_hidden = self
+            .row_hidden
+            .iter()
+            .map(|r| if *r >= at { r + 1 } else { *r })
+            .collect();
     }
 
     /// 行を1つ抜く。
@@ -684,6 +696,18 @@ impl Sheet {
             .filter(|(r, _)| **r != at)
             .map(|(r, h)| (if *r > at { r - 1 } else { *r }, *h))
             .collect();
+        self.row_outline = self
+            .row_outline
+            .iter()
+            .filter(|(r, _)| **r != at)
+            .map(|(r, l)| (if *r > at { r - 1 } else { *r }, *l))
+            .collect();
+        self.row_hidden = self
+            .row_hidden
+            .iter()
+            .filter(|r| **r != at)
+            .map(|r| if *r > at { r - 1 } else { *r })
+            .collect();
     }
 
     pub fn insert_col(&mut self, at: u32) {
@@ -695,6 +719,16 @@ impl Sheet {
             .col_width
             .iter()
             .map(|(c, w)| (if *c >= at { c + 1 } else { *c }, *w))
+            .collect();
+        self.col_outline = self
+            .col_outline
+            .iter()
+            .map(|(c, l)| (if *c >= at { c + 1 } else { *c }, *l))
+            .collect();
+        self.col_hidden = self
+            .col_hidden
+            .iter()
+            .map(|c| if *c >= at { c + 1 } else { *c })
             .collect();
     }
 
@@ -708,6 +742,18 @@ impl Sheet {
             .iter()
             .filter(|(c, _)| **c != at)
             .map(|(c, w)| (if *c > at { c - 1 } else { *c }, *w))
+            .collect();
+        self.col_outline = self
+            .col_outline
+            .iter()
+            .filter(|(c, _)| **c != at)
+            .map(|(c, l)| (if *c > at { c - 1 } else { *c }, *l))
+            .collect();
+        self.col_hidden = self
+            .col_hidden
+            .iter()
+            .filter(|c| **c != at)
+            .map(|c| if *c > at { c - 1 } else { *c })
             .collect();
     }
 

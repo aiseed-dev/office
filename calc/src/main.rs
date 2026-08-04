@@ -348,6 +348,66 @@ fn add_total_row(s: &mut sheet::Sheet, a: Pos, b: Pos) -> usize {
     n
 }
 
+/// データタブの「小計」(Excel の集計)。基準の列の値が変わる区切りごとに
+/// 「〜 小計」の行(=SUM)を挿し、明細にグループ化(深さ1)を掛け、最後に
+/// 総計の行を足す。**小計・総計の行はグループ化しない** — 詳細を畳んでも
+/// 合計は見えたまま残る(発注者指摘 2026-08-04)。挿した式は最終の座標で
+/// 書き、既存の式は insert_row が直す。返り値は区切りの数。
+fn apply_subtotals(s: &mut sheet::Sheet, a: Pos, b: Pos, by: u32, vals: &[u32]) -> usize {
+    // 区切り = 基準の列で連続する同じ値の並び(Excel と同じく、並べ替えは
+    // 済んでいる前提。飛び飛びなら区切りもその数だけできる)
+    let mut runs: Vec<(u32, u32, String)> = Vec::new();
+    for r in a.row + 1..=b.row {
+        let v = s.get(Pos::new(r, by)).map(|c| c.value.display()).unwrap_or_default();
+        match runs.last_mut() {
+            Some((_, end, label)) if *label == v => *end = r,
+            _ => runs.push((r, r, v)),
+        }
+    }
+    if runs.is_empty() {
+        return 0;
+    }
+    // 枠を下から挿す(上の位置が狂わない): 総計の枠 → 各区切りの小計の枠
+    s.insert_row(b.row + 1);
+    for (_, end, _) in runs.iter().rev() {
+        s.insert_row(end + 1);
+    }
+    // 中身は最終の座標で書く: k 番目の区切りの小計行 = end+1+k、
+    // その明細は k 行ぶん下がっている。総計 = b.row+1+区切りの数
+    let style = |s: &mut sheet::Sheet, p: Pos, text: &str| {
+        let fmt0 = s.get(p).map(|c| c.fmt.clone()).unwrap_or_default();
+        let mut cell = Cell::input(text);
+        cell.fmt = fmt0;
+        cell.fmt.bold = true;
+        cell.fmt.borders.top = true;
+        s.set(p, cell);
+    };
+    let mut sub_rows = Vec::new();
+    for (k, (start, end, label)) in runs.iter().enumerate() {
+        let k = k as u32;
+        let (det0, det1, srow) = (start + k, end + k, end + 1 + k);
+        sub_rows.push(srow);
+        style(s, Pos::new(srow, by), &format!("{label} 小計"));
+        for c in vals {
+            style(
+                s,
+                Pos::new(srow, *c),
+                &format!("=SUM({}:{})", Pos::new(det0, *c).a1(), Pos::new(det1, *c).a1()),
+            );
+        }
+        for r in det0..=det1 {
+            s.row_outline.insert(r, 1);
+        }
+    }
+    let trow = b.row + 1 + runs.len() as u32;
+    style(s, Pos::new(trow, by), "総計");
+    for c in vals {
+        let refs: Vec<String> = sub_rows.iter().map(|r| Pos::new(*r, *c).a1()).collect();
+        style(s, Pos::new(trow, *c), &format!("={}", refs.join("+")));
+    }
+    runs.len()
+}
+
 /// 控えたセルの**書式だけ**を写す(中身は残す)。帳票の枠の使い回し。
 fn paste_formats(s: &mut sheet::Sheet, at: Pos, cells: &[Vec<Option<Cell>>]) -> usize {
     let mut n = 0usize;
@@ -415,6 +475,8 @@ struct Calc {
     goal: Option<(Pos, f64)>,
     /// ピボットの聞き取りの途中経過(元の範囲・見出し・決めた欄)
     pivot_pend: Option<PivotPend>,
+    /// 小計の聞き取りの途中経過(同じ形の控えを使い回す)
+    sub_pend: Option<PivotPend>,
     /// PY のスピルの台帳(シート番号, 錨 → 行×列)。次の @計算 で前の面を消す
     py_spills: std::collections::HashMap<(usize, Pos), (u32, u32)>,
     /// トレースの光り(参照元=青緑 / 参照先=橙)。見え方だけ、保存されない
@@ -514,6 +576,7 @@ impl Calc {
             img_cache: Default::default(),
             find_term: None,
             pivot_pend: None,
+            sub_pend: None,
             goal: None,
             py_spills: Default::default(),
             trace: Vec::new(),
@@ -1516,7 +1579,8 @@ impl Calc {
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
         // 入力の板 → 一覧 → 子メニュー → 親メニュー → 書式の小窓 → コピーの破線、
         // の順で閉じる
-        self.pivot_pend = None; // 聞き取り途中のピボットは Esc でやめる
+        self.pivot_pend = None; // 聞き取り途中のピボット・小計は Esc でやめる
+        self.sub_pend = None;
         if self.prompt.take().is_some()
             || self.pick.take().is_some()
             || self.menu_sub.take().is_some()
@@ -1741,6 +1805,86 @@ impl Calc {
                     return;
                 };
                 self.goal_seek(target, goal, var);
+            }
+            // 小計の聞き取り(区切りの見出し → 合計する見出し)
+            "subtotal-by" => {
+                let Some(mut pend) = self.sub_pend.take() else { return };
+                let t = text.trim().to_string();
+                if !pend.headers.iter().any(|h| *h == t) {
+                    self.status =
+                        format!("「{t}」は見出しにありません: {}", pend.headers.join(" / "))
+                            .into();
+                    self.sub_pend = Some(pend);
+                    self.prompt = Some(("subtotal-by", Editor::new(&text)));
+                    return;
+                }
+                pend.rows_sel = vec![t];
+                self.status =
+                    "合計する見出し(カンマ区切り可。空 Enter = 数の列全部)".into();
+                self.sub_pend = Some(pend);
+                self.prompt = Some(("subtotal-vals", Editor::new("")));
+            }
+            "subtotal-vals" => {
+                let Some(pend) = self.sub_pend.take() else { return };
+                let by_off =
+                    pend.headers.iter().position(|h| *h == pend.rows_sel[0]).unwrap_or(0);
+                let by = pend.a.col + by_off as u32;
+                let sel = split_fields(&text);
+                let mut vals: Vec<u32> = Vec::new();
+                if sel.is_empty() {
+                    // 数の列を自動で拾う(基準の列は除く)
+                    let sh = self.sheet();
+                    for i in 0..pend.headers.len() {
+                        let c = pend.a.col + i as u32;
+                        if c == by {
+                            continue;
+                        }
+                        let numeric = (pend.a.row + 1..=pend.b.row).any(|r| {
+                            matches!(
+                                sh.get(Pos::new(r, c)).map(|x| &x.value),
+                                Some(Value::Number(_))
+                            )
+                        });
+                        if numeric {
+                            vals.push(c);
+                        }
+                    }
+                    if vals.is_empty() {
+                        self.status =
+                            "数の列が見つかりません(合計する見出しを書いてください)".into();
+                        self.sub_pend = Some(pend);
+                        self.prompt = Some(("subtotal-vals", Editor::new("")));
+                        return;
+                    }
+                } else {
+                    for name in &sel {
+                        match pend.headers.iter().position(|h| h == name) {
+                            Some(i) => vals.push(pend.a.col + i as u32),
+                            None => {
+                                self.status =
+                                    format!("「{name}」は見出しにありません").into();
+                                self.sub_pend = Some(pend);
+                                self.prompt = Some(("subtotal-vals", Editor::new(&text)));
+                                return;
+                            }
+                        }
+                    }
+                }
+                self.checkpoint();
+                let n = apply_subtotals(
+                    &mut self.book.sheets[self.active],
+                    pend.a,
+                    pend.b,
+                    by,
+                    &vals,
+                );
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.sync_input();
+                self.status = format!(
+                    "{n} 区切りに小計と総計を入れ、明細をグループ化しました — 「詳細の非表示」で畳むと合計だけ残ります(Ctrl+Z で1手)"
+                )
+                .into();
             }
             // ピボットの聞き取り(行 → 列 → 値と集計)。間違いは板を出し直して言う
             "pivot-rows" => {
@@ -3729,7 +3873,7 @@ calc の隣に置いてください)"
         "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout",
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
-        "group", "ungroup", "hide-details", "show-details",
+        "group", "ungroup", "hide-details", "show-details", "subtotal",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -4103,6 +4247,43 @@ calc の隣に置いてください)"
                             cols_sel: Vec::new(),
                         });
                         self.prompt = Some(("pivot-rows", Editor::new("")));
+                    }
+                }
+            }
+            // 小計(Excel の集計)。本家のデータタブに無い釦だが、グループ化を
+            // 「畳むと合計が残る」形で使うために要る(発注者指摘 2026-08-04)
+            "subtotal" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status = "表を範囲で選んでください(1行目が見出し)".into();
+                } else {
+                    let (a, b) = self.sel_rect();
+                    if b.row <= a.row {
+                        self.status = "見出しの下にデータの行が要ります".into();
+                    } else {
+                        let headers: Vec<String> = (a.col..=b.col)
+                            .map(|c| {
+                                let v = self
+                                    .sheet()
+                                    .get(Pos::new(a.row, c))
+                                    .map(|x| x.value.display())
+                                    .unwrap_or_default();
+                                if v.is_empty() { col_name(c) } else { v }
+                            })
+                            .collect();
+                        self.status = format!(
+                            "何の区切りで集めるか(見出しを1つ): {}",
+                            headers.join(" / ")
+                        )
+                        .into();
+                        self.sub_pend = Some(PivotPend {
+                            a,
+                            b,
+                            headers,
+                            rows_sel: Vec::new(),
+                            cols_sel: Vec::new(),
+                        });
+                        self.prompt = Some(("subtotal-by", Editor::new("")));
                     }
                 }
             }
@@ -6202,6 +6383,8 @@ impl Render for Calc {
                     "「{}」を何に置き換える?",
                     self.find_term.as_deref().unwrap_or("")
                 ),
+                "subtotal-by" => "小計 1/2 — 何の区切りで集めるか(見出しを1つ)".to_string(),
+                "subtotal-vals" => "小計 2/2 — 合計する見出し".to_string(),
                 "pivot-rows" => "ピボット 1/3 — 行に並べる見出し(カンマ区切り可)".to_string(),
                 "pivot-cols" => "ピボット 2/3 — 列に広げる見出し(空 Enter = なし)".to_string(),
                 "pivot-val" => "ピボット 3/3 — 値にする見出しと集計".to_string(),
@@ -6231,6 +6414,8 @@ impl Render for Calc {
                         "py" => "b=ブック s=シート / @計算 =PY(…)セルを評価 / @名前 実行 @名前 net @save @list @del",
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
+                        "subtotal-by" => "使える見出しは下の状態行に出ています。並べ替えてから使うと区切りがまとまります",
+                        "subtotal-vals" => "空のまま Enter = 数の列全部に入れます。畳んでも小計と総計は残ります",
                         "pivot-rows" | "pivot-cols" => "使える見出しは下の状態行に出ています。Enter で次へ / Esc で取消",
                         "pivot-val" => "例: 金額 合計。集計は 合計/平均/個数/最大/最小(省けば合計)",
                         _ => "Enter で決定 / Esc で取消",
@@ -6884,6 +7069,66 @@ mod table_design_tests {
         let sum = s.get(Pos::new(2, 0)).unwrap();
         assert_eq!(sum.formula.as_deref(), Some("SUM(A1:A2)"));
         assert_eq!(sum.value.display(), "30");
+    }
+}
+
+#[cfg(test)]
+mod subtotal_tests {
+    use super::*;
+
+    #[test]
+    fn 小計と総計が入り明細だけ畳まれる() {
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        for (r, row) in [
+            ["部署", "月", "金額"],
+            ["営業", "1月", "100"],
+            ["営業", "1月", "50"],
+            ["営業", "2月", "70"],
+            ["総務", "1月", "30"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (c, v) in row.iter().enumerate() {
+                s.set(Pos::new(r as u32, c as u32), Cell::input(v));
+            }
+        }
+        let n = apply_subtotals(&mut s, Pos::new(0, 0), Pos::new(4, 2), 0, &[2]);
+        recalc(&mut s);
+        assert_eq!(n, 2, "区切りの数が違う");
+        // 並び: 1見出し 2-4営業明細 5営業小計 6総務明細 7総務小計 8総計
+        let d = |r: u32, c: u32| s.get(Pos::new(r, c)).map(|x| x.value.display()).unwrap_or_default();
+        assert_eq!(d(4, 0), "営業 小計");
+        assert_eq!(d(4, 2), "220", "営業の小計が違う");
+        assert_eq!(
+            s.get(Pos::new(4, 2)).and_then(|c| c.formula.clone()).as_deref(),
+            Some("SUM(C2:C4)"),
+            "小計が式でない"
+        );
+        assert_eq!(d(6, 0), "総務 小計");
+        assert_eq!(d(6, 2), "30");
+        assert_eq!(d(7, 0), "総計");
+        assert_eq!(d(7, 2), "250", "総計が違う");
+        // 明細だけグループ化(小計・総計はされない → 畳んでも残る)
+        for r in [1, 2, 3, 5] {
+            assert_eq!(s.row_outline.get(&r), Some(&1), "明細 {r} が畳めない");
+        }
+        for r in [0, 4, 6, 7] {
+            assert!(!s.row_outline.contains_key(&r), "行 {r} まで畳まれてしまう");
+        }
+    }
+
+    #[test]
+    fn 行の挿抜でグループ化が付いてくる() {
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        s.row_outline.insert(5, 1);
+        s.row_hidden.insert(5);
+        s.insert_row(2);
+        assert_eq!(s.row_outline.get(&6), Some(&1), "挿入で深さが置き去り");
+        assert!(s.row_hidden.contains(&6), "挿入で畳みが置き去り");
+        s.remove_row(0);
+        assert_eq!(s.row_outline.get(&5), Some(&1), "削除で深さが置き去り");
+        assert!(s.row_hidden.contains(&5));
     }
 }
 

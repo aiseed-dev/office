@@ -431,7 +431,10 @@ DYN_LABELS = {}
 # 並びは本家のまま、増えた分だけ後ろ — 乗り換えの人の目当ては崩さない
 EXTRA_CMDS = {
     "calc": {
-        "データ": [("python", "Python", "python")],
+        # 小計は本家のデータタブに無いが、グループ化を「畳むと合計が残る」
+        # 形で使うために置く(Excel の データ > 小計 に相当。発注者指摘)
+        "データ": [("subtotal", "小計", "subtotal"),
+                   ("python", "Python", "python")],
     },
 }
 
