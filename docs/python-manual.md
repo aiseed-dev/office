@@ -1,216 +1,235 @@
-# Python の手引き — 配列と API
+# Python manual — arrays and the API
 
-釦の使い方は [calc](calc-manual.md) / [writer](writer-manual.md) の手引きに。
-ここは**コードを書く人のための1冊** — とくに「範囲⇄配列」のやり取りは
-画面から見えないので、ここが正本。全部この機械で実測してある。
+*日本語版(secondary): [python-manual.ja.md](python-manual.ja.md)*
 
-## Python が動く場所と、渡される束縛
+For the buttons, see the [calc](calc-manual.md) / [writer](writer-manual.md)
+manuals. This is **the one document for people writing code** — in particular
+the range ⇄ array exchange, which is invisible from the UI, is specified here.
+Everything was measured on a real machine.
 
-| 場所 | 束縛 | 檻 |
+## Where Python runs, and what is bound
+
+| Place | Bindings | Sandbox |
 |---|---|---|
-| calc: データ > Python(一行 / .py) | `b` = ブック、`s` = いまのシート | 檻があれば檻(網あり) |
-| calc: `@save 名前` → `@名前` | 同上 | **必ず檻**(網なし。`net` で網あり) |
-| calc: `=PY("関数",…)` + `@計算` | 引数が値で渡る(下記) | 必ず檻(網なし) |
-| calc / writer: マクロ・プラグイン | calc は `b`/`s`、**writer は `d` = python-docx の文書** | 檻 |
-| writer: ページの Python(HTML) | `form` = 記入欄の名前→値の辞書 | 必ず檻 |
+| calc: Data > Python (one-liner / .py) | `b` = workbook, `s` = current sheet | sandboxed if available (with network) |
+| calc: `@save name` → `@name` | same | **always sandboxed** (no network; `net` enables it) |
+| calc: `=PY("fn",…)` + `@計算` | arguments passed as values (below) | always sandboxed (no network) |
+| calc / writer: macros, plugins | calc: `b`/`s`; **writer: `d` = python-docx Document** | sandboxed |
+| writer: in-page Python (HTML) | `form` = dict of field name → value | always sandboxed |
 
-どれも**複製の上で走る** — 失敗しても表・文書は無傷、成功したら結果が
-**1手**として入る(複数シートに触っても Ctrl+Z 一回で戻る)。
+Everything runs **on a copy** — a failure leaves the sheet/document unharmed;
+on success the result lands as **one undo step** (one Ctrl+Z even across
+multiple sheets).
 
-## office_sheet(pysheet)の API
+## The office_sheet (pysheet) API
 
 ```python
-import office_sheet                     # calc の中では import 済みで b, s が来る
-b = office_sheet.Book.open("帳票.xlsx")
-s = b["シート名"]                        # 番号でも: b[0]
+import office_sheet                     # inside calc it's pre-imported; b and s arrive bound
+b = office_sheet.Book.open("form.xlsx")
+s = b["SheetName"]                      # or by index: b[0]
 b.sheet_names                           # ['見積書', …]
-b.add_sheet("新しいシート")              # 同名があればエラー
-b.recalc()                              # 式を計算し直す(値を読む前に)
-b.save("out.xlsx")                      # 原本の部品は据え置き
-b.unsupported                           # 読めなかった部品の一覧(空 = 全部読めた)
+b.add_sheet("NewSheet")                 # error if the name exists
+b.recalc()                              # recalculate before reading values
+b.save("out.xlsx")                      # original parts preserved
+b.unsupported                           # list of parts we couldn't read (empty = everything read)
 ```
 
-### セルの読み書き
+### Reading and writing cells
 
 ```python
-s["A1"]            # 読み: 数は float、文字は str、☑/☐ は bool、式セルは計算値
-s.formula("E2")    # 式そのもの("=SUM(B2:D2)"。式でなければ None)
-s.display("E2")    # 表示の文字("238"。表示形式を通した見た目)
-s["A1"] = 100      # 書き: 数
-s["A1"] = "文字"   #        文字
-s["A1"] = True     #        真偽(calc では ☑/☐ に見える)
-s["A1"] = "=B1*C1" #        式("=" で始まる文字列)
-s["A1"] = None     #        消す
+s["A1"]            # read: numbers are float, text is str, ☑/☐ is bool, formula cells give the computed value
+s.formula("E2")    # the formula itself ("=SUM(B2:D2)"; None if not a formula)
+s.display("E2")    # display string ("238" — through the number format)
+s["A1"] = 100      # write: number
+s["A1"] = "text"   #        text
+s["A1"] = True     #        bool (shows as ☑/☐ in calc)
+s["A1"] = "=B1*C1" #        formula (string starting with "=")
+s["A1"] = date(2026, 8, 5)  # datetime.date/datetime/time → Excel serial number
+s["A1"] = None     #        clear
 ```
 
-- **書式は据え置き** — 値を入れても罫線・結合・表示形式は変わらない
-- 空のセルは **None か ""** で返る(触ったことのないセルは None、
-  空文字を入れたセルは ""。どちらも偽なので `if s["A1"]:` で足りるが、
-  厳密には `s["A1"] in (None, "")` で見る)
+- **Formatting is preserved** — writing a value never touches borders, merges,
+  or number formats
+- Empty cells read back as **None or ""** (never-touched cells are None; cells
+  where an empty string was stored are "". Both are falsy, so `if s["A1"]:`
+  usually suffices; to be precise use `s["A1"] in (None, "")`)
 
-### 配列(範囲)のやり取り — ここが本題
+### Ranges as arrays — the main topic
 
-**範囲の添字は無い**(`s["A2:C3"]` はエラー)。**2次元の一括代入も無い**
-(`s["A1"] = [[…]]` はエラー)。配列はこう扱う:
+**There is no range subscript** (`s["A2:C3"]` raises) and **no 2-D bulk
+assignment** (`s["A1"] = [[…]]` raises). Arrays work like this:
 
 ```python
-# 読み: values() が使っている広さ全体の2次元リスト(行×列、0 始まり)
-rows, cols = s.shape          # (10, 6) — shape は属性(() を付けない)
-v = s.values()                # v[0] = 1行目(見出し)、v[1][1] = B2 の値
-tbl = [r[0:3] for r in v[1:6]]   # A2:C6 を切り出す
+# read: values() is the whole used area as a 2-D list (rows × columns, 0-based)
+rows, cols = s.shape          # (10, 6) — shape is a property (no parentheses)
+v = s.values()                # v[0] = first row (headings), v[1][1] = value of B2
+tbl = [r[0:3] for r in v[1:6]]   # cut out A2:C6
 
-# 書き: ループで1セルずつ(行番号は A1 表記なので 1 始まりに注意)
-data = [["ペン", 10, 150], ["ノート", 5, 180]]
+# write: loop cell by cell (row numbers are 1-based in A1 notation!)
+data = [["pen", 10, 150], ["notebook", 5, 180]]
 for i, row in enumerate(data):
-    n = 2 + i                              # 2行目から
+    n = 2 + i                              # starting at row 2
     s[f"A{n}"], s[f"B{n}"], s[f"C{n}"] = row
-    s[f"D{n}"] = f"=B{n}*C{n}"             # 式も文字列で入れる
+    s[f"D{n}"] = f"=B{n}*C{n}"             # formulas are strings too
 b.recalc()
 ```
 
-### polars との往復
+### Round-tripping with polars
 
 ```python
 import polars as pl
-# シート → DataFrame(1行目を見出しに)
+# sheet → DataFrame (first row as headings)
 v = s.values()
 df = pl.DataFrame({h: [r[i] for r in v[1:]] for i, h in enumerate(v[0])})
 
-# DataFrame → シート(見出しの下へ)
+# DataFrame → sheet (below the headings)
 for i, row in enumerate(df.rows()):
     for j, val in enumerate(row):
         s[f"{chr(65 + j)}{2 + i}"] = val
 ```
 
-集計・結合・絞り込みは polars 側でやるのが分業の流儀
-(シートは帳票の形、データの計算は Python)。
+Aggregation, joins, and filtering belong on the polars side — that's the
+division of labor (the sheet is the form; computation is Python's job).
 
-## =PY(UDF)の配列
+## Arrays with =PY (UDF)
 
 ```
-=PY("集計", A1:B10, 100, "甲")
+=PY("aggregate", A1:B10, 100, "甲")
 ```
 
-- 範囲の引数は**行×列の2次元リスト**(値。1セルはスカラ)で def に渡る
-- 返り値: スカラ → そのセルへ / **1次元リスト → 下へ展開** /
-  **2次元リスト → 右下へスピル**。展開先に他人のデータがあれば
-  `#SPILL!` で止まる(潰さない)
-- 評価は `@計算` のときだけ・檻の中。関数の定義は「関数」で始まる名前で
-  `@save` したスクリプトの def
+- Range arguments arrive at your `def` as **row × column 2-D lists** of values
+  (a single cell is a scalar)
+- Return values: scalar → into the cell / **1-D list → spills downward** /
+  **2-D list → spills down-right**. If the target area holds someone's data,
+  it stops with `#SPILL!` (nothing is overwritten)
+- Evaluation happens only on `@計算`, inside the sandbox. The function
+  definitions come from a script embedded under a name starting with 関数
+  via `@save`
 
 ```python
-def 集計(r, 上限, 種別):        # r = [[行1列1, 行1列2], [行2列1, …], …]
-    hit = [row for row in r if row[0] == 種別 and row[1] <= 上限]
-    return [[row[0], row[1]] for row in hit]   # 2次元 → スピル
+def aggregate(r, limit, kind):   # r = [[r1c1, r1c2], [r2c1, …], …]
+    hit = [row for row in r if row[0] == kind and row[1] <= limit]
+    return [[row[0], row[1]] for row in hit]   # 2-D → spills
 ```
 
-## writer のマクロ(d = python-docx)
+## writer macros (d = python-docx)
 
 ```python
-# d が python-docx の Document。API は python-docx の公式文書のまま
+# d is a python-docx Document. The API is exactly python-docx's
 d.paragraphs[12].runs[0].text = "商号 例示工務店"
 for r in d.paragraphs[12].runs[1:]:
-    r.text = ""                  # 先頭ランに書き、残りを空に(書式が残る作法)
+    r.text = ""                  # write to the first run, empty the rest (keeps formatting)
 d.tables[0].rows[1].cells[2].text = "640,200円"
 ```
 
-保存は writer 側がやる(台本の中で d.save は不要)。
+Saving is writer's job (don't call d.save in the script).
 
-## ページの Python(HTML の form)
+## In-page Python (HTML forms)
 
 ```python
-# form = 記入欄の名前 → 値の辞書。返した値が紙面に書き戻る
+# form = dict of field name → value. Values you set are written back to the page
 qty = int(form.get("qty") or 0)
 form["total"] = qty * 150
 ```
 
-## 檻の中でできること・できないこと
+## What the sandbox allows
 
-- 実ファイルは**読み取り専用**、ホームは見えない、書けるのは交換用の
-  一時領域だけ。網は**既定で閉じている** — `@名前 net` とその場で打った
-  ときだけ開く(許可はブックに保存されない)
-- 機械に入っているライブラリ(polars・scipy・matplotlib 等)は使える
-- print した文字は状態行に出る(進み具合や件数はそこで言う)
+- The real filesystem is **read-only**, your home directory is invisible, and
+  the only writable place is a scratch area for the exchange. The network is
+  **closed by default** — it opens only when you type `@name net` at that
+  moment (the permission is never saved into the workbook)
+- Libraries installed on the machine (polars, scipy, matplotlib, …) work
+- `print` output appears in the status bar (report progress and counts there)
 
-## AI と書く — 共働の手引き
+## Writing with an AI — a collaboration guide
 
-マクロは自分で書かなくてよい。**AI(Claude 等)に頼んで、検分して、
-檻で回す**のがこのソフトの想定する形 — VBA の移し替えもこの道でやる。
-ただし AI は世間の常識(openpyxl・xlwings・VBA)で書いてくるので、
-**この家の流儀を最初に渡す**こと。下の枠をそのまま貼ればいい。
+You don't have to write macros yourself. **Ask an AI (Claude etc.), inspect,
+run in the sandbox** — that is the intended workflow, including VBA
+migrations. But AIs write for the common world (openpyxl, xlwings, VBA), so
+**hand them this house's rules first**. Paste the block below as-is.
 
-### AI への申し送り(コピペ用)
+### Briefing for the AI (copy-paste)
 
 ```
-次の環境で動く Python を書いてください。
+Write Python for the following environment.
 
-【calc のマクロ】b(ブック)と s(いまのシート)が束縛済み。
-- 読み: s["A1"](数=float・文字=str・☑=bool・式セルは計算値。
-  空は None か ""。式が要るなら s.formula("A1")、見た目は s.display("A1"))
-- 全面の読み: s.values()(行×列の2次元リスト。0 始まり)、広さは
-  s.shape(属性。() を付けない)
-- 書き: s["A1"] = 値。式は "=B1*C1" の文字列。消すのは None
-- 【重要】範囲の添字(s["A2:C3"])と2次元の一括代入は無い —
-  書き込みはループで1セルずつ。行番号は A1 表記で1始まり
-- 式を入れたら b.recalc() してから値を読む
-- b.save() は呼ばない(適用はアプリ側の仕事)。print は画面の状態行に出る
-- 書式(罫線・結合・表示形式)は値を入れても壊れない — 触らなくてよい
+[calc macro] b (workbook) and s (current sheet) are pre-bound.
+- read: s["A1"] (number=float, text=str, checkbox=bool; formula cells give
+  the computed value. Empty is None or "". For the formula use
+  s.formula("A1"), for the display string s.display("A1"))
+- bulk read: s.values() (2-D list, rows × columns, 0-based); size is
+  s.shape (a property — no parentheses)
+- write: s["A1"] = value. Formulas are strings like "=B1*C1". None clears
+- IMPORTANT: there is no range subscript (s["A2:C3"]) and no 2-D bulk
+  assignment — write in a loop, one cell at a time. Row numbers in A1
+  notation are 1-based
+- after writing formulas call b.recalc() before reading values
+- don't call b.save() (applying is the app's job). print goes to the app's
+  status bar
+- formatting (borders/merges/number formats) survives value writes — don't
+  touch it
 
-【writer のマクロ】d(python-docx の Document)が束縛済み。
-python-docx の普通の API が使える。d.save() は呼ばない。
-様式の欄に書くときは「先頭ランに書き、残りのランを空にする」
-(p.runs[0].text = 値; 以降の run は ""; — 段落の書式が残る作法)
+[writer macro] d (python-docx Document) is pre-bound.
+Ordinary python-docx API. Don't call d.save().
+When filling form fields: write to the first run and empty the rest
+(p.runs[0].text = value; the remaining runs get "" — keeps paragraph
+formatting)
 
-【実行環境】bubblewrap の檻の中。ファイルは読み取り専用(表・文書の
-複製にだけ書ける)、ネットワークは既定で遮断(利用者が net を明示した
-ときだけ通る)。polars・scipy・matplotlib は使える。
-失敗しても元の表・文書は無傷。成功したら全体が undo 1手で戻る。
+[execution] inside a bubblewrap sandbox. Files are read-only (only the
+copy of the sheet/document is writable), network is closed by default
+(only opens when the user explicitly grants net). polars, scipy, and
+matplotlib are available. A failure leaves the original unharmed; success
+lands as a single undo step.
 
-【=PY のセル関数を書くとき】def の引数に範囲は行×列の2次元リスト
-(値)で来る。返りはスカラ / 1次元(縦に展開)/ 2次元(右下へスピル)。
+[when writing =PY cell functions] range arguments arrive as row × column
+2-D lists of values. Return a scalar / 1-D list (spills down) / 2-D list
+(spills down-right).
 ```
 
-これに**やりたいことを日本語で**添える(シート名・見出しの行・
-何をどうしたいか)。表の形が要るなら `s.values()[0]`(見出し行)を
-貼ると話が早い。
+Then add **what you want, in plain language** (sheet name, heading row, what
+should happen). If the table's shape matters, paste `s.values()[0]` (the
+heading row) — it shortens the conversation.
 
-### 受け取ったコードの検分
+### Inspecting the code you receive
 
-貼る前に3つだけ見る — 檻が守るのは**機械と網**であって、
-**結果の正しさは守らない**:
+Three checks before pasting — the sandbox protects **the machine and the
+network**, not **the correctness of the result**:
 
-1. **どこに書くか**(壊してほしくない列・行に書いていないか)
-2. **何を消すか**(None 代入・行削除があるか)
-3. **net が要るか**(通信するコードなら、宛先は意図した所か)
+1. **Where does it write** (does it touch columns/rows you must not lose?)
+2. **What does it delete** (None assignments, row removals?)
+3. **Does it need net** (if it talks to the network, is the destination the
+   one you intended?)
 
-そのうえで安全網は三重にある: 実行は複製の上(失敗しても無傷)、
-結果は undo 1手(気に入らなければ Ctrl+Z)、檻(暴れても機械に触れない)。
-だから**まず回して、結果を見て、気に入らなければ戻す**が正しい試し方。
-`@save` でブックに載せるのは、動きに納得した後でいい。
+Beyond that the safety net is threefold: execution on a copy (failure is
+harmless), one-step undo (didn't like it? Ctrl+Z), and the sandbox (even
+misbehaving code can't reach the machine). So the right way to try things is
+**run it, look at the result, undo if you don't like it**. Embed with
+`@save` only after you're satisfied.
 
-### VBA の移し替え
+### Migrating VBA
 
-現場の .xlsm の VBA は、コードを取り出して(`oletools` の `olevba` が
-定番)AI に貼り、「上の申し送りの環境で同じ仕事をする Python に」と
-頼む。Range/Cells のループは s[f"A{n}"] のループに、Worksheet は
-b["名前"] に、だいたい素直に写る。**移した後に元の VBA と同じ入力で
-突き合わせる**こと(答え合わせまでが移し替え)。
+For a workplace .xlsm, extract the VBA (the standard tool is `olevba` from
+`oletools`), paste it to the AI, and ask for "the same job in Python for the
+environment above". Range/Cells loops map naturally to `s[f"A{n}"]` loops,
+Worksheet to `b["name"]`. **After migrating, run both against the same input
+and compare** — the comparison is part of the migration.
 
-### 頼み方の実例
+### An example request
 
-> (申し送りを貼った後で)
-> シート「受注台帳」: 1行目が見出し(受付・社名・品番・品名・数量・
-> 単価・金額・発送済)。社名ごとの金額の合計を J5 から下に
-> 「社名, 合計」で書き出すマクロを書いて。
+> (after pasting the briefing)
+> Sheet 受注台帳: row 1 is headings (受付・社名・品番・品名・数量・
+> 単価・金額・発送済). Write a macro that totals 金額 per 社名 and writes
+> "社名, total" starting at J5 downward.
 
-AI が書く → 検分(J 列は空きか・net 不要)→ 実行 → 結果を見る →
-必要なら「合計の大きい順に」と続きを頼む。この回転が共働の基本形。
+The AI writes → you inspect (is column J free? no net needed) → run → look →
+maybe ask "sort by total, descending" next. That loop is the basic form of
+the collaboration.
 
-## 実例(そのまま読める見本)
+## Worked examples (readable as-is)
 
-- [templates/](../templates/README.md) — 問い合わせ台帳(`@取り込み net` の
-  CSV 取り込み・=PY の状態集計)ほか
-- [sample/注文書.xlsx](../sample/README.md) — マスタの入れ替え(`@更新 net`)と
-  JSON の送信(`@送信 net`)
-- [sample/受注台帳.xlsx](../sample/README.md) — 取り込みの控え(K2)で
-  重複を防ぐ増分の取り込み
+- [templates/](../templates/README.md) — an inquiry ledger (CSV intake with
+  `@取り込み net`, status aggregation with =PY) and more
+- [sample/注文書.xlsx](../sample/README.md) — swapping in a product master
+  (`@更新 net`) and sending JSON (`@送信 net`)
+- [sample/受注台帳.xlsx](../sample/README.md) — incremental intake that
+  avoids duplicates with a watermark cell (K2)

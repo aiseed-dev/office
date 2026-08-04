@@ -1,420 +1,445 @@
-# calc の手引き
+# calc manual
 
-xlsx を開いて、直して、保存する表計算アプリ。式も計算する。
+*日本語版(secondary): [calc-manual.ja.md](calc-manual.ja.md)*
 
-このマニュアルには**いま動くことだけ**を書く。リボンに灰色で並んでいる
-コマンドは未実装で、押せない(できないものを、できるように見せない)。
-灰色のものと Python での代替は[巻末](#未実装のもの灰色と代替)に。
+A spreadsheet app that opens, edits, and saves xlsx — and calculates formulas.
 
-3つの約束:
+This manual describes **only what works today**. Commands shown grayed out on the
+ribbon are unimplemented and cannot be pressed (we never make something look
+usable when it isn't). Grayed-out items and their Python alternatives are listed
+[at the end](#not-implemented-gray-and-alternatives).
 
-- **書式は据え置き。** 開いた帳票の罫線・結合・列幅・図形・テーマは、
-  保存しても壊れない(理解しない部品は原文のまま持ち越す)
-- **どの操作も1手で戻せる。** 迷ったら Ctrl+Z
-- **黙って落とさない。** 読めないもの・保存で失われるものは状態行で言う
+Three promises:
 
-## 起動
+- **Formatting is preserved.** Borders, merged cells, column widths, shapes, and
+  themes of an opened form survive a save (parts we don't understand are carried
+  over from the original file)
+- **Every operation is one undo away.** When in doubt, Ctrl+Z
+- **Nothing is dropped silently.** Anything we can't read, or that would be lost
+  on save, is mentioned in the status bar
+
+## Starting
 
 ```bash
-./target/release/calc              # 空で開く
-./target/release/calc 帳票.xlsx    # ファイルを指定して開く
+./target/release/calc              # opens empty
+./target/release/calc 帳票.xlsx    # open a file
 ```
 
-日本語フォントが機械に無いと起動しない(`fonts-noto-cjk` か
-`fonts-ipaexfont` を入れる。`OFFICE_FONT=/path/to/font.ttf` で明示も可)。
+Without a Japanese font the app won't start (install `fonts-noto-cjk` or
+`fonts-ipaexfont`, or set `OFFICE_FONT=/path/to/font.ttf`).
 
-## 画面
+## The screen
 
-額縁はデスクトップ版の形。**1段目**が保存・印刷・戻す・やり直しと
-ブック名(未保存は * 印。この行を掴むと窓が動く)、**2段目**が白地のタブ
-(現在地は緑の下線。右端の 🔍 = 検索と置換)。釦の帯は本家と同じ
-**一段の絵釦**(主要な釦は名札つき。釦に乗ると名前が下のステータスバーに
-出る。ホームだけ2段)。**ファイルタブは全面のページ** — 左の品書き
-(新規作成・開く・最近開いた・保存・名前を付けて保存・印刷・保護する・
-詳細情報・ファイルの場所を開く・終了)と、右に「ブックの情報」
-(統計と、xlsx の情報 = 作成者・タイトルなど。**欄を押して打ち、Enter で
-控える** — 保存で xlsx の docProps に入り、Excel でも見える)。
-「最近開いた」は12件残る。タブの並びは Euro-Office と同じ:
-**ファイル / ホーム / 挿入 / 描画 / レイアウト / 数式 / データ / ピボットテーブル /
-表のデザイン / 共同編集 / 保護 / 表示 / プラグイン**(本家の全タブ)。
-**インターフェイステーマ**(表示タブ)で画面を暗くできる —
-**セルは白のまま**(画面と紙の一致を守る)。
-**下端**がステータスバー — シートの耳、操作の結果・警告・エラー、そして
-範囲を選ぶと**合計・平均・個数**が生きて出る(Excel の下端と同じ)。
-保護したシートの耳には 🔒 が付く。
+The window frame follows the desktop-app convention. **Row 1**: save, print,
+undo, redo, and the workbook name (unsaved changes show `*`; drag this row to
+move the window). **Row 2**: tabs on a white strip (current tab has a green
+underline; 🔍 at the right edge is find & replace). The button band is a single
+row of icon buttons like the original (major buttons are labeled; hovering shows
+the name in the status bar; only Home has two rows). **The File tab is a
+full-page view** — a menu on the left (New, Open, Recent, Save, Save As, Print,
+Protect, Properties, Open file location, Quit) and "Workbook info" on the right
+(statistics plus xlsx properties = author, title, etc. **Click a field, type,
+Enter to record** — saved into docProps, visible in Excel). "Recent" keeps 12
+entries. Tab order matches Euro-Office:
+**File / Home / Insert / Draw / Layout / Formulas / Data / Pivot Table /
+Table Design / Collaboration / Protection / View / Plugins** (all the original
+tabs). **Interface theme** (View tab) darkens the surroundings —
+**cells stay white** (screen and paper must agree).
+**Bottom edge**: the status bar — sheet tabs, results/warnings/errors, and when
+a range is selected its **sum, average, and count** update live (like Excel's
+status bar). Protected sheets get a 🔒 on their tab.
 
-**表示タブ**(本家デスクトップ版に合わせた): 拡大・縮小(50〜200%。
-セルも文字も一緒に伸縮 — 紙は変わらない)、数式バーの表示/非表示、
-枠線表示、見出し(行番号・列名。消すと表だけの見た目になる)、
-0を表示する(0 の値を隠す — **見え方だけ。値は 0 のまま**で式にも効く)。
-枠の固定・シートの表示(隠しシートを戻す/隠す)・インターフェイステーマ(画面の明暗)もここ。
+**View tab** (matching the original desktop app): zoom (50–200%; cells and text
+scale together — paper is unaffected), formula bar on/off, gridlines, headings
+(row numbers and column letters; hide them for a clean table look), show zeros
+(hides zero values — **display only; the value stays 0** and formulas still see
+it). Freeze panes, sheet visibility (unhide/hide sheets), and the interface
+theme also live here.
 
-## 基本操作
+## Basics
 
-### キー
+### Keys
 
-| 操作 | キー |
+| Action | Keys |
 |---|---|
-| セル移動 | ↑ ↓ ← → / Enter(下へ)/ Tab(右へ)/ Shift+Tab(左へ) |
-| 範囲選択 | Shift+矢印 |
-| 先頭 / 末尾へ | Ctrl+Home / Ctrl+End |
-| ページ送り | PageUp / PageDown |
-| すべて選択 | Ctrl+A |
-| 元に戻す / やり直し | Ctrl+Z / Ctrl+Shift+Z(Ctrl+Y も同じ) |
-| コピー / 切り取り / 貼り付け | Ctrl+C / Ctrl+X / Ctrl+V |
-| **値だけ貼り付け** | Ctrl+Shift+V(式を計算結果の値にして貼る) |
-| 検索・置換 | Ctrl+F / Ctrl+H |
-| 開く / 保存 | Ctrl+O / Ctrl+S |
-| 右クリックメニュー | Menu キー / Shift+F10 |
-| 取り消し・閉じる | Esc |
-| 終了 | Ctrl+Q |
+| Move | ↑ ↓ ← → / Enter (down) / Tab (right) / Shift+Tab (left) |
+| Select range | Shift+arrows |
+| First / last cell | Ctrl+Home / Ctrl+End |
+| Page up / down | PageUp / PageDown |
+| Select all | Ctrl+A |
+| Undo / redo | Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y too) |
+| Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V |
+| **Paste values only** | Ctrl+Shift+V (formulas become their computed values) |
+| Find / replace | Ctrl+F / Ctrl+H |
+| Open / save | Ctrl+O / Ctrl+S |
+| Context menu | Menu key / Shift+F10 |
+| Cancel / close | Esc |
+| Quit | Ctrl+Q |
 
-### マウス
+### Mouse
 
-- クリックで選択、ドラッグで範囲選択、Shift+クリックで起点から拡張
-- 行番号・列名の見出しをクリックで行・列ごと選択
-- 見出しの境界をドラッグで列幅・行高の変更
-- ハイパーリンクは Ctrl+クリックで開く
-- 図形はドラッグで移動、右下の角で大きさ変更
+- Click to select, drag to select a range, Shift+click to extend from the anchor
+- Click a row number or column letter to select the whole row/column
+- Drag the boundary between headings to resize columns/rows
+- Ctrl+click opens hyperlinks
+- Drag shapes to move them; the bottom-right corner resizes
 
-## 式と関数
+## Formulas and functions
 
-`=` で始めると式。四則(`+ - * /`)、比較(`= <> > >= < <=`)、
-範囲(`A1:B3`)、絶対参照(`$A$1`)、定義した名前が使える。
-編集すると自動で再計算され、循環参照は検出してエラーになる(黙らない)。
+Start with `=` for a formula. Arithmetic (`+ - * /`), comparisons
+(`= <> > >= < <=`), ranges (`A1:B3`), absolute references (`$A$1`), and defined
+names all work. Editing triggers recalculation; circular references are detected
+and reported (never silent).
 
-実装済みの関数(44):
+**About 185 functions** are implemented (including modern aliases). By category:
 
-| 分類 | 関数 |
+| Category | Functions |
 |---|---|
-| 統計 | SUM, AVERAGE, COUNT, COUNTA, MIN, MAX, SUMIF, COUNTIF |
-| 数学 | ABS, MOD, POWER, SQRT, INT, ROUND, ROUNDUP, TRUNC, PRODUCT |
-| 財務 | PMT, PV, FV, NPER |
-| 日付 | TODAY, NOW, DATE, YEAR, MONTH, DAY, WEEKDAY |
-| 文字列 | LEN, LEFT, RIGHT, MID, TRIM, UPPER, LOWER, CONCATENATE |
-| 論理 | IF, AND, OR, NOT, IFERROR, ISBLANK, ISERROR |
-| 検索 | VLOOKUP, HLOOKUP, INDEX, MATCH |
+| Aggregation | SUM, AVERAGE, COUNT, COUNTA, COUNTBLANK, MIN, MAX, SUMIF, **SUMIFS**, COUNTIF, **COUNTIFS**, AVERAGEIF(S), MINIFS, MAXIFS, **SUBTOTAL**, AGGREGATE, SUMPRODUCT, SUMSQ, AVERAGEA, MAXA, MINA |
+| Math | ABS, MOD, QUOTIENT, POWER, SQRT, INT, ROUND(UP/DOWN), TRUNC, CEILING(.MATH), FLOOR(.MATH), MROUND, EVEN, ODD, SIGN, PRODUCT, FACT, COMBIN, PERMUT, GCD, LCM, PI, SIN…ATAN2, SINH…TANH, EXP, LN, LOG, LOG10, DEGREES, RADIANS, RAND, RANDBETWEEN |
+| Statistics | MEDIAN, MODE, STDEV(P), VAR(P) (and .S/.P names), PERCENTILE, QUARTILE, LARGE, SMALL, RANK(.EQ/.AVG), CORREL, SLOPE, INTERCEPT, FORECAST |
+| Finance | PMT, PV, FV, NPER, **NPV, IRR, RATE** (IRR and RATE are iterative) |
+| Date & time | TODAY, NOW, DATE, DATEVALUE, YEAR, MONTH, DAY, WEEKDAY, TIME, HOUR, MINUTE, SECOND, EDATE, EOMONTH, DATEDIF, WORKDAY, NETWORKDAYS, DAYS, DAYS360, YEARFRAC, WEEKNUM, ISOWEEKNUM |
+| Text | LEN, LEFT, RIGHT, MID, TRIM, UPPER, LOWER, PROPER, EXACT, CLEAN, CONCATENATE/CONCAT, **TEXT**, SUBSTITUTE, FIND, SEARCH, VALUE, NUMBERVALUE, TEXTJOIN, REPT, FIXED, YEN, CHAR/UNICHAR, CODE/UNICODE |
+| Japanese | **LENB, LEFTB, RIGHTB, MIDB** (full-width = 2, matching Excel's Japanese locale), **ASC, JIS** (full/half-width conversion), **DATESTRING** (Japanese era dates), **PHONETIC** (furigana — reads the rPh data in the xlsx) |
+| Logic & info | IF, IFS, SWITCH, CHOOSE, AND, OR, NOT, IFERROR, IFNA, NA, IS… (BLANK/ERROR/ERR/NA/NUMBER/TEXT/NONTEXT/LOGICAL/EVEN/ODD), T, N, TYPE |
+| Lookup | VLOOKUP, HLOOKUP, **XLOOKUP**, LOOKUP, INDEX, MATCH, ROW(S), COLUMN(S), ADDRESS, HYPERLINK, **OFFSET, INDIRECT** (including `'Sheet name'!A1` across sheets) |
+| Dynamic arrays | **FILTER, SORT, UNIQUE, SEQUENCE, TRANSPOSE** — results spill into neighboring cells; blocked cells give `#SPILL!`. They also combine with operators (`=SEQUENCE(3)+1`) and nest into aggregates (`=SUM(FILTER(…))`) |
 
-エラー(`#N/A` 等)は引数から式へそのまま伝わる。ただし IFERROR は
-第1引数のエラーを受けて第2引数に落ち、IF は選ばなかった側の
-エラーを踏まない(`=IFERROR(VLOOKUP(…),"")` で「見つからない」を空欄にできる)。
+Errors (`#N/A` etc.) propagate from arguments to the formula. IFERROR catches an
+error in its first argument, and IF never trips over the error in the branch it
+didn't take (`=IFERROR(VLOOKUP(…),"")` turns "not found" into a blank).
+Unknown function names return **#NAME?** — the app never silently computes 0.
 
-これに加えて **`=PY(…)` で自分の関数を Python で書ける** —
-[Python の章](#セル関数を-python-で書く-pyudf)へ。
+On top of these, **`=PY(…)` lets you write your own functions in Python** —
+see [the Python section](#writing-cell-functions-in-python-py-udf).
 
-数式タブの道具: オートSUM、**関数の挿入**(分類 → 関数)、分類別の関数一覧、
-**計算方法**(自動 ⇔ 手動。手動は大きな表で待たされない)、
-**ウォッチウィンドウ**(選んだ式のセルを見張り、値を下の帯に出す)、
-名前の管理、参照元・参照先のトレース(該当セルが光る。
-「トレース矢印の削除」で消える)、数式の表示。
+Formula-tab tools: AutoSum, **Insert Function** (category → function), function
+lists by category, **calculation mode** (automatic ⇔ manual; manual avoids
+waiting on big sheets), **watch window** (pins formula cells and shows their
+values in the bottom band), name manager, trace precedents/dependents (the cells
+light up; "remove arrows" clears), show formulas.
 
-**名前の定義**: 選択してホーム(または数式)の「名前の定義」。
-名前は英数字と `_`(先頭は文字。セル参照の形は不可)。式の中で使える。
+**Defined names**: select a range, then "Define Name" (Home or Formulas).
+Names are alphanumeric plus `_` (must not look like a cell reference) and can be
+used in formulas.
 
-## 書式
+## Formatting
 
-- 文字: 太字・斜体・下線・取り消し線・**下付き**・文字色・書体・大きさ
-  (リボンの書体一覧は**この機械にあるフォント**)
-- セル: 塗りつぶし、罫線(上下左右を独立に)、縦横の揃え(**両端揃え**を
-  含む)、折り返し、**文字の向き**(ホームの「印刷の向き」。押すたびに
-  縦向き → 縦に積む → 戻る。日本の帳票の縦の見出しに)
-- **文字の向き(右横書き)**(ホーム): セルの中を1字ずつ右から並べる。
-  **日本語の右横書き**(昔の看板・横額)のための機能で、ラテン文字の
-  双方向(bidi)は扱わない
-- **シートの方向**(レイアウト): 列を右から左へ並べる(右横書きの帳面)
-- **セルのスタイル**(ホーム): 見出し・表題・良い/悪い/どちらでもない・
-  メモ・計算・通貨・パーセント。選ぶと選択に書式が掛かる(Ctrl+Z で戻る)
-- **テーマ色**: 今どきの Excel は色を「テーマの何番目 + 明るさの加減」で
-  持つことがある。それを読んで実際の色に解くので、**色が消えない**。
-  **配色の変更**(レイアウト)で色の組(Office / 暖色 / 寒色 / 墨)を
-  入れ替えると、テーマ色を使っているセルの色が**そのまま追従する**
-- 表示形式: 桁区切り・小数桁の増減・% ・通貨
-- セル結合(隠れた値は消えない)
-- **条件付き書式**: 「〜より大きい / 小さい / 等しい」で文字色・塗りを変える
-  (cellIs 型。xlsx と往復する)
-- **入力規則**(データタブ): リスト型。候補は直書き(`甲,乙,丙`)か
-  範囲参照(`=D2:D5` — 参照先を書き換えれば候補も追従)。規則に合わない
-  入力はセルに入らず Esc で戻る。別シート参照など解決できない規則では
-  堰き止めない(通して警告しない)。list 以外の型は読めない旨を報告する
-- **表のデザイン**(表のデザインタブ): 範囲を選んで1手ずつ掛ける道具 —
-  ヘッダー行(1行目に帯)・縞模様の行 / 列・最初 / 最後の列(太字)・
-  **合計行**(下に =SUM の行を足す。式なので元が変われば追従。下に中身が
-  あれば断る)・フィルタのボタン(絞り込みと同じ)。表オブジェクトは
-  **表オブジェクト**(名前の付いた範囲)として持つので、**範囲に変換する**
-  (表を外す。帯や縞々の書式と式はそのまま残る — Excel と同じ)と
-  **テーブルのサイズ変更**(板で A1:C9 のように新しい範囲を打つ)もできる。
-  表は xlsx の table として保存され、Excel でも表として見える。
-  まとめて掛けるなら挿入タブの「表の挿入」(表オブジェクトも一緒に作る)
+- Text: bold, italic, underline, strikethrough, **subscript**, color, font, size
+  (the font list shows **this machine's fonts**)
+- Cells: fill, borders (each side independently), horizontal and vertical
+  alignment (including **justified**), wrap, **text orientation** (each press:
+  vertical → stacked → back; for the vertical headings of Japanese forms)
+- **Right-to-left text** (Home): characters in a cell run right to left —
+  for Japanese right-to-left horizontal writing (old signboards); Latin bidi is
+  out of scope
+- **Sheet direction** (Layout): columns run right to left
+- **Cell styles** (Home): heading, title, good/bad/neutral, note, calculation,
+  currency, percent — one click applies the set (Ctrl+Z undoes)
+- **Theme colors**: modern Excel stores colors as "theme slot + tint". We read
+  and resolve them, so **colors don't disappear**. Switching the **color scheme**
+  (Layout: Office / warm / cool / ink) updates every cell that uses theme colors
+- Number formats: thousands separator, more/fewer decimals, %, currency
+- Merged cells (hidden values are not destroyed)
+- **Conditional formatting**: greater/less/equal rules changing text color or
+  fill (cellIs type; round-trips through xlsx)
+- **Data validation** (Data tab): list type. Choices are inline (`甲,乙,丙`) or
+  a range reference (`=D2:D5` — edit the referenced cells and the choices
+  follow). Invalid input doesn't enter the cell; Esc restores. Rules we can't
+  resolve (references to another sheet, etc.) don't block input (we don't warn
+  on what we can't check). Non-list rule types are reported as unreadable
+- **Table design** (Table Design tab): tools applied to the selection one step
+  at a time — header-row band, banded rows/columns, first/last column bold,
+  **total row** (adds a =SUM row below; it's a formula, so it follows edits;
+  refuses if something is already below), filter buttons. Tables are stored as
+  named **table objects**, so "Convert to range" (removes the table; band
+  formatting and formulas stay — like Excel) and "Resize table" (type a new
+  range like A1:C9) also work. Saved as real xlsx tables, visible in Excel.
+  To apply everything at once, use Insert > Table
 
-## シート・データの操作
+## Sheets and data
 
-- **複数シート**: 追加・削除・名前の変更・切り替え
-- **枠の固定**(表示タブ): カーソルの上の行・左の列を固定。もう一度で解除
-- **フィルター**: セルの値で絞る(見た目だけ。中身は変わらない)。解除も1手
-- **並べ替え**: 列単位の昇順・降順。見出し行は据え置き
-- **重複削除**(データタブ): 件数を確認してから消す
-- **テキストからデータ**(データタブ): CSV/TSV をいまのセルから流し込む。
-  文字コード(CP932 含む)と区切りは自動判定
-- **外部リンク**(データタブ): 他のブックの値を**値として**取り込む。
-  参照は張らない — リンク切れの帳票を作らないため
-- **ゴールシーク**(データタブ)
-- **ソルバー**(データタブ): ONLYOFFICE と同じ「ソルバーのパラメータ」の
-  小窓。目的のセル(最大/最小/値)・変数セル(範囲かカンマ区切り、最大64個)・
-  制約(左辺セル / <= = >= / 右辺の数かセル)を決めて「解を求める」。
-  解法は**単体法 LP**(裏方 scipy)。係数は表の複製から測り、**線形で
-  なければ断る**(本家と同じ)。解は変数セルに書かれ、Ctrl+Z の1手で戻る
-- **小計**(データタブ): 見出し付きの表を範囲で選んで押すと、区切りの
-  見出し(例: 部署)→ 合計する見出し(空 Enter = 数の列全部)の順に聞かれ、
-  区切りごとに「〜 小計」(=SUM)の行と最後に総計の行が入り、**明細だけ**が
-  グループ化される。**詳細の非表示で畳むと、小計と総計だけが残る**。
-  式なので明細を直せば追従する。先に並べ替えておくと区切りがまとまる
-  (Excel と同じ)。全部まとめて Ctrl+Z の1手
-- **グループ化**(データタブ): 行の見出し(番号)を撫でて選んでから
-  「グループ化」。**詳細の非表示**で畳み、**詳細の表示**で開く(選択なしなら
-  カーソルの行が属するグループひとつながり)。列の見出しを選べば列にも効く。
-  もう一度グループ化すると深さが増える(7段まで)。深さと畳みは xlsx の
-  outlineLevel / hidden と往復するので、Excel で開くと普通のアウトラインに
-  見える。畳んだ行・列は印刷(PDF)にも出ない。絞り込みと違って
-  **保存に残る** — 畳んだ台帳は畳んだまま渡る。畳んだときに合計を
-  見せたいときは、手で行を選ぶより上の「小計」が早い。
-  かたまりの直後の行の見出しには **+/− の丸印**が出て、押すだけで
-  畳んだり開いたりできる(Excel のアウトラインの縁と同じ)
-- **ピボットテーブル**(ピボットテーブルタブ): 見出し付きの表を範囲で
-  選んで「挿入」を押すと、行に並べる見出し(複数可)→ 列に広げる見出し
-  (省略可)→ 値と集計(合計/平均/個数/最大/最小)の順に聞かれる。
-  裏方の polars が集計し、結果は**その時の値**として元の表の右の空きに
-  置かれる(埋まっていればさらに右へ — 黙って上書きしない)。
-  指図はブックに控えるので(独自部品 xl/joPivot.xml)、元の表が変わったら
-  ピボットの上にカーソルを置いて**更新**(すべて更新はブック全部)。
-  **総計**(行と、列に広げていれば列も)・**小計**・**空行**(行の見出しが
-  2つ以上のとき)・**レポートのレイアウト**(表形式 ⇔ コンパクト)は
-  押すたびに切り替えて置き直す。**選択する**はピボット全体の選択。
-  集計はどの操作でも polars が元データからやり直すので、平均の総計も
-  正しい(行の平均の平均ではない)。どれも Ctrl+Z の1手。
-  Excel で保存し直すと指図の部品は消える — その後は「更新」できない、
-  ただの値の表になる(正直な劣化)
-- **コメント**: セルに1件。空で Enter すると消える。保存で xlsx に残る
+- **Multiple sheets**: add, delete, rename, switch
+- **Freeze panes** (View): freezes rows above and columns left of the cursor;
+  press again to release
+- **Filter**: filter by cell value (display only; data unchanged). One step to clear
+- **Sort**: by column, ascending/descending. The header row stays put
+- **Remove duplicates** (Data): shows the count before deleting
+- **Text to data** (Data): pours CSV/TSV in at the cursor. Encoding (including
+  CP932) and delimiter are auto-detected
+- **External links** (Data): imports another workbook's values **as values**.
+  No live links — we don't create forms that break when a link dies
+- **Goal seek** (Data)
+- **Solver** (Data): the same "Solver parameters" dialog as ONLYOFFICE —
+  target cell (max/min/value), variable cells (a range or comma-separated, up to
+  64), constraints (cell / <= = >= / number or cell), then "Solve". The method
+  is **simplex LP** (backed by scipy). Coefficients are measured on a copy of
+  the sheet, and **nonlinear problems are refused** (as in the original).
+  The solution lands in the variable cells; one Ctrl+Z restores
+- **Subtotals** (Data): select a table with headings and it asks for the
+  grouping column (e.g. department) → columns to total (empty Enter = every
+  numeric column). Inserts "〜 小計" (=SUM) rows per group and a grand total at
+  the end, and groups **only the detail rows**. **Collapse to show just the
+  subtotals and grand total.** They're formulas, so edits flow through. Sort
+  first to bring groups together (as in Excel). All of it is one Ctrl+Z
+- **Grouping** (Data): drag across row headings, then "Group". **Hide detail**
+  collapses, **Show detail** expands (with no selection, the group containing
+  the cursor). Works on columns too. Grouping again deepens the nesting (up to
+  7). Depth and collapsed state round-trip through xlsx outlineLevel / hidden,
+  so Excel shows a normal outline. Collapsed rows/columns don't print (PDF)
+  either. Unlike filtering this **persists in the file** — a collapsed ledger
+  stays collapsed for the next person. The heading of the row just after a
+  group shows a **+/− button**; click to collapse or expand (like Excel's
+  outline margin)
+- **Pivot tables** (Pivot Table tab): select a table with headings and press
+  Insert; it asks for row headings (multiple allowed) → column headings
+  (optional) → value and aggregation (sum/average/count/max/min). polars does
+  the aggregation and the result is placed **as values** in the empty space to
+  the right of the source (further right if occupied — nothing is overwritten
+  silently). The definition is stored in the workbook (custom part
+  xl/joPivot.xml), so when the source changes, put the cursor on the pivot and
+  press **Refresh** (Refresh All does the whole workbook). **Grand totals**
+  (rows, and columns if you spread by column), **subtotals**, **blank rows**
+  (with 2+ row headings), and **report layout** (tabular ⇔ compact) toggle and
+  re-place on each press. **Select** selects the whole pivot. Every operation
+  re-aggregates from the source data with polars, so even averages in the grand
+  total are correct (not averages of averages). Each is one Ctrl+Z.
+  If Excel re-saves the file the definition part disappears — the pivot then
+  can't refresh and becomes a plain table of values (honest degradation)
+- **Comments**: one per cell. Empty + Enter deletes. Saved into the xlsx
 
-## 挿入
+## Insert
 
-- **表の挿入**: 罫線と見出し付きの表の枠を一括で作る
-- **画像**: PNG / JPEG。図形(四角・角丸・楕円・矢印・ひし形・直線。
-  中に文字も書ける)、記号、テキストボックス、スパークライン
-- **グラフ / 推奨チャート**: 選択範囲を裏方の matplotlib が描いて、画像として
-  シートに浮かべる(1列目が項目名、2列目以降が系列。先頭行が見出しなら
-  系列名になる)。日本語フォントは機械のものを登録するので豆腐にならない。
-  Python が見つからないときは状態行が手順を言う
-- **SmartArt**: 分類(リスト / プロセス / 循環 / 階層 / 関係 / マトリックス /
-  ピラミッド)→ 形、の順に選ぶ。分類・並び・名前は Euro-Office の現物と同じ。
-  入るのは**図形の集まり**なので、各図形を選んで Enter で文字、ドラッグで
-  移動、Del で削除ができ、全部まとめて Ctrl+Z の1手で戻る。xlsx へは
-  普通の図形として入る(Excel でも図形として見える。本物の SmartArt 部品
-  ではない — そのぶん、どの道具でも開いて直せる)。一覧には**この方式で
-  組める形だけ**を出している
-- **テキストアート**: 飾り文字。文字を打つと太字+縁取りで描いて、画像として
-  シートに浮かべる(裏方 matplotlib。方程式と同じ道)
+- **Table**: creates a bordered table frame with a header row in one go
+- **Images**: PNG / JPEG. Shapes (rectangle, rounded, ellipse, arrow, diamond,
+  line — text inside works too), symbols, text boxes, sparklines
+- **Chart / recommended chart**: matplotlib draws the selected range and floats
+  it on the sheet as an image (first column = labels, remaining columns =
+  series; a heading row becomes series names). Japanese fonts are registered
+  from the machine so no tofu. If Python is missing, the status bar explains
+  what to install
+- **SmartArt**: pick a category (list / process / cycle / hierarchy /
+  relationship / matrix / pyramid) then a layout. Categories, order, and names
+  match Euro-Office. What's inserted is **a group of shapes**, so each shape
+  can be selected, Enter to edit text, drag to move, Del to delete — and the
+  whole thing is one Ctrl+Z. Saved to xlsx as ordinary shapes (Excel shows
+  them as shapes; they are not native SmartArt parts — in exchange, any tool
+  can open and edit them). The list shows **only layouts this method can build**
+- **Text art**: decorative text — drawn bold with an outline and floated as an
+  image (matplotlib, same pipeline as equations)
+- Draw tab **pen / highlighter / eraser**: press to arm the tool, drag over the
+  grid to draw (pen: thin black; highlighter: wide translucent yellow). The
+  eraser removes **one stroke at a time**. Press the button again or Esc to
+  return to cell operations. Strokes are saved as **ordinary polyline shapes**,
+  so Excel shows them, Ctrl+Z steps back stroke by stroke, and they print (PDF)
+- **Checkbox**: placed on an empty cell it becomes ☑/☐ and **toggles with the
+  space key** (the value is TRUE/FALSE — usable from formulas: `=E4`,
+  `=COUNTIF(E:E,TRUE)`). Any TRUE/FALSE cell displays as ☑/☐. Occupied cells
+  are refused. Excel shows the TRUE/FALSE values
+- **Slicer**: a panel listing the values of the cursor's column as buttons;
+  press one to filter to those rows (≡ multi-select, ✕ clear, Esc close).
+  Like filtering, **display only** — the saved data doesn't change
+- **Equation**: mathematical typesetting (separate from cell formulas — nothing
+  is computed). Type TeX (`\frac{a}{b}`, `\sum_{i=1}^n i^2`) and matplotlib's
+  mathtext renders it as an image. Unreadable input is refused with a message
+- **Hyperlink**: right-click or Insert tab. Empty + Enter removes
 
-描画タブの**ペン・蛍光ペン・消しゴム**: 押して道具を出し、表の上をドラッグ
-すると線が引ける(ペンは細い黒、蛍光ペンは太く薄い黄)。消しゴムは線を
-なぞると**1筆ずつ**消える。もう一度同じ釦か Esc でセルの操作に戻る。
-線は**普通の図形(折れ線)として保存される**ので、Excel でも線に見え、
-Ctrl+Z で1手ずつ戻り、印刷(PDF)にも出る
-- **チェックボックス**: 空のセルに置くと ☑/☐ になり、**空白キーで切り替わる**
-  (値は TRUE/FALSE — 式から `=E4` や `=COUNTIF(E:E,TRUE)` で普通に使える)。
-  TRUE/FALSE の値を持つセルはどれも ☑/☐ で見える。中身のあるセルは潰さない。
-  Excel で開くと TRUE/FALSE の値で見える(部品の書式は書かない)
-- **スライサー**: カーソルの列の値が釦で並ぶ小窓。押すとその値の行だけに
-  絞れる(≡ で複数選択、✕ で解除、Esc で閉じる)。絞り込みと同じく
-  **見え方だけ** — 保存される中身は変わらない
-- **方程式**: 数学の式の清書(セルの計算式とは別物 — 計算はしない)。
-  TeX の書き方で打つと(例: `\frac{a}{b}`、`\sum_{i=1}^n i^2`)、裏方の
-  matplotlib(mathtext)が清書して画像として置く。読めない式は
-  そう言って断る。Microsoft 日本語版の「数式」と同じ機能で、名前は
-  Euro-Office の訳語(方程式)に合わせている
-- **ハイパーリンク**: 右クリックまたは挿入タブ。空で Enter すると消える
+## AI — transformations and generation by a model
 
-## AI — モデルに任せる変換と生成
+Ten buttons on the AI tab. Because this is a spreadsheet, what's sent is **the
+selected range** and what comes back is **a table (cells) or a formula**.
+**Every response is one Ctrl+Z away.**
 
-AI タブの10釦。表計算なので、渡すのは**選んだ範囲**、返ってくるのは
-**表(セル)や式**です。**返事はどれも1手(Ctrl+Z)で戻せます**。
+- **Destination**: each press cycles local model → Claude (subscription) →
+  Claude (API). **Subscription** means calling the local `claude` command
+  (Claude Code CLI), so no API key is needed. Unavailable destinations say why
+  on the spot (default is the local model; **nothing leaves your network**)
+- **Summarize**: the selected table (or the used area) in 2–4 sentences, into
+  a **comment** at the cursor
+- **Rewrite / polite / plain / translate**: rewrites **only text cells** in the
+  selection (numbers and formulas are untouched)
+- **Furigana**: select one column and readings go into the **column to the
+  right** (the reading column of a name roster; refuses if it's occupied)
+- **Continue**: extends the selected table's pattern into the rows below
+  (**it's the model guessing — check the result**)
+- **To table**: type prose, get a table poured in at the cursor
+- **Ask**: type a request; answers starting with `=` are inserted **as a
+  formula** at the cursor, anything else becomes a comment ("write me a sum
+  formula" works)
 
-- **宛先**: 押すたびに 手元のモデル → Claude(定額)→ Claude(API)と
-  回る。**定額** = 手元の `claude` コマンド(Claude Code の CLI)を呼ぶので
-  API の鍵は要りません。使えない宛先なら理由をその場で言います
-  (既定は手元のモデル。**基幹網の外に出ません**)
-- **要約**: 選んだ表(無ければ使っている全域)を2〜4文に。カーソルの
-  **コメント**に付きます
-- **書き直す / 敬語にする / やさしく / 翻訳**: 選んだ範囲の**文字のセル
-  だけ**を直します(数字と式は触りません)
-- **ふりがな**: 1列だけ選ぶと、読みが**右隣の列**に入ります(名簿の
-  フリガナ欄。右隣に中身があれば断ります)
-- **続きを書く**: 選んだ表のパターンから続きの行を作り、下の空きへ
-  (**AI の当て推量なので、よく確かめてください**)
-- **表にする**: 文章を打つと、表にしてカーソルから流し込みます
-- **頼む**: 用件を打つと、**= で始まる答えは式として**カーソルに入り、
-  他はコメントに付きます(「合計の式を書いて」のように数式も頼めます)
+If the destination can't be reached the app says so (it never silently returns
+nothing). **Keys are never stored in the workbook.**
 
-繋がらなければ「できません」と言います(黙って空にしません)。
-**鍵がブックに入ることは決してありません**。
+## Python — instead of macros
 
-## Python — マクロの代わりに
+The programmer's reference (ranges ⇄ arrays, the API, =PY arguments and return
+values) is the [Python manual](python-manual.md). This section is the
+operations side.
 
-コードの書き方(**範囲⇄配列**・API・=PY の引数と返り値)の正本は
-[Python の手引き](python-manual.md)。この章は操作の側から。
+**There are no VBA-style macros.** Instead, Python travels inside the workbook:
+the form (UI) + code (logic) + rules (validation, status columns) fit in one
+xlsx — ledger-style workflows are built this way.
 
-**VBA 型のマクロはない。** その代わり、Python をブックに載せて持ち運べる。
-帳票(UI)+ コード(ロジック)+ 運用(入力規則・状態列)が 1 つの xlsx に
-収まる — 台帳系の業務はこれで組む。
+Two safety principles. **Opening a file never executes anything** (execution is
+always an explicit action; the "open = execute" attack path does not exist).
+And **code that traveled inside a workbook always runs in a sandbox.**
 
-安全の原則は2つ。**開いても決して自動実行しない**(実行は常に明示の操作
-だけ。「開く=実行」という攻撃経路が存在しない)。そして**ブックに載って
-旅してきたコードは必ず檻の中で回す**。
+### Setup
 
-### 準備
+- Python is found via `JO_PYTHON` → `.venv/bin/python` → `python3`
+- Put `office_sheet.so` (pysheet) **next to the calc executable**: build with
+  `cargo build -p pysheet --release --features extension-module` and copy
+  `liboffice_sheet.so` under the name `office_sheet.so`
+- The sandbox is bubblewrap (`apt install bubblewrap`). **On machines without
+  it, workbook-borne code is not executed** (and the app says so)
 
-- Python: `JO_PYTHON` → `.venv/bin/python` → `python3` の順で探す
-- `office_sheet.so`(pysheet)を **calc の実行ファイルの隣**に置く:
-  `cargo build -p pysheet --release --features extension-module` で出来る
-  `liboffice_sheet.so` を `office_sheet.so` の名で置く
-- 檻 = bubblewrap(`apt install bubblewrap`)。**檻の無い機械では、
-  ブックに載ったコードは実行しない**(そう言われる)
+### Running one line (Data > Python)
 
-### 一行のコードを回す(データ > Python)
-
-`b` = ブック、`s` = いまのシート、が束縛済み。
+`b` = the workbook and `s` = the current sheet are pre-bound.
 
 ```python
-s["A30"] = "日本フネン株式会社"        # 書式は据え置きで値だけ入る
+s["A30"] = "Nihon Funen Co., Ltd."   # value goes in, formatting untouched
 ```
 
-- 空のまま Enter → .py ファイルを選んで回す(コードはあなたのファイルに
-  あり、ブックには入らない)
-- 実行は**複製の上** — 失敗しても表は無傷。成功したら結果を**1手として**
-  適用する(複数シートに触っても Ctrl+Z 一回で戻る)
-- polars・scipy など、この機械に入っているものは全部使える
+- Empty + Enter → choose a .py file to run (the code stays in your file, not
+  in the workbook)
+- Execution happens **on a copy** — if it fails, the sheet is unharmed; on
+  success the result lands as **one undo step** (even across sheets)
+- Everything installed on the machine (polars, scipy, …) is available
 
-### コードをブックに載せる(@コマンド)
+### Embedding code in the workbook (@-commands)
 
-データ > Python の入力欄で:
+In the Data > Python input:
 
-| 打つもの | 動き |
+| You type | What happens |
 |---|---|
-| `@save 名前` | .py を選んでブックに載せる(保存で xlsx に入り、帳票と一緒に旅をする) |
-| `@名前` | 載せたコードを実行(**必ず網なし檻の中**) |
-| `@名前 net` | ネット許可つきの檻で実行(下記) |
-| `@list`(または `@`) | 載っているコードの一覧 |
-| `@del 名前` | ブックから外す |
-| `@計算` | =PY(…) セルの一括計算(下記) |
+| `@save name` | choose a .py and embed it (saved into the xlsx; travels with the form) |
+| `@name` | run the embedded code (**always in the no-network sandbox**) |
+| `@name net` | run with network allowed (see below) |
+| `@list` (or `@`) | list embedded code |
+| `@del name` | remove from the workbook |
+| `@計算` | batch-evaluate =PY(…) cells (see below) |
 
-コードは xlsx の独自部品 `xl/joPython.xml` に入る。Excel で開いて保存し
-直すとこの部品は消えることがある(**値は残る** — 劣化は安全側)。
+Code is stored in the custom part `xl/joPython.xml`. If Excel opens and
+re-saves the file this part may disappear (**the values remain** — the
+degradation is on the safe side).
 
-### 檻(サンドボックス)
+### The sandbox
 
-ブック搭載コードの実行環境は bubblewrap で閉じる:
-**ネットワーク遮断・実ファイルは読み取り専用・ホームは不可視(空)・
-書けるのは交換用の一時領域だけ**。共有フォルダの「他人のファイル」を
-開いても、載っているコードがあなたのファイルや網に触ることはできない。
+Workbook-borne code runs closed inside bubblewrap: **no network, the real
+filesystem is read-only, your home directory is invisible (empty), and the only
+writable place is a scratch area for the exchange**. Opening someone else's
+file from a shared folder cannot let its embedded code touch your files or
+your network.
 
-- ネットが要る仕事(Web フォームの受信箱から台帳へ取り込む等)は、
-  **その場で `@名前 net` と打ったときだけ**網が開く。この許可はブックには
-  決して保存されない — ファイルが自分に権限を与えることはできない
-- 自分で打った/選んだコードも、檻があれば檻で回す(深層防御。
-  こちらは網あり)
+- Jobs that need the network (pulling a web form's inbox into a ledger, …)
+  get it **only when you type `@name net` at that moment**. The permission is
+  never saved into the workbook — a file cannot grant itself rights
+- Code you typed or picked yourself also runs sandboxed when a sandbox exists
+  (defense in depth; that variant has network)
 
-### セル関数を Python で書く(PY・UDF)
+### Writing cell functions in Python (PY, UDF)
 
 ```
-=PY("関数名", 引数…)
+=PY("fname", args…)
 ```
 
-1. 関数の定義(`def 関数名(…):`)を書いた .py を、**「関数」で始まる名前**で
-   ブックに載せる(例: `@save 関数`)
-2. セルに `=PY("関数名", A1:B10, 100, "甲")` のように書く
-3. **データ > Python で `@計算`** — このときだけ、全 PY セルが
-   網なし檻の中で一括評価される
+1. Embed a .py that defines `def fname(…):` under a name starting with 関数
+   (e.g. `@save 関数`)
+2. Write `=PY("fname", A1:B10, 100, "甲")` in a cell
+3. **Data > Python, `@計算`** — only then are all PY cells evaluated at once,
+   in the no-network sandbox
 
-仕様:
+Specification:
 
-- **PY セルは開いても普通の再計算でも実行されない。** 最後に計算した値を
-  保ち、一度も計算していなければ `#PY?` と出る。「開く=実行を持たない」は
-  セル関数でも破らない
-- 引数は式を**いま評価した値**で渡す(範囲は行×列の2次元リスト)。式は
-  保たれるので、`@計算` を押し直せば新しい引数で再評価される
-- 返り値が2次元(リストのリスト)なら右下へ**スピル**(1次元は縦に展開)。
-  展開先に他人のデータや式があれば `#SPILL!` で止まる — 潰さない。
-  結果が縮んだら前回の面の残りは消える
-- 計算後も Ctrl+Z 一回で全部戻る
-- Excel で開くと PY は `#NAME?` になる(保存された値は Excel が再計算する
-  までは見える)
+- **PY cells are not executed on open or on normal recalculation.** They keep
+  their last computed value; before the first evaluation they show `#PY?`.
+  "No open = execute" holds for cell functions too
+- Arguments are passed as **current values** (ranges as row×column 2-D lists).
+  The formulas stay, so pressing `@計算` again re-evaluates with fresh inputs
+- A 2-D return value **spills** down-right (1-D spills down). If the target
+  area holds someone's data or formulas, it stops with `#SPILL!` — nothing is
+  overwritten. When a result shrinks, the leftover area is cleared
+- Even after evaluation, one Ctrl+Z restores everything
+- Excel shows `#NAME?` for PY (saved values remain visible until Excel
+  recalculates)
 
-## 共有フォルダと排他ロック
+## Shared folders and locking
 
-開くとき LibreOffice と同じ場所の `.~lock.ファイル名#` を見る。
+On open, the app checks `.~lock.filename#` in the same place LibreOffice does.
 
-- 先客がいれば**誰が開いているか**を見せ、**上書き保存を止める**
-  (名前を付けて保存へ)。「二人で開いて後勝ちで潰す」事故を防ぐ
-- 誰もいなければ自分のロックを置き、閉じる・別のファイルへ移るときに外す
+- If someone holds it, **their name is shown** and **overwrite-save is
+  blocked** (Save As still works). This prevents the "two people open it, last
+  save wins" accident
+- Otherwise our lock is placed, and removed when closing or moving to another
+  file
 
-## 共同編集タブとプラグイン
+## Collaboration tab and plugins
 
-サーバーは使わない。全部**ファイル越し**の道具(共有フォルダで効く):
+No server. Everything works **through files** (i.e. in a shared folder):
 
-- **共同編集モード**: いまの編集権(=錠)の持ち主を確かめる。先客が
-  去っていれば編集権を取り直す
-- **コメントを追加 / 削除 / 表示**: セル単位。表示を消しても付いたまま
-- **チャット**: ブックの隣の申し送り帳(`名前.xlsx.chat.txt`)へ名乗り付きで
-  追記。生放送ではない — ファイル越しの言伝
-- **バージョン履歴**: 上書き保存のたびに `.jo-history/名前/日時.xlsx` へ
-  控えが残る(9世代まで)。一覧から選ぶと**名無しの複製**として開く —
-  元へ戻すなら同じ名前で保存(黙って書き戻さない)
-- **マクロ**(プラグインタブ): .py を選ぶと檻の中の Python が回る
-  (実体は データ > Python と同じ。b=ブック s=シート)
-- **プラグインの管理**: `~/.config/office/plugins` の .py を一覧して実行
+- **Collaboration mode**: shows who currently holds editing rights (the lock);
+  if they've left, takes over
+- **Add / remove / show comments**: per cell. Hiding doesn't delete
+- **Chat**: appends named messages to the file next to the workbook
+  (`name.xlsx.chat.txt`). Not live — messages passed through files
+- **Version history**: every overwrite-save keeps a copy under
+  `.jo-history/name/timestamp.xlsx` (9 generations). Picking one opens it as
+  an **untitled copy** — to restore, save it under the original name yourself
+  (nothing is written back silently)
+- **Macros** (Plugins tab): choose a .py and Python runs in the sandbox
+  (same machinery as Data > Python; b = workbook, s = sheet)
+- **Manage plugins**: lists and runs .py files from `~/.config/office/plugins`
 
-## 保護タブ
+## Protection tab
 
-- **保護**: いまのシートを読み取り専用にする(編集を堰き止める。同じ釦で
-  解除)。**パスワードは掛けない — 掛けた振りもしない**。xlsx の
-  sheetProtection と往復するので Excel でも保護されたシートに見える
-- **暗号化する**: パスワードを決めると次の保存から **AES-256(Agile。
-  Excel 2013+ の既定)**で包む。Excel や LibreOffice でも開ける。
-  空にして Enter で暗号化をやめる。開くときはパスワードの板(伏せ字)。
-  **開く側は古い AES-128(2007 の Standard)も Agile も両方読める**
-- **デジタル署名を追加**: **隣の `名前.xlsx.sig` への添え書き**(Ed25519)。
-  押すと、署名が有効なら報告、無い・中身が変わったなら署名し直す。
-  Excel の署名欄に出る方式ではない — 改ざん検知と名乗りが実体
+- **Protect**: makes the current sheet read-only (edits are blocked; same
+  button to release). **No password, and no pretend-password.** Round-trips
+  xlsx sheetProtection, so Excel shows the sheet as protected too
+- **Encrypt**: set a password and the next save is wrapped in **AES-256
+  (Agile, the Excel 2013+ default)**. Opens in Excel and LibreOffice. Clear
+  the field and press Enter to stop encrypting. Opening prompts for the
+  password (masked). **Reading accepts both Agile and the older AES-128
+  (2007 Standard)**
+- **Add digital signature**: a signature file next to the workbook
+  (`name.xlsx.sig`, Ed25519). Press once: if a valid signature exists it
+  reports; if missing or the content changed, it (re-)signs. Not the scheme
+  that appears in Excel's signature line — tamper detection plus a name
 
-## 印刷と PDF
+## Print and PDF
 
-レイアウトタブで設定し、ファイル > 印刷 で PDF に書き出す。
+Configure on the Layout tab, then File > Print writes a PDF.
 
-- 用紙: A4 / A3 / B4 / B5 / A5。**B は JIS**(日本の事務様式の実情に合わせる)
-- 向き・余白(既定 20mm / 狭い 10mm / 広い 30mm)・拡大縮小
+- Paper: A4 / A3 / B4 / B5 / A5. **B sizes are JIS** (matching Japanese
+  office forms)
+- Orientation, margins (default 20mm / narrow 10mm / wide 30mm), scale
   (100→90→80→70→50%)
-- 印刷範囲(選択して指定。もう一度で解除)、改ページ、
-  タイトル行の繰り返し、枠線も印刷、見出し(行番号・列名)も印刷
-- これらは xlsx にも保存される(原文への属性差し替え — 理解しない属性は
-  消さない)ので、Excel で開いても同じ印刷設定になる
-- PDF には値・書式・罫線・塗りと、このアプリで挿した図形・画像が写る。
-  紙に入り切らない右の列は切れる(状態行で言う)
+- Print area (select and set; press again to clear), page breaks, repeated
+  title rows, print gridlines, print headings (row numbers / column letters)
+- These are saved into the xlsx (by patching the original attributes — ones we
+  don't understand are not deleted), so Excel opens with the same print setup
+- The PDF carries values, formatting, borders, fills, and the shapes/images
+  inserted by this app. Columns that don't fit the paper are cut (the status
+  bar says so)
 
-## 保存
+## Saving
 
-- Ctrl+S で上書き(先客のロックがあれば止まる)。名前がなければダイアログ
-- 原本の部品(グラフ・図形・テーマ・理解しない XML)は**原文のまま持ち越す**
-- 未保存の変更があれば状態行に出て、終了時に「保存して終了しますか?」と聞く
+- Ctrl+S overwrites (blocked if someone else holds the lock). If unnamed, a
+  dialog asks
+- Original parts (charts, shapes, themes, XML we don't understand) are
+  **carried over as-is**
+- Unsaved changes show in the status bar, and quitting asks "save and quit?"
 
-## 未実装のもの(灰色)と代替
+## Not implemented (gray) and alternatives
 
-**リボンの灰色はゼロ(155/155 実装。AI タブを足した)。** 以下は、うちのやり方が本家と
-違うもの・Python に回すもの:
+**Zero grayed-out ribbon commands (155/155 including the AI tab).** The
+following work differently here, or are delegated to Python:
 
-| 灰色のもの | いまのやり方 |
+| Grayed elsewhere / different | Our way |
 |---|---|
-| 予測・統計 | polars、statsmodels |
-| マクロ(VBA) | **作らない方針**。Python in Calc(檻つき)が担う |
-| ペン・蛍光ペン(描画タブ) | 未実装 |
+| Forecasting, statistics | polars, statsmodels |
+| Macros (VBA) | **deliberately absent**; Python in Calc (sandboxed) takes the role |
 
-外部のブックへの**参照リンク**も作らない(値として取り込む)。
-リンク切れの帳票を作らないため。
+We also don't create **reference links** to external workbooks (values are
+imported instead) — no forms that break when a link dies.

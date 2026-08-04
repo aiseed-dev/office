@@ -1,248 +1,272 @@
-# writer の手引き
+# writer manual
 
-docx を開いて、直して、保存するワープロ。PDF にもでき、JS なしの HTML を
-文書として読める。**リボンは 114/114 — 全部の釦が動く(灰色ゼロ)。**
+*日本語版(secondary): [writer-manual.ja.md](writer-manual.ja.md)*
 
-3つの約束:
+A word processor that opens, edits, and saves docx. It exports PDF and can read
+JavaScript-free HTML as a document. **Ribbon: 114/114 — every button works
+(zero grayed out).**
 
-- **書式は据え置き。** 開いた文書のスタイル・図形・理解しない部品は、
-  保存しても壊れない(原文のまま持ち越す)
-- **どの操作も1手で戻せる。** 打鍵も IME の確定も貼り付けも筆の1本も
-  配色の変更も、Ctrl+Z 一回で戻る
-- **黙って落とさない。** 読めないもの・保存で失われるものは帳簿と状態行で言う
+Three promises:
 
-試せる見本が [sample/](../sample/README.md) にある — 特に
-`sample/writer/01〜05`(日本語の組版・縦書き・申込書・月次報告・道具くらべ)。
+- **Formatting is preserved.** Styles, shapes, and parts we don't understand
+  survive a save untouched (carried over from the original file)
+- **Every operation is one undo away.** Keystrokes, IME commits, pastes, a single
+  ink stroke, a color-scheme change — all come back with one Ctrl+Z
+- **Nothing is dropped silently.** Anything we can't read, or that would be lost
+  on save, is listed in the report and mentioned in the status bar
 
-## 起動
+Try the samples in [sample/](../sample/README.md) — especially
+`sample/writer/01〜05` (Japanese typesetting, vertical writing, an application
+form, a monthly report, a feature tour).
+
+## Starting
 
 ```bash
-./target/release/writer                          # 空で開く
+./target/release/writer                          # opens empty
 ./target/release/writer sample/報告書.docx
 ./target/release/writer sample/writer/02_縦書きの手紙.docx
 ```
 
-日本語フォントが機械に無いと、理由を言って止まる(豆腐を見せない)。
-`fonts-noto-cjk` か `fonts-ipaexfont` を。`OFFICE_FONT=…` で明示もできる。
+If the machine has no Japanese font, the app stops and says so (instead of showing
+tofu boxes). Install `fonts-noto-cjk` or `fonts-ipaexfont`, or set `OFFICE_FONT=…`.
 
-## 画面
+## The screen
 
-額縁はデスクトップ版の形。**1段目**が保存・印刷・戻す・やり直しと文書名
-(未保存は * 印。この行が窓の取っ手)、**2段目**が白地のタブ(現在地は
-下線。右端の 🔍 = 検索と置換)、**下端**がステータスバー — ページ n/m・
-文字数(日本語の実情に合わせ単語数ではなく**文字数**)・状態の文言・
-校正・ズーム。
+The window frame follows the desktop-app convention. **Row 1**: save, print, undo,
+redo, and the document name (unsaved changes show a `*`; this row is also the
+window drag handle). **Row 2**: tabs on a white strip (the current tab is
+underlined; the 🔍 at the right edge is find & replace). **Bottom edge**: the
+status bar — page n/m, character count (character, not word, count — matching
+how Japanese documents are measured), status messages, proofreading, zoom.
 
-- **ファイルタブは全面のページ** — 左の品書き(新規作成・開く・URL を開く・
-  最近開いた12件・保存・名前を付けて保存・印刷・保護する・詳細情報・
-  ファイルの場所を開く・終了)と、右に「文書の情報」(統計と、docx の
-  プロパティ = 作成者・タイトルなど。欄を押して打てば docProps に入り、
-  Word でも見える)
-- **左パネル**(表示タブ): 見出し / コメント / 検索 — 押すとその場所へ飛ぶ
-- **右パネル**(表示タブ): 文字・段落・ページの設定盤(釦はリボンと同じ
-  実体。入っている釦は色が変わる)
+- **The File tab is a full-page view** — a menu on the left (New, Open, Open URL,
+  12 recent files, Save, Save As, Print, Protect, Properties, Open file location,
+  Quit) and "Document info" on the right (statistics plus docx properties =
+  author, title, and so on; click a field and type — it goes into docProps and
+  is visible in Word)
+- **Left panel** (View tab): headings / comments / search — click to jump
+- **Right panel** (View tab): settings board for character, paragraph, and page —
+  the buttons are the same actions as the ribbon; active toggles are tinted
 
-タブの並び:
-**ファイル / ホーム / 挿入 / 描画 / レイアウト / 参考資料 / フォーム /
-ヘッダー・フッター / 共同編集 / 保護 / 表示 / プラグイン**。
+Tab order:
+**File / Home / Insert / Draw / Layout / References / Forms /
+Header & Footer / Collaboration / Protection / View / Plugins**.
 
-## 基本操作(キー)
+## Basic keys
 
-| 操作 | キー |
+| Action | Keys |
 |---|---|
-| 移動 | ↑ ↓ ← →(見た目の行単位)。語単位は Ctrl+←→ |
-| 行頭 / 行末 | Home / End(Home 2度押しで段落の頭) |
-| 文書の頭 / 末尾 | Ctrl+Home / Ctrl+End |
-| 選択 | Shift+矢印・Ctrl+A |
-| 元に戻す / やり直し | Ctrl+Z / Ctrl+Shift+Z(Ctrl+Y も) |
-| コピー / 切り取り / 貼り付け | Ctrl+C / Ctrl+X / Ctrl+V |
-| 検索・置換 | Ctrl+F / Ctrl+H |
-| 開く / 保存 | Ctrl+O / Ctrl+S |
-| 字下げ・箇条書きのレベル | Tab / Shift+Tab(表の中では隣のセルへ) |
-| 右クリックメニュー | Menu キー / Shift+F10 |
-| 板を閉じる・道具を戻す | Esc |
-| 終了 | Ctrl+Q(書きかけがあれば確認) |
+| Move | ↑ ↓ ← → (visual lines). By word: Ctrl+←→ |
+| Line start / end | Home / End (Home twice = paragraph start) |
+| Document start / end | Ctrl+Home / Ctrl+End |
+| Select | Shift+arrows, Ctrl+A |
+| Undo / redo | Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y too) |
+| Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V |
+| Find / replace | Ctrl+F / Ctrl+H |
+| Open / save | Ctrl+O / Ctrl+S |
+| Indent / list level | Tab / Shift+Tab (inside a table: next cell) |
+| Context menu | Menu key / Shift+F10 |
+| Close dialog, put tool away | Esc |
+| Quit | Ctrl+Q (asks if there are unsaved changes) |
 
-IME の未確定は下線つきで本文に見え、確定した時点で undo の1手になる。
-新しい機能(ルビ・縦書きなど)は全部釦から — 新しいキーは覚えなくてよい。
+Uncommitted IME text appears underlined in the body and becomes one undo step
+when committed. New features (ruby, vertical writing, …) are all reachable from
+buttons — there are no new shortcuts to memorize.
 
-## 文字書式(ホーム)
+## Character formatting (Home)
 
-**選択した字にだけ掛かる**(選択が空なら段落まるごと)。太字・斜体・
-下線・取り消し線・上付き/下付き・文字色・蛍光ペン・書体(この機械の
-フォント一覧)・大きさ・大文字小文字・スタイルのクリア。
+**Applies to the selected text only** (with no selection, to the whole paragraph).
+Bold, italic, underline, strikethrough, super/subscript, text color, highlight,
+font (from this machine's font list), size, change case, clear formatting.
 
-**ルビ**: 選択してホーム > ルビ。板に読みを打つ(空で外す)。基底の上に
-半分の大きさで組まれ、読みが親より長ければ等配で伸びる。docx には
-`w:ruby` で入り、Word / LibreOffice でも見える。でんでん記法
-`{漢字|かんじ}` の .md からも読める。
+**Ruby (furigana)**: select text, Home > Ruby, type the reading in the dialog
+(empty removes it). It is set at half size above the base text; if the reading is
+longer than the base, spacing is distributed. Stored as `w:ruby` in docx and
+visible in Word / LibreOffice. Denden-markdown `{漢字|かんじ}` in .md files is
+also read.
 
-## 段落書式(ホーム)
+## Paragraph formatting (Home)
 
-- 揃え: 左・中央・右・両端、そして**均等割付** — 両端揃えとの違いは
-  **最後の行まで**字間に配ること(項目名を端から端まで、の日本の様式の形。
-  docx には `w:jc distribute` で入る)
-- 箇条書き・段落番号(レベルは Tab / Shift+Tab)、インデント、行間
-  (1.0→1.5→2.0)、段落の前で改ページ、背景色、囲み枠、ドロップキャップ
-- 非表示文字の表示切り替え
+- Alignment: left, center, right, justified, and **distributed** — unlike
+  justified, it spreads spacing **through the last line** (the shape used for
+  labels that must fill the column in Japanese forms; stored as `w:jc distribute`)
+- Bulleted and numbered lists (levels via Tab / Shift+Tab), indent, line spacing
+  (1.0→1.5→2.0), page-break-before, background color, borders, drop caps
+- Toggle display of hidden characters
 
-## 縦書き(ホーム > テキスト方向)
+## Vertical writing (Home > Text Direction)
 
-押すたびに縦横が切り替わる。右の列から左へ流れ、句読点・かぎ括弧・
-長音は縦用の形になり、ルビも縦で振れる。docx には sectPr の
-`textDirection tbRl` で入り、LibreOffice で開けることを確認済み。
+Each press toggles horizontal/vertical. Text flows top-to-bottom, columns
+right-to-left; punctuation, brackets, and long-vowel marks switch to their
+vertical forms, and ruby works vertically too. Stored as `textDirection tbRl`
+in sectPr; verified to open in LibreOffice.
 
-初版の限界(正直に): 表・段組みは横のまま、英数字は1字ずつ縦に積む
-(横倒しはまだ)、明示の改ページは列送りに畳まれる。見開き表示とは
-併せない。見本: `sample/writer/02_縦書きの手紙.docx`。
+Honest first-version limits: tables and multi-column layout stay horizontal;
+Latin letters and digits are stacked one per line (no rotated run yet); explicit
+page breaks fold into column breaks. Not combined with facing-pages view.
+Sample: `sample/writer/02_縦書きの手紙.docx`.
 
-## 見出し・目次・しおり・相互参照(参考資料)
+## Headings, TOC, bookmarks, cross-references (References)
 
-- **見出し**: ホーム > 段落のスタイル(または参考資料 > テキストの追加で
-  標準→見出し1→2→3 と回す)
-- **目次 / 図表目次**: ページ番号は**印刷(PDF)と同じ折り方**で計算する
-  ので紙と食い違わない。変えたら「更新」で作り直す。docx には静的な
-  本文として入る
-- **図表番号**: 段落の下に「図 N」(採番は自動)
-- **しおり**: 板で追加・削除・移動。**相互参照**はしおりの「文字」か
-  「ページ」を本文に挿す(うっすら網掛け=計算された値の印。docx には
-  REF / PAGEREF フィールドで入り、Word でも再計算できる)
+- **Headings**: Home > paragraph styles (or References > Add Text to cycle
+  body → heading 1 → 2 → 3)
+- **TOC / table of figures**: page numbers are computed with **the same layout
+  as print (PDF)**, so they can't disagree with the paper. After edits, press
+  Update to rebuild. Stored in docx as static text
+- **Captions**: "図 N" below the paragraph, numbered automatically
+- **Bookmarks**: add/remove/jump from a dialog. **Cross-references** insert a
+  bookmark's text or page number into the body (shown with a light shade =
+  computed value; stored as REF / PAGEREF fields, so Word can recalculate them)
 
-## フォーム(記入欄・コンテンツコントロール)
+## Forms (form fields / content controls)
 
-フォームタブに10種: **テキスト・コンボボックス・ドロップダウン・
-チェックボックス・ラジオボタン・画像・メールアドレス・電話番号・
-複合・署名**。
+Ten kinds on the Forms tab: **text, combo box, dropdown, checkbox, radio,
+picture, e-mail, phone, composite, signature**.
 
-- 欄は薄い箱で見え、中は普通に打てる(欄の中の編集は欄の中身として残る)
-- チェックは同じ釦(または空白キー)で ☐⇄☑。コンボ・ドロップダウンは
-  板で選択肢をカンマ区切りで決め、同じ釦で次の候補へ回る
-- docx には `w:sdt`(コンテンツコントロール)で入り、Word で開ける。
-  うちだけの種類(メール・電話・複合・署名)は tag に `jo:*` の印
-- **保護タブの「保護」と組み合わせると配布用の様式になる** — 読み取り
-  専用にして配り、受け取った側は欄だけ記入する。見本:
+- Fields appear as light boxes; typing inside them works normally (the content
+  stays part of the field)
+- Checkboxes toggle ☐⇄☑ with the same button (or the space key). Combo/dropdown
+  choices are set comma-separated in a dialog; the same button cycles candidates
+- Stored as `w:sdt` (content controls) and opens in Word. Our own kinds
+  (e-mail, phone, composite, signature) are tagged `jo:*`
+- **Combined with Protection > Protect this becomes a distributable form** —
+  hand out a read-only document where only the fields accept input. Sample:
   `sample/writer/03_申込書.docx`
 
-## 表・画像・挿入
+## Tables, images, insert
 
-- **表**: 挿入 > 表の挿入(3×3)。セルの中で編集、Tab で隣へ。セル結合
-  された表は読み・表示・保存・PDF 対応(結合を作る UI はまだ無い)
-- **画像**: PNG・JPEG・SVG(SVG は高精細 PNG に変換)。docx の部品ごと
-  保存され Word でも見える
-- **図形・SmartArt(9形)・グラフ・テキストアート・方程式(TeX)**:
-  釦の裏で Python(matplotlib 等)が描いて画像として貼る
-- **テキストボックス**: 1×1 の表(枠の中に文字)
-- **ファイルからのテキスト**: .txt / .md / .docx を差し込む
+- **Tables**: Insert > Table (3×3). Edit inside cells, Tab to the next cell.
+  Tables with merged cells are read, displayed, saved, and printed (no UI to
+  create new merges yet)
+- **Images**: PNG, JPEG, SVG (SVG is converted to a high-resolution PNG).
+  Saved as proper docx parts, visible in Word
+- **Shapes, SmartArt (9 layouts), charts, text art, equations (TeX)**:
+  behind the buttons Python (matplotlib etc.) draws the picture and pastes it
+  as an image
+- **Text box**: a 1×1 table (text inside a frame)
+- **Text from file**: inserts .txt / .md / .docx
 
-## 描画(ペン・蛍光ペン・消しゴム)
+## Drawing (pen, highlighter, eraser)
 
-紙の上をドラッグ。筆は**ページに固定**(本文を編集しても動かない)、
-1筆が undo の1手。docx では自由曲線の図形になり Word でも見える。
+Drag on the page. Strokes are **anchored to the page** (editing the body doesn't
+move them); one stroke is one undo step. In docx they become freeform shapes,
+visible in Word.
 
-## レイアウト
+## Layout
 
-- 用紙(A4→B5→A3)・向き・余白(20/12/30mm)・段組み(1→2→3段)・
-  行番号・ページ色・透かし(斜めの薄い字。Word でも見える)・
-  ハイフネーション(欧文を音節で折る)
-- **配色の変更**: 6種を巡回(標準・藍・緑・臙脂・藍+生成りの紙・
-  墨+灰の紙)。見出しの字の色と紙の色が組で変わり、**その時の値で塗る**
-  のでテーマ部品なしで Word でも同じ色に見える。Ctrl+Z で1手で戻る
+- Paper (A4→B5→A3), orientation, margins (20/12/30mm), columns (1→2→3),
+  line numbers, page color, watermark (light diagonal text, visible in Word),
+  hyphenation (Latin text broken at syllables)
+- **Color scheme**: cycles through six (standard, indigo, green, dark red,
+  indigo+unbleached paper, ink+gray paper). Heading color and page color change
+  as a pair, and the **actual color values are written**, so Word shows the same
+  colors without needing theme parts. One Ctrl+Z restores
 
-## ヘッダー・フッター
+## Header & footer
 
-板で編集(全ページ共通)。ページ番号・ページ数は印として入り、紙(PDF)で
-各ページの実番号になる。日付は挿した時点の**固定の文字**(開くたびに
-変わるフィールドにしない — 事務書類の事故のもと)。
+Edited in a dialog (shared by all pages). Page number and page count go in as
+placeholders and become real numbers on paper (PDF). The date is inserted as
+**fixed text** at insertion time (not a field that changes every time the file
+is opened — a classic source of clerical accidents).
 
-## HTML — JS なしの閲覧と記入
+## HTML — reading and filling in, without JavaScript
 
-**Web の文書を writer で読む・記入する・刷る。**
+**Read, fill in, and print web documents in writer.**
 
-- **開く**: .html ファイル、または ファイル > **URL を開く**(http/https)。
-  見出し・段落・リスト・表・画像・ルビ・form が紙面に組まれる —
-  読めない要素は帳簿へ。リンクは**起点のホストの中だけ**辿れる
-- **JS は実行しない**(読み飛ばして帳簿に言う)。JS 前提のページは
-  動かない — 読めないものは読めないと言う
-- **記入と送信**: form の欄(input / select / textarea)が記入欄になり、
-  送信は GET / POST の素の往復。返ってきた文書がまた紙面になる
-- **ページの Python**(`<script type="py">`)は**開いても実行されない**。
-  明示の操作で、Python in Calc と同じ檻(bubblewrap)の中でだけ回る
-- 開いた HTML は docx で保存・PDF で印刷できる(HTML では保存しない —
-  互換は書式の境界で守る)
-- 受入サンプル: `sample/html/`(01〜10)、動く相手は
-  `python3 sample/catalog_server.py` のカタログと注文書
+- **Open**: an .html file, or File > **Open URL** (http/https). Headings,
+  paragraphs, lists, tables, images, ruby, and forms are typeset onto the page —
+  unreadable elements go to the report. Links are followed **only within the
+  origin host**
+- **JavaScript is never executed** (it is skipped and noted in the report).
+  Pages that require JS won't work — and the app says so
+- **Filling and submitting**: form fields (input / select / textarea) become
+  form fields; submit is a plain GET / POST round trip. The response becomes
+  a page again
+- **In-page Python** (`<script type="py">`) is **never run on open**. It runs
+  only on explicit command, inside the same sandbox as Python in Calc
+- Opened HTML can be saved as docx and printed as PDF (we don't save HTML —
+  compatibility stops at the format boundary)
+- Acceptance samples: `sample/html/` (01〜10); a live counterpart is the catalog
+  and order form from `python3 sample/catalog_server.py`
 
-## 共同編集タブ — サーバー無し、全部ファイル越し
+## Collaboration tab — no server, everything through files
 
-共有フォルダに置いた文書で、そのまま効く道具:
+Tools that work on a document in a shared folder:
 
-- **共同編集モード**: 錠(`.~lock.文書.docx#`)の持ち主を名乗りで確認し、
-  先客が去っていれば編集権を取り直す。先客がいる間は上書き保存が止まる
-  (早い者勝ちの編集権+後の人は読むだけ、という正直な形)
-- **コメント**: 段落単位で追加・削除・表示切替(docx の comments.xml。
-  Word で吹き出しに見える)
-- **変更履歴**: 記録の開始/停止。記録中は変わった段落の左に橙の棒。
-  **保存のときに** Word の本物の変更履歴(挿入・削除・著者つき)になる。
-  保存すると履歴は確定される(そう言われる)
-- **チャット**: 文書の隣の申し送り帳(`文書.docx.chat.txt`)へ名乗り付きで
-  追記。生放送ではない — ファイル越しの言伝
-- **バージョン履歴**: 上書き保存のたびに `.jo-history/` へ控え(9世代)。
-  選ぶと**名無しの複製**として開く — 戻すなら自分で同じ名前で保存
-  (黙って書き戻さない)
+- **Collaboration mode**: checks who holds the lock (`.~lock.document.docx#`),
+  by name; if the previous holder has left, takes over editing rights. While
+  someone else holds it, overwrite-save is blocked (first come, first served;
+  later arrivals read — an honest arrangement)
+- **Comments**: add/remove/toggle per paragraph (docx comments.xml; Word shows
+  them as balloons)
+- **Track changes**: start/stop recording. While recording, changed paragraphs
+  get an orange bar in the margin. **On save** they become real Word tracked
+  changes (insertions/deletions with author). Saving finalizes the recording
+  (the app tells you so)
+- **Chat**: appends named messages to a file next to the document
+  (`document.docx.chat.txt`). Not live — messages passed through files
+- **Version history**: every overwrite-save keeps a copy under `.jo-history/`
+  (9 generations). Selecting one opens it as an **untitled copy** — to restore,
+  save it yourself under the same name (nothing is written back silently)
 
-## 保護タブ
+## Protection tab
 
-- **保護**: 読み取り専用の入切(docx の documentProtection と往復 —
-  Word でも保護に見える)。**パスワードは掛けない・掛けた振りもしない**。
-  効き目は本物: 打鍵も文書を変える釦も堰き止め、見る・刷る・検索は通す
-- **暗号化する**: パスワードを決めると次の保存から AES で包む
-  (**Agile = AES-256、Word 2013+ の既定**。開く側は古い AES-128 も
-  読める)。Excel 系と同じく Word / LibreOffice でも開ける。
-  空にして Enter で解除。msoffcrypto-tool との相互検証済み
-- **デジタル署名**: 隣の `文書.docx.sig` への添え書き(Ed25519。鍵は
-  `~/.config/office/sign.key` に自動生成)。改ざん検知と名乗りが実体 —
-  Word の署名欄に出る方式ではない(そう言う)
+- **Protect**: read-only toggle (round-trips docx documentProtection — Word
+  shows it as protected too). **No password, and no pretend-password.** The
+  effect is real: typing and every document-changing button are blocked;
+  viewing, printing, and searching still work
+- **Encrypt**: set a password and the next save is wrapped in AES
+  (**Agile = AES-256, the Word 2013+ default**; opening also accepts the older
+  AES-128). Opens in Word / LibreOffice. Clear the field and press Enter to
+  remove. Cross-verified against msoffcrypto-tool
+- **Digital signature**: a signature file next to the document
+  (`document.docx.sig`, Ed25519; the key is auto-generated at
+  `~/.config/office/sign.key`). Tamper detection plus a name — it is not the
+  scheme that fills Word's signature line (and says so)
 
-## 表示タブ
+## View tab
 
-ナビゲーション(左パネル)・ページに合わせる / 幅に合わせる / 100% /
-拡大・縮小・**複数ページ(見開き — 画面だけ。印刷は1ページずつ)**・
-ダークモード(周りだけ暗く、紙は白のまま)・ルーラー(mm)・
-ツールバー / ステータスバー / 左右パネルの表示切替。
+Navigation (left panel), fit page / fit width / 100% / zoom in / out,
+**multiple pages (spread — screen only; printing stays one page per sheet)**,
+dark mode (surroundings darken, paper stays white), ruler (mm),
+toolbar / status bar / side panel toggles.
 
-## 校正(レビュー系)
+## Proofreading (review)
 
-英語の綴りは機械の辞書、日本語の誤変換(以外/意外)・表記ゆれは
-**ローカルのモデル**に聞く(宛先は OpenAI 互換
-`OFFICE_HOST` / `OFFICE_PORT` / `OFFICE_MODEL`。基幹網の外に出ない)。
-モデルの作り話は通さず、**繋がらなければ「校正できません」と出る** —
-黙って「指摘なし」にしない。ルビの自動付与も同じモデルの資産
-(文脈で読みを選ぶ — 読みが割れる語 561種の実測に基づく)。
+English spelling via the machine's dictionary; Japanese misconversions
+(以外/意外) and inconsistent spellings via a **local model** (OpenAI-compatible
+endpoint, `OFFICE_HOST` / `OFFICE_PORT` / `OFFICE_MODEL`; nothing leaves your
+network). Model hallucinations are filtered, and **if the model can't be
+reached the app says "can't proofread"** — never a silent "no issues".
+Automatic furigana uses the same model assets (readings chosen in context,
+based on measurements of 561 ambiguous-reading words).
 
-画面なしの道具: `office-spell 文書.txt`(終了コード 0=無し 1=あり
-2=読めない 3=検査しきれず)、`--furigana`、`--washi`。
+Headless tools: `office-spell document.txt` (exit code 0=clean 1=findings
+2=unreadable 3=incomplete), `--furigana`, `--washi`.
 
-## プラグインタブ
+## Plugins tab
 
-- **マクロ**: .py を選ぶと**檻(bubblewrap)の中の Python** が文書の複製を
-  直し、結果が1手として入る(Ctrl+Z で戻る)。台本には `d` =
-  python-docx の文書が束縛される。**コードは文書には載せない**(docx に
-  実行コードを入れない — xlsx と方針が違うのは、python-docx という
-  公共財が既にあるから)
-- **プラグインの管理**: `~/.config/office/plugins` の .py を一覧して実行
-  (檻の中)。青空注記・EPUB などの拡張はここに足していく
+- **Macros**: choose a .py and **Python in a sandbox** (bubblewrap) edits a copy
+  of the document; the result lands as one undo step. The script gets `d` =
+  the python-docx Document. **Code is never stored in the document** (no
+  executable content in docx — the policy differs from xlsx because python-docx
+  already exists as public infrastructure)
+- **Manage plugins**: lists and runs .py files from `~/.config/office/plugins`
+  (in the sandbox). Extensions like Aozora annotations or EPUB go here
 
-## 印刷(PDF)と保存
+## Printing (PDF) and saving
 
-- ファイル > 印刷で PDF。**画面と紙は同じ紙面** — 食い違わない。
-  ヘッダー・フッターの実番号・透かし・ページ色・ペン・縦書きごと写る
-- Ctrl+S で docx(先客のロックがあれば止まる)。本文・表・画像・
-  ヘッダーは書き戻し、理解しない部品は原文のまま。読めなかった要素は
-  「保存では残ります」と付記される
+- File > Print writes a PDF. **Screen and paper are the same page** — they
+  cannot disagree. Real header/footer numbers, watermark, page color, ink,
+  and vertical writing all carry over
+- Ctrl+S saves docx (blocked if someone else holds the lock). Body, tables,
+  images, and headers are written back; parts we don't understand are carried
+  over from the original file. Elements we couldn't read are noted as
+  "preserved on save"
 
-## 灰色はもう無い
+## No more gray
 
-リボンの 114 コマンドは全部動く。「できないものを、できるように
-見せない」の灰色は、writer では**ゼロ**になった(2026-08-04)。
-残る正直な限界は各章に書いたとおり(縦書きの初版の限界、変更履歴の
-個別採否、セル結合を作る UI など)。
+All 114 ribbon commands work. The gray of "don't make it look usable when it
+isn't" reached **zero** in writer (2026-08-04). The remaining honest limits are
+noted in each section above (first-version vertical writing, per-change
+accept/reject for tracked changes, no UI yet for creating cell merges).
