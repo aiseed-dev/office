@@ -679,6 +679,9 @@ enum AiJob {
     Table,
     /// 自由に頼む(答えはカーソルの位置へ挿す)
     Ask(String),
+    /// マクロ台本を書かせる(答えは文書に入れず、プラグイン置き場に
+    /// .py で置く — 人が読んで確かめてから実行する。自動では走らせない)
+    Macro(String),
 }
 
 impl AiJob {
@@ -710,6 +713,28 @@ impl AiJob {
                 "あなたは日本語の文書を扱う道具です。頼まれたことに対する答えの                 本文だけを返します。前置き・後書き・見出しは書きません。",
                 "",
             ),
+            // 台本の作法 = 檻の中の python-docx。前置きの関数だけを使わせ、
+            // ラベル走査と cell(i,j) ループ(実測 140 倍遅い)を禁じる
+            AiJob::Macro(_) => (
+                "あなたは writer(docx 互換ワープロ)のマクロ台本を書く道具です。\
+                 Python のコードだけを返してください(説明・前置き・\
+                 コードフェンスは書かない)。台本は檻の中で実行され、\
+                 d = python-docx の Document が渡されています。\
+                 import docx / Document() / d.save() は書きません。\
+                 記入欄の読み書きは必ず次の関数を使います: \
+                 fill(名前, 値)=名前の記入欄すべてに書く / \
+                 fill_one(名前, 値)=最初の一つに書く / \
+                 extract(名前)=値を読む / fields()=(名前, 値)の一覧 / \
+                 render(辞書)={{名前}} 雛形への差し込み / \
+                 tpl_fields()=差し込み口の一覧。\
+                 ラベルの文字列を探して隣のセルに書く走査はしません(誤爆する)。\
+                 表を歩くときは for row in tb.rows: for c in row.cells: の形にし、\
+                 tb.cell(i, j) をループの中で呼びません(遅い)。\
+                 ネットとファイルの読み書きはできません(檻の外に出ない)。\
+                 最後に print で何をしたかを一行で報告し、できない・危うい頼みは \
+                 raise SystemExit(\"理由\") で断ります。",
+                "",
+            ),
         }
     }
 
@@ -722,8 +747,21 @@ impl AiJob {
             AiJob::Continue => "続き",
             AiJob::Table => "表",
             AiJob::Ask(_) => "頼み",
+            AiJob::Macro(_) => "マクロ台本",
         }
     }
+}
+
+/// モデルの答えからコードフェンス(```python 〜 ```)を外す。
+/// system で「書くな」と言っても書くモデルはいるので、受け側でも剥がす
+fn strip_code_fence(s: &str) -> String {
+    let t = s.trim();
+    let Some(rest) = t.strip_prefix("```") else {
+        return t.to_string();
+    };
+    // 1行目(```python 等)を落とし、末尾の ``` を落とす
+    let body = rest.split_once('\n').map(|(_, b)| b).unwrap_or("");
+    body.trim_end().trim_end_matches("```").trim_end().to_string()
 }
 /// gpui の文字は行の高さが既定で黄金比(1.618×文字サイズ)なので、
 /// グリフは div の頭から余白の半分ぶん下に描かれる。自前で引く線
@@ -863,6 +901,8 @@ struct Writer {
     sd_kind: kumihan::SdtKind,
     /// 板が「選択肢」でなく「記入欄の名前」を聞いている
     sd_naming: bool,
+    /// AI の板が「頼む」でなく「マクロ台本」を聞いている
+    ai_macro: bool,
     /// ルビの板(選んだ字に読みを振る)
     rb_open: bool,
     rb_ed: Editor,
@@ -1140,6 +1180,7 @@ impl Writer {
             sd_ed: Editor::new(""),
             sd_kind: kumihan::SdtKind::Text,
             sd_naming: false,
+            ai_macro: false,
             rb_open: false,
             rb_ed: Editor::new(""),
             rb_range: 0..0,
@@ -2148,11 +2189,12 @@ impl Writer {
         // 渡すもの: 選択があればそこ、無ければ全文(続きはカーソルまで)
         let body = match &job {
             AiJob::Continue => text[..sel.end.min(text.len())].to_string(),
+            AiJob::Macro(_) => String::new(),
             AiJob::Ask(_) if sel.is_empty() => String::new(),
             _ if sel.is_empty() => text.clone(),
             _ => text[sel.clone()].to_string(),
         };
-        if body.trim().is_empty() && !matches!(job, AiJob::Ask(_)) {
+        if body.trim().is_empty() && !matches!(job, AiJob::Ask(_) | AiJob::Macro(_)) {
             self.status = "文章がありません(打つか、選んでから押してください)".into();
             return;
         }
@@ -2163,6 +2205,15 @@ impl Writer {
                     q.clone()
                 } else {
                     format!("{q}\n\n---\n{body}")
+                }
+            }
+            // マクロには本文でなく、記入欄の名前一覧を渡す(台本の的)
+            AiJob::Macro(q) => {
+                let names = self.sdt_names();
+                if names.is_empty() {
+                    format!("{q}\n\n(この文書に名前つきの記入欄はありません)")
+                } else {
+                    format!("{q}\n\n【この文書の記入欄の名前】{}", names.join("、"))
                 }
             }
             _ => format!("{ask}\n\n---\n{body}"),
@@ -2192,6 +2243,39 @@ impl Writer {
         .detach();
     }
 
+    /// 文書の名前つき記入欄の名前(重複なし・出現順)。
+    /// マクロ台本を書く AI に「的」として渡す
+    fn sdt_names(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut push = |sd: &kumihan::Sdt| {
+            if !sd.tag.is_empty() && sd.tag != sd.kind.as_tag() && !out.contains(&sd.tag)
+            {
+                out.push(sd.tag.clone());
+            }
+        };
+        for p in self.doc.paragraphs() {
+            for r in &p.runs {
+                if let Some(sd) = r.fmt.sdt.as_deref() {
+                    push(sd);
+                }
+            }
+        }
+        for t in self.doc.tables() {
+            for row in &t.rows {
+                for c in row {
+                    for p in &c.paragraphs {
+                        for r in &p.runs {
+                            if let Some(sd) = r.fmt.sdt.as_deref() {
+                                push(sd);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// 返事を文書へ入れる。**1手で戻せる**(doc_undo に控える)
     fn ai_apply(
         &mut self,
@@ -2203,6 +2287,36 @@ impl Writer {
         let out = out.trim().to_string();
         if out.is_empty() {
             self.status = "AI: 答えが空でした(何もしていません)".into();
+            return;
+        }
+        // マクロ台本は文書に入れない — プラグイン置き場に .py で置き、
+        // 人が読んで確かめてから一覧から実行する(開く=実行なしのまま)
+        if matches!(job, AiJob::Macro(_)) {
+            let code = strip_code_fence(&out);
+            if code.trim().is_empty() {
+                self.status = "AI: 台本が空でした(何もしていません)".into();
+                return;
+            }
+            let dir = plugins_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            let mut i = 1;
+            let mut path = dir.join("ai台本1.py");
+            while path.exists() {
+                i += 1;
+                path = dir.join(format!("ai台本{i}.py"));
+            }
+            match std::fs::write(&path, &code) {
+                Ok(()) => {
+                    self.plug_open = true; // 置いた台本がすぐ見えるように
+                    self.status = format!(
+                        "台本を {} に置きました — 読んで確かめてから、\
+                         プラグインの一覧で実行してください(自動では走らせません)",
+                        path.display()
+                    )
+                    .into();
+                }
+                Err(e) => self.status = format!("台本を置けません: {e}").into(),
+            }
             return;
         }
         self.doc_undo = Some(self.doc.clone());
@@ -2235,6 +2349,8 @@ impl Writer {
                 self.doc.set_body_text(self.ed.text(), SIZE_PT);
             }
             // 続き・自由な頼みは、カーソル(選択の終わり)の後ろへ
+            // Macro は上で受けて return 済み
+            AiJob::Macro(_) => unreachable!(),
             AiJob::Continue | AiJob::Ask(_) => {
                 let at = sel.end.min(self.ed.text().len());
                 self.ed.move_to(at, false);
@@ -3759,6 +3875,7 @@ impl Writer {
         "colorschemas",
         "ai-where", "ai-summary", "ai-rewrite", "ai-polite", "ai-plain",
         "ai-translate", "ai-furigana", "ai-continue", "ai-table", "ai-ask",
+        "ai-macro",
         "nav", "fit-page", "fit-width", "zoom100", "multipage",
         "show-toolbar", "show-statusbar", "show-left", "show-right",
         "incfont", "decfont", "markers", "numbering",
@@ -4924,13 +5041,34 @@ impl Writer {
             "ai-ask" => {
                 if self.ai_open {
                     self.ai_open = false;
+                    self.ai_macro = false;
                     return;
                 }
                 self.ai_ed = Editor::new("");
                 self.ai_open = true;
+                self.ai_macro = false;
                 self.find_open = false;
                 self.status = format!(
                     "AI({})に頼む: 用件を打って Enter(選んだ字があれば一緒に渡します)",
+                    ui::ai::backend().label()
+                )
+                .into();
+            }
+            // マクロ台本を AI に書かせる。答えは文書に入れず、プラグイン
+            // 置き場に .py で置く — 人が読んで確かめてから実行する
+            "ai-macro" => {
+                if self.ai_open {
+                    self.ai_open = false;
+                    self.ai_macro = false;
+                    return;
+                }
+                self.ai_ed = Editor::new("");
+                self.ai_open = true;
+                self.ai_macro = true;
+                self.find_open = false;
+                self.status = format!(
+                    "AI({})にマクロ台本を頼む: 用件を打って Enter\
+                     (台本はプラグイン置き場に置くだけで、自動では走らせません)",
                     ui::ai::backend().label()
                 )
                 .into();
@@ -5164,6 +5302,7 @@ impl Writer {
             self.sd_open = false;
             self.sd_naming = false;
             self.ai_open = false;
+            self.ai_macro = false;
             self.status = "".into();
             cx.notify();
             return;
@@ -5280,8 +5419,11 @@ impl Writer {
         } else if self.ai_open {
             let q = self.ai_ed.text().to_string();
             self.ai_open = false;
+            let macro_mode = self.ai_macro;
+            self.ai_macro = false;
             if !q.trim().is_empty() {
-                self.ai_go(AiJob::Ask(q), cx);
+                let job = if macro_mode { AiJob::Macro(q) } else { AiJob::Ask(q) };
+                self.ai_go(job, cx);
             }
         } else {
             self.editor().insert("\n");
@@ -7629,7 +7771,8 @@ impl Render for Writer {
                 .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(0x165E83))
                     .child(SharedString::from(format!(
-                        "AI に頼む — 宛先 {}(Esc で取りやめ)",
+                        "{} — 宛先 {}(Esc で取りやめ)",
+                        if self.ai_macro { "AI にマクロ台本を頼む" } else { "AI に頼む" },
                         ui::ai::backend().label()
                     ))))
                 .child(div().px_2().py_1().rounded_sm()
@@ -7637,7 +7780,12 @@ impl Render for Writer {
                     .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
                     .child(SharedString::from(t)))
                 .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
-                    .child("答えはカーソルの位置に入ります。Ctrl+Z で1手で戻せます")))
+                    .child(if self.ai_macro {
+                        "台本はプラグイン置き場に置くだけです。読んで確かめてから\
+                         一覧で実行してください(自動では走りません)"
+                    } else {
+                        "答えはカーソルの位置に入ります。Ctrl+Z で1手で戻せます"
+                    })))
         };
 
         // 記入欄の選択肢を聞く板
@@ -8984,6 +9132,46 @@ render({"顧客名": "青森県庁", "担当者": "山田",
         }
         eprintln!("実物様式 {n} 件が通った");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// モデルが書きがちなコードフェンスは受け側で剥がす
+    #[test]
+    fn コードフェンスを剥がす() {
+        assert_eq!(strip_code_fence("print(1)"), "print(1)");
+        assert_eq!(strip_code_fence("```python\nprint(1)\n```"), "print(1)");
+        assert_eq!(strip_code_fence("```\nprint(1)\n```\n"), "print(1)");
+        assert_eq!(
+            strip_code_fence("```python\nfill(\"氏名\", \"x\")\nprint('done')\n```"),
+            "fill(\"氏名\", \"x\")\nprint('done')"
+        );
+    }
+
+    /// 「マクロを書く」は板を開き、宛先が無ければ正直に断る。
+    /// 台本が文書に入ることは決してない(置き場に置くだけ)
+    #[gpui::test]
+    fn マクロを書くは板を開き宛先が無ければ断る(cx: &mut gpui::TestAppContext) {
+        let _ai = AI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let keep = ui::ai::backend();
+        let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
+        w.update(cx, |this, cx| {
+            this.set_doc(Document::plain("本文です。", SIZE_PT));
+            this.run_cmd("ai-macro", cx);
+            assert!(this.ai_open && this.ai_macro, "マクロの板が開かない");
+            this.run_cmd("ai-macro", cx); // もう一度押すと閉じる
+            assert!(!this.ai_open && !this.ai_macro, "板が閉じない");
+        });
+        ui::ai::set_backend(ui::ai::Backend::ClaudeApi);
+        if ui::ai::ready(ui::ai::Backend::ClaudeApi).is_err() {
+            w.update(cx, |this, cx| {
+                let before = this.ed.text().to_string();
+                this.ai_go(AiJob::Macro("氏名を記入して".into()), cx);
+                let st = this.status.to_string();
+                assert!(st.starts_with("AI:"), "断りの言葉が出ない: {st}");
+                assert!(!this.ai_busy, "断ったのに考え中のまま");
+                assert_eq!(this.ed.text(), before, "文書が変わってしまった");
+            });
+        }
+        ui::ai::set_backend(keep);
     }
 
     /// 「名前」釦で記入欄に名前が付く(docx の w:tag。マクロの fill の鍵)

@@ -85,7 +85,7 @@ READY = {
         "ai-rewrite": "ai-rewrite", "ai-polite": "ai-polite",
         "ai-plain": "ai-plain", "ai-translate": "ai-translate",
         "ai-furigana": "ai-furigana", "ai-continue": "ai-continue",
-        "ai-table": "ai-table", "ai-ask": "ai-ask",
+        "ai-table": "ai-table", "ai-ask": "ai-ask", "ai-macro": "ai-macro",
         "controls": "controls", "form-text": "form-text",
         "form-combo": "form-combo", "form-dropdown": "form-dropdown",
         "form-checkbox": "form-checkbox", "form-radio": "form-radio",
@@ -377,7 +377,7 @@ COMMON_TAIL = {
         ("ai-polite", "敬語にする"), ("ai-plain", "やさしく"),
         ("ai-translate", "翻訳"), ("ai-furigana", "ふりがな"),
         ("ai-continue", "続きを書く"), ("ai-table", "表にする"),
-        ("ai-ask", "頼む"),
+        ("ai-ask", "頼む"), ("ai-macro", "マクロを書く"),
     ],
 }
 

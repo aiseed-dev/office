@@ -190,6 +190,7 @@ pub const WRITER: &[Tab] = &[
         c("ai-continue", "続きを書く", "ai-continue"),
         c("ai-table", "表にする", "ai-table"),
         c("ai-ask", "頼む", "ai-ask"),
+        c("ai-macro", "マクロを書く", "ai-macro"),
     ]},
 ];
 
