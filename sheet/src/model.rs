@@ -598,9 +598,22 @@ pub struct PivotDef {
     pub size: (u32, u32),
 }
 
+/// ブックの情報(docProps/core.xml の主な欄)。読んで見せる。
+/// 保存は原文持ち越しなので、開いたファイルの情報は保存で消えない。
+#[derive(Debug, Clone, Default)]
+pub struct BookProps {
+    pub creator: String,
+    pub title: String,
+    pub subject: String,
+    pub keywords: String,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Book {
     pub sheets: Vec<Sheet>,
+    /// ブックの情報(ファイルの全面ページで見せる)
+    pub props: BookProps,
     /// こちらが理解できなかった definedName の原文(Print_Area など)。
     /// **理解はしないが、捨てない。** 保存でそのまま返す
     pub names_raw: Vec<String>,

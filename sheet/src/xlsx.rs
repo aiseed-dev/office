@@ -745,6 +745,33 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     paths.sort();
 
     let mut book = Book { sheets: Vec::new(), names_raw: defined_raw, ..Default::default() };
+    // ブックの情報(docProps/core.xml)。読んで見せる。保存は原文持ち越し
+    // なので、開いたファイルの情報は保存で消えない
+    if let Ok(mut f) = zip.by_name("docProps/core.xml") {
+        let mut s = String::new();
+        let _ = f.read_to_string(&mut s);
+        let unesc = |t: &str| {
+            t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
+        };
+        let grab = |tag: &str| -> String {
+            let open = format!("<{tag}");
+            s.find(&open)
+                .and_then(|i| {
+                    let rest = &s[i..];
+                    let a = rest.find('>')? + 1;
+                    let b = rest.find("</")?;
+                    (b > a).then(|| unesc(&rest[a..b]))
+                })
+                .unwrap_or_default()
+        };
+        book.props = crate::model::BookProps {
+            creator: grab("dc:creator"),
+            title: grab("dc:title"),
+            subject: grab("dc:subject"),
+            keywords: grab("cp:keywords"),
+            description: grab("dc:description"),
+        };
+    }
     for (i, path) in paths.iter().enumerate() {
         let mut s = String::new();
         if let Ok(mut f) = zip.by_name(path) { let _ = f.read_to_string(&mut s); }
@@ -2120,7 +2147,7 @@ mod fmt_round {
             formula: None, value: Value::Text("品名".into()), fmt: fmt.clone() });
         s.set(Pos { row: 0, col: 1 }, Cell {
             formula: None, value: Value::Number(1200.0), fmt });
-        Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() }
+        Book { sheets: vec![s], ..Default::default() }
     }
 
     fn roundtrip(b: &Book) -> Book {
@@ -2182,7 +2209,7 @@ mod fmt_round {
             value: Value::Empty,
             fmt: CellFormat { borders: Borders::ALL, ..Default::default() },
         });
-        let back = roundtrip(&Book { sheets: vec![sh], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() });
+        let back = roundtrip(&Book { sheets: vec![sh], ..Default::default() });
         let c = back.sheets[0].get(Pos { row: 2, col: 2 });
         assert!(c.is_some(), "値の無い罫線セルが消えた");
         assert_eq!(c.unwrap().fmt.borders, Borders::ALL);
@@ -2208,7 +2235,7 @@ mod merge_round {
             formula: None, value: Value::Text("見出し".into()), fmt: Default::default() });
         s.merges.push((Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
         s.merges.push((Pos::parse("A2").unwrap(), Pos::parse("A4").unwrap()));
-        let back = roundtrip(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() });
+        let back = roundtrip(&Book { sheets: vec![s], ..Default::default() });
         assert_eq!(back.sheets[0].merges.len(), 2, "結合が消えた");
         assert_eq!(back.sheets[0].merges[0],
                    (Pos::parse("A1").unwrap(), Pos::parse("C1").unwrap()));
@@ -2258,7 +2285,7 @@ mod colwidth_round {
         s.col_width.insert(0, 3.5);
         s.col_width.insert(2, 24.0);
         let mut buf = Vec::new();
-        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::write(&Book { sheets: vec![s], ..Default::default() }, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
         let cw = &back.sheets[0].col_width;
         assert_eq!(cw.get(&0), Some(&3.5), "列幅が消えた: {cw:?}");
@@ -2298,7 +2325,7 @@ mod rowheight_round {
             formula: None, value: Value::Text("高い行".into()), fmt: Default::default() });
         s.row_height.insert(2, 27.5);
         let mut buf = Vec::new();
-        crate::xlsx::write(&Book { sheets: vec![s], names_raw: Vec::new(), scripts: Vec::new(), pivots: Vec::new() }, std::io::Cursor::new(&mut buf)).unwrap();
+        crate::xlsx::write(&Book { sheets: vec![s], ..Default::default() }, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::xlsx::read(std::io::Cursor::new(&buf)).unwrap().0;
         assert_eq!(back.sheets[0].row_height.get(&2), Some(&27.5), "行の高さが消えた");
     }

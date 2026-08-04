@@ -673,6 +673,12 @@ struct Calc {
     dirty: bool,
     /// 選んでいるリボンのタブ
     tab: usize,
+    /// ファイルの全面ページから「戻る」ときのタブ
+    prev_tab: usize,
+    /// 釦に乗っているときの名前(下のステータスバーに出す)
+    hover_hint: Option<&'static str>,
+    /// ファイルのページの右側(0=詳細情報 1=最近開いた)
+    file_view: u8,
 }
 
 impl HasEditor for Calc {
@@ -756,7 +762,10 @@ impl Calc {
             status: "".into(),
             notes: Vec::new(),
             dirty: false,
-            tab: 0,
+            tab: 1, // ファイルは全面ページになったので、開きはホーム
+            prev_tab: 1,
+            hover_hint: None,
+            file_view: 0,
         };
         if let Some(p) = path {
             c.open(p);
@@ -2683,6 +2692,7 @@ impl Calc {
                     )
                     .into();
                 }
+                Self::note_recent(&p);
                 self.path = Some(p);
                 self.sync_input();
             }
@@ -2860,6 +2870,84 @@ impl Calc {
             os.push(".chat.txt");
             PathBuf::from(os)
         })
+    }
+
+    /// 最近開いた・保存したブックの控え(writer と同じ作法)
+    fn recent_file() -> PathBuf {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+            .join(".config/office/recent-calc.txt")
+    }
+
+    fn note_recent(p: &std::path::Path) {
+        let rf = Self::recent_file();
+        if let Some(dir) = rf.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let mut list: Vec<String> = std::fs::read_to_string(&rf)
+            .map(|s| s.lines().map(str::to_string).collect())
+            .unwrap_or_default();
+        let me = p.to_string_lossy().to_string();
+        list.retain(|x| *x != me);
+        list.insert(0, me);
+        list.truncate(12);
+        let _ = std::fs::write(&rf, list.join("\n"));
+    }
+
+    fn recent_list() -> Vec<PathBuf> {
+        std::fs::read_to_string(Self::recent_file())
+            .map(|s| s.lines().map(PathBuf::from).filter(|p| p.exists()).collect())
+            .unwrap_or_default()
+    }
+
+    /// 新しいブック。未保存の変更があるときは作らない(黙って捨てない)。
+    fn new_book(&mut self) -> bool {
+        if self.dirty {
+            self.status =
+                "未保存の変更があります。先に保存してください(Ctrl+S)".into();
+            return false;
+        }
+        self.release_lock();
+        self.locked_by = None;
+        self.path = None;
+        self.encrypt_pw = None;
+        self.notes = Vec::new();
+        self.book = Book::new();
+        self.active = 0;
+        self.cursor = Pos::new(0, 0);
+        self.view = Pos::new(0, 0);
+        self.anchor = None;
+        self.frozen = None;
+        self.filter = None;
+        self.slicer = None;
+        self.sheet_ui.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.dirty = false;
+        self.sync_input();
+        self.status = "新しいブックです".into();
+        true
+    }
+
+    /// 名前を付けて保存(いつでもダイアログ。別の糸 — rfd は同期)
+    fn save_as(&mut self, cx: &mut Context<Self>) {
+        let ask = cx.background_executor().spawn(async {
+            rfd::FileDialog::new().add_filter("Excelブック", &["xlsx"]).save_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(mut p) = r {
+                    if p.extension().is_none() {
+                        p.set_extension("xlsx");
+                    }
+                    this.save_to(p);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     // ---- 割り当てられた操作 ----
@@ -6485,6 +6573,7 @@ calc の隣に置いてください)"
                 )
                 .into();
                 self.acquire_lock(&p);
+                Self::note_recent(&p);
                 self.path = Some(p);
                 self.dirty = false;
                 // 挿した絵はもう原本(いま書いたファイル)にある。次の保存で
@@ -7382,7 +7471,13 @@ impl Render for Calc {
                 // 現在地の緑の下線(デスクトップ版の形)
                 .child(div().h(px(2.5)).w_full().rounded_sm()
                     .bg(if on { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) }))
-                .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.tab != 0 {
+                        this.prev_tab = this.tab;
+                    }
+                    this.tab = i;
+                    cx.notify()
+                })));
         }
         tabs = tabs.child(div().flex_1())
             .child(div().id("tab-find").px_2().pb_1().text_size(px(12.0))
@@ -7394,36 +7489,111 @@ impl Render for Calc {
                     cx.notify()
                 })));
 
-        let mut cmds = div().flex().flex_row().flex_wrap().gap_1().items_center()
-            .px_3().py_2().bg(gpui::white())
-            .border_b_1().border_color(rgb(0xE1E6EA));
-        for cmd in ribbon::CALC[self.tab].cmds {
-            if cmd.ready {
-                let id = cmd.id;
-                cmds = cmds.child(div().id(SharedString::from(cmd.id))
-                    .px_3().py_1().rounded_md()
-                    .border_1().border_color(rgb(0x1B6E3C)).text_color(rgb(0x1B6E3C))
-                    .text_size(px(12.0)).cursor_pointer()
-                    .hover(|s| s.bg(rgb(0xEAF5EE)))
-                    .child(cmd.label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run_cmd(id, cx); cx.notify()
-                    })));
-            } else {
-                cmds = cmds.child(div().px_3().py_1().rounded_md()
-                    .border_1().border_color(rgb(0xEDEFF1))
-                    .text_color(rgb(0xB6BDC4)).text_size(px(12.0))
-                    .flex().flex_row().items_center().gap_1()
-                    .children(ui::icons::find(cmd.icon).map(|_| {
+        // 釦の帯: 本家のデスクトップ版の一段の絵釦(writer の写し)。
+        // 主要な釦は名札つきの大釦、他は絵だけ(乗ると名前が下のステータス
+        // バーへ)。絵の無い釦は小さな文字の釦。ホームだけ2段(釦が多い)
+        const BIG: &[(&str, &str)] = &[
+            ("instable", "表"), ("insimage", "画像"), ("insshape", "図形"),
+            ("inschart", "グラフ"), ("inssmartart", "SmartArt"),
+            ("autosum", "オートSUM"), ("recent", "最近使った関数"),
+            ("pagemargins", "余白"), ("pageorient", "向き"), ("pagesize", "サイズ"),
+            ("printarea", "印刷範囲"),
+            ("data-from-text", "テキストから"), ("custom-sort", "並べ替え"),
+            ("setfilter", "フィルター"), ("python", "Python"),
+            ("subtotal", "小計"), ("solver", "ソルバー"), ("group", "グループ化"),
+            ("pivot-insert", "ピボットの挿入"),
+            ("td-header", "ヘッダー行"), ("td-total", "合計行"),
+            ("coauth-mode", "共同編集モード"), ("co-addcomment", "コメント"),
+            ("co-chat", "チャット"), ("co-history", "バージョン履歴"),
+            ("prot-encrypt", "暗号化"), ("prot-sign", "署名"), ("prot-doc", "保護"),
+            ("freeze", "枠の固定"), ("pen", "ペン"), ("highlighter", "蛍光ペン"),
+            ("eraser", "消しゴム"),
+            ("plug-macros", "マクロ"), ("plug-manage", "プラグインの管理"),
+        ];
+        let th_cmd_border = rgb(0xE1E6EA);
+        let th_btn_hover = rgb(0xEAF5EE);
+        let th_fg = rgb(0x444B52);
+        let th_gray = rgb(0xB6BDC4);
+        let mut cmds = div().flex().flex_col().gap_0p5()
+            .px_3().py_1().bg(gpui::white())
+            .border_b_1().border_color(th_cmd_border);
+        let items = ribbon::CALC[self.tab].cmds;
+        let split = if ribbon::CALC[self.tab].name == "ホーム" {
+            items.len().div_ceil(2)
+        } else {
+            items.len()
+        };
+        for chunk in items.chunks(split.max(1)) {
+            let mut row = div().flex().flex_row().items_center().gap_0p5();
+            for cmd in chunk {
+                let label = cmd.label;
+                let icon = cmd.icon;
+                let has_icon = ui::icons::find(icon).is_some();
+                let big = BIG.iter().find(|(k, _)| *k == icon).map(|(_, s)| *s);
+                let hoverable = cx.listener(move |this: &mut Calc, on: &bool, _, cx| {
+                    if *on {
+                        this.hover_hint = Some(label);
+                    } else if this.hover_hint == Some(label) {
+                        this.hover_hint = None;
+                    }
+                    cx.notify()
+                });
+                let fg = if cmd.ready { th_fg } else { th_gray };
+                if let Some(short) = big {
+                    // 名札つきの大釦(絵の下に短い名前 — 本家の言い方)
+                    let mut b = div().id(SharedString::from(format!("h-{icon}")))
+                        .px_2().h(px(46.0)).rounded_sm()
+                        .flex().flex_col().items_center().justify_center().gap_1()
+                        .on_hover(hoverable)
+                        .children(has_icon.then(|| {
+                            gpui::svg()
+                                .path(SharedString::from(format!("icons/{icon}.svg")))
+                                .size(px(20.0)).text_color(fg)
+                        }))
+                        .child(div().text_size(px(10.5)).text_color(fg).child(short));
+                    if cmd.ready {
+                        let cid = cmd.id;
+                        b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.run_cmd(cid, cx);
+                                cx.notify()
+                            }));
+                    }
+                    row = row.child(b);
+                    continue;
+                }
+                let mut b = div().id(SharedString::from(format!("h-{icon}")))
+                    .h(px(26.0)).rounded_sm()
+                    .flex().items_center().justify_center()
+                    .on_hover(hoverable);
+                b = if has_icon { b.w(px(26.0)) } else { b.px_1p5() };
+                b = b
+                    .children(has_icon.then(|| {
                         gpui::svg()
-                            .path(SharedString::from(format!("icons/{}.svg", cmd.icon)))
-                            .size(px(15.0))
-                            .text_color(rgb(0xB6BDC4))
+                            .path(SharedString::from(format!("icons/{icon}.svg")))
+                            .size(px(18.0)).text_color(fg)
                     }))
-                    .child(cmd.label));
+                    .children((!has_icon).then(|| {
+                        div().text_size(px(10.5)).text_color(fg).child(label)
+                    }));
+                if cmd.ready {
+                    let cid = cmd.id;
+                    b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.run_cmd(cid, cx);
+                            cx.notify()
+                        }));
+                }
+                row = row.child(b);
             }
+            cmds = cmds.child(row);
         }
-        let bar = div().flex().flex_col().child(top).child(tabs).child(cmds);
+        let bar = if self.tab == 0 {
+            // ファイルの全面ページは釦の帯を持たない(本家の形)
+            div().flex().flex_col().child(top).child(tabs)
+        } else {
+            div().flex().flex_col().child(top).child(tabs).child(cmds)
+        };
 
         // ---- 数式バー ----
         let formula_bar = div()
@@ -7715,11 +7885,15 @@ impl Render for Calc {
         sheets_bar = sheets_bar
             .child(div().pl_3().text_size(px(11.0)).text_color(rgb(0x66707A))
                 .whitespace_nowrap().overflow_hidden()
-                .child(SharedString::from(format!(
-                    "{}{}",
-                    if self.dirty { "● " } else { "" },
-                    self.status
-                ))))
+                .child(SharedString::from(match self.hover_hint {
+                    // 釦に乗っている間はその名前(本家の作法)
+                    Some(h) => h.to_string(),
+                    None => format!(
+                        "{}{}",
+                        if self.dirty { "● " } else { "" },
+                        self.status
+                    ),
+                })))
             .child(div().flex_1())
             .children(self.sel_stats().map(|s| {
                 div().pr_2().text_size(px(11.0)).font_weight(gpui::FontWeight::BOLD)
@@ -8264,6 +8438,205 @@ impl Render for Calc {
                         }))))
         });
 
+        // ---- ファイルの全面ページ(本家の File メニュー。タブ0で全面) ----
+        let filepage = (self.tab == 0).then(|| {
+            let item_bg = rgb(0xE2E6EA);
+            let gray = rgb(0xB6BDC4);
+            let fg = rgb(0x444B52);
+            let dim = rgb(0x66707A);
+            let mk = |id: &'static str, label: &'static str, ready: bool| {
+                let d = div().id(id).px_4().py_1p5().text_size(px(13.0));
+                if ready {
+                    d.text_color(fg).cursor_pointer().hover(move |s| s.bg(item_bg))
+                } else {
+                    d.text_color(gray)
+                }
+                .child(label)
+            };
+            let sb = div().w(px(280.0)).bg(rgb(0xF1F3F5))
+                .border_r_1().border_color(rgb(0xE1E6EA))
+                .flex().flex_col().py_2()
+                .child(mk("f-back", "‹ 戻る", true).on_click(cx.listener(|this, _, _, cx| {
+                    this.tab = this.prev_tab;
+                    cx.notify()
+                })))
+                .child(div().h(px(10.0)))
+                .child(mk("f-new", "新規作成", true).on_click(cx.listener(|this, _, _, cx| {
+                    if this.new_book() {
+                        this.tab = this.prev_tab;
+                    }
+                    cx.notify()
+                })))
+                .child(mk("f-tpl", "テンプレートから作成", false))
+                .child(mk("f-open", "開く", true).on_click(cx.listener(|this, _, _, cx| {
+                    this.tab = this.prev_tab;
+                    this.open_dialog(cx);
+                    cx.notify()
+                })))
+                .child({
+                    let d = mk("f-recent", "最近開いた", true).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.file_view = 1;
+                            cx.notify()
+                        }));
+                    if self.file_view == 1 { d.bg(item_bg) } else { d }
+                })
+                .child(div().h(px(10.0)))
+                .child(mk("f-save", "保存", true).on_click(cx.listener(|this, _, _, cx| {
+                    this.save(false, cx);
+                    cx.notify()
+                })))
+                .child(mk("f-saveas", "名前を付けて保存", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.save_as(cx);
+                        cx.notify()
+                    })))
+                .child(mk("f-print", "印刷", true).on_click(cx.listener(|this, _, _, cx| {
+                    this.run_cmd("pdf", cx);
+                    cx.notify()
+                })))
+                .child(mk("f-protect", "保護する", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        if let Some(i) =
+                            ribbon::CALC.iter().position(|t| t.name == "保護")
+                        {
+                            this.prev_tab = i;
+                            this.tab = i;
+                        }
+                        cx.notify()
+                    })))
+                .child(div().h(px(10.0)))
+                .child({
+                    let d = mk("f-info", "詳細情報", true).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.file_view = 0;
+                            cx.notify()
+                        }));
+                    if self.file_view == 0 { d.bg(item_bg) } else { d }
+                })
+                .child(mk("f-place", "ファイルの場所を開く", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        match this.path.as_ref().and_then(|p| p.parent()) {
+                            Some(dir) => {
+                                let _ = std::process::Command::new("xdg-open")
+                                    .arg(dir)
+                                    .spawn();
+                            }
+                            None => {
+                                this.status = "まだファイルになっていません".into();
+                            }
+                        }
+                        cx.notify()
+                    })))
+                .child(div().h(px(10.0)))
+                .child(mk("f-quit", "終了", true).on_click(cx.listener(|this, _, _, cx| {
+                    this.request_quit(cx);
+                    cx.notify()
+                })))
+                .child(div().flex_1())
+                .child(mk("f-opts", "詳細設定", false))
+                .child(mk("f-help", "ヘルプ", false))
+                .child(mk("f-req", "機能のリクエスト", false));
+            let mut pane = div().flex_1().bg(gpui::white()).p_8()
+                .flex().flex_col().gap_3().text_size(px(12.5)).text_color(fg);
+            if self.file_view == 1 {
+                pane = pane.child(div().text_size(px(16.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child("最近開いた"));
+                let list = Self::recent_list();
+                if list.is_empty() {
+                    pane = pane.child(div().text_color(dim)
+                        .child("(まだありません。開く・保存すると残ります)"));
+                }
+                for (i, q) in list.into_iter().enumerate() {
+                    let name = q.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let dir = q.parent()
+                        .map(|d| d.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    pane = pane.child(div()
+                        .id(SharedString::from(format!("recent-{i}")))
+                        .px_2().py_1().rounded_sm().cursor_pointer()
+                        .hover(move |s| s.bg(item_bg))
+                        .flex().flex_row().items_center().gap_2()
+                        .child(div().text_size(px(13.0)).child(SharedString::from(name)))
+                        .child(div().text_size(px(11.0)).text_color(dim)
+                            .child(SharedString::from(dir)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.tab = this.prev_tab;
+                            this.open(q.clone());
+                            cx.notify()
+                        })));
+                }
+            } else {
+                // 統計(生きた値)とブックの情報(docProps/core.xml から)
+                let sheets_n = self.book.sheets.len();
+                let mut cells_n = 0usize;
+                let mut formulas_n = 0usize;
+                for sh in &self.book.sheets {
+                    cells_n += sh.cells.len();
+                    formulas_n +=
+                        sh.cells.values().filter(|c| c.formula.is_some()).count();
+                }
+                let shapes_n: usize = self
+                    .book
+                    .sheets
+                    .iter()
+                    .map(|s| {
+                        s.shapes.len() + s.shapes_new.len() + s.images.len()
+                            + s.images_new.len()
+                    })
+                    .sum();
+                pane = pane.child(div().text_size(px(16.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child("ブックの情報"))
+                    .child(div().text_size(px(13.5))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child("統計"));
+                for (k, v) in [
+                    ("シート", sheets_n),
+                    ("使っているセル", cells_n),
+                    ("式のセル", formulas_n),
+                    ("図形と画像", shapes_n),
+                ] {
+                    pane = pane.child(div().flex().flex_row()
+                        .child(div().w(px(220.0)).text_color(dim).child(k))
+                        .child(SharedString::from(format!("{v}"))));
+                }
+                pane = pane.child(div().h(px(6.0)))
+                    .child(div().text_size(px(13.5))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child("プロパティ"));
+                let pr = &self.book.props;
+                for (k, v) in [
+                    ("作成者", pr.creator.clone()),
+                    ("タイトル", pr.title.clone()),
+                    ("タグ", pr.keywords.clone()),
+                    ("件名", pr.subject.clone()),
+                    ("コメント", pr.description.clone()),
+                ] {
+                    let empty = v.is_empty();
+                    pane = pane.child(div().flex().flex_row()
+                        .child(div().w(px(220.0)).text_color(dim).child(k))
+                        .child(div()
+                            .text_color(if empty { gray } else { fg })
+                            .child(SharedString::from(if empty {
+                                "—".to_string()
+                            } else {
+                                v
+                            }))));
+                }
+                pane = pane.child(div().text_size(px(11.5)).text_color(dim)
+                    .child("開いた xlsx の情報(保存でもそのまま残ります)"));
+            }
+            div().absolute().inset_0().bg(gpui::white())
+                .flex().flex_row()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(sb)
+                .child(pane)
+        });
+
         // ---- スライサーの小窓(列の値の釦で絞る) ----
         let slicer_panel = self.slicer.as_ref().map(|(col, sel, multi)| {
             let col = *col;
@@ -8550,7 +8923,7 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_context_menu))
             .on_action(cx.listener(Calc::a_cancel))
             .child(bar)
-            .child(formula_bar)
+            .children((self.tab != 0).then(|| formula_bar))
             .child(div().flex_1().overflow_hidden().relative()
                    // ホイールで窓を動かす(下に回すと先の行が見える)
                    .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, _, cx| {
@@ -8676,7 +9049,8 @@ impl Render for Calc {
                    .children(pick_panel)
                    .children(prompt_panel)
                    .children(solver_panel)
-                   .children(slicer_panel))
+                   .children(slicer_panel)
+                   .children(filepage))
             .child(sheets_bar)
             .children(notes)
     }
