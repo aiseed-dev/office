@@ -288,53 +288,114 @@ fn sig_path_for(p: &std::path::Path) -> PathBuf {
     PathBuf::from(os)
 }
 
-/// 閉域向けの小さな HTTP(http:// だけ。https はまだ — そう言う)。
-/// GET は body=None、POST は form の urlencoded を渡す
-fn http_fetch(url: &str, body: Option<&str>) -> Result<Vec<u8>, String> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or("http:// だけに対応しています(閉域向け。https はまだ)")?;
-    let (hostport, path) = match rest.split_once('/') {
-        Some((h, p)) => (h, format!("/{p}")),
-        None => (rest, "/".to_string()),
-    };
-    let addr = if hostport.contains(':') {
-        hostport.to_string()
-    } else {
-        format!("{hostport}:80")
-    };
-    let mut st = std::net::TcpStream::connect(&addr)
-        .map_err(|e| format!("繋がりません({addr}): {e}"))?;
-    st.set_read_timeout(Some(std::time::Duration::from_secs(10))).ok();
+/// 小さな HTTP(http と https。公開 Web も見える — 発注者 2026-08-04)。
+/// HTTP/1.0 で頼む(chunked を受けない素直な形)。転送(3xx)は5回まで
+/// 追いかける。GET は body=None、POST は form の urlencoded。
+/// 返り値は (中身, 最終 URL)
+fn http_fetch(url: &str, body: Option<&str>) -> Result<(Vec<u8>, String), String> {
     use std::io::{BufRead as _, Read as _, Write as _};
-    let req = match body {
-        Some(b) => format!(
-            "POST {path} HTTP/1.1\r\nHost: {hostport}\r\n             Content-Type: application/x-www-form-urlencoded\r\n             Content-Length: {}\r\nConnection: close\r\n\r\n{b}",
-            b.len()
-        ),
-        None => format!(
-            "GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n"
-        ),
-    };
-    st.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
-    let mut r = std::io::BufReader::new(st);
-    let mut status = String::new();
-    r.read_line(&mut status).map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    loop {
-        line.clear();
-        if r.read_line(&mut line).map_err(|e| e.to_string())? == 0
-            || line.trim().is_empty()
-        {
-            break;
+    let mut url = url.to_string();
+    for _ in 0..5 {
+        let (https, rest) = if let Some(r) = url.strip_prefix("https://") {
+            (true, r)
+        } else if let Some(r) = url.strip_prefix("http://") {
+            (false, r)
+        } else {
+            return Err("http:// か https:// の URL にしてください".into());
+        };
+        let (hostport, path) = match rest.split_once('/') {
+            Some((h, p)) => (h.to_string(), format!("/{p}")),
+            None => (rest.to_string(), "/".to_string()),
+        };
+        let host = hostport.split(':').next().unwrap_or(&hostport).to_string();
+        let addr = if hostport.contains(':') {
+            hostport.clone()
+        } else {
+            format!("{hostport}:{}", if https { 443 } else { 80 })
+        };
+        let sock = std::net::TcpStream::connect(&addr)
+            .map_err(|e| format!("繋がりません({addr}): {e}"))?;
+        sock.set_read_timeout(Some(std::time::Duration::from_secs(15))).ok();
+        let req = match body {
+            Some(b) => format!(
+                "POST {path} HTTP/1.0\r\nHost: {hostport}\r\n                 User-Agent: aiseed-writer\r\n                 Content-Type: application/x-www-form-urlencoded\r\n                 Content-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                b.len()
+            ),
+            None => format!(
+                "GET {path} HTTP/1.0\r\nHost: {hostport}\r\n                 User-Agent: aiseed-writer\r\nConnection: close\r\n\r\n"
+            ),
+        };
+        // http と https を同じ道で読むための入れ物
+        let mut stream: Box<dyn ReadWrite> = if https {
+            let mut roots = rustls::RootCertStore::empty();
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let cfg = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            let name = rustls::pki_types::ServerName::try_from(host.clone())
+                .map_err(|_| format!("ホスト名が変です: {host}"))?;
+            let conn = rustls::ClientConnection::new(std::sync::Arc::new(cfg), name)
+                .map_err(|e| e.to_string())?;
+            Box::new(rustls::StreamOwned::new(conn, sock))
+        } else {
+            Box::new(sock)
+        };
+        stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+        let mut r = std::io::BufReader::new(stream);
+        let mut status = String::new();
+        r.read_line(&mut status).map_err(|e| e.to_string())?;
+        let mut location: Option<String> = None;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if r.read_line(&mut line).map_err(|e| e.to_string())? == 0
+                || line.trim().is_empty()
+            {
+                break;
+            }
+            if line.to_ascii_lowercase().starts_with("location:") {
+                location = Some(line[9..].trim().to_string());
+            }
         }
+        if status.contains(" 30") {
+            if let Some(loc) = location {
+                url = resolve_url(&url, &loc);
+                continue;
+            }
+        }
+        let mut out = Vec::new();
+        r.read_to_end(&mut out).map_err(|e| e.to_string())?;
+        if !status.contains(" 200") {
+            return Err(format!("サーバーの答え: {}", status.trim()));
+        }
+        return Ok((out, url));
     }
-    let mut out = Vec::new();
-    r.read_to_end(&mut out).map_err(|e| e.to_string())?;
-    if !status.contains(" 200") {
-        return Err(format!("サーバーの答え: {}", status.trim()));
+    Err("転送が多すぎます(5回まで)".into())
+}
+
+trait ReadWrite: std::io::Read + std::io::Write {}
+impl<T: std::io::Read + std::io::Write> ReadWrite for T {}
+
+/// 相対の URL を今の場所から解く(部分集合)
+fn resolve_url(base: &str, href: &str) -> String {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        return href.to_string();
     }
-    Ok(out)
+    let scheme_end = base.find("://").map(|i| i + 3).unwrap_or(0);
+    let host_end = base[scheme_end..]
+        .find('/')
+        .map(|i| scheme_end + i)
+        .unwrap_or(base.len());
+    if let Some(rest) = href.strip_prefix("//") {
+        return format!("{}{rest}", &base[..scheme_end]);
+    }
+    if href.starts_with('/') {
+        return format!("{}{href}", &base[..host_end]);
+    }
+    match base.rfind('/').filter(|i| *i > host_end) {
+        Some(i) => format!("{}{href}", &base[..i + 1]),
+        None => format!("{}/{href}", &base[..host_end]),
+    }
 }
 
 fn urlenc(s: &str) -> String {
@@ -534,7 +595,11 @@ struct Writer {
     prop_ed: Editor,
     /// HTML の記入(form)。開いた HTML の欄と、送り先の起点
     html_forms: Vec<kumihan::html::Form>,
+    html_links: Vec<(String, String)>,
     html_origin: Option<String>,
+    /// 相対リンクを解く土台(開いた URL そのもの)
+    html_base: Option<String>,
+    lk_open: bool,
     fm_open: bool,
     fm_field: Option<usize>,
     fm_ed: Editor,
@@ -785,7 +850,10 @@ impl Writer {
             file_field: None,
             prop_ed: Editor::new(""),
             html_forms: Vec::new(),
+            html_links: Vec::new(),
             html_origin: None,
+            html_base: None,
+            lk_open: false,
             fm_open: false,
             fm_field: None,
             fm_ed: Editor::new(""),
@@ -1734,10 +1802,12 @@ impl Writer {
                 t.into_owned()
             }
         };
-        let (doc, notes, forms) = kumihan::html::parse_full(&text, SIZE_PT);
+        let (doc, notes, forms, links) = kumihan::html::parse_full(&text, SIZE_PT);
         self.html_forms = forms;
+        self.html_links = links;
         self.fm_field = None;
         self.fm_open = !self.html_forms.is_empty();
+        self.lk_open = !self.html_links.is_empty() && self.html_base.is_some();
         self.target = Target::Body;
         self.hf_edit = None;
         self.track = false;
@@ -1768,22 +1838,12 @@ impl Writer {
             return;
         }
         self.url_open = false;
-        let task = cx.background_executor().spawn(async move {
-            http_fetch(&url, None).map(|b| (url, b))
-        });
+        let task = cx.background_executor().spawn(async move { http_fetch(&url, None) });
         cx.spawn(async move |this, cx| {
             let r = task.await;
             let _ = this.update(cx, |this, cx| {
                 match r {
-                    Ok((url, bytes)) => {
-                        // 起点(scheme://host:port)を控える — 送信と相対の解決に使う
-                        let origin = url.strip_prefix("http://").map(|rest| {
-                            let host = rest.split('/').next().unwrap_or(rest);
-                            format!("http://{host}")
-                        });
-                        this.html_origin = origin;
-                        this.open_html(std::path::Path::new(&url), &bytes);
-                    }
+                    Ok((bytes, final_url)) => this.adopt_fetched(&final_url, &bytes),
                     Err(e) => this.status = format!("開けません: {e}").into(),
                 }
                 cx.notify();
@@ -1791,6 +1851,34 @@ impl Writer {
         })
         .detach();
         self.status = format!("取りに行っています… {}", self.url_ed.text()).into();
+    }
+
+    /// 取ってきた HTML を開き、起点と土台を控える(リンクと送信の解決に使う)
+    fn adopt_fetched(&mut self, url: &str, bytes: &[u8]) {
+        let scheme_end = url.find("://").map(|i| i + 3).unwrap_or(0);
+        let host = url[scheme_end..].split('/').next().unwrap_or("");
+        self.html_origin = Some(format!("{}{host}", &url[..scheme_end]));
+        self.html_base = Some(url.to_string());
+        self.open_html(std::path::Path::new(url), bytes);
+    }
+
+    /// リンクを辿る(GET して同じ道で開く)
+    fn follow_link(&mut self, href: String, cx: &mut Context<Self>) {
+        let base = self.html_base.clone().unwrap_or_default();
+        let url = resolve_url(&base, &href);
+        self.status = format!("取りに行っています… {url}").into();
+        let task = cx.background_executor().spawn(async move { http_fetch(&url, None) });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok((bytes, final_url)) => this.adopt_fetched(&final_url, &bytes),
+                    Err(e) => this.status = format!("開けません: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 記入の欄の Enter。板の欄へ書き戻す
@@ -1844,10 +1932,7 @@ impl Writer {
             let r = task.await;
             let _ = this.update(cx, |this, cx| {
                 match r {
-                    Ok(bytes) => {
-                        // 返ってきた文書を読む(記入 → 送信 → 読む、の往復)
-                        this.open_html(std::path::Path::new("送信の答え"), &bytes);
-                    }
+                    Ok((bytes, final_url)) => this.adopt_fetched(&final_url, &bytes),
                     Err(e) => this.status = format!("送れません: {e}").into(),
                 }
                 cx.notify();
@@ -4192,10 +4277,11 @@ impl Writer {
             cx.notify();
             return;
         }
-        if self.url_open || self.fm_field.is_some() || self.fm_open {
+        if self.url_open || self.fm_field.is_some() || self.fm_open || self.lk_open {
             if self.fm_field.take().is_none() {
                 self.url_open = false;
                 self.fm_open = false;
+                self.lk_open = false;
             }
             self.status = "".into();
             cx.notify();
@@ -6262,6 +6348,45 @@ impl Render for Writer {
             Some(d)
         };
 
+        // リンクの板(押すと辿る。公開 Web も見える — JS は実行しない)
+        let lk_panel = if !self.lk_open || self.html_links.is_empty() {
+            None
+        } else {
+            let mut d = div().absolute().right(px(16.0)).bottom(px(8.0)).w(px(340.0))
+                .max_h(px(300.0)).overflow_hidden()
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_1()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child(SharedString::from(format!(
+                        "リンク({}件。押すと辿る。Esc で閉じる)",
+                        self.html_links.len()
+                    ))));
+            for (i, (href, text)) in self.html_links.iter().take(16).enumerate() {
+                let href2 = href.clone();
+                d = d.child(div()
+                    .id(SharedString::from(format!("lk-{i}")))
+                    .px_2().py_0p5().rounded_sm().cursor_pointer()
+                    .text_size(px(12.0)).text_color(rgb(0x165E83))
+                    .whitespace_nowrap().overflow_hidden()
+                    .hover(|st| st.bg(rgb(0xEAF2F7)))
+                    .child(SharedString::from(text.clone()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.follow_link(href2.clone(), cx);
+                        cx.notify()
+                    })));
+            }
+            if self.html_links.len() > 16 {
+                d = d.child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
+                    .child(SharedString::from(format!(
+                        "(あと {} 件は出していません)",
+                        self.html_links.len() - 16
+                    ))));
+            }
+            Some(d)
+        };
+
         // ルビの板(読みの入力)
         let rb_panel = if !self.rb_open {
             None
@@ -6704,6 +6829,7 @@ impl Render for Writer {
                     .children(rb_panel)
                     .children(url_panel)
                     .children(fm_panel)
+                    .children(lk_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)
@@ -7000,6 +7126,21 @@ mod find_tests {
     fn 無ければ無いと言える() {
         assert_eq!(next_hit("本文", "存在しない", 0), None);
         let _ = w("x");
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::resolve_url;
+
+    #[test]
+    fn 相対urlが今の場所から解ける() {
+        let b = "http://ex.jp/a/b.html";
+        assert_eq!(resolve_url(b, "c.html"), "http://ex.jp/a/c.html");
+        assert_eq!(resolve_url(b, "/x/y"), "http://ex.jp/x/y");
+        assert_eq!(resolve_url(b, "https://o.jp/z"), "https://o.jp/z");
+        assert_eq!(resolve_url(b, "//o.jp/z"), "http://o.jp/z");
+        assert_eq!(resolve_url("http://ex.jp", "p.html"), "http://ex.jp/p.html");
     }
 }
 

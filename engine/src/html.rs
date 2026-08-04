@@ -27,12 +27,15 @@ pub struct Field {
 
 /// HTML を文書モデルへ写す。返り値は (文書, 帳簿)。
 pub fn parse(src: &str, size_pt: f32) -> (Document, Vec<String>) {
-    let (d, n, _) = parse_full(src, size_pt);
+    let (d, n, _, _) = parse_full(src, size_pt);
     (d, n)
 }
 
-/// 記入欄(form)も返す版。
-pub fn parse_full(src: &str, size_pt: f32) -> (Document, Vec<String>, Vec<Form>) {
+/// 記入欄(form)とリンクも返す版。リンクは (href, 見えている字)。
+pub fn parse_full(
+    src: &str,
+    size_pt: f32,
+) -> (Document, Vec<String>, Vec<Form>, Vec<(String, String)>) {
     let mut b = Builder::new(size_pt);
     let bytes = src.as_bytes();
     let mut i = 0usize;
@@ -101,6 +104,8 @@ struct Builder {
     skip: Option<String>,
     notes: std::collections::BTreeMap<String, usize>,
     forms: Vec<Form>,
+    links: Vec<(String, String)>,
+    cur_link: Option<(String, String)>,
     cur_form: Option<Form>,
     /// select / textarea の中身を拾う先
     sel: Option<Field>,
@@ -129,6 +134,8 @@ impl Builder {
             skip: None,
             notes: Default::default(),
             forms: Vec::new(),
+            links: Vec::new(),
+            cur_link: None,
             cur_form: None,
             sel: None,
             in_option: false,
@@ -256,7 +263,11 @@ impl Builder {
                 self.flush_text();
                 self.under += 1;
                 if name == "a" {
-                    self.note("リンク(a。飛べない — 文字として読める)");
+                    if let Some(href) = attr_of(tag, "href") {
+                        if !href.starts_with('#') && !href.is_empty() {
+                            self.cur_link = Some((href, String::new()));
+                        }
+                    }
                 }
             }
             "ul" | "ol" => {
@@ -364,6 +375,16 @@ impl Builder {
             "u" | "a" => {
                 self.flush_text();
                 self.under = (self.under - 1).max(0);
+                if name == "a" {
+                    if let Some((href, text)) = self.cur_link.take() {
+                        let t = if text.trim().is_empty() {
+                            href.clone()
+                        } else {
+                            text.trim().chars().take(60).collect()
+                        };
+                        self.links.push((href, t));
+                    }
+                }
             }
             "ul" | "ol" => {
                 self.flush_para();
@@ -478,6 +499,9 @@ impl Builder {
                 return;
             }
         }
+        if let Some((_, t)) = &mut self.cur_link {
+            t.push_str(&decoded);
+        }
         if self.in_title {
             self.doc.props.title.push_str(decoded.trim());
             return;
@@ -499,7 +523,7 @@ impl Builder {
         }
     }
 
-    fn finish(mut self) -> (Document, Vec<String>, Vec<Form>) {
+    fn finish(mut self) -> (Document, Vec<String>, Vec<Form>, Vec<(String, String)>) {
         self.close("ruby");
         self.close("form");
         self.close("table");
@@ -517,7 +541,7 @@ impl Builder {
             .into_iter()
             .map(|(k, n)| if n > 1 { format!("{k} × {n}") } else { k })
             .collect();
-        (self.doc, notes, self.forms)
+        (self.doc, notes, self.forms, self.links)
     }
 }
 
@@ -583,7 +607,7 @@ mod tests {
 
     #[test]
     fn フォームの欄が集まる() {
-        let (_, _, forms) = parse_full(
+        let (_, _, forms, _) = parse_full(
             "<form action=\"/order\" method=\"post\">             <input type=\"text\" name=\"品名\" value=\"鉛筆\">             <select name=\"数\"><option>1</option><option>2</option></select>             <textarea name=\"備考\">急ぎ</textarea>             <input type=\"submit\" value=\"送る\"></form>",
             10.5,
         );
