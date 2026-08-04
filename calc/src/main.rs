@@ -477,6 +477,10 @@ struct Calc {
     pivot_pend: Option<PivotPend>,
     /// 小計の聞き取りの途中経過(同じ形の控えを使い回す)
     sub_pend: Option<PivotPend>,
+    /// コメントを見せるか(共同編集タブで切替。隠しても付いたまま)
+    show_comments: bool,
+    /// pick の一覧が指す実体(バージョン履歴・プラグインの表示名 → パス)
+    pick_paths: Vec<(String, PathBuf)>,
     /// PY のスピルの台帳(シート番号, 錨 → 行×列)。次の @計算 で前の面を消す
     py_spills: std::collections::HashMap<(usize, Pos), (u32, u32)>,
     /// トレースの光り(参照元=青緑 / 参照先=橙)。見え方だけ、保存されない
@@ -577,6 +581,8 @@ impl Calc {
             find_term: None,
             pivot_pend: None,
             sub_pend: None,
+            show_comments: true,
+            pick_paths: Vec::new(),
             goal: None,
             py_spills: Default::default(),
             trace: Vec::new(),
@@ -1265,7 +1271,7 @@ impl Calc {
     }
 
     /// 一覧から選んだものを適用する(pick_kind で意味が変わる)。
-    fn apply_pick(&mut self, v: &str) {
+    fn apply_pick(&mut self, v: &str, cx: &mut Context<Self>) {
         match self.pick_kind {
             "font" => {
                 let name = v.to_string();
@@ -1311,6 +1317,21 @@ impl Calc {
                     at.a1()
                 )
                 .into();
+            }
+            "history" | "plugin" => {
+                let plugin = self.pick_kind == "plugin";
+                let hit = self.pick_paths.iter().find(|(n, _)| n == v).cloned();
+                if let Some((_, path)) = hit {
+                    if plugin {
+                        match std::fs::read_to_string(&path) {
+                            Ok(code) => self.run_python(code, cx),
+                            Err(e) => self.status = format!("読めません: {e}").into(),
+                        }
+                    } else {
+                        self.open_version(&path);
+                    }
+                }
+                self.pick_paths.clear();
             }
             _ => self.pick_value(v),
         }
@@ -1805,6 +1826,34 @@ impl Calc {
                     return;
                 };
                 self.goal_seek(target, goal, var);
+            }
+            "chat" => {
+                if text.is_empty() {
+                    self.status = "何も書き残しませんでした".into();
+                } else if let Some(cp) = self.chat_path() {
+                    let stamp = std::process::Command::new("date")
+                        .arg("+%Y-%m-%d %H:%M")
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                        .unwrap_or_default();
+                    let line = format!("[{stamp}] {}: {text}\n", lock_identity());
+                    use std::io::Write as _;
+                    let r = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&cp)
+                        .and_then(|mut f| f.write_all(line.as_bytes()));
+                    self.status = match r {
+                        Ok(_) => format!(
+                            "書き残しました({})",
+                            cp.file_name().unwrap_or_default().to_string_lossy()
+                        )
+                        .into(),
+                        Err(e) => format!("書けません: {e}").into(),
+                    };
+                }
             }
             // 小計の聞き取り(区切りの見出し → 合計する見出し)
             "subtotal-by" => {
@@ -2363,6 +2412,116 @@ impl Calc {
             }
             Err(e) => self.status = format!("開けません: {e}").into(),
         }
+    }
+
+    /// 上書きの前に、直前の中身を控えとして残す(最大9世代)。writer と
+    /// 同じ作法: 同じフォルダの .jo-history/<ファイル名>/<日時>.xlsx。
+    /// 名前は**その中身を保存した日時**(mtime)— いつの姿かが分かる。
+    fn keep_version(&self, p: &std::path::Path) {
+        let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            return;
+        };
+        let dir = p
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(".jo-history")
+            .join(&name);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return; // 控えられなくても保存は止めない
+        }
+        let stamp = std::process::Command::new("date")
+            .arg("-r")
+            .arg(p)
+            .arg("+%Y%m%d-%H%M%S")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "0".into());
+        let _ = std::fs::copy(p, dir.join(format!("{stamp}.xlsx")));
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            let mut old: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+            old.sort();
+            while old.len() > 9 {
+                let _ = std::fs::remove_file(old.remove(0));
+            }
+        }
+    }
+
+    /// 控えの一覧(新しい順)。(表示名, パス)
+    fn versions(&self) -> Vec<(String, PathBuf)> {
+        let Some(p) = &self.path else { return Vec::new() };
+        let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            return Vec::new();
+        };
+        let dir = p
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(".jo-history")
+            .join(&name);
+        let Ok(rd) = std::fs::read_dir(&dir) else { return Vec::new() };
+        let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        v.sort();
+        v.reverse();
+        v.into_iter()
+            .map(|q| {
+                let stem = q
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                // 20260804-183012 → 2026-08-04 18:30
+                let disp = if stem.len() >= 13 && stem.is_ascii() {
+                    format!(
+                        "{}-{}-{} {}:{}",
+                        &stem[0..4], &stem[4..6], &stem[6..8], &stem[9..11], &stem[11..13]
+                    )
+                } else {
+                    stem
+                };
+                let kb = std::fs::metadata(&q).map(|m| m.len() / 1024).unwrap_or(0);
+                (format!("{disp}({kb} KB)"), q)
+            })
+            .collect()
+    }
+
+    /// 控えを開く。いまのファイルは動かさず、**名無しの複製**として読む
+    /// (保存すると名前を聞く。元へ戻したいなら同じ名前で保存する —
+    /// 黙って元のファイルを書き戻したりしない)。
+    fn open_version(&mut self, q: &std::path::Path) {
+        match std::fs::File::open(q).map_err(|e| e.to_string()).and_then(sheet::xlsx::read) {
+            Ok((mut book, _rep)) => {
+                for sh in &mut book.sheets {
+                    recalc(sh);
+                }
+                self.release_lock();
+                self.locked_by = None;
+                self.book = book;
+                self.active = 0;
+                self.cursor = Pos::new(0, 0);
+                self.view = Pos::new(0, 0);
+                self.anchor = None;
+                self.frozen = None;
+                self.filter = None;
+                self.sheet_ui.clear();
+                self.undo_stack.clear();
+                self.redo_stack.clear();
+                self.clip_range = None;
+                self.path = None;
+                self.dirty = true;
+                self.sync_input();
+                self.status = "控えを開きました(名無しの複製。保存で名前を聞きます。元へ戻すなら同じ名前で保存)".into();
+            }
+            Err(e) => self.status = format!("控えが読めません: {e}").into(),
+        }
+    }
+
+    /// チャット(申し送り帳)の置き場。ブックの隣の 名前.xlsx.chat.txt
+    fn chat_path(&self) -> Option<PathBuf> {
+        self.path.as_ref().map(|p| {
+            let mut os = p.as_os_str().to_owned();
+            os.push(".chat.txt");
+            PathBuf::from(os)
+        })
     }
 
     // ---- 割り当てられた操作 ----
@@ -3874,6 +4033,8 @@ calc の隣に置いてください)"
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal",
+        "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
+        "co-history", "plug-macros", "plug-manage",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -4248,6 +4409,153 @@ calc の隣に置いてください)"
                         });
                         self.prompt = Some(("pivot-rows", Editor::new("")));
                     }
+                }
+            }
+            // 共同編集モード。実体はファイルの錠(.~lock)による早い者勝ちの
+            // 編集権。押すと錠の今を確かめ、先客が去っていれば取り直す
+            "coauth-mode" => match self.path.clone() {
+                None => {
+                    self.status =
+                        "まだファイルになっていません(保存すると編集権=錠を取ります)"
+                            .into();
+                }
+                Some(p) => {
+                    if self.my_lock.is_some() {
+                        self.status = format!(
+                            "編集権はこちら({})にあります。同じブックは先に開いた人が書け、後の人は読むだけになります(錠は .~lock ファイル)",
+                            lock_identity()
+                        )
+                        .into();
+                    } else {
+                        self.acquire_lock(&p);
+                        self.status = match &self.locked_by {
+                            Some(who) => format!(
+                                "{who} が編集中です(読めますが上書き保存はできません。相手が閉じたら、またこの釦で確かめてください)"
+                            )
+                            .into(),
+                            None => "先客が居なくなっていたので、編集権を取り直しました"
+                                .into(),
+                        };
+                    }
+                }
+            },
+            "co-showcomment" => {
+                self.show_comments = !self.show_comments;
+                self.status = if self.show_comments {
+                    "コメントを表示します".into()
+                } else {
+                    "コメントを隠しました(付いてはいます)".into()
+                };
+            }
+            "co-delcomment" => {
+                let p = self.cursor;
+                if self.sheet().comments.contains_key(&p) {
+                    self.checkpoint();
+                    self.book.sheets[self.active].comments.remove(&p);
+                    self.dirty = true;
+                    self.status =
+                        format!("{} のコメントを外しました(Ctrl+Z で戻せます)", p.a1())
+                            .into();
+                } else {
+                    self.status = "このセルにコメントはありません".into();
+                }
+            }
+            // バージョン履歴。上書き保存のたびに .jo-history へ残る控えの一覧
+            "co-history" => {
+                if self.path.is_none() {
+                    self.status =
+                        "まだファイルになっていません(保存すると、上書きのたびに控えが残ります)"
+                            .into();
+                } else {
+                    let v = self.versions();
+                    if v.is_empty() {
+                        self.status =
+                            "控えはまだありません(上書き保存のたびに .jo-history へ残ります)"
+                                .into();
+                    } else {
+                        let names: Vec<String> = v.iter().map(|(n, _)| n.clone()).collect();
+                        self.pick_paths = v;
+                        self.pick_kind = "history";
+                        self.pick = Some((names, (HEAD_W + 60.0, ROW_H + 20.0)));
+                        self.status =
+                            "バージョン履歴: 選ぶと控えを名無しの複製で開きます(いまの書きかけは要るなら先に保存)"
+                                .into();
+                    }
+                }
+            }
+            // チャット。ブックの隣の申し送り帳(.chat.txt)へ名乗り付きで追記。
+            // サーバーは無いので生放送ではない — ファイル越しの言伝
+            "co-chat" => match self.chat_path() {
+                None => {
+                    self.status =
+                        "まだファイルになっていません(保存すると、隣に申し送り帳ができます)"
+                            .into();
+                }
+                Some(cp) => {
+                    let tail = std::fs::read_to_string(&cp)
+                        .map(|t| {
+                            t.lines()
+                                .rev()
+                                .take(3)
+                                .map(|l| l.to_string())
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect::<Vec<_>>()
+                                .join(" / ")
+                        })
+                        .unwrap_or_default();
+                    self.status = if tail.is_empty() {
+                        "まだ言伝はありません(打って Enter で書き残します)".into()
+                    } else {
+                        format!("言伝: {tail}").into()
+                    };
+                    self.prompt = Some(("chat", Editor::new("")));
+                }
+            },
+            // マクロ = Python in Calc と同じ実体(檻の中で .py を回す)
+            "plug-macros" => {
+                self.commit();
+                self.run_python_file_dialog(cx);
+                self.status =
+                    "マクロ: .py を選ぶと檻の中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)"
+                        .into();
+            }
+            // プラグインの管理。置き場の .py を一覧し、同じ檻で実行
+            "plug-manage" => {
+                let dir = plugins_dir();
+                let mut items: Vec<PathBuf> = std::fs::read_dir(&dir)
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "py"))
+                    .collect();
+                items.sort();
+                if items.is_empty() {
+                    self.status = format!(
+                        "プラグイン: {} に .py を置くと、ここに並びます",
+                        dir.display()
+                    )
+                    .into();
+                } else {
+                    let v: Vec<(String, PathBuf)> = items
+                        .into_iter()
+                        .map(|q| {
+                            (
+                                q.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                                q,
+                            )
+                        })
+                        .collect();
+                    let names: Vec<String> = v.iter().map(|(n, _)| n.clone()).collect();
+                    self.pick_paths = v;
+                    self.pick_kind = "plugin";
+                    self.pick = Some((names, (HEAD_W + 60.0, ROW_H + 20.0)));
+                    self.status =
+                        "プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)"
+                            .into();
                 }
             }
             // 小計(Excel の集計)。本家のデータタブに無い釦だが、グループ化を
@@ -5136,6 +5444,10 @@ calc の隣に置いてください)"
             .as_ref()
             .and_then(|old| std::fs::read(old).ok())
             .map(std::io::Cursor::new);
+        // 上書きの前に、直前の中身をバージョン履歴に控える
+        if p.exists() {
+            self.keep_version(&p);
+        }
         match kumihan::atomic::save(&p, |f| {
             sheet::xlsx::write_with(&self.book, original, std::io::BufWriter::new(f))
         }) {
@@ -5757,6 +6069,14 @@ for kind, cells in out:
 sys.stdout.buffer.write("\x1e".join(lines).encode("utf-8"))
 "#;
 
+/// プラグイン(.py)の置き場。writer と同じ ~/.config/office/plugins
+fn plugins_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config/office/plugins")
+}
+
 fn col_name(c: u32) -> String {
     Pos::new(0, c).a1().trim_end_matches('1').to_string()
 }
@@ -6072,8 +6392,8 @@ impl Render for Calc {
                 } else if f.color.is_none() {
                     d = d.text_color(rgb(0x1B1B1B));
                 }
-                // コメントのあるセルは右上に赤い角印
-                if self.sheet().comments.contains_key(&p) {
+                // コメントのあるセルは右上に赤い角印(表示を消していれば出さない)
+                if self.show_comments && self.sheet().comments.contains_key(&p) {
                     d = d.relative().child(div().absolute()
                         .top(px(1.0)).right(px(1.0))
                         .w(px(6.0)).h(px(6.0)).rounded_sm().bg(rgb(0xC00000)));
@@ -6332,8 +6652,10 @@ impl Render for Calc {
 
         // ---- カーソルのセルの付記(コメント・リンク) ----
         let mut tip_lines: Vec<String> = Vec::new();
-        if let Some(t) = self.sheet().comments.get(&self.cursor) {
-            tip_lines.push(t.clone());
+        if self.show_comments {
+            if let Some(t) = self.sheet().comments.get(&self.cursor) {
+                tip_lines.push(t.clone());
+            }
         }
         if let Some(u) = self.sheet().links.get(&self.cursor) {
             tip_lines.push(format!("リンク: {u}(Ctrl+クリックで開く)"));
@@ -6383,6 +6705,7 @@ impl Render for Calc {
                     "「{}」を何に置き換える?",
                     self.find_term.as_deref().unwrap_or("")
                 ),
+                "chat" => "チャット — 言伝を書き残す(ブックの隣の .chat.txt)".to_string(),
                 "subtotal-by" => "小計 1/2 — 何の区切りで集めるか(見出しを1つ)".to_string(),
                 "subtotal-vals" => "小計 2/2 — 合計する見出し".to_string(),
                 "pivot-rows" => "ピボット 1/3 — 行に並べる見出し(カンマ区切り可)".to_string(),
@@ -6414,6 +6737,7 @@ impl Render for Calc {
                         "py" => "b=ブック s=シート / @計算 =PY(…)セルを評価 / @名前 実行 @名前 net @save @list @del",
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
+                        "chat" => "生放送ではありません — ファイル越しの言伝。最近の言伝は下の状態行に",
                         "subtotal-by" => "使える見出しは下の状態行に出ています。並べ替えてから使うと区切りがまとまります",
                         "subtotal-vals" => "空のまま Enter = 数の列全部に入れます。畳んでも小計と総計は残ります",
                         "pivot-rows" | "pivot-cols" => "使える見出しは下の状態行に出ています。Enter で次へ / Esc で取消",
@@ -6546,7 +6870,7 @@ impl Render for Calc {
                         move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.pick = None;
-                            this.apply_pick(&v);
+                            this.apply_pick(&v, cx);
                             cx.notify();
                         })));
             }

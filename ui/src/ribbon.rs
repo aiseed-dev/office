@@ -306,12 +306,12 @@ pub const CALC: &[Tab] = &[
         x("テーブルのサイズ変更", "td-resize"),
     ]},
     Tab { name: "共同編集", cmds: &[
-        x("共同編集モード", "coauth-mode"),
+        c("coauth-mode", "共同編集モード", "coauth-mode"),
         c("addcomment", "コメントを追加", "co-addcomment"),
-        x("コメントを削除", "co-delcomment"),
-        x("コメントの表示", "co-showcomment"),
-        x("チャット", "co-chat"),
-        x("バージョン履歴", "co-history"),
+        c("co-delcomment", "コメントを削除", "co-delcomment"),
+        c("co-showcomment", "コメントの表示", "co-showcomment"),
+        c("co-chat", "チャット", "co-chat"),
+        c("co-history", "バージョン履歴", "co-history"),
     ]},
     Tab { name: "保護", cmds: &[
         x("暗号化する", "prot-encrypt"),
@@ -325,8 +325,8 @@ pub const CALC: &[Tab] = &[
         x("見出し", "show-headings"),
     ]},
     Tab { name: "プラグイン", cmds: &[
-        x("マクロ", "plug-macros"),
-        x("プラグインの管理", "plug-manage"),
+        c("plug-macros", "マクロ", "plug-macros"),
+        c("plug-manage", "プラグインの管理", "plug-manage"),
     ]},
 ];
 
