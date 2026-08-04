@@ -679,6 +679,14 @@ struct Calc {
     hover_hint: Option<&'static str>,
     /// ファイルのページの右側(0=詳細情報 1=最近開いた)
     file_view: u8,
+    /// 表示の倍率(表示タブのズーム。0.5〜2.0)
+    zoom: f32,
+    /// 数式バーを見せるか(表示タブ)
+    show_formula_bar: bool,
+    /// 行番号・列名の見出しを見せるか(表示タブ)
+    show_headers: bool,
+    /// 0 の値を見せるか(表示タブ。消しても値は 0 のまま)
+    show_zeros: bool,
 }
 
 impl HasEditor for Calc {
@@ -766,6 +774,10 @@ impl Calc {
             prev_tab: 1,
             hover_hint: None,
             file_view: 0,
+            zoom: 1.0,
+            show_formula_bar: true,
+            show_headers: true,
+            show_zeros: true,
         };
         if let Some(p) = path {
             c.open(p);
@@ -974,7 +986,7 @@ impl Calc {
     /// 格子の中の位置(px、格子領域の左上原点)からセルを逆算する。
     /// 見出しの帯の上なら None。
     fn cell_at(&self, x: f32, y: f32) -> Option<Pos> {
-        if x < HEAD_W || y < ROW_H {
+        if x < self.head_w() || y < self.head_h() {
             return None;
         }
         Some(Pos { row: self.row_at(y)?, col: self.col_at(x)? })
@@ -986,7 +998,7 @@ impl Calc {
             .into_iter()
             .map(|c| (c, self.col_px(c)))
             .collect();
-        index_at(&cols, HEAD_W, x)
+        index_at(&cols, self.head_w(), x)
     }
 
     fn row_at(&self, y: f32) -> Option<u32> {
@@ -995,7 +1007,7 @@ impl Calc {
             .into_iter()
             .map(|r| (r, self.row_px(r)))
             .collect();
-        index_at(&rows, ROW_H, y)
+        index_at(&rows, self.head_h(), y)
     }
 
     /// 列をまるごと選ぶ(使われている高さまで)。`a` が起点、`b` が動く側。
@@ -1030,6 +1042,9 @@ impl Calc {
     /// 描画・cell_at と同じ並び(固定・窓・絞り込み)を使う —
     /// ずれると別の境界を掴んでしまう。
     fn size_grip_at(&self, x: f32, y: f32) -> Option<(bool, u32)> {
+        if !self.show_headers {
+            return None; // 見出しが無ければ掴む縁も無い
+        }
         if y < ROW_H && x >= HEAD_W {
             let cols: Vec<(u32, f32)> = self.visible_cols()
                 .into_iter()
@@ -1073,7 +1088,7 @@ impl Calc {
             )
             .into();
         } else {
-            let pt = (base + y - grab).max(6.0) * 15.0 / 24.0;
+            let pt = ((base + y - grab) / self.zoom).max(6.0) * 15.0 / 24.0;
             let pt = (pt * 100.0).round() / 100.0;
             self.sheet_mut().row_height.insert(idx, pt);
             self.status = format!(
@@ -1349,7 +1364,7 @@ impl Calc {
 
     /// いま表示されているセルの左上(格子領域の px)。画面の外なら None。
     fn cell_origin_px(&self, p: Pos) -> Option<(f32, f32)> {
-        let mut x = HEAD_W;
+        let mut x = self.head_w();
         let mut cfound = false;
         for c in self.visible_cols() {
             if c == p.col {
@@ -1358,7 +1373,7 @@ impl Calc {
             }
             x += self.col_px(c);
         }
-        let mut y = ROW_H;
+        let mut y = self.head_h();
         let mut rfound = false;
         for r in self.visible_rows() {
             if r == p.row {
@@ -2550,6 +2565,15 @@ impl Calc {
     /// 行の画面高。文書の指定(xlsx の ht、pt)に従う。既定 15pt = 24px
     fn row_px(&self, r: u32) -> f32 {
         self.sheet().row_height.get(&r).map(|pt| pt * 24.0 / 15.0).unwrap_or(ROW_H)
+            * self.zoom
+    }
+
+    /// 見出しの幅・高さ(表示タブで消せる。当たり判定も同じ値を使う)
+    fn head_w(&self) -> f32 {
+        if self.show_headers { HEAD_W } else { 0.0 }
+    }
+    fn head_h(&self) -> f32 {
+        if self.show_headers { ROW_H } else { 0.0 }
     }
 
     /// 列の画面幅。文書の指定(xlsx の width)に従う
@@ -2561,6 +2585,7 @@ impl Calc {
             .or(self.sheet().default_col_width)
             .map(|w| w * PX_PER_CHW)
             .unwrap_or(COL_W)
+            * self.zoom
     }
 
     /// 列の左端(見出しの右から)
@@ -4924,6 +4949,7 @@ calc の隣に置いてください)"
         "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
         "co-history", "plug-macros", "plug-manage",
         "prot-doc", "prot-encrypt", "prot-sign",
+        "zoom-in", "zoom-out", "formula-bar", "show-headings", "show-zeros",
     ];
 
     /// シートの保護中でも通す操作(見るだけ・保存・保護の操作そのもの)
@@ -5674,6 +5700,39 @@ calc の隣に置いてください)"
                     self.status =
                         "ソルバー: 欄を押して打つ。目的・変数セル・制約を決めて「解を求める」".into();
                 }
+            }
+            // 表示タブ(本家のデスクトップ版に合わせる)。どれも見え方だけ
+            "zoom-in" => {
+                self.zoom = (self.zoom + 0.1).min(2.0);
+                self.status = format!("ズーム {}%", (self.zoom * 100.0).round() as i32).into();
+            }
+            "zoom-out" => {
+                self.zoom = (self.zoom - 0.1).max(0.5);
+                self.status = format!("ズーム {}%", (self.zoom * 100.0).round() as i32).into();
+            }
+            "formula-bar" => {
+                self.show_formula_bar = !self.show_formula_bar;
+                self.status = if self.show_formula_bar {
+                    "数式バーを表示します".into()
+                } else {
+                    "数式バーを隠しました(表示タブで戻せます)".into()
+                };
+            }
+            "show-headings" => {
+                self.show_headers = !self.show_headers;
+                self.status = if self.show_headers {
+                    "見出しを表示します".into()
+                } else {
+                    "見出しを隠しました(列幅のドラッグ等は見出しと一緒に戻ります)".into()
+                };
+            }
+            "show-zeros" => {
+                self.show_zeros = !self.show_zeros;
+                self.status = if self.show_zeros {
+                    "0 を表示します".into()
+                } else {
+                    "0 を隠しました(見え方だけ — 値は 0 のまま)".into()
+                };
             }
             // 小計(Excel の集計)。本家のデータタブに無い釦だが、グループ化を
             // 「畳むと合計が残る」形で使うために要る(発注者指摘 2026-08-04)
@@ -7750,6 +7809,11 @@ impl Render for Calc {
                     }
                     _ => shown,
                 };
+                let shown = if !self.show_zeros && matches!(v, Value::Number(n) if n == 0.0) {
+                    String::new()
+                } else {
+                    shown
+                };
                 let is_num = matches!(v, Value::Number(_));
                 let is_err = matches!(v, Value::Error(_));
                 let sel = p == self.cursor;
@@ -7764,7 +7828,7 @@ impl Render for Calc {
                     .bg(rgb(0xFFFFFF))
                     .flex().items_center()
                     .px_1p5()
-                    .text_size(px(cell.and_then(|x| x.fmt.size_c)
+                    .text_size(px(self.zoom * cell.and_then(|x| x.fmt.size_c)
                         .map(|c| c as f32 / 100.0 * 24.0 / 15.0 * 0.8)
                         .unwrap_or(12.5)))
                     .font_family("Noto Sans JP")
@@ -9007,7 +9071,7 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_context_menu))
             .on_action(cx.listener(Calc::a_cancel))
             .child(bar)
-            .children((self.tab != 0).then(|| formula_bar))
+            .children((self.tab != 0 && self.show_formula_bar).then(|| formula_bar))
             .child(div().flex_1().overflow_hidden().relative()
                    // ホイールで窓を動かす(下に回すと先の行が見える)
                    .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, _, cx| {

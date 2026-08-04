@@ -335,10 +335,15 @@ pub const CALC: &[Tab] = &[
         c("prot-doc", "保護", "prot-doc"),
     ]},
     Tab { name: "表示", cmds: &[
-        c("freeze", "ウィンドウ枠の固定", "freeze"),
         x("シートの表示", "sheet-view"),
-        c("show-gridlines", "グリッド線", "show-gridlines"),
-        x("見出し", "show-headings"),
+        c("zoom-in", "拡大", "zoom-in"),
+        c("zoom-out", "縮小", "zoom-out"),
+        x("インターフェイステーマ", "theme"),
+        c("freeze", "ウィンドウ枠の固定", "freeze"),
+        c("formula-bar", "数式バー", "formula-bar"),
+        c("show-gridlines", "枠線表示", "show-gridlines"),
+        c("show-headings", "見出し", "show-headings"),
+        c("show-zeros", "0を表示する", "show-zeros"),
     ]},
     Tab { name: "プラグイン", cmds: &[
         c("plug-macros", "マクロ", "plug-macros"),
