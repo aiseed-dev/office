@@ -220,7 +220,7 @@ pub const CALC: &[Tab] = &[
         c("instable", "表の挿入", "instable"),
         c("insimage", "画像を挿入", "insimage"),
         c("insshape", "図形を挿入", "insshape"),
-        x("SmartArtの挿入", "inssmartart"),
+        c("inssmartart", "SmartArtの挿入", "inssmartart"),
         x("inscheckbox", "inscheckbox"),
         c("insrecommend", "推奨チャートを挿入", "insrecommend"),
         c("inschart", "グラフを挿入", "inschart"),

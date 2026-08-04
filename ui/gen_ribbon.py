@@ -121,6 +121,7 @@ READY = {
         "goal-seek": "goal-seek", "data-external-links": "data-external-links",
         "solver": "solver",
         "insshape": "insshape", "instext": "instext",
+        "inssmartart": "inssmartart",
         "inssparkline": "inssparkline", "co-addcomment": "addcomment",
         "coauth-mode": "coauth-mode", "co-delcomment": "co-delcomment",
         "co-showcomment": "co-showcomment", "co-chat": "co-chat",

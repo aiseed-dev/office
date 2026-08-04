@@ -425,8 +425,8 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
     format!(
         concat!(
             "<xdr:oneCellAnchor>",
-            "<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>0</xdr:colOff>",
-            "<xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>",
+            "<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>{dx}</xdr:colOff>",
+            "<xdr:row>{row}</xdr:row><xdr:rowOff>{dy}</xdr:rowOff></xdr:from>",
             "<xdr:ext cx=\"{cx}\" cy=\"{cy}\"/>",
             "<xdr:sp macro=\"\" textlink=\"\">",
             "<xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"図形 {id}\"/><xdr:cNvSpPr/></xdr:nvSpPr>",
@@ -436,6 +436,8 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
         ),
         col = sp.at.col,
         row = sp.at.row,
+        dx = (sp.dx_px * 9525.0) as i64,
+        dy = (sp.dy_px * 9525.0) as i64,
         cx = cx,
         cy = cy,
         id = id,
@@ -986,6 +988,10 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             line,
                             text,
                             points,
+                            // 読みは錨のセルまで(ずらしはまだ読まない —
+                            // 表示専用なので大勢に影響しない)
+                            dx_px: 0.0,
+                            dy_px: 0.0,
                         });
                     }
                 }

@@ -296,6 +296,34 @@ impl Solver {
 
 const SOLVER_OPS: [&str; 3] = ["<=", "=", ">="];
 
+/// SmartArt の一覧。**分類・並び・名前は Euro-Office の現物**
+/// (web-apps の define.js の並びと ja.json の訳)から取った。
+/// 載せるのは**うちの図形(SVG 方式)で組めるものだけ** —
+/// できないものを、できるように見せない。
+const SMARTART: &[(&str, &[(&str, &str)])] = &[
+    ("リスト", &[
+        ("カード型リスト", "block-list"),
+        ("縦方向リスト", "vbox-list"),
+        ("ピラミッドのリスト", "pyramid-list"),
+    ]),
+    ("プロセス", &[
+        ("基本ステップ", "basic-process"),
+        ("プロセス", "chevron-process"),
+        ("タイムライン", "timeline"),
+    ]),
+    ("循環", &[
+        ("基本の循環", "basic-cycle"),
+        ("ボックス循環", "block-cycle"),
+    ]),
+    ("階層", &[
+        ("組織図", "org-chart"),
+        ("階層", "hierarchy"),
+    ]),
+    ("関係", &[("基本ベン図", "venn")]),
+    ("マトリックス", &[("基本マトリックス", "matrix")]),
+    ("ピラミッド", &[("基本ピラミッド", "pyramid")]),
+];
+
 /// セル・範囲の列挙を読む(A1 / B2:B5 / $A$1。カンマ・読点・空白区切り)。
 /// 範囲は左上→右下に展開する。読めない・大きすぎるときは None。
 fn parse_cell_list(text: &str, cap: usize) -> Option<Vec<Pos>> {
@@ -571,6 +599,8 @@ struct Calc {
     sub_pend: Option<PivotPend>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
+    /// SmartArt の選択中の分類(2段の pick の1段目の答え)
+    sa_cat: usize,
     /// コメントを見せるか(共同編集タブで切替。隠しても付いたまま)
     show_comments: bool,
     /// 暗号化のパスワード(次の保存から効く。開いた暗号化ブックからも入る)
@@ -687,6 +717,7 @@ impl Calc {
             pivot_pend: None,
             sub_pend: None,
             solver: None,
+            sa_cat: 0,
             show_comments: true,
             pick_paths: Vec::new(),
             encrypt_pw: None,
@@ -1425,6 +1456,29 @@ impl Calc {
                     at.a1()
                 )
                 .into();
+            }
+            "sa-cat" => {
+                if let Some(ci) = SMARTART.iter().position(|(n, _)| *n == v) {
+                    self.sa_cat = ci;
+                    let names: Vec<String> =
+                        SMARTART[ci].1.iter().map(|(n, _)| n.to_string()).collect();
+                    self.pick_kind = "sa-item";
+                    self.pick = Some((names, (HEAD_W + 120.0, ROW_H + 20.0)));
+                    self.status = format!(
+                        "SmartArt > {v}: 形を選ぶと図形の集まりとして入ります"
+                    )
+                    .into();
+                    return; // pick_kind を "value" に戻さない(2段目へ)
+                }
+            }
+            "sa-item" => {
+                let hit = SMARTART
+                    .get(self.sa_cat)
+                    .and_then(|(_, items)| items.iter().find(|(n, _)| *n == v));
+                if let Some((name, key)) = hit {
+                    let (name, key) = (name.to_string(), key.to_string());
+                    self.insert_smartart(&name, &key);
+                }
             }
             "history" | "plugin" => {
                 let plugin = self.pick_kind == "plugin";
@@ -3248,6 +3302,7 @@ impl Calc {
     fn shape_at(&self, x: f32, y: f32) -> Option<(usize, (f32, f32), bool)> {
         for (i, sp) in self.sheet().shapes_new.iter().enumerate().rev() {
             let Some((sx, sy)) = self.cell_origin_px(sp.at) else { continue };
+            let (sx, sy) = (sx + sp.dx_px, sy + sp.dy_px);
             let (w, h) = (sp.width_px, sp.height_px);
             if x >= sx && x <= sx + w && y >= sy && y <= sy + h {
                 let corner = x >= sx + w - 12.0 && y >= sy + h - 12.0;
@@ -3271,14 +3326,21 @@ impl Calc {
             self.dirty = true;
             self.status = format!("大きさ: {w:.0}×{h:.0}px").into();
         } else {
-            // 移動: 掴んだときのずれを保って、左上の来るセルに留め直す
+            // 移動: 掴んだときのずれを保って、左上の来るセルに留め直す。
+            // セルからのはみ出しは px のずらしとして持つ(位置が飛ばない)
             let (nx, ny) = (ox + x - gx, oy + y - gy);
             if let (Some(c), Some(r)) = (self.col_at(nx.max(HEAD_W)), self.row_at(ny.max(ROW_H))) {
                 let at = Pos::new(r, c);
-                if self.sheet().shapes_new[i].at != at {
-                    self.sheet_mut().shapes_new[i].at = at;
-                    self.dirty = true;
-                    self.status = format!("図形を {} に留めました", at.a1()).into();
+                if let Some((cx0, cy0)) = self.cell_origin_px(at) {
+                    let (dx, dy) = ((nx - cx0).max(0.0), (ny - cy0).max(0.0));
+                    let sp = &mut self.sheet_mut().shapes_new[i];
+                    if sp.at != at || (sp.dx_px - dx).abs() > 0.5 || (sp.dy_px - dy).abs() > 0.5 {
+                        sp.at = at;
+                        sp.dx_px = dx;
+                        sp.dy_px = dy;
+                        self.dirty = true;
+                        self.status = format!("図形を {} に留めました", at.a1()).into();
+                    }
                 }
             }
         }
@@ -4100,6 +4162,121 @@ calc の隣に置いてください)"
         .detach();
     }
 
+    /// SmartArt を図形の集まりとして組む。1手 = checkpoint 一回(全部まとめて
+    /// Ctrl+Z で戻る)。各図形は普通の図形なので、選んで動かす・Enter で
+    /// 文字を書く・Del で消す、が全部効く。xlsx へは prstGeom の図形として
+    /// 入る(Excel でも図形として見える。本物の SmartArt 部品ではない)。
+    fn insert_smartart(&mut self, name: &str, key: &str) {
+        self.checkpoint();
+        let at = self.cursor;
+        let (g, l) = (Some("D5E8DC".to_string()), Some("1B6E3C".to_string()));
+        // (dx, dy, w, h, kind, 塗り?, 文字?)
+        let mut parts: Vec<(f32, f32, f32, f32, &str, bool, bool)> = Vec::new();
+        match key {
+            "block-list" => {
+                for i in 0..3 {
+                    parts.push((i as f32 * 140.0, 0.0, 128.0, 72.0, "roundRect", true, true));
+                }
+            }
+            "vbox-list" => {
+                for i in 0..3 {
+                    parts.push((0.0, i as f32 * 60.0, 240.0, 48.0, "rect", true, true));
+                }
+            }
+            "pyramid-list" => {
+                for i in 0..3 {
+                    let w = 160.0 + i as f32 * 60.0;
+                    parts.push(((280.0 - w) / 2.0, i as f32 * 58.0, w, 48.0, "roundRect", true, true));
+                }
+            }
+            "basic-process" => {
+                for i in 0..3 {
+                    parts.push((i as f32 * 164.0, 0.0, 120.0, 56.0, "rect", true, true));
+                    if i < 2 {
+                        parts.push((i as f32 * 164.0 + 124.0, 16.0, 36.0, 24.0, "rightArrow", true, false));
+                    }
+                }
+            }
+            "chevron-process" => {
+                for i in 0..3 {
+                    parts.push((i as f32 * 140.0, 0.0, 150.0, 56.0, "rightArrow", true, true));
+                }
+            }
+            "timeline" => {
+                parts.push((0.0, 46.0, 420.0, 3.0, "rect", true, false)); // 軸
+                for i in 0..3 {
+                    parts.push((30.0 + i as f32 * 150.0, 38.0, 18.0, 18.0, "ellipse", true, false));
+                    parts.push((6.0 + i as f32 * 150.0, 0.0, 100.0, 32.0, "rect", false, true));
+                }
+            }
+            "basic-cycle" => {
+                parts.push((110.0, 0.0, 110.0, 64.0, "ellipse", true, true));
+                parts.push((0.0, 110.0, 110.0, 64.0, "ellipse", true, true));
+                parts.push((220.0, 110.0, 110.0, 64.0, "ellipse", true, true));
+            }
+            "block-cycle" => {
+                parts.push((105.0, 0.0, 120.0, 48.0, "rect", true, true));
+                parts.push((220.0, 78.0, 120.0, 48.0, "rect", true, true));
+                parts.push((105.0, 156.0, 120.0, 48.0, "rect", true, true));
+                parts.push((0.0, 78.0, 120.0, 48.0, "rect", true, true));
+            }
+            "org-chart" | "hierarchy" => {
+                let kids = if key == "org-chart" { 3 } else { 2 };
+                let (w, gap) = (120.0, 40.0);
+                let total = kids as f32 * w + (kids - 1) as f32 * gap;
+                parts.push(((total - w) / 2.0, 0.0, w, 48.0, "rect", true, true));
+                // 継ぎの線(細い棒): 親の下 → 横橋 → 子の上
+                parts.push((total / 2.0 - 1.0, 48.0, 2.0, 22.0, "rect", true, false));
+                parts.push((w / 2.0, 70.0, total - w, 2.0, "rect", true, false));
+                for i in 0..kids {
+                    let x = i as f32 * (w + gap);
+                    parts.push((x + w / 2.0 - 1.0, 72.0, 2.0, 22.0, "rect", true, false));
+                    parts.push((x, 94.0, w, 48.0, "rect", true, true));
+                }
+            }
+            "venn" => {
+                parts.push((0.0, 0.0, 150.0, 150.0, "ellipse", false, true));
+                parts.push((90.0, 0.0, 150.0, 150.0, "ellipse", false, true));
+                parts.push((45.0, 78.0, 150.0, 150.0, "ellipse", false, true));
+            }
+            "matrix" => {
+                for r in 0..2 {
+                    for c in 0..2 {
+                        parts.push((c as f32 * 132.0, r as f32 * 62.0, 124.0, 54.0, "rect", true, true));
+                    }
+                }
+            }
+            "pyramid" => {
+                for i in 0..3 {
+                    let w = 120.0 + i as f32 * 90.0;
+                    parts.push(((300.0 - w) / 2.0, i as f32 * 54.0, w, 48.0, "rect", true, true));
+                }
+            }
+            _ => {}
+        }
+        let n = parts.len();
+        for (dx, dy, w, h, kind, filled, texted) in parts {
+            self.sheet_mut().shapes_new.push(sheet::model::SheetShape {
+                at,
+                dx_px: dx,
+                dy_px: dy,
+                width_px: w,
+                height_px: h,
+                kind: kind.into(),
+                fill: if filled { g.clone() } else { None },
+                line: l.clone(),
+                text: if texted { Some("テキスト".into()) } else { None },
+                ..Default::default()
+            });
+        }
+        self.dirty = true;
+        self.status = format!(
+            "{name} を {} に置きました({n} 個の図形。図形を選んで Enter で文字、ドラッグで移動。全部まとめて Ctrl+Z で1手)",
+            at.a1()
+        )
+        .into();
+    }
+
     /// ソルバーを解く。係数は**表の複製の上で測る**(ゴールシークと同じ流儀):
     /// 変数を全部 0 → 単位ベクトル、で目的と制約左辺の一次係数を取り、
     /// 全部 1 の点で検算して**線形でなければ正直に断る**(単体法 LP は
@@ -4520,6 +4697,7 @@ calc の隣に置いてください)"
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
+        "inssmartart",
         "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
         "co-history", "plug-macros", "plug-manage",
         "prot-doc", "prot-encrypt", "prot-sign",
@@ -5166,6 +5344,16 @@ calc の隣に置いてください)"
                         "プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)"
                             .into();
                 }
+            }
+            // SmartArt。分類 → 形の2段の一覧(分類・並び・名前は本家)
+            "inssmartart" => {
+                self.commit();
+                let names: Vec<String> =
+                    SMARTART.iter().map(|(n, _)| n.to_string()).collect();
+                self.pick_kind = "sa-cat";
+                self.pick = Some((names, (HEAD_W + 60.0, ROW_H + 20.0)));
+                self.status =
+                    "SmartArt: 分類 → 形の順に選ぶ(図形の集まりとして入ります)".into();
             }
             // ソルバー。ONLYOFFICE と同じ小窓を開く(解法も同じ単体法 LP)
             "solver" => {
@@ -7395,6 +7583,7 @@ impl Render for Calc {
         let shape_frame = self.shape_sel.and_then(|i| {
             let sp = self.sheet().shapes_new.get(i)?;
             let (x, y) = self.cell_origin_px(sp.at)?;
+            let (x, y) = (x + sp.dx_px, y + sp.dy_px);
             Some(
                 div()
                     .absolute()
@@ -7999,6 +8188,7 @@ impl Render for Calc {
                            .enumerate()
                        {
                            let Some((x, y)) = self.cell_origin_px(sp.at) else { continue };
+                           let (x, y) = (x + sp.dx_px, y + sp.dy_px);
                            let svg = sp.to_svg();
                            let key = {
                                use std::hash::{Hash, Hasher};

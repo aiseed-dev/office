@@ -314,6 +314,9 @@ pub fn sheet_to_pdf<W: Write>(
         for sp in grid.shapes.iter().chain(grid.shapes_new.iter()) {
             let (x, y_top) = cell_mm(sp.at);
             let mm = 25.4 / 96.0; // px → mm
+            // 錨のセルからの px のずらしも紙に写す
+            let (x, y_top) =
+                (x + sp.dx_px * mm * scale, y_top - sp.dy_px * mm * scale);
             let (w, h) = (sp.width_px * mm * scale, sp.height_px * mm * scale);
             if let Some((cr, cg, cb)) = sp.line.as_deref().and_then(hex_rgb) {
                 l1.set_outline_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));

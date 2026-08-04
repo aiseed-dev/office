@@ -336,6 +336,10 @@ pub struct SheetShape {
     pub text: Option<String>,
     /// 折れ線の点(0..1 に正規化した x, y)。kind="spark" が使う
     pub points: Vec<(f32, f32)>,
+    /// 錨のセルからの右・下へのずらし(px)。SmartArt のような
+    /// 図形の集まりを、セルの粗さに縛られずに組むための細かい座標
+    pub dx_px: f32,
+    pub dy_px: f32,
 }
 
 impl Default for Pos {
