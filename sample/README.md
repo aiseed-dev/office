@@ -27,6 +27,22 @@
 - **送付状.docx** — 右揃え(日付・差出・敬具)と中央揃え(表題・記)の定型
 - **議事録.docx** — 見出し+表(開催情報)+決定事項
 
+## 注文書付きカタログ(writer 用・サーバー連携の見本)
+
+- **カタログ.docx** — 分類ごとの見出し+商品表(36品目)、巻末に注文書の
+  ページ。writer で開いて 参考資料 > 目次 を押せば、ページ番号つきの
+  目次ができる
+- **商品マスタの正本はサーバー、docx は生成物**という分業の見本:
+
+```bash
+python3 sample/catalog_server.py           # マスタを配る(127.0.0.1:8765)
+.venv/bin/python sample/gen_catalog.py     # サーバーから取って作り直す
+```
+
+サーバー側は価格改定と新商品(37品目)を持っているので、作り直すと
+カタログが追従する。**繋がらなければ、そう言ってから**同梱の見本データで
+作る(黙って古いままにしない)。追跡に入っているのは同梱データ版。
+
 ## 作り直し
 
 サンプルは生成物。直すのは生成側で、ファイルを直接直さない。
@@ -34,6 +50,7 @@
 ```bash
 cargo run -p sheet --example gen_samples   # xlsx 3件
 .venv/bin/python sample/gen_docs.py        # docx 3件(要 python-docx)
+.venv/bin/python sample/gen_catalog.py     # カタログ.docx
 ```
 
 どれも検査つき: xlsx は pysheet で開いて式の値を、docx は

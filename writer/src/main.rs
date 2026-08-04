@@ -342,6 +342,8 @@ struct Writer {
     ruler: bool,
     /// 行番号を見せるか(見え方だけ。文書は変わらない)
     line_numbers: bool,
+    /// コメントの印と一覧を見せるか(見え方だけ)
+    show_comments: bool,
     /// フォントの一覧を出しているか
     font_list: bool,
     /// 大きさの一覧を出しているか
@@ -515,6 +517,7 @@ impl Writer {
             show_marks: false,
             ruler: false,
             line_numbers: false,
+            show_comments: true,
             font_list: false,
             size_list: false,
             style_list: false,
@@ -1959,6 +1962,10 @@ impl Writer {
             self.ed.move_to(i, false);
             self.ed.move_to(i + term.len(), true);
             self.ed.insert(&repl);
+            // **1置換ごとに本文へ写す。** まとめて写すと「1回の編集 = 1箇所」の
+            // 前提から外れ、最初と最後の一致の間の書式が均されてしまう
+            // (SEKKEI「writer の編集モデル」の注意をここで解いた)
+            self.doc.set_body_text(self.ed.text(), SIZE_PT);
             n += 1;
             if n > 100_000 {
                 break; // 置換後が検索語を含むと止まらなくなるのを防ぐ
@@ -1991,7 +1998,7 @@ impl Writer {
         "insequation", "instext", "pagecolor", "comment", "watermark", "bookmarks",
         "caption", "tof", "tof-update", "columns",
         "pen", "highlighter", "eraser", "track-changes", "dropcap", "hyphenation",
-        "crossref",
+        "crossref", "co-addcomment", "co-delcomment", "co-showcomment",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2622,8 +2629,41 @@ impl Writer {
                     "ハイフネーション: 切".into()
                 };
             }
+            // コメントの印と一覧の表示(見え方だけ)
+            "co-showcomment" => {
+                self.show_comments = !self.show_comments;
+                self.status = if self.show_comments {
+                    "コメントを表示します".into()
+                } else {
+                    "コメントを隠しました(付いてはいます)".into()
+                };
+            }
+            // カーソルの段落のコメントを外す
+            "co-delcomment" => {
+                self.switch_target(Target::Body);
+                let (pi, _) = self.cursor_para();
+                let mut removed = 0usize;
+                let mut i = 0usize;
+                for b in &mut self.doc.blocks {
+                    if let kumihan::Block::Para(p) = b {
+                        if i == pi {
+                            removed = p.comments.len();
+                            p.comments.clear();
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                if removed > 0 {
+                    self.dirty = true;
+                    self.status =
+                        format!("この段落のコメントを外しました({removed} 件)").into();
+                } else {
+                    self.status = "この段落にコメントはありません".into();
+                }
+            }
             // コメント(段落単位)。カーソルの段落に付ける
-            "comment" => {
+            "co-addcomment" | "comment" => {
                 if self.cmt_edit {
                     self.cmt_edit = false;
                     return;
@@ -3394,7 +3434,7 @@ impl Render for Writer {
         }
 
         // コメントの印。付いた段落の1行目の右余白にオレンジの角を出す
-        {
+        if self.show_comments {
             let mut at = 0usize;
             let mut heads: Vec<usize> = Vec::new(); // コメント付き段落の頭のバイト
             for p in self.doc.paragraphs() {
@@ -3798,7 +3838,7 @@ impl Render for Writer {
             let cur = self.ed.cursor();
             let mut at = 0usize;
             let mut found: Option<Vec<(String, String)>> = None;
-            if self.target == Target::Body {
+            if self.show_comments && self.target == Target::Body {
                 for p in self.doc.paragraphs() {
                     let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
                     if at <= cur && cur <= at + len && !p.comments.is_empty() {
