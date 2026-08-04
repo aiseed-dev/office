@@ -308,6 +308,42 @@ fn pivot_spec_json(
     json
 }
 
+/// 表のデザインの「合計行」。選択の下の行に、数の列へ =SUM(…) を入れて
+/// 太字+上罫線にする。1行目が見出し(文字)なら合計の範囲から外す。
+/// 文字の列の先頭には「合計」の札。書いた欄の数を返す。
+fn add_total_row(s: &mut sheet::Sheet, a: Pos, b: Pos) -> usize {
+    let header = (a.col..=b.col).any(|c| {
+        matches!(s.get(Pos::new(a.row, c)).map(|x| &x.value), Some(Value::Text(_)))
+    });
+    let from = if header && b.row > a.row { a.row + 1 } else { a.row };
+    let total = b.row + 1;
+    let mut n = 0usize;
+    for c in a.col..=b.col {
+        let numeric = (from..=b.row).any(|r| {
+            matches!(s.get(Pos::new(r, c)).map(|x| &x.value), Some(Value::Number(_)))
+        });
+        let p = Pos::new(total, c);
+        let fmt0 = s.get(p).map(|x| x.fmt.clone()).unwrap_or_default();
+        let mut cell = if numeric {
+            Cell::input(&format!(
+                "=SUM({}:{})",
+                Pos::new(from, c).a1(),
+                Pos::new(b.row, c).a1()
+            ))
+        } else if c == a.col {
+            Cell::input("合計")
+        } else {
+            s.get(p).cloned().unwrap_or_default()
+        };
+        cell.fmt = fmt0;
+        cell.fmt.bold = true;
+        cell.fmt.borders.top = true;
+        s.set(p, cell);
+        n += 1;
+    }
+    n
+}
+
 /// 控えたセルの**書式だけ**を写す(中身は残す)。帳票の枠の使い回し。
 fn paste_formats(s: &mut sheet::Sheet, at: Pos, cells: &[Vec<Option<Cell>>]) -> usize {
     let mut n = 0usize;
@@ -3549,6 +3585,8 @@ calc の隣に置いてください)"
         "insshape", "instext", "inssparkline", "python", "addcomment",
         "trace-prec", "trace-dep", "remove-arrows", "insrecommend",
         "instable", "table-tpl", "inssymbol", "pivot-insert",
+        "td-header", "td-total", "td-band-row", "td-band-col",
+        "td-first", "td-last", "td-filter",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -3925,6 +3963,101 @@ calc の隣に置いてください)"
                     }
                 }
             }
+            // 表のデザイン: 表オブジェクトは持たない。選択に**1手ずつ掛ける道具**
+            // (掛けた書式・式が帳面に残るだけ。切り替え式に見せない。
+            // まとめて掛けるなら挿入タブの「表の挿入」)
+            "td-header" | "td-band-row" | "td-band-col" | "td-first" | "td-last" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status = "表の範囲を選んでください".into();
+                } else {
+                    self.checkpoint();
+                    let (a, b) = self.sel_rect();
+                    for r in a.row..=b.row {
+                        for c in a.col..=b.col {
+                            let p = Pos::new(r, c);
+                            let mut cell = self.sheet().get(p).cloned().unwrap_or_default();
+                            let touched = match id {
+                                "td-header" if r == a.row => {
+                                    cell.fmt.bold = true;
+                                    cell.fmt.fill = Some("D5E8DC".into());
+                                    cell.fmt.borders.top = true;
+                                    true
+                                }
+                                "td-band-row" if r > a.row && (r - a.row) % 2 == 0 => {
+                                    cell.fmt.fill = Some("F1F6F3".into());
+                                    true
+                                }
+                                "td-band-col" if (c - a.col) % 2 == 1 => {
+                                    cell.fmt.fill = Some("F1F6F3".into());
+                                    true
+                                }
+                                "td-first" if c == a.col => {
+                                    cell.fmt.bold = true;
+                                    true
+                                }
+                                "td-last" if c == b.col => {
+                                    cell.fmt.bold = true;
+                                    true
+                                }
+                                _ => false,
+                            };
+                            if touched {
+                                self.book.sheets[self.active].set(p, cell);
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                    let what = match id {
+                        "td-header" => "1行目を見出しの帯に",
+                        "td-band-row" => "1行おきの縞々に",
+                        "td-band-col" => "1列おきの縞々に",
+                        "td-first" => "最初の列を太字に",
+                        _ => "最後の列を太字に",
+                    };
+                    self.status = format!(
+                        "{}:{} を{}しました(Ctrl+Z で戻せます)",
+                        a.a1(),
+                        b.a1(),
+                        what
+                    )
+                    .into();
+                }
+            }
+            // 合計行 = 選択の下に =SUM(…) の行を足す(式なので元が変われば追従)
+            "td-total" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status = "合計したい表の範囲を選んでください".into();
+                } else {
+                    let (a, b) = self.sel_rect();
+                    let below_used = (a.col..=b.col).any(|c| {
+                        self.sheet()
+                            .get(Pos::new(b.row + 1, c))
+                            .map(|cell| {
+                                !cell.value.display().is_empty() || cell.formula.is_some()
+                            })
+                            .unwrap_or(false)
+                    });
+                    if below_used {
+                        self.status =
+                            "すぐ下の行に中身があります(空けてから — 黙って上書きしません)"
+                                .into();
+                    } else {
+                        self.checkpoint();
+                        add_total_row(&mut self.book.sheets[self.active], a, b);
+                        recalc(&mut self.book.sheets[self.active]);
+                        self.dirty = true;
+                        self.status = format!(
+                            "{} 行目に合計(=SUM)を足しました。式なので元が変われば追従します(Ctrl+Z で戻せます)",
+                            b.row + 2
+                        )
+                        .into();
+                    }
+                }
+            }
+            // フィルタのボタン = データタブの絞り込みと同じ実体
+            "td-filter" => self.run_cmd("setfilter", cx),
             // 表の挿入 = 選択に表の書式(見出しの帯+縞々+外枠)を掛ける
             "instable" | "table-tpl" => {
                 self.commit();
@@ -6277,6 +6410,48 @@ mod clipboard_tests {
         assert_eq!(tsv_grid("a\tb\r\nc\td\r\n"),
                    vec![vec!["a".to_string(), "b".into()], vec!["c".into(), "d".into()]]);
         assert_eq!(tsv_grid("1"), vec![vec!["1".to_string()]]);
+    }
+}
+
+#[cfg(test)]
+mod table_design_tests {
+    use super::*;
+
+    #[test]
+    fn 合計行は見出しを外して数の列だけ足す() {
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::new(0, 0), Cell::input("品名"));
+        s.set(Pos::new(0, 1), Cell::input("金額"));
+        s.set(Pos::new(1, 0), Cell::input("甲"));
+        s.set(Pos::new(1, 1), Cell::input("100"));
+        s.set(Pos::new(2, 0), Cell::input("乙"));
+        s.set(Pos::new(2, 1), Cell::input("50"));
+        add_total_row(&mut s, Pos::new(0, 0), Pos::new(2, 1));
+        recalc(&mut s);
+        let label = s.get(Pos::new(3, 0)).unwrap();
+        assert_eq!(label.value.display(), "合計", "文字の列の先頭は札");
+        assert!(label.fmt.bold && label.fmt.borders.top, "合計行の書式が付かない");
+        let sum = s.get(Pos::new(3, 1)).unwrap();
+        assert_eq!(
+            sum.formula.as_deref(),
+            Some("SUM(B2:B3)"),
+            "見出しが合計に混ざった: {:?}",
+            sum.formula
+        );
+        assert_eq!(sum.value.display(), "150");
+    }
+
+    #[test]
+    fn 見出しの無い表は全行を合計する() {
+        let mut s = sheet::Sheet { name: "表".into(), ..Default::default() };
+        for (r, v) in [(0, "10"), (1, "20")] {
+            s.set(Pos::new(r, 0), Cell::input(v));
+        }
+        add_total_row(&mut s, Pos::new(0, 0), Pos::new(1, 0));
+        recalc(&mut s);
+        let sum = s.get(Pos::new(2, 0)).unwrap();
+        assert_eq!(sum.formula.as_deref(), Some("SUM(A1:A2)"));
+        assert_eq!(sum.value.display(), "30");
     }
 }
 
