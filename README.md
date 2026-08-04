@@ -150,6 +150,6 @@ python3 ui/gen_ribbon.py en > ui/src/ribbon.rs
 
 ## いまの進み
 
-リボンのコマンドは **writer 114/114(灰色ゼロ — 全部動きます)**、
-calc 139/145。残る灰色は理由ごと `HIKITSUGI.md` に。
-設計と判断の記録は `SEKKEI.md`、試せる見本は `sample/`(手引きから辿れます)。
+リボンのコマンドは **writer 124/124・calc 145/145 — 両方とも灰色ゼロ、
+全部動きます**(2026-08-04)。設計と判断の記録は `SEKKEI.md`、
+経緯と残件は `HIKITSUGI.md`、試せる見本は `sample/`(手引きから辿れます)。
