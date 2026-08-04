@@ -1024,6 +1024,11 @@ pub fn format_value(v: &Value, code: Option<&str>) -> String {
     let Value::Number(n) = v else { return v.display() };
     let Some(code) = code else { return v.display() };
 
+    // 日付・時刻の書式なら、通し番号を暦に直して描く
+    if let Some(s) = format_date(*n, code) {
+        return s;
+    }
+
     let percent = code.contains('%');
     let n = if percent { n * 100.0 } else { *n };
     let comma = code.contains(',');
@@ -1057,6 +1062,120 @@ pub fn format_value(v: &Value, code: Option<&str>) -> String {
         out.push('%');
     }
     out
+}
+
+/// 日付・時刻の表示形式なら描いて Some、数の形式なら None。
+///
+/// 見分け方: 引用部("…")を除いた地に y・d・h(または m と s の組)が
+/// あれば日付・時刻。# や 0 が混ざるものは数の形式(例: `#,##0;[Red]…` の
+/// Red の d を日付と見ない)。m は h・s の隣なら「分」、それ以外は「月」。
+/// 和暦(g・e)はまだ描けない — 黙って数で出さず None(数の表示)に落とす
+fn format_date(n: f64, code: &str) -> Option<String> {
+    let mut bare = String::new();
+    let mut quoted = false;
+    for c in code.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            _ if !quoted => bare.push(c.to_ascii_lowercase()),
+            _ => {}
+        }
+    }
+    if bare.contains('#') || bare.contains('0') {
+        return None;
+    }
+    let datey = bare.contains('y') || bare.contains('d') || bare.contains('h')
+        || bare.contains('a') // 曜日(aaa)
+        || (bare.contains('m') && bare.contains('s'));
+    if !datey || bare.contains('g') || bare.contains('e') || n < 0.0 {
+        return None;
+    }
+
+    let days = n.floor() as i64;
+    let (y, mo, d) = crate::calc::civil_from_days(days - crate::calc::EXCEL_EPOCH_DAYS);
+    let total = ((n - days as f64) * 86400.0).round() as i64;
+    let (hh, mi, ss) = (total / 3600 % 24, total / 60 % 60, total % 60);
+    let wd = crate::calc::weekday0(days) as usize; // 0=日曜
+    const YOBI: [&str; 7] = ["日", "月", "火", "水", "木", "金", "土"];
+
+    // 字句: 引用は文字どおり、同じ字の連なりは1つの札
+    #[derive(PartialEq)]
+    enum T {
+        Run(char, usize),
+        Lit(String),
+    }
+    let mut toks: Vec<T> = Vec::new();
+    let mut it = code.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '"' {
+            let mut s = String::new();
+            for q in it.by_ref() {
+                if q == '"' {
+                    break;
+                }
+                s.push(q);
+            }
+            toks.push(T::Lit(s));
+        } else if c.is_ascii_alphabetic() {
+            let lc = c.to_ascii_lowercase();
+            let mut len = 1;
+            while it.peek().map(|p| p.to_ascii_lowercase()) == Some(lc) {
+                it.next();
+                len += 1;
+            }
+            toks.push(T::Run(lc, len));
+        } else {
+            match toks.last_mut() {
+                Some(T::Lit(s)) => s.push(c),
+                _ => toks.push(T::Lit(c.to_string())),
+            }
+        }
+    }
+
+    let mut out = String::new();
+    let mut prev_hour = false; // 直前の字の札が h だったか(m の意味の判定)
+    for (i, t) in toks.iter().enumerate() {
+        match t {
+            T::Lit(s) => out.push_str(s),
+            T::Run(c, len) => {
+                let pad = |v: i64, len: usize| {
+                    if len >= 2 { format!("{v:02}") } else { v.to_string() }
+                };
+                match c {
+                    'y' => out.push_str(&if *len >= 3 {
+                        format!("{y:04}")
+                    } else {
+                        format!("{:02}", y.rem_euclid(100))
+                    }),
+                    'd' => out.push_str(&pad(d, *len)),
+                    'h' => out.push_str(&pad(hh, *len)),
+                    's' => out.push_str(&pad(ss, *len)),
+                    'm' => {
+                        // 分: h の直後、または次の字の札が s のとき。それ以外は月
+                        let next_s = toks[i + 1..]
+                            .iter()
+                            .find_map(|t| match t {
+                                T::Run(c, _) => Some(*c == 's'),
+                                _ => None,
+                            })
+                            .unwrap_or(false);
+                        out.push_str(&pad(if prev_hour || next_s { mi } else { mo }, *len));
+                    }
+                    'a' => {
+                        // aaa=短い曜日、aaaa=「〜曜日」
+                        out.push_str(YOBI[wd]);
+                        if *len >= 4 {
+                            out.push_str("曜日");
+                        }
+                    }
+                    _ => return None, // 知らない字は描けない — 黙って崩さない
+                }
+                if c.is_ascii_alphabetic() {
+                    prev_hour = *c == 'h';
+                }
+            }
+        }
+    }
+    Some(out)
 }
 
 /// 3桁ごとに区切る。

@@ -7410,13 +7410,19 @@ calc の隣に置いてください)"
             f @ ("fn-math" | "fn-text" | "fn-logical" | "fn-recent" | "fn-datetime"
             | "fn-lookup" | "fn-financial" | "fn-more") => {
                 let names: &str = match f {
-                    "fn-math" => "SUM AVERAGE ROUND ROUNDUP ROUNDDOWN INT ABS MOD POWER SQRT PRODUCT",
-                    "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE",
-                    "fn-logical" => "IF AND OR NOT TRUE FALSE ISBLANK ISERROR IFERROR",
-                    "fn-datetime" => "TODAY NOW DATE YEAR MONTH DAY WEEKDAY(値は通し番号)",
-                    "fn-lookup" => "VLOOKUP HLOOKUP INDEX MATCH(照合は完全一致)",
+                    "fn-math" => "SUM AVERAGE ROUND ROUNDUP ROUNDDOWN INT ABS MOD POWER SQRT \
+                                  PRODUCT SUMPRODUCT",
+                    "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE TEXT \
+                                  SUBSTITUTE FIND SEARCH VALUE TEXTJOIN REPT CHAR CODE",
+                    "fn-logical" => "IF IFS SWITCH AND OR NOT TRUE FALSE ISBLANK ISERROR IFERROR",
+                    "fn-datetime" => "TODAY NOW DATE DATEVALUE YEAR MONTH DAY WEEKDAY \
+                                      TIME HOUR MINUTE SECOND EDATE EOMONTH DATEDIF \
+                                      WORKDAY NETWORKDAYS(値は通し番号)",
+                    "fn-lookup" => "VLOOKUP HLOOKUP XLOOKUP INDEX MATCH CHOOSE \
+                                    ROW COLUMN ROWS COLUMNS(照合は完全一致)",
                     "fn-financial" => "PMT PV FV NPER(RATE のような反復解はまだ)",
-                    "fn-more" => "SUMIF COUNTIF COUNTA TRUNC IFERROR — 一覧は各族の釦で",
+                    "fn-more" => "SUMIF SUMIFS COUNTIF COUNTIFS AVERAGEIF AVERAGEIFS \
+                                  MINIFS MAXIFS COUNTA TRUNC RANK LARGE SMALL — 一覧は各族の釦で",
                     _ => "SUM AVERAGE COUNT MAX MIN IF SUMIF COUNTIF VLOOKUP TODAY",
                 };
                 self.status = format!("使える関数: {names}").into();

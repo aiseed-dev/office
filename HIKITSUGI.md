@@ -481,6 +481,32 @@ datetime 代入が頻出」→ 発注者「まず、これをやるのがいい�
   calc の画面では通し番号のまま見える。ファイルは正しいので Excel では日付で出る。
   書式の描画対応は関数拡充(TEXT)と同じ土俵でやるのが良い
 
+**関数拡充 第1段(2026-08-05、発注者「このcalcは、業務専用だとは思っていません」
+→「これをやりませんか?」)**: 47個 → **84個**。日常と帳票を閉じる37個を追加:
+- 条件集計: SUMIFS/COUNTIFS/AVERAGEIF/AVERAGEIFS/MINIFS/MAXIFS(範囲の大きさ違いは
+  #VALUE!。1件も合わない MINIFS/MAXIFS は 0 = Excel の約束、AVERAGEIF は #DIV/0!)
+- 選ぶ: IFS/SWITCH/CHOOSE(**選ばなかった枝のエラーは踏まない** — IF と同じ扱いで
+  エラー素通し表に追加)、XLOOKUP(完全一致。見つからない時の第4引数あり)
+- 日付時刻: TIME/HOUR/MINUTE/SECOND/DATEVALUE(和文「2026年8月5日」も読む)/
+  EDATE/EOMONTH(月またぎは civil の 13月正規化で処理)/DATEDIF(Y/M/D/YM/MD/YD)/
+  WORKDAY/NETWORKDAYS(土日+指定休。step 上限で暴走を止める)
+- 文字列: TEXT/SUBSTITUTE(n個目指定可)/FIND/SEARCH(1起点の**文字**番号。バイトでない)/
+  VALUE(¥と桁区切りと%を解く)/TEXTJOIN(Text("") も空と見る — is_empty は
+  Value::Empty しか見ないので display() で判定)/REPT(32767字上限)/CHAR/CODE
+- 位置: ROW/COLUMN/ROWS/COLUMNS — 参照を**値に崩す前に**読む必要があり、
+  P(評価器)に at: Pos(いま計算しているセル)を足して atom で横取り
+- 順位: RANK(同値同順位)/LARGE/SMALL、SUMPRODUCT
+- **TEXT のために format_value に日付書式の描画を実装**(model.rs format_date)。
+  これで display() と calc の画面でも日付セルが日付で見える(前日の残件解消)。
+  m の月/分は「h の直後か、次が s なら分」で判定。aaa=曜日(日本語)。
+  # や 0 が混ざる書式と和暦(g/e)は数の道へ(和暦は次の課題 — 黙って崩さない)
+- 罠: 既存試験「知らない関数は名前エラー」が XLOOKUP を『無い関数』の例に
+  使っていて、実装したら落ちた。実装が進むたびこの試験の例は差し替えること
+- 関数一覧の釦(fn-*)も同じコミットで更新(「できないものを、できるように
+  見せない」の逆 — **できるようになったものを一覧に載せ忘れない**)
+残: 第2段(統計・数学 約50)、第3段(OFFSET/INDIRECT=依存追跡、RAND=揮発、
+動的配列)、日本語系(ASC/JIS/PHONETIC/和暦)。
+
 小さい残件: 変換下線の位置の実機確認、表入りのヘッダー・フッターの編集。
 暗号化の Agile 方式(Word/Excel 2013+ の既定)を実装(2026-08-04、発注者
 「作れますか」→「やって」): ooxml/src/crypt.rs の後半。SHA-512 の鍵導出を
