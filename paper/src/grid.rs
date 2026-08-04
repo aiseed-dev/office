@@ -252,7 +252,7 @@ pub fn sheet_to_pdf<W: Write>(
             // 数は右、文字は左(指定があればそちら)
             let right = match cell.fmt.align {
                 HAlign::Right => true,
-                HAlign::Left | HAlign::Center => false,
+                HAlign::Left | HAlign::Center | HAlign::Justify => false,
                 HAlign::General => matches!(cell.value, Value::Number(_)),
             };
             let pt = 9.5f32 * scale;

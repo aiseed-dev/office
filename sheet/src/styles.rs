@@ -21,6 +21,7 @@ struct Fnt {
     italic: bool,
     underline: bool,
     strike: bool,
+    subscript: bool,
     size_c: Option<u32>,
     color: Option<String>,
     name: Option<String>,
@@ -72,7 +73,7 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
                     b"border" if in_borders => borders.push(std::mem::take(&mut bd)),
                     b"xf" if in_cellxfs => {
                         if let Some(x) = xf.take() {
-                            xfs.push(resolve(x, &fonts, &fills, &borders, &numfmts, None));
+                            xfs.push(resolve(x, &fonts, &fills, &borders, &numfmts, None, None));
                         }
                     }
                     _ => {}
@@ -110,6 +111,9 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
             b"i" if in_fonts => font.italic = on(&e),
             b"u" if in_fonts => font.underline = true,
             b"strike" if in_fonts => font.strike = on(&e),
+            b"vertAlign" if in_fonts => {
+                font.subscript = attr(&e, "val").as_deref() == Some("subscript");
+            }
             b"sz" if in_fonts => {
                 font.size_c = attr(&e, "val")
                     .and_then(|v| v.parse::<f32>().ok())
@@ -147,7 +151,7 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
                 let g = |k: &str| attr(&e, k).and_then(|v| v.parse().ok()).unwrap_or(0);
                 let x = (g("fontId"), g("fillId"), g("borderId"), g("numFmtId") as u32);
                 if empty {
-                    xfs.push(resolve(x, &fonts, &fills, &borders, &numfmts, None));
+                    xfs.push(resolve(x, &fonts, &fills, &borders, &numfmts, None, None));
                 } else {
                     xf = Some(x);
                 }
@@ -157,7 +161,8 @@ pub fn parse(xml: &str) -> Vec<CellFormat> {
                     let a = attr(&e, "horizontal").map(|v| HAlign::from_xlsx(&v));
                     let va = attr(&e, "vertical").map(|v| VAlign::from_xlsx(&v));
                     let wrap = attr(&e, "wrapText").as_deref() == Some("1");
-                    let mut f = resolve(x, &fonts, &fills, &borders, &numfmts, a);
+                    let rot = attr(&e, "textRotation").and_then(|v| v.parse::<i32>().ok());
+                    let mut f = resolve(x, &fonts, &fills, &borders, &numfmts, a, rot);
                     f.valign = va.unwrap_or_default();
                     f.wrap = wrap;
                     xfs.push(f);
@@ -189,6 +194,7 @@ fn resolve(
     borders: &[Borders],
     numfmts: &BTreeMap<u32, String>,
     align: Option<HAlign>,
+    rot: Option<i32>,
 ) -> CellFormat {
     let f = fonts.get(fid).cloned().unwrap_or_default();
     CellFormat {
@@ -196,6 +202,8 @@ fn resolve(
         italic: f.italic,
         underline: f.underline,
         strike: f.strike,
+        subscript: f.subscript,
+        rotation: rot,
         size_c: f.size_c,
         valign: VAlign::default(),
         wrap: false,
@@ -318,12 +326,13 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
     let mut fills: Vec<Option<String>> = vec![None, None]; // 0=none 1=gray125 は予約席
     let mut borders: Vec<Borders> = vec![Borders::NONE];
     let mut numfmts: Vec<String> = Vec::new();
-    let mut xfs: Vec<(usize, usize, usize, usize, HAlign, VAlign, bool)> = Vec::new();
+    let mut xfs: Vec<(usize, usize, usize, usize, HAlign, VAlign, bool, Option<i32>)> =
+        Vec::new();
 
     for f in &order {
         let font = Fnt {
             bold: f.bold, italic: f.italic, underline: f.underline,
-            strike: f.strike, size_c: f.size_c,
+            strike: f.strike, subscript: f.subscript, size_c: f.size_c,
             color: f.color.clone(), name: f.font.clone(),
         };
         let fi = idx(&mut fonts, font);
@@ -339,7 +348,7 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
             }
             None => 0,
         };
-        xfs.push((fi, fl, bi, ni, f.align, f.valign, f.wrap));
+        xfs.push((fi, fl, bi, ni, f.align, f.valign, f.wrap, f.rotation));
     }
 
     let mut s = String::from(
@@ -369,6 +378,7 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
         if f.italic { s.push_str("<i/>") }
         if f.underline { s.push_str("<u/>") }
         if f.strike { s.push_str("<strike/>") }
+        if f.subscript { s.push_str("<vertAlign val=\"subscript\"/>") }
         if let Some(c) = &f.color { s.push_str(&format!("<color rgb=\"FF{c}\"/>")) }
         if let Some(n) = &f.name { s.push_str(&format!("<name val=\"{}\"/>", esc(n))) }
         s.push_str("</font>");
@@ -401,7 +411,7 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
     s.push_str("</borders>");
     s.push_str("<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>");
     s.push_str(&format!("<cellXfs count=\"{}\">", xfs.len()));
-    for (fi, fl, bi, ni, al, va, wrap) in &xfs {
+    for (fi, fl, bi, ni, al, va, wrap, rot) in &xfs {
         // applyX を付けないと読み手が無視することがある
         s.push_str(&format!(
             "<xf numFmtId=\"{ni}\" fontId=\"{fi}\" fillId=\"{fl}\" borderId=\"{bi}\" xfId=\"0\"\
@@ -416,6 +426,9 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
         }
         if *wrap {
             attrs.push_str(" wrapText=\"1\"");
+        }
+        if let Some(r) = rot {
+            attrs.push_str(&format!(" textRotation=\"{r}\""));
         }
         if attrs.is_empty() {
             s.push_str("/>");

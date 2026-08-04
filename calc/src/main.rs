@@ -687,6 +687,14 @@ struct Calc {
     show_headers: bool,
     /// 0 の値を見せるか(表示タブ。消しても値は 0 のまま)
     show_zeros: bool,
+    /// 自動で再計算するか(数式タブの「計算方法」。手動のときは F9)
+    auto_calc: bool,
+    /// 見張り(ウォッチウィンドウ)。(シート番号, セル)
+    watch: Vec<(usize, Pos)>,
+    /// 描画の道具(0=ペン 1=蛍光ペン 2=消しゴム)。writer と同じ形
+    tool: Option<u8>,
+    /// 描きかけの線(ドラッグ中)
+    ink_cur: Option<Vec<(f32, f32)>>,
 }
 
 impl HasEditor for Calc {
@@ -778,6 +786,10 @@ impl Calc {
             show_formula_bar: true,
             show_headers: true,
             show_zeros: true,
+            auto_calc: true,
+            watch: Vec::new(),
+            tool: None,
+            ink_cur: None,
         };
         if let Some(p) = path {
             c.open(p);
@@ -1530,6 +1542,39 @@ impl Calc {
                     let (name, key) = (name.to_string(), key.to_string());
                     self.insert_smartart(&name, &key);
                 }
+            }
+            "func-cat" => {
+                let id = match v {
+                    "統計" => "fn-math",
+                    "数学" => "fn-math",
+                    "財務" => "fn-financial",
+                    "日付" => "fn-datetime",
+                    "文字列" => "fn-text",
+                    "論理" => "fn-logical",
+                    _ => "fn-lookup",
+                };
+                self.run_cmd(id, cx);
+            }
+            "cell-style" => {
+                if let Some((_, f)) = CELL_STYLES.iter().find(|(n, _)| *n == v) {
+                    let f = *f;
+                    self.fmt(move |c| f(c));
+                    self.status = format!("セルのスタイル「{v}」を掛けました").into();
+                }
+            }
+            "unhide" => {
+                if let Some((_, path)) = self.pick_paths.iter().find(|(n, _)| n == v).cloned() {
+                    if let Ok(i) = path.to_string_lossy().parse::<usize>() {
+                        if i < self.book.sheets.len() {
+                            self.checkpoint_book();
+                            self.book.sheets[i].hidden = false;
+                            self.switch_sheet(i);
+                            self.dirty = true;
+                            self.status = format!("シート「{v}」を表示に戻しました").into();
+                        }
+                    }
+                }
+                self.pick_paths.clear();
             }
             "history" | "plugin" => {
                 let plugin = self.pick_kind == "plugin";
@@ -2516,6 +2561,13 @@ impl Calc {
     /// 数式バーの内容をセルへ。**入力規則(list)に合わない値は入れない**
     /// (Excel と同じ)。false を返したら呼び側は移動しないこと —
     /// 打った文字が黙って消える。Esc でセルの保存内容に戻せる。
+    /// いまの計算方法で再計算する(手動なら何もしない — 「計算」で回す)
+    fn recalc_if_auto(&mut self) {
+        if self.auto_calc {
+            recalc(&mut self.book.sheets[self.active]);
+        }
+    }
+
     fn commit(&mut self) -> bool {
         let (cur, text) = (self.cursor, self.input.text().to_string());
         // 変わっていなければ何もしない(移動のたびに履歴が積まれるのを防ぐ)
@@ -4950,6 +5002,9 @@ calc の隣に置いてください)"
         "co-history", "plug-macros", "plug-manage",
         "prot-doc", "prot-encrypt", "prot-sign",
         "zoom-in", "zoom-out", "formula-bar", "show-headings", "show-zeros",
+        "subscript", "align-just", "text-orient", "calc-mode",
+        "insert-function", "cell-styles", "sheet-view", "watch",
+        "pen", "highlighter", "eraser",
     ];
 
     /// シートの保護中でも通す操作(見るだけ・保存・保護の操作そのもの)
@@ -5700,6 +5755,155 @@ calc の隣に置いてください)"
                     self.status =
                         "ソルバー: 欄を押して打つ。目的・変数セル・制約を決めて「解を求める」".into();
                 }
+            }
+            // 下付き(vertAlign subscript)。上付きは本家 calc にも無い
+            "subscript" => {
+                self.fmt(|f| f.subscript = !f.subscript);
+                self.status = "下付きを切り替えました".into();
+            }
+            // 両端揃え(セルの横揃え。折り返した行を左右に伸ばす)
+            "align-just" => {
+                self.fmt(|f| {
+                    f.align = if f.align == sheet::model::HAlign::Justify {
+                        sheet::model::HAlign::General
+                    } else {
+                        sheet::model::HAlign::Justify
+                    };
+                    f.wrap = true; // 揃えるには折り返しが要る
+                });
+                self.status = "両端揃えにしました(折り返して全体を表示も入れます)".into();
+            }
+            // 文字の回転(縦書きのセル。90度ずつ回る)
+            "text-orient" => {
+                self.fmt(|f| {
+                    f.rotation = match f.rotation {
+                        None | Some(0) => Some(90),
+                        Some(90) => Some(180),
+                        Some(180) => Some(255), // 255 = 縦に積む(xlsx の作法)
+                        _ => None,
+                    };
+                });
+                let r = self.sheet().get(self.cursor).map(|c| c.fmt.rotation).unwrap_or(None);
+                self.status = match r {
+                    Some(90) => "文字を 90 度回しました".into(),
+                    Some(180) => "文字を 180 度回しました".into(),
+                    Some(255) => "文字を縦に積みました".into(),
+                    _ => "文字の向きを戻しました".into(),
+                };
+            }
+            // 計算方法(自動 ⇔ 手動)。手動のときは F9 で計算する
+            "calc-mode" => {
+                self.auto_calc = !self.auto_calc;
+                self.status = if self.auto_calc {
+                    "計算方法: 自動(いつもすぐ計算します)".into()
+                } else {
+                    "計算方法: 手動(F9 で計算します — 大きな表で待たされない)".into()
+                };
+            }
+            // 関数の挿入 = 分類の一覧を出す(既存の関数一覧と同じ実体)
+            "insert-function" => {
+                self.pick_kind = "func-cat";
+                self.pick = Some((
+                    vec![
+                        "統計".into(), "数学".into(), "財務".into(), "日付".into(),
+                        "文字列".into(), "論理".into(), "検索".into(),
+                    ],
+                    (HEAD_W + 60.0, ROW_H + 20.0),
+                ));
+                self.status = "関数の挿入: 分類 → 関数 の順に選ぶ".into();
+            }
+            // セルのスタイル(既定の書式の組。押すと一覧から選ぶ)
+            "cell-styles" => {
+                self.pick_kind = "cell-style";
+                self.pick = Some((
+                    CELL_STYLES.iter().map(|(n, _)| n.to_string()).collect(),
+                    (HEAD_W + 60.0, ROW_H + 20.0),
+                ));
+                self.status = "セルのスタイル: 選ぶと選択に掛かります(Ctrl+Z で戻せます)".into();
+            }
+            // シートの表示(隠したシートを戻す/いまのシートを隠す)
+            "sheet-view" => {
+                let hidden: Vec<(usize, String)> = self
+                    .book
+                    .sheets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.hidden)
+                    .map(|(i, s)| (i, s.name.clone()))
+                    .collect();
+                if hidden.is_empty() {
+                    // 隠すほう(最後の1枚は隠さない — 見えるシートがゼロになる)
+                    if self.book.sheets.iter().filter(|s| !s.hidden).count() <= 1 {
+                        self.status = "最後の1枚は隠せません".into();
+                    } else {
+                        let n = self.sheet().name.clone();
+                        self.checkpoint_book();
+                        self.sheet_mut().hidden = true;
+                        // 見えるシートへ移る
+                        if let Some(i) = self.book.sheets.iter().position(|s| !s.hidden) {
+                            self.switch_sheet(i);
+                        }
+                        self.dirty = true;
+                        self.status = format!(
+                            "シート「{n}」を隠しました(同じ釦で戻せます。保存で xlsx にも残ります)"
+                        )
+                        .into();
+                    }
+                } else {
+                    self.pick_kind = "unhide";
+                    self.pick_paths = hidden
+                        .iter()
+                        .map(|(i, n)| (n.clone(), PathBuf::from(i.to_string())))
+                        .collect();
+                    self.pick = Some((
+                        hidden.into_iter().map(|(_, n)| n).collect(),
+                        (HEAD_W + 60.0, ROW_H + 20.0),
+                    ));
+                    self.status = "隠したシート: 選ぶと表示に戻します".into();
+                }
+            }
+            // ウォッチウィンドウ(見張りの窓)。選んだセルを控えて下に見せる
+            "watch" => {
+                let (a, b) = self.sel_rect();
+                let mut n = 0usize;
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        let p = Pos::new(r, c);
+                        if self.sheet().get(p).and_then(|x| x.formula.as_ref()).is_some()
+                            || self.anchor.is_none()
+                        {
+                            if !self.watch.contains(&(self.active, p)) {
+                                self.watch.push((self.active, p));
+                                n += 1;
+                            }
+                        }
+                    }
+                }
+                if n == 0 && !self.watch.is_empty() {
+                    self.watch.clear();
+                    self.status = "見張りを空にしました".into();
+                } else {
+                    self.status = format!(
+                        "{n} 個を見張ります(値は下の帯に出ます。もう一度押すと空に)"
+                    )
+                    .into();
+                }
+            }
+            // 描画(ペン・蛍光ペン・消しゴム)。writer と同じ形の道具の入切
+            "pen" | "highlighter" | "eraser" => {
+                let t = match id {
+                    "pen" => 0u8,
+                    "highlighter" => 1,
+                    _ => 2,
+                };
+                self.tool = if self.tool == Some(t) { None } else { Some(t) };
+                self.ink_cur = None;
+                self.status = match self.tool {
+                    Some(0) => "ペン: 表の上をドラッグで描く(もう一度押すか Esc で戻る)".into(),
+                    Some(1) => "蛍光ペン: ドラッグで引く(セルの上に薄く乗る)".into(),
+                    Some(2) => "消しゴム: 線をなぞると1筆ずつ消える".into(),
+                    _ => "セルの操作に戻りました".into(),
+                };
             }
             // 表示タブ(本家のデスクトップ版に合わせる)。どれも見え方だけ
             "zoom-in" => {
@@ -7431,6 +7635,47 @@ fn sig_path_for(p: &std::path::Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// セルのスタイル(本家の「セルのスタイル」。よく使う組だけ)。
+/// 表オブジェクトは持たない方針どおり、掛けるのは普通の書式 —
+/// どれも Ctrl+Z の1手で戻る
+#[allow(clippy::type_complexity)]
+const CELL_STYLES: &[(&str, fn(&mut CellFormat))] = &[
+    ("標準", |f| *f = CellFormat::default()),
+    ("見出し", |f| {
+        f.bold = true;
+        f.fill = Some("D5E8DC".into());
+        f.borders.bottom = true;
+    }),
+    ("表題", |f| {
+        f.bold = true;
+        f.size_c = Some(1600);
+        f.color = Some("1B6E3C".into());
+    }),
+    ("良い", |f| {
+        f.fill = Some("C6EFCE".into());
+        f.color = Some("006100".into());
+    }),
+    ("悪い", |f| {
+        f.fill = Some("FFC7CE".into());
+        f.color = Some("9C0006".into());
+    }),
+    ("どちらでもない", |f| {
+        f.fill = Some("FFEB9C".into());
+        f.color = Some("9C6500".into());
+    }),
+    ("メモ", |f| {
+        f.fill = Some("FFFFCC".into());
+        f.borders = Borders::ALL;
+    }),
+    ("計算", |f| {
+        f.italic = true;
+        f.fill = Some("F2F2F2".into());
+        f.color = Some("7F7F7F".into());
+    }),
+    ("通貨", |f| f.number_format = Some("¥#,##0".into())),
+    ("パーセント", |f| f.number_format = Some("0.0%".into())),
+];
+
 fn col_name(c: u32) -> String {
     Pos::new(0, c).a1().trim_end_matches('1').to_string()
 }
@@ -7875,6 +8120,15 @@ impl Render for Calc {
                 if f.italic {
                     d = d.italic();
                 }
+                // 下付きは小さく下げて見せる(xlsx へは vertAlign で入る)
+                if f.subscript {
+                    d = d.text_size(px(self.zoom * 8.5)).pt_2();
+                }
+                // 縦積み(255)は1字ずつ縦に並べる — 日本の帳票の縦の見出し。
+                // 90/180 度は GPUI に字の回転が無いので、いまは縦積みで見せる
+                if f.rotation.is_some_and(|r| r != 0) {
+                    d = d.flex().flex_col().items_center();
+                }
                 if let Some(c) = &f.color {
                     d = d.text_color(hex(c));
                 }
@@ -7939,6 +8193,7 @@ impl Render for Calc {
                     HAlign::Left => d = d.justify_start(),
                     HAlign::Center => d = d.justify_center(),
                     HAlign::Right => d = d.justify_end(),
+                    HAlign::Justify => d = d.justify_between(),
                     HAlign::General => {}
                 }
                 if is_num && f.align == HAlign::General {
@@ -7972,7 +8227,15 @@ impl Render for Calc {
                 }
                 // 選択中のセルは、確定前の入力をその場に見せる
                 let shown = if sel { self.input.text().to_string() } else { shown };
-                row = row.child(d.child(SharedString::from(shown)));
+                if f.rotation.is_some_and(|r| r != 0) {
+                    let mut stack = d;
+                    for ch in shown.chars() {
+                        stack = stack.child(SharedString::from(ch.to_string()));
+                    }
+                    row = row.child(stack);
+                } else {
+                    row = row.child(d.child(SharedString::from(shown)));
+                }
             }
             grid = grid.child(row);
         }
@@ -7982,6 +8245,9 @@ impl Render for Calc {
             .px_3().py_1().bg(rgb(0xEFF2F4))
             .border_t_1().border_color(rgb(0xD5DBE0));
         for (i, s) in self.book.sheets.iter().enumerate() {
+            if s.hidden {
+                continue; // 隠したシートは耳に出さない(表示タブで戻す)
+            }
             let on = i == self.active;
             sheets_bar = sheets_bar.child(div()
                 .id(SharedString::from(format!("sheet{i}")))
@@ -8012,6 +8278,26 @@ impl Render for Calc {
                 this.add_sheet();
                 cx.notify()
             })));
+        // 見張り(ウォッチウィンドウ)。控えたセルの値を下に並べる
+        let watch_bar = (!self.watch.is_empty()).then(|| {
+            let mut w = div().flex().flex_row().flex_wrap().gap_3()
+                .px_3().py_1().bg(rgb(0xF7F9FA))
+                .border_t_1().border_color(rgb(0xD5DBE0))
+                .text_size(px(11.0)).text_color(rgb(0x1B1B1B));
+            w = w.child(div().font_weight(gpui::FontWeight::BOLD)
+                .text_color(rgb(0x1B6E3C)).child("見張り"));
+            for (si, p) in self.watch.iter().take(24) {
+                let Some(sh) = self.book.sheets.get(*si) else { continue };
+                let v = sh.get(*p).map(|c| c.value.display()).unwrap_or_default();
+                w = w.child(div().flex().flex_row().gap_1()
+                    .child(div().text_color(rgb(0x66707A))
+                        .child(SharedString::from(format!("{}!{}", sh.name, p.a1()))))
+                    .child(div().font_weight(gpui::FontWeight::BOLD)
+                        .child(SharedString::from(v))));
+            }
+            w
+        });
+
         // 下端はステータスバーを兼ねる(デスクトップ版の形):
         // 状態の文言と、選択の生きた値(合計・平均・個数)
         sheets_bar = sheets_bar
@@ -9199,6 +9485,7 @@ impl Render for Calc {
                    .children(prompt_panel)
                    .children(solver_panel)
                    .children(slicer_panel))
+            .children(watch_bar)
             .child(sheets_bar)
             .children(notes)
     }

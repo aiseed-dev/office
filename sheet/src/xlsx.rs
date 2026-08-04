@@ -695,6 +695,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     };
     // シート名(workbook.xml の並び順)と、名前の定義
     let mut names = Vec::new();
+    let mut hiddens: Vec<bool> = Vec::new();
     // (名前, 中身) — 中身は 'Sheet1'!$A$1:$B$2 の形
     let mut defined: Vec<(String, String)> = Vec::new();
     // 理解できなかった definedName の原文(hidden 属性つき等)。捨てない
@@ -717,6 +718,10 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                     if local(e.name().as_ref()) == b"sheet" =>
                 {
                     names.push(attr(&e, "name").unwrap_or_else(|| "Sheet".into()));
+                    hiddens.push(matches!(
+                        attr(&e, "state").as_deref(),
+                        Some("hidden") | Some("veryHidden")
+                    ));
                 }
                 Ok(Event::Start(e)) if local(e.name().as_ref()) == b"definedName" => {
                     // name= 以外の属性(hidden 等)が付いていたら「単純ではない」
@@ -790,6 +795,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
         if let Ok(mut f) = zip.by_name(path) { let _ = f.read_to_string(&mut s); }
         let name = names.get(i).cloned().unwrap_or_else(|| format!("Sheet{}", i + 1));
         let mut sh = parse_sheet(&s, &shared, &styles, &name, &mut rep);
+        sh.hidden = hiddens.get(i).copied().unwrap_or(false);
         // このシートの rels(ハイパーリンクの先・コメントの部品への道)
         let rels_path = {
             let base = path.rsplit_once('/').map(|(_, b)| b).unwrap_or(path);
@@ -1271,6 +1277,37 @@ fn dollars(r: &str) -> String {
 }
 
 /// 原本の workbook.xml の definedNames を、こちらの塊に置き換える。
+/// 原文の workbook.xml の <sheet> に state="hidden" を差し替える。
+/// **知らない属性は残す** — 名前・sheetId・r:id はそのまま。
+fn patch_sheet_states(workbook: &str, book: &Book) -> String {
+    let mut out = String::new();
+    let mut rest = workbook;
+    let mut i = 0usize;
+    while let Some(p) = rest.find("<sheet ") {
+        let Some(e) = rest[p..].find('>') else { break };
+        let tag = &rest[p..p + e + 1];
+        out.push_str(&rest[..p]);
+        // 既存の state= を落として、必要なら付け直す
+        let mut t = tag.to_string();
+        while let Some(a) = t.find(" state=\"") {
+            if let Some(b) = t[a + 8..].find('"') {
+                t.replace_range(a..a + 8 + b + 1, "");
+            } else {
+                break;
+            }
+        }
+        if book.sheets.get(i).map(|s| s.hidden).unwrap_or(false) {
+            let cut = t.len() - if t.ends_with("/>") { 2 } else { 1 };
+            t.insert_str(cut, " state=\"hidden\"");
+        }
+        out.push_str(&t);
+        rest = &rest[p + e + 1..];
+        i += 1;
+    }
+    out.push_str(rest);
+    out
+}
+
 fn patch_defined_names(workbook: &str, block: &str) -> String {
     let mut s = workbook.to_string();
     if let Some(i) = s.find("<definedNames>") {
@@ -1566,6 +1603,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     // 原本の definedNames を置き換えて持ち越す
                     let s = String::from_utf8_lossy(&buf).to_string();
                     let patched = patch_defined_names(&s, &defined_names_xml(book));
+                    // 隠しシートの state はこちらのモデルが正(原文へ属性差し替え)
+                    let patched = patch_sheet_states(&patched, book);
                     carried.push((name, patched.into_bytes()));
                     continue;
                 }
@@ -1895,8 +1934,10 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     }
 
     let sheets_xml: String = book.sheets.iter().enumerate()
-        .map(|(i, s)| format!(r#"<sheet name="{}" sheetId="{}" r:id="rId{}"/>"#,
-                              esc(&s.name), i + 1, i + 1))
+        .map(|(i, s)| format!(r#"<sheet name="{}" sheetId="{}"{} r:id="rId{}"/>"#,
+                              esc(&s.name), i + 1,
+                              if s.hidden { r#" state="hidden""# } else { "" },
+                              i + 1))
         .collect();
     if !carry {
     put("xl/workbook.xml", &format!(
@@ -3083,6 +3124,28 @@ mod script_roundtrip_tests {
         let sp = &back.sheets[0].shapes[0];
         assert!((sp.dx_px - 30.0).abs() < 0.2, "colOff が往復しない: {}", sp.dx_px);
         assert!((sp.dy_px - 12.0).abs() < 0.2, "rowOff が往復しない: {}", sp.dy_px);
+    }
+
+    #[test]
+    fn 隠しシートと下付きと回転が往復する() {
+        let mut b = Book::new();
+        b.sheets.push(crate::Sheet::new("裏"));
+        b.sheets[1].hidden = true;
+        let p = Pos::parse("A1").unwrap();
+        let mut c = Cell::input("x");
+        c.fmt.subscript = true;
+        c.fmt.rotation = Some(255);
+        c.fmt.align = crate::model::HAlign::Justify;
+        b.sheets[0].set(p, c);
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert!(back.sheets[1].hidden, "隠しシートが往復しない");
+        let f = &back.sheets[0].get(p).unwrap().fmt;
+        assert!(f.subscript, "下付きが往復しない");
+        assert_eq!(f.rotation, Some(255), "回転が往復しない");
+        assert_eq!(f.align, crate::model::HAlign::Justify, "両端揃えが往復しない");
     }
 
     #[test]

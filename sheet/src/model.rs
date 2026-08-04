@@ -118,6 +118,8 @@ pub enum HAlign {
     Left,
     Center,
     Right,
+    /// 両端揃え(折り返した行を左右いっぱいに伸ばす)
+    Justify,
 }
 
 impl HAlign {
@@ -127,6 +129,7 @@ impl HAlign {
             HAlign::Left => Some("left"),
             HAlign::Center => Some("center"),
             HAlign::Right => Some("right"),
+            HAlign::Justify => Some("justify"),
         }
     }
     pub fn from_xlsx(v: &str) -> HAlign {
@@ -134,6 +137,7 @@ impl HAlign {
             "left" => HAlign::Left,
             "center" | "centerContinuous" => HAlign::Center,
             "right" => HAlign::Right,
+            "justify" | "distributed" => HAlign::Justify,
             _ => HAlign::General,
         }
     }
@@ -183,6 +187,10 @@ pub struct CellFormat {
     /// 文字の大きさ(pt×100 で持つ。f32 だと Ord が付かない)
     pub size_c: Option<u32>,
     pub strike: bool,
+    /// 下付き(xlsx の vertAlign subscript)。上付きは未実装
+    pub subscript: bool,
+    /// 文字の回転(xlsx の alignment textRotation。度。90=縦向き)
+    pub rotation: Option<i32>,
     pub valign: VAlign,
     /// 折り返して全体を表示
     pub wrap: bool,
@@ -266,6 +274,9 @@ pub struct Sheet {
     /// 保存に残る** — 畳んだ台帳は畳んだまま次の人に渡る
     pub row_hidden: std::collections::BTreeSet<u32>,
     pub col_hidden: std::collections::BTreeSet<u32>,
+    /// 隠しシート(xlsx の workbook.xml の sheet state="hidden")。
+    /// 隠しても中身も式も生きている — 見えなくなるだけ
+    pub hidden: bool,
     /// シートの保護(xlsx の sheetProtection)。**パスワードは掛けない** —
     /// 掛けた振りもしない(writer の保護と同じ正直な作法)。
     /// 効き目はアプリが守る: 保護中は編集を堰き止める
