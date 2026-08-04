@@ -2622,6 +2622,38 @@ impl Calc {
         }
     }
 
+    /// 選択の生きた値(Excel の下端と同じ 合計・平均・個数)。
+    /// 2セル以上を選んでいて、数のセルがあるときだけ出す。
+    fn sel_stats(&self) -> Option<String> {
+        self.anchor?;
+        let (a, b) = self.sel_rect();
+        let cells = (b.row - a.row + 1) as u64 * (b.col - a.col + 1) as u64;
+        // 全選択のような巨大な矩形は数えない(描画のたびに走るので)
+        if cells < 2 || cells > 200_000 {
+            return None;
+        }
+        let sh = self.sheet();
+        let mut n = 0u64;
+        let mut sum = 0.0f64;
+        for r in a.row..=b.row {
+            for c in a.col..=b.col {
+                if let Some(Value::Number(v)) = sh.get(Pos::new(r, c)).map(|x| &x.value) {
+                    n += 1;
+                    sum += *v;
+                }
+            }
+        }
+        if n == 0 {
+            return None;
+        }
+        let avg = (sum / n as f64 * 100.0).round() / 100.0;
+        Some(format!(
+            "合計 {} / 平均 {} / 個数 {n}",
+            Value::Number(sum).display(),
+            Value::Number(avg).display()
+        ))
+    }
+
     /// チャット(申し送り帳)の置き場。ブックの隣の 名前.xlsx.chat.txt
     fn chat_path(&self) -> Option<PathBuf> {
         self.path.as_ref().map(|p| {
@@ -6419,39 +6451,25 @@ impl Render for Calc {
             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             eprintln!("render #{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         }
-        // ---- リボン(Euro-Office に名前と並びを合わせる) ----
-        // **タブの行そのものが窓の取っ手**(掴んで移動・二度押しで最大化)。
-        // 空きの帯だけだとタブが多い窓で幅がゼロになり掴めない(writer で踏んだ)。
-        // 釦の類いは stop_propagation で取っ手より先に効く
+        // ---- 画面の額縁(デスクトップ版の形。writer と同じ構成) ----
+        // 1段目 = クイックアクセス+ブック名(この行が窓の取っ手)。
+        // 表計算の色は緑(デスクトップ版の app 色分けと同じ)。
+        // 2段目 = 白地のタブ+現在地の緑の下線。右端に 🔍。
+        // 下端 = ステータスバー(シートの耳+状態の文言+選択の生きた値)
         let (ready, all) = ribbon::progress(ribbon::CALC);
-        let mut tabs = div().id("titlebar").flex().flex_row().items_end().gap_1()
-            .px_3().pt_1p5().bg(rgb(0x1B6E3C))
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(
-                |_, e: &gpui::MouseDownEvent, window, _| {
-                    if e.click_count >= 2 {
-                        window.zoom_window();
-                    } else {
-                        window.start_window_move();
-                    }
-                }));
-        for (i, tb) in ribbon::CALC.iter().enumerate() {
-            let on = i == self.tab;
-            tabs = tabs.child(div()
-                .id(SharedString::from(format!("tab{i}")))
-                .px_3().py_1p5().rounded_t_md()
-                .bg(if on { rgb(0xFFFFFF) } else { rgb(0x1B6E3C) })
-                .text_color(if on { rgb(0x1B6E3C) } else { rgb(0xCFE6D8) })
-                .text_size(px(12.0))
-                .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
-                .cursor_pointer().hover(|s| s.text_color(rgb(0xFFFFFF)))
-                .child(tb.name)
+        let qa = |id: &'static str, icon: &'static str| {
+            div().id(id).px_2().py_1().rounded_sm().cursor_pointer()
+                .hover(move |s| s.bg(rgb(0x2E8B57)))
+                .child(gpui::svg()
+                    .path(SharedString::from(format!("icons/{icon}.svg")))
+                    .size(px(15.0)).text_color(rgb(0xE8F3EC)))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
-        }
-        tabs = tabs
-            .child(div().flex_1().h(px(28.0)))
-            .child(div().pb_1p5().pr_2().text_size(px(10.5)).text_color(rgb(0x9CC9AF))
-                   .child(SharedString::from(format!("calc — 実装済み {ready}/{all}"))));
+        };
+        let title = self
+            .path
+            .as_ref()
+            .and_then(|q| q.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "無題のブック".into());
         let winbtn = |id: &'static str, label: &'static str| {
             div().id(id).px_2p5().py_1().rounded_sm()
                 .text_size(px(12.0)).text_color(rgb(0xCFE6D8))
@@ -6461,7 +6479,42 @@ impl Render for Calc {
                 .child(label)
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
-        tabs = tabs
+        let top = div().id("titlebar").flex().flex_row().items_center().gap_0p5()
+            .px_2().py_0p5().bg(rgb(0x1B6E3C))
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                |_, e: &gpui::MouseDownEvent, window, _| {
+                    if e.click_count >= 2 {
+                        window.zoom_window();
+                    } else {
+                        window.start_window_move();
+                    }
+                }))
+            .child(qa("qa-save", "save").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("save", cx);
+                cx.notify()
+            })))
+            .child(qa("qa-print", "print").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("pdf", cx);
+                cx.notify()
+            })))
+            .child(qa("qa-undo", "undo").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("undo", cx);
+                cx.notify()
+            })))
+            .child(qa("qa-redo", "redo").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("redo", cx);
+                cx.notify()
+            })))
+            .child(div().flex_1())
+            .child(div().text_size(px(12.5)).text_color(rgb(0xFFFFFF))
+                .whitespace_nowrap().overflow_hidden()
+                .child(SharedString::from(format!(
+                    "{}{title}",
+                    if self.dirty { "*" } else { "" }
+                ))))
+            .child(div().flex_1())
+            .child(div().pr_2().text_size(px(10.5)).text_color(rgb(0x9CC9AF))
+                .child(SharedString::from(format!("calc — 実装済み {ready}/{all}"))))
             .child(winbtn("min", "─").on_click(cx.listener(|_, _, window, _| {
                 window.minimize_window();
             })))
@@ -6471,6 +6524,35 @@ impl Render for Calc {
             .child(winbtn("close", "✕").on_click(cx.listener(|this, _, _, cx| {
                 this.request_quit(cx);
             })));
+
+        let mut tabs = div().flex().flex_row().items_end().gap_1()
+            .px_2().bg(gpui::white());
+        for (i, tb) in ribbon::CALC.iter().enumerate() {
+            let on = i == self.tab;
+            tabs = tabs.child(div()
+                .id(SharedString::from(format!("tab{i}")))
+                .px_2p5().pt_1p5()
+                .text_size(px(12.0))
+                .text_color(if on { rgb(0x1B6E3C) } else { rgb(0x555E66) })
+                .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(0x1B6E3C)))
+                .flex().flex_col().items_center().gap_1()
+                .child(tb.name)
+                // 現在地の緑の下線(デスクトップ版の形)
+                .child(div().h(px(2.5)).w_full().rounded_sm()
+                    .bg(if on { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) }))
+                .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
+        }
+        tabs = tabs.child(div().flex_1())
+            .child(div().id("tab-find").px_2().pb_1().text_size(px(12.0))
+                .text_color(rgb(0x555E66)).cursor_pointer()
+                .hover(|s| s.text_color(rgb(0x1B6E3C)))
+                .child("🔍")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.run_cmd("replace", cx);
+                    cx.notify()
+                })));
 
         let mut cmds = div().flex().flex_row().flex_wrap().gap_1().items_center()
             .px_3().py_2().bg(gpui::white())
@@ -6501,11 +6583,7 @@ impl Render for Calc {
                     .child(cmd.label));
             }
         }
-        cmds = cmds.child(div().flex_1())
-            .child(div().text_size(px(11.0)).text_color(rgb(0x66707A))
-                   .child(SharedString::from(format!("{}{}",
-                       if self.dirty { "● " } else { "" }, self.status))));
-        let bar = div().flex().flex_col().child(tabs).child(cmds);
+        let bar = div().flex().flex_col().child(top).child(tabs).child(cmds);
 
         // ---- 数式バー ----
         let formula_bar = div()
@@ -6745,7 +6823,11 @@ impl Render for Calc {
                 .text_color(if on { rgb(0x1B6E3C) } else { rgb(0x66707A) })
                 .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                 .cursor_pointer().hover(|s| s.bg(gpui::white()))
-                .child(SharedString::from(s.name.clone()))
+                .child(SharedString::from(format!(
+                    "{}{}",
+                    if s.protected { "🔒" } else { "" },
+                    s.name
+                )))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.switch_sheet(i);
                     cx.notify()
@@ -6761,6 +6843,22 @@ impl Render for Calc {
                 this.add_sheet();
                 cx.notify()
             })));
+        // 下端はステータスバーを兼ねる(デスクトップ版の形):
+        // 状態の文言と、選択の生きた値(合計・平均・個数)
+        sheets_bar = sheets_bar
+            .child(div().pl_3().text_size(px(11.0)).text_color(rgb(0x66707A))
+                .whitespace_nowrap().overflow_hidden()
+                .child(SharedString::from(format!(
+                    "{}{}",
+                    if self.dirty { "● " } else { "" },
+                    self.status
+                ))))
+            .child(div().flex_1())
+            .children(self.sel_stats().map(|s| {
+                div().pr_2().text_size(px(11.0)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x1B6E3C)).whitespace_nowrap()
+                    .child(SharedString::from(s))
+            }));
 
         // ---- 右クリックのメニュー ----
         // **並びと名前は Euro-Office の右クリックメニューに合わせる**(リボンと
