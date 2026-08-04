@@ -2,22 +2,78 @@
 #
 #   python3 sample/catalog_server.py        # 127.0.0.1:8765
 #
-# - GET /catalog.csv — 品番,分類,品名,説明,単価(税抜) の CSV(商品マスタ)
-# - POST /order      — 注文(JSON)を受けて受付番号を返す(注文書.xlsx の @送信 net)
-# - GET /orders      — 受けた注文の一覧(JSON。確認用)
+# - GET /catalog.html — カタログ(JS なしの HTML。writer の HTML 読みの検証相手)
+# - GET /order.html   — 注文書(JS なしの HTML フォーム。記入して送るだけ — form の
+#                       POST は JavaScript 以前からの素の仕組み)
+# - GET /catalog.csv  — 品番,分類,品名,説明,単価(税抜) の CSV(商品マスタ)
+# - POST /order       — 注文の受け口。JSON(注文書.xlsx の @送信 net)と
+#                       フォーム(order.html)の両方を受ける
+# - GET /orders       — 受けた注文の一覧(JSON。確認用)
 #
-# 標準ライブラリだけで動く。gen_catalog.py がここから取ってカタログを作る —
-# 「価格の正本はサーバー、docx / xlsx は手元」の分業の見本。
+# 標準ライブラリだけで動く。HTML も CSV も同じ PRODUCTS から生成(1ソース多形態)。
+# 「正本はサーバーのデータ、配布物は文書。コードは文書と一緒に旅をしない」の見本。
 #
 # 同梱データとの違い(マスタが動いた後、という想定):
 #   A-101〜A-103 は 150→160 に値上げ、D-401 は 1480→1380 に値下げ、
 #   E-505(結束バンド)が新商品として増えている。
 import csv
+import html
 import io
 import json
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ORDERS = []  # 受けた注文(この見本ではメモリに持つだけ)
+
+STYLE = """<style>
+body { font-family: sans-serif; margin: 2rem auto; max-width: 46rem; }
+table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }
+th, td { border: 1px solid #999; padding: 0.3rem 0.6rem; text-align: left; }
+th { background: #dce6f1; }
+td.num, th.num { text-align: right; }
+input { padding: 0.2rem; }
+</style>"""
+
+
+def page(title, body):
+    return (f"<!DOCTYPE html><html lang=\"ja\"><head><meta charset=\"utf-8\">"
+            f"<title>{html.escape(title)}</title>{STYLE}</head>"
+            f"<body>{body}</body></html>").encode("utf-8")
+
+
+def catalog_page():
+    b = ["<h1>事務用品カタログ(2026年秋)</h1>",
+         "<p>例示文具株式会社 — 価格はすべて税抜。"
+         "ご注文は <a href=\"/order.html\">注文書</a> で。</p>"]
+    cats = []
+    for p in PRODUCTS:
+        if p[1] not in cats:
+            cats.append(p[1])
+    for cat in cats:
+        b.append(f"<h2>{html.escape(cat)}</h2>")
+        b.append("<table><tr><th>品番</th><th>品名</th><th>説明</th>"
+                 "<th class=\"num\">単価(税抜)</th></tr>")
+        for code, c, name, desc, price in PRODUCTS:
+            if c == cat:
+                b.append(f"<tr><td>{code}</td><td>{html.escape(name)}</td>"
+                         f"<td>{html.escape(desc)}</td>"
+                         f"<td class=\"num\">{price:,}円</td></tr>")
+        b.append("</table>")
+    return page("事務用品カタログ", "".join(b))
+
+
+def order_page():
+    b = ["<h1>注文書</h1>",
+         "<p>例示文具株式会社 行 — 品番は<a href=\"/catalog.html\">カタログ</a>から。</p>",
+         "<form method=\"post\" action=\"/order\">",
+         "<table><tr><th>社名</th><td><input name=\"company\" size=\"30\"></td>"
+         "<th>担当</th><td><input name=\"person\" size=\"12\"></td></tr></table>",
+         "<table><tr><th>品番</th><th>数量</th></tr>"]
+    for i in range(1, 11):
+        b.append(f"<tr><td><input name=\"c{i}\" size=\"8\"></td>"
+                 f"<td><input name=\"q{i}\" size=\"6\"></td></tr>")
+    b.append("</table><p><input type=\"submit\" value=\"注文を送る\"></p></form>")
+    return page("注文書", "".join(b))
 
 PRODUCTS = [
     ("A-101", "筆記具", "ボールペン(黒)", "0.7mm・油性", 160),
@@ -73,6 +129,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/catalog.html":
+            self.reply_html(catalog_page())
+        elif self.path == "/order.html":
+            self.reply_html(order_page())
         elif self.path == "/orders":
             self.reply_json(ORDERS)
         else:
@@ -90,15 +150,51 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         n = int(self.headers.get("Content-Length", 0))
-        try:
-            order = json.loads(self.rfile.read(n).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            self.reply_json({"error": "JSON が読めません"}, code=400)
-            return
+        raw = self.rfile.read(n).decode("utf-8")
+        is_form = "json" not in (self.headers.get("Content-Type") or "")
+        if is_form:
+            # HTML フォームから(order.html。JS なしの素の POST)
+            q = {k: v[0].strip() for k, v in urllib.parse.parse_qs(raw).items()}
+            codes = {p[0] for p in PRODUCTS}
+            lines, rejected = [], []
+            for i in range(1, 11):
+                code, qty = q.get(f"c{i}", ""), q.get(f"q{i}", "")
+                if not code and not qty:
+                    continue
+                if code in codes and qty.isdigit() and int(qty) > 0:
+                    lines.append({"品番": code, "数量": int(qty)})
+                else:
+                    rejected.append(f"{i}行目({code or '品番なし'})")
+            if not lines:
+                self.reply_html(page("注文書", "<h1>受け付けられません</h1>"
+                                     "<p>正しい品番と数量の行がありません。</p>"), code=400)
+                return
+            order = {"社名": q.get("company") or "(未記入)",
+                     "担当": q.get("person", ""), "明細": lines}
+        else:
+            try:
+                order = json.loads(raw)
+            except ValueError:
+                self.reply_json({"error": "JSON が読めません"}, code=400)
+                return
         ORDERS.append(order)
         no = len(ORDERS)
         print(f"注文を受けた(受付番号 {no}): {order}")
-        self.reply_json({"受付番号": no, "明細": len(order.get("明細", []))})
+        if is_form:
+            note = (f"<p>読めなかった行は受けていません: {'、'.join(rejected)}</p>"
+                    if rejected else "")
+            self.reply_html(page("受付", f"<h1>受け付けました</h1>"
+                                 f"<p>受付番号 {no}・明細 {len(order['明細'])} 行。</p>{note}"
+                                 "<p><a href=\"/order.html\">続けて注文する</a></p>"))
+        else:
+            self.reply_json({"受付番号": no, "明細": len(order.get("明細", []))})
+
+    def reply_html(self, body, code=200):
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def reply_json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
