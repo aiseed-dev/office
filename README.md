@@ -52,8 +52,8 @@
 cargo build --release
 
 ./target/release/writer            # 空で開く
-./target/release/writer 文書.docx
-./target/release/calc  帳票.xlsx
+./target/release/writer sample/報告書.docx   # 同梱のサンプル(中身は架空)
+./target/release/calc  sample/見積書.xlsx
 ```
 
 初回のビルドは GPUI(zed)を取ってくるので時間がかかります。
