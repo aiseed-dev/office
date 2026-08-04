@@ -3825,6 +3825,12 @@ impl Calc {
         self.extend(1, 0); cx.notify();
     }
     fn a_select_all(&mut self, _: &ui::SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_all_now();
+        cx.notify();
+    }
+    /// 全選択の実体。Ctrl+A ともリボンの「すべて選択」とも同じ道を通す
+    /// (リボンだけバーの文字選択、という別物にしない)
+    fn select_all_now(&mut self) {
         if self.editing() {
             // 打ちかけの間は、バーの文字の全選択
             self.input.select_all();
@@ -3841,7 +3847,6 @@ impl Calc {
                 self.sync_input();
             }
         }
-        cx.notify();
     }
     fn a_undo(&mut self, _: &ui::Undo, _: &mut Window, cx: &mut Context<Self>) {
         if !self.input.undo() {
@@ -5551,7 +5556,7 @@ calc の隣に置いてください)"
                     self.redo_sheet();
                 }
             }
-            "selectall" => self.input.select_all(),
+            "selectall" => self.select_all_now(),
             // 罫線 — **日本の帳票の本体**
             "borders" => self.fmt(|f| {
                 f.borders = if f.borders.any() { Borders::NONE } else { Borders::ALL }
@@ -11003,6 +11008,9 @@ mod menu_run_tests {
         }
         this.cursor = Pos::parse("A1").unwrap();
         this.anchor = Some(Pos::parse("D3").unwrap());
+        // バーとセルを揃える(実機ではカーソル移動が必ず呼ぶ。ずれたままだと
+        // 最初の commit() が A1 を空で潰し、種の表が崩れる)
+        this.sync_input();
     }
 
     #[gpui::test]
@@ -11028,6 +11036,26 @@ mod menu_run_tests {
             }
         }
         ui::ai::set_backend(keep_ai);
+    }
+
+    /// リボンの「すべて選択」は**セル**に効く(バーの文字選択に化けない —
+    /// Ctrl+A と同じ実体を通ることの検査。2026-08-05 に別実装のサボりを直した)
+    #[gpui::test]
+    fn 全選択はセルに効く(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            seed(this);
+            this.anchor = None;
+            this.sync_input(); // 実機ではカーソル移動が必ず呼ぶ
+            this.run_cmd("selectall", cx);
+            let (rows, cols) = this.sheet().extent();
+            assert_eq!(this.anchor, Some(Pos::parse("A1").unwrap()), "起点が A1 でない");
+            assert_eq!(
+                this.cursor,
+                Pos::new(rows - 1, cols - 1),
+                "使われている範囲の端まで選べていない"
+            );
+        });
     }
 
     /// 押すと入切する釦は、2回押すと元に戻る(1手で戻せる家訓)
