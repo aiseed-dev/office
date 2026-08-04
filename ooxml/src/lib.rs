@@ -133,6 +133,20 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Document, Report), String> {
         let head = &sxml[i..(i + 60).min(sxml.len())];
         doc.hyphenate = !(head.contains("w:val=\"0\"") || head.contains("w:val=\"false\""));
     }
+    // 文書の保護(readOnly 等)。enforcement が切られていれば保護ではない
+    if let Some(i) = sxml.find("<w:documentProtection") {
+        let head = &sxml[i..(i + 200).min(sxml.len())];
+        let off = head.contains("w:enforcement=\"0\"")
+            || head.contains("w:enforcement=\"false\"");
+        if !off {
+            if let Some(j) = head.find("w:edit=\"") {
+                let s2 = j + 8;
+                if let Some(e) = head[s2..].find('"') {
+                    doc.protection = Some(head[s2..s2 + e].to_string());
+                }
+            }
+        }
+    }
     // ヘッダー・フッター(全ページ同じもの = type="default")を部品から読む。
     // 表など、まだ持てないものが入っていたら**編集の対象にしない** —
     // paragraphs を空のまま残せば、保存で原文の部品がそのまま生きる
@@ -1942,7 +1956,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
              "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"),
             (ftr.as_ref().map(|(n, _)| n.as_str()),
              "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"),
-            ((doc.page_color.is_some() || doc.hyphenate).then_some("word/settings.xml"),
+            ((doc.page_color.is_some() || doc.hyphenate || doc.protection.is_some())
+                .then_some("word/settings.xml"),
              "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"),
             ((!cmts_out.is_empty()).then_some("word/comments.xml"),
              "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"),
@@ -1969,7 +1984,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     // 本文の rels。原本の関係(既存の画像・ヘッダー等)は残し、
     // 挿した画像のぶん(rIdJO1〜)と、新しく作るヘッダー・フッターを足す
     if orig_rels.is_some() || !new_media.is_empty() || hdr.is_some() || ftr.is_some()
-        || doc.page_color.is_some() || doc.hyphenate || !cmts_out.is_empty()
+        || doc.page_color.is_some() || doc.hyphenate || doc.protection.is_some()
+        || !cmts_out.is_empty()
     {
         let mut rels = orig_rels.unwrap_or_else(|| {
             concat!(
@@ -2002,7 +2018,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             ));
         }
         // 設定(settings.xml)への関係。素の文書に設定を足したときだけ要る
-        if (doc.page_color.is_some() || doc.hyphenate)
+        if (doc.page_color.is_some() || doc.hyphenate || doc.protection.is_some())
             && !rels.contains("Target=\"settings.xml\"")
         {
             add.push_str(&format!(
@@ -2056,7 +2072,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     }
     // 設定(settings.xml)。ページの色を見せる旗と、ハイフネーションの旗を
     // 織り込む。原本の settings は他の設定ごと生かす(丸ごと作り直さない)
-    if doc.page_color.is_some() || doc.hyphenate || orig_settings.is_some() {
+    if doc.page_color.is_some() || doc.hyphenate || doc.protection.is_some()
+        || orig_settings.is_some()
+    {
         let mut st = orig_settings.unwrap_or_else(|| concat!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n",
             "<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"></w:settings>"
@@ -2075,6 +2093,20 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         } else if let Some(i) = st.find("<w:autoHyphenation") {
             if let Some(j) = st[i..].find("/>") {
                 st.replace_range(i..i + j + 2, "");
+            }
+        }
+        // 文書の保護。旗に合わせて置き直す(古いものは外してから)
+        if let Some(i) = st.find("<w:documentProtection") {
+            if let Some(j) = st[i..].find("/>") {
+                st.replace_range(i..i + j + 2, "");
+            }
+        }
+        if let Some(edit) = &doc.protection {
+            if let Some(i) = st.rfind("</w:settings>") {
+                st.insert_str(i, &format!(
+                    r#"<w:documentProtection w:edit="{}" w:enforcement="1"/>"#,
+                    esc(edit)
+                ));
             }
         }
         zip.start_file("word/settings.xml", opts).map_err(|e| e.to_string())?;
@@ -2100,7 +2132,7 @@ mod tests {
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![Run { text: s.to_string(), size_pt: 10.5, font: None, fmt: Default::default() }] }
     }
     fn doc(parts: &[&str]) -> Document {
-        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
+        Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: parts.iter().map(|s| Block::Para(para(s))).collect() }
     }
     fn round_trip(d: &Document) -> (Document, Report) {
         let mut buf = Cursor::new(Vec::new());
@@ -2130,7 +2162,7 @@ mod tests {
 
     #[test]
     fn 文字サイズが保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "大見出し".into(), size_pt: 16.0, font: None, fmt: Default::default() },
@@ -2163,7 +2195,7 @@ mod tests {
 
     #[test]
     fn 段落内の改行が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![Block::Para(Paragraph { align: Default::default(), style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![
             Run { text: "一行目\n二行目".into(), size_pt: 10.5, font: None, fmt: Default::default() }]})]};
@@ -2179,7 +2211,7 @@ mod tests {
 
     #[test]
     fn 表が往復する() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![
             Block::Para(para("(様式3) 会社概要")),
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![cell("会　社　名"), cell("日本フネン株式会社")],
@@ -2202,7 +2234,7 @@ mod tests {
 
     #[test]
     fn 表と本文の順序が保たれる() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![
             Block::Para(para("前")),
             Block::Table(Table { col_mm: vec![], rows: vec![vec![cell("表1")]] }),
             Block::Para(para("中")),
@@ -2218,7 +2250,7 @@ mod tests {
     #[test]
     fn 空セルも列として残る() {
         // 事務様式は「記入欄が空の表」が本体。空セルが消えると様式が壊れる
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![Block::Table(Table { col_mm: vec![], rows: vec![
             vec![cell("氏名"), Cellbox::default()],
             vec![cell("所属"), Cellbox::default()],
         ]})]};
@@ -2258,7 +2290,7 @@ mod tests {
         vstart.v_merge = kumihan::VMerge::Start;
         let mut vcont = Cellbox::default();
         vcont.v_merge = kumihan::VMerge::Continue;
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![
             Block::Table(Table { col_mm: vec![], rows: vec![
                 vec![head],
                 vec![vstart, cell("本社")],
@@ -2315,7 +2347,7 @@ mod font_tests {
         let doc = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None,
             blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
                 align: Default::default(),
                 anchors: Vec::new(),
@@ -2371,7 +2403,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("見出し", f.clone())] })],
@@ -2386,7 +2418,7 @@ mod fmt_tests {
         let d = Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None,
             blocks: vec![Block::Para(Paragraph { align: Align::Left, style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false, anchors: Vec::new(),
                     images: Vec::new(), page_break_before: false,
                     list: Default::default(), indent: 0, line_spacing: 1.0, shade: None, boxed: false, images_new: Vec::new(), runs: vec![run("赤", f.clone())] })],
@@ -2400,7 +2432,7 @@ mod fmt_tests {
             let d = Document {
                 font: None,
                 page: None,
-                sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
+                sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None,
                 blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
                     align: a,
                     anchors: Vec::new(),
@@ -2465,7 +2497,7 @@ mod para_tests {
     }
 
     fn roundtrip(p: Paragraph) -> Paragraph {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![Block::Para(p)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![Block::Para(p)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         crate::read(std::io::Cursor::new(&buf)).unwrap().0.paragraphs().next().unwrap().clone()
@@ -2495,7 +2527,7 @@ mod para_tests {
 
     #[test]
     fn 既定の段落には余計な指定を書かない() {
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![Block::Para(para(ListKind::None, 0, 1.0))] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(&buf)).unwrap();
@@ -2533,7 +2565,7 @@ mod break_round {
         para.page_break_before = true;
         para.runs.push(Run {
             text: "二頁目".into(), size_pt: 10.5, font: None, fmt: Default::default() });
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, blocks: vec![Block::Para(para)] };
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None, blocks: vec![Block::Para(para)] };
         let mut buf = Vec::new();
         crate::write(&d, std::io::Cursor::new(&mut buf)).unwrap();
         let back = crate::read(std::io::Cursor::new(&buf)).unwrap().0;
@@ -2687,7 +2719,7 @@ mod vertalign_tests {
         Document {
             font: None,
             page: None,
-            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
+            sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None,
             blocks: vec![Block::Para(Paragraph { style: Default::default(), comments: Vec::new(), bookmarks: Vec::new(), dropcap: false,
                 align: Align::Left,
                 runs: vec![Run { text: "x2".into(), size_pt: 10.5, font: None, fmt }],
@@ -2779,7 +2811,7 @@ mod shade_tests {
         };
         p.shade = Some("FFF2CC".into());
         p.boxed = true;
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None,
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");
@@ -2890,6 +2922,27 @@ mod partial_fmt_tests {
             ("仕様".into(), true, 14.0),
             ("を確認".into(), false, 10.5),
         ], "部分書式が往復しない");
+    }
+}
+
+#[cfg(test)]
+mod protection_round_tests {
+    use super::*;
+    use kumihan::Document;
+
+    #[test]
+    fn 文書の保護が往復し解除で消える() {
+        let mut d = Document::plain("大事な様式", 10.5);
+        d.protection = Some("readOnly".into());
+        let mut first = Vec::new();
+        write(&d, Cursor::new(&mut first)).expect("書けない");
+        let (mut back, _) = read(Cursor::new(&first)).expect("読めない");
+        assert_eq!(back.protection.as_deref(), Some("readOnly"), "保護が往復しない");
+        back.protection = None;
+        let mut second = Vec::new();
+        write_with(&back, Some(Cursor::new(&first)), Cursor::new(&mut second)).unwrap();
+        let (back2, _) = read(Cursor::new(&second)).unwrap();
+        assert_eq!(back2.protection, None, "解除したのに残っている");
     }
 }
 
@@ -3463,7 +3516,7 @@ mod image_insert_tests {
             w_mm: 50.0,
             h_mm: 30.0,
         });
-        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false,
+        let d = Document { font: None, page: None, sect_raw: None, header: Default::default(), footer: Default::default(), page_color: None, watermark: None, ink: Vec::new(), track_author: None, hyphenate: false, protection: None,
                            blocks: vec![Block::Para(p)] };
         let mut buf = Cursor::new(Vec::new());
         write(&d, &mut buf).expect("書けない");

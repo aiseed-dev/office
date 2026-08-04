@@ -74,6 +74,7 @@ READY = {
         "hyphenation": "hyphenation", "crossref": "crossref",
         "co-addcomment": "co-addcomment", "co-delcomment": "co-delcomment",
         "co-showcomment": "co-showcomment",
+        "coauth-mode": "coauth-mode", "prot-doc": "prot-doc",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",

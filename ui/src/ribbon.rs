@@ -144,7 +144,7 @@ pub const WRITER: &[Tab] = &[
         c("comment", "コメント", "comment"),
     ]},
     Tab { name: "コラボレーション", cmds: &[
-        x("共同編集モード", "coauth-mode"),
+        c("coauth-mode", "共同編集モード", "coauth-mode"),
         c("co-addcomment", "コメントを追加", "co-addcomment"),
         c("co-delcomment", "コメントを削除", "co-delcomment"),
         c("co-showcomment", "コメントの表示", "co-showcomment"),
@@ -154,7 +154,7 @@ pub const WRITER: &[Tab] = &[
     Tab { name: "保護", cmds: &[
         x("暗号化する", "prot-encrypt"),
         x("デジタル署名を追加", "prot-sign"),
-        x("保護", "prot-doc"),
+        c("prot-doc", "保護", "prot-doc"),
     ]},
     Tab { name: "表示", cmds: &[
         c("zoom-in", "拡大", "zoom-in"),

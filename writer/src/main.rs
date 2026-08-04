@@ -443,6 +443,38 @@ impl HasEditor for Writer {
             // 検索欄への打鍵は文書を変えない
             return;
         }
+        if self.protected() {
+            // 読み取り専用の保護。**打った分を取り消して、文書は変えない。**
+            // 板(ヘッダー等)の打鍵は文書に入る前なので、板ごと閉じて捨てる
+            if self.hf_edit.is_some() || self.wm_edit || self.cmt_edit {
+                self.hf_edit = None;
+                self.wm_edit = false;
+                self.cmt_edit = false;
+            }
+            if !self.bm_open {
+                self.ed.clear_marked();
+                let want = match self.target {
+                    Target::Body => self.doc.body_text(),
+                    Target::Cell { table, row, col } => self
+                        .doc
+                        .tables()
+                        .nth(table)
+                        .and_then(|t| t.rows.get(row))
+                        .and_then(|r| r.get(col))
+                        .map(cell_text)
+                        .unwrap_or_default(),
+                };
+                while self.ed.text() != want {
+                    if !self.ed.undo() {
+                        self.ed = Editor::new(&want);
+                        break;
+                    }
+                }
+            }
+            self.status =
+                "読み取り専用で保護されています(保護タブの「保護」で解除できます)".into();
+            return;
+        }
         if let Some(footer) = self.hf_edit {
             // 板の打鍵はその場で文書のヘッダー・フッターに反映する
             let text = self.hf_ed.text().to_string();
@@ -887,6 +919,11 @@ impl Writer {
         }
     }
 
+    /// 読み取り専用の保護が掛かっているか(保護タブの「保護」で入切)
+    fn protected(&self) -> bool {
+        self.doc.protection.is_some()
+    }
+
     /// 自分のロックを外す(閉じる・別のファイルへ移るとき)。
     fn release_lock(&mut self) {
         if let Some(lp) = self.my_lock.take() {
@@ -945,6 +982,13 @@ impl Writer {
                 if let Some(who) = self.locked_by.clone() {
                     self.status = format!(
                         "{} — **{who} が開いています**。上書き保存はできません(別の名前で保存へ)",
+                        self.status
+                    )
+                    .into();
+                }
+                if self.doc.protection.is_some() {
+                    self.status = format!(
+                        "{} — 読み取り専用で保護されています(保護タブで解除できます)",
                         self.status
                     )
                     .into();
@@ -1252,6 +1296,11 @@ impl Writer {
 
     /// 選んでいる段落の性質を変える。
     fn para(&mut self, f: impl Fn(&mut kumihan::Paragraph) + Copy) {
+        if self.protected() {
+            self.status =
+                "読み取り専用で保護されています(保護タブの「保護」で解除できます)".into();
+            return;
+        }
         match self.target {
             Target::Body => {
                 let sel = self.ed.selection();
@@ -1933,6 +1982,11 @@ impl Writer {
 
     /// いま選ばれている一致を置き換えて、次へ。
     fn replace_current(&mut self) {
+        if self.protected() {
+            self.status =
+                "読み取り専用で保護されています(保護タブの「保護」で解除できます)".into();
+            return;
+        }
         let term = self.find_ed.text().to_string();
         let repl = self.repl_ed.text().to_string();
         if term.is_empty() {
@@ -1950,6 +2004,11 @@ impl Writer {
 
     /// 全部置き換える。**何件変えたかを言う**(黙って書き換えない)。
     fn replace_all(&mut self) {
+        if self.protected() {
+            self.status =
+                "読み取り専用で保護されています(保護タブの「保護」で解除できます)".into();
+            return;
+        }
         let term = self.find_ed.text().to_string();
         let repl = self.repl_ed.text().to_string();
         if term.is_empty() {
@@ -1999,6 +2058,7 @@ impl Writer {
         "caption", "tof", "tof-update", "columns",
         "pen", "highlighter", "eraser", "track-changes", "dropcap", "hyphenation",
         "crossref", "co-addcomment", "co-delcomment", "co-showcomment",
+        "prot-doc", "coauth-mode",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2127,6 +2187,18 @@ impl Writer {
     }
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
+        // 読み取り専用の保護。文書を変える釦はここで断る(見る・出す・
+        // 保存・検索の類いは通す)。解除はいつでも「保護」の釦1手
+        const READONLY_OK: &[&str] = &[
+            "open", "save", "pdf", "zoom-in", "zoom-out", "ruler", "darkmode",
+            "line-numbers", "hidenchars", "selectall", "spell", "wordcount",
+            "co-showcomment", "replace", "prot-doc", "coauth-mode",
+        ];
+        if self.protected() && !READONLY_OK.contains(&id) {
+            self.status =
+                "読み取り専用で保護されています(保護タブの「保護」で解除できます)".into();
+            return;
+        }
         match id {
             "open" => self.open_dialog(cx),
             "save" => self.save(false, cx),
@@ -2685,6 +2757,59 @@ impl Writer {
                 self.status =
                     "コメントを編集中(段落に付きます。空にして閉じると外れる)".into();
             }
+            // 文書の保護。readOnly を docx の documentProtection と往復する。
+            // パスワードは掛けない(**掛けた振りもしない**)— Word でも
+            // 「編集の制限」として見え、解除も同じ1手でできる正直な保護
+            "prot-doc" => {
+                if self.doc.protection.is_some() {
+                    self.doc.protection = None;
+                    self.dirty = true;
+                    self.status =
+                        "保護を外しました(編集できます。保存で docx にも残ります)".into();
+                } else {
+                    self.flush_target();
+                    self.doc.protection = Some("readOnly".into());
+                    // 文書を変える板とペンは店じまい
+                    self.hf_edit = None;
+                    self.wm_edit = false;
+                    self.cmt_edit = false;
+                    self.tool = None;
+                    self.dirty = true;
+                    self.status = "読み取り専用で保護しました(同じ釦で解除。\
+                                   パスワードは掛けません — 掛けた振りもしません)"
+                        .into();
+                }
+            }
+            // 共同編集モード。実体はファイルの錠(.~lock)による早い者勝ちの
+            // 編集権。押すと錠の今を確かめ、先客が去っていれば編集権を取り直す
+            "coauth-mode" => match self.path.clone() {
+                None => {
+                    self.status =
+                        "まだファイルになっていません(保存すると編集権=錠を取ります)"
+                            .into();
+                }
+                Some(p) => {
+                    if self.my_lock.is_some() {
+                        self.status = format!(
+                            "編集権はこちら({})にあります。同じ文書は先に開いた人が書け、\
+                             後の人は読むだけになります(錠は .~lock ファイル)",
+                            lock_identity()
+                        )
+                        .into();
+                    } else {
+                        self.acquire_lock(&p);
+                        self.status = match &self.locked_by {
+                            Some(who) => format!(
+                                "{who} が編集中です(読めますが上書き保存はできません。\
+                                 相手が閉じたら、またこの釦で確かめてください)"
+                            )
+                            .into(),
+                            None => "先客が居なくなっていたので、編集権を取り直しました"
+                                .into(),
+                        };
+                    }
+                }
+            },
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
