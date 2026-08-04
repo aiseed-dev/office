@@ -312,6 +312,7 @@ COMMON_TAIL = {
         ("coauth-mode", "共同編集モード"), ("co-addcomment", "コメントを追加"),
         ("co-delcomment", "コメントを削除"), ("co-showcomment", "コメントの表示"),
         ("co-chat", "チャット"), ("co-history", "バージョン履歴"),
+        # writer は本家どおり変更履歴もここ(出力時に履歴の前へ挿す)
     ],
     "protect": [
         ("prot-encrypt", "暗号化する"), ("prot-sign", "デジタル署名を追加"),
@@ -325,15 +326,11 @@ COMMON_TAIL = {
 DYNAMIC = {
     "documenteditor": [
         ("draw", 3, [("pen", "ペン"), ("highlighter", "蛍光ペン"), ("eraser", "消しゴム")]),
-        ("headerfooter", 6, [
-            ("edit-header", "ヘッダーの編集"), ("edit-footer", "フッターの編集"),
-            ("pagenum", "ページ番号"), ("datetime", "日付＆時刻"), ("numpages", "ページ数"),
-        ]),
-        ("review", 7, [
-            ("spell", "スペルチェック"), ("wordcount", "文字カウント"),
-            ("track-changes", "変更履歴"), ("comment", "コメント"),
-        ]),
-        ("view", 8, [
+        # ヘッダー/フッターとレビューのタブはデスクトップ版に無い
+        # (2026-08-04 発注者「画面はデスクトップ版に合わせて」)。
+        # 中身は 挿入(ヘッダー等)・共同編集(変更履歴)・
+        # 下のステータスバー(スペル・文字数)へ畳んだ
+        ("view", 6, [
             ("zoom-in", "拡大"), ("zoom-out", "縮小"),
             ("ruler", "ルーラー"), ("darkmode", "ダークモード"),
         ]),
@@ -349,7 +346,7 @@ DYNAMIC = {
 
 TAB_NAME_KEYS = {"draw": "Draw", "headerfooter": "HeaderFooter",
                  "review": "Review", "view": "View",
-                 "collaboration": "コラボレーション", "protect": "保護",
+                 "collaboration": "共同編集", "protect": "保護",
                  "plugins": "プラグイン"}
 
 
@@ -378,6 +375,16 @@ def tabs_of(app, prefix):
         # 目次も class 注入。Euro-Office では参考資料の先頭にある
         if tab == "links" and app == "documenteditor" and "contents" not in slots:
             slots.insert(0, "contents")
+        # ヘッダー・フッター類はタブを畳んで挿入タブへ(デスクトップ版の場所)
+        if tab == "ins" and app == "documenteditor":
+            at = slots.index("insequation") if "insequation" in slots else len(slots)
+            slots[at:at] = ["edit-header", "edit-footer", "pagenum",
+                            "datetime", "numpages"]
+            for c, l in [("edit-header", "ヘッダーの編集"),
+                         ("edit-footer", "フッターの編集"),
+                         ("pagenum", "ページ番号"), ("datetime", "日付/時刻"),
+                         ("numpages", "ページ数")]:
+                DYN_LABELS[c] = l
         # フィルターも class 注入(btn-slot.slot-btn-setfilter)
         if tab == "home" and app == "spreadsheeteditor" and "custom-sort" not in slots:
             slots.extend(["setfilter", "clear-filter"])
@@ -411,6 +418,9 @@ def tabs_of(app, prefix):
         ("protect", COMMON_TAIL["protect"]),
         ("plugins", COMMON_TAIL["plugins"]),
     ]:
+        if key == "collaboration" and app == "documenteditor":
+            # 変更履歴は本家どおりバージョン履歴の手前
+            cmds = cmds[:-1] + [("track-changes", "変更履歴")] + cmds[-1:]
         name = TAB_NAME_KEYS[key]
         entry = (name, [c for c, _ in cmds])
         for c, label in cmds:
@@ -522,7 +532,7 @@ mod tests {
         // 発注者確定(2026-08-04): メニューは制限しない。実装しないものも
         // 場所は本家どおり(灰色)。タブごと消すことはしない
         for tabs in [WRITER, CALC] {
-            for want in ["コラボレーション", "保護", "プラグイン"] {
+            for want in ["共同編集", "保護", "プラグイン"] {
                 assert!(
                     tabs.iter().any(|t| t.name == want),
                     "タブが無い: {want}"

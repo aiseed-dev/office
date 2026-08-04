@@ -191,7 +191,7 @@ pub fn is_encrypted(bytes: &[u8]) -> bool {
         return false;
     }
     cfb::CompoundFile::open(std::io::Cursor::new(bytes))
-        .map(|mut c| c.exists("/EncryptionInfo"))
+        .map(|c| c.exists("/EncryptionInfo"))
         .unwrap_or(false)
 }
 

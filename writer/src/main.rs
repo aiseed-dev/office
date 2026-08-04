@@ -652,7 +652,7 @@ impl Writer {
             target: Target::Body,
             symbols: false,
             show_marks: false,
-            ruler: false,
+            ruler: true,
             line_numbers: false,
             show_comments: true,
             font_list: false,
@@ -3971,7 +3971,7 @@ impl Render for Writer {
         let pxmm = PX_PER_MM * self.zoom;
         // 編集領域の高さを実測しておく(キャレット追従・スクロールの止めに使う)。
         // リボンのぶん(約110px)を引いた近似で足りる
-        self.view_h_px = (f32::from(window.viewport_size().height) - 110.0).max(100.0);
+        self.view_h_px = (f32::from(window.viewport_size().height) - 136.0).max(100.0);
         let marked = self.ed.marked_range();
         let (cx_mm, cy_mm, caret_pt) = self.caret_xy();
 
@@ -3984,10 +3984,8 @@ impl Render for Writer {
         // ダークモードは**紙以外**を暗くする — 紙は白いまま(印刷と同じ)。
         // 文書は何も変わらない(見え方だけ)
         let dk = self.dark;
-        let th_bar = if dk { rgb(0x0F2B3C) } else { rgb(0x165E83) };
         let th_tab_on_bg = if dk { rgb(0x22262A) } else { rgb(0xFFFFFF) };
         let th_tab_on_fg = if dk { rgb(0xCFE0EA) } else { rgb(0x165E83) };
-        let th_tab_fg = if dk { rgb(0x9FB8C6) } else { rgb(0xCFE0EA) };
         let th_cmd_bg = if dk { rgb(0x22262A) } else { rgb(0xFFFFFF) };
         let th_cmd_border = if dk { rgb(0x33383D) } else { rgb(0xE1E6EA) };
         let th_btn = if dk { rgb(0x7FB2D0) } else { rgb(0x165E83) };
@@ -3996,8 +3994,35 @@ impl Render for Writer {
         let th_gray_fg = if dk { rgb(0x565D64) } else { rgb(0xB6BDC4) };
         let th_status = if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) };
         let th_desk = if dk { rgb(0x191C1F) } else { rgb(0x63686D) };
-        let mut tabs = div().id("titlebar").flex().flex_row().items_end().gap_1()
-            .px_3().pt_1p5().bg(th_bar)
+        // デスクトップ版の額縁: 1段目がクイックアクセス+文書名(=取っ手)、
+        // 2段目が下線つきのタブ(現在地は青い下線)、3段目が釦の帯
+        let th_top_bg = if dk { rgb(0x1B1E21) } else { rgb(0xF1F3F5) };
+        let th_top_fg = if dk { rgb(0xCFD6DC) } else { rgb(0x444B52) };
+        let th_qa_hover = if dk { rgb(0x2C333A) } else { rgb(0xE2E6EA) };
+        let qa = |id: &'static str, icon: &'static str| {
+            div().id(id).px_2().py_1().rounded_sm().cursor_pointer()
+                .hover(move |s| s.bg(th_qa_hover))
+                .child(gpui::svg()
+                    .path(SharedString::from(format!("icons/{icon}.svg")))
+                    .size(px(15.0)).text_color(th_top_fg))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        };
+        let title = self
+            .path
+            .as_ref()
+            .and_then(|q| q.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "無題のドキュメント".into());
+        let winbtn = |id: &'static str, label: &'static str| {
+            div().id(id).px_2p5().py_1().rounded_sm()
+                .text_size(px(12.0)).text_color(th_top_fg)
+                .cursor_pointer()
+                .hover(move |s| if id == "close" { s.bg(rgb(0xC0392B)).text_color(rgb(0xFFFFFF)) }
+                                else { s.bg(rgb(0x2C7DA6)).text_color(rgb(0xFFFFFF)) })
+                .child(label)
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        };
+        let top = div().id("titlebar").flex().flex_row().items_center().gap_0p5()
+            .px_2().py_0p5().bg(th_top_bg)
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                 |_, e: &gpui::MouseDownEvent, window, _| {
                     if e.click_count >= 2 {
@@ -4005,38 +4030,34 @@ impl Render for Writer {
                     } else {
                         window.start_window_move();
                     }
-                }));
-        for (i, tb) in ribbon::WRITER.iter().enumerate() {
-            let on = i == self.tab;
-            tabs = tabs.child(div()
-                .id(SharedString::from(format!("tab{i}")))
-                .px_3().py_1p5()
-                .rounded_t_md()
-                .bg(if on { th_tab_on_bg } else { th_bar })
-                .text_color(if on { th_tab_on_fg } else { th_tab_fg })
-                .text_size(px(12.0))
-                .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
-                .cursor_pointer()
-                .hover(|s| s.text_color(rgb(0xFFFFFF)))
-                .child(tb.name)
-                // 押した瞬間に取っ手へ抜けない(窓の移動が始まるとクリックが死ぬ)
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
-        }
-        tabs = tabs
-            .child(div().flex_1().h(px(28.0)))
-            .child(div().pb_1p5().pr_2().text_size(px(10.5)).text_color(rgb(0x6E93A6))
-                   .child(SharedString::from(format!("writer — 実装済み {ready}/{all}"))));
-        let winbtn = |id: &'static str, label: &'static str| {
-            div().id(id).px_2p5().py_1().rounded_sm()
-                .text_size(px(12.0)).text_color(rgb(0xCFE0EA))
-                .cursor_pointer()
-                .hover(move |s| if id == "close" { s.bg(rgb(0xC0392B)).text_color(rgb(0xFFFFFF)) }
-                                else { s.bg(rgb(0x2C7DA6)).text_color(rgb(0xFFFFFF)) })
-                .child(label)
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        };
-        tabs = tabs
+                }))
+            .child(qa("qa-save", "save").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("save", cx);
+                cx.notify()
+            })))
+            .child(qa("qa-print", "print").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("pdf", cx);
+                cx.notify()
+            })))
+            .child(qa("qa-undo", "undo").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("undo", cx);
+                cx.notify()
+            })))
+            .child(qa("qa-redo", "redo").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("redo", cx);
+                cx.notify()
+            })))
+            .child(div().flex_1())
+            .child(div().text_size(px(12.5)).text_color(th_top_fg)
+                .whitespace_nowrap().overflow_hidden()
+                .child(SharedString::from(format!(
+                    "{}{title}",
+                    if self.dirty { "*" } else { "" }
+                ))))
+            .child(div().flex_1())
+            .child(div().pr_2().text_size(px(10.5))
+                .text_color(if dk { rgb(0x6E7982) } else { rgb(0x8A949D) })
+                .child(SharedString::from(format!("writer — 実装済み {ready}/{all}"))))
             .child(winbtn("min", "─").on_click(cx.listener(|_, _, window, _| {
                 window.minimize_window();
             })))
@@ -4046,6 +4067,36 @@ impl Render for Writer {
             .child(winbtn("close", "✕").on_click(cx.listener(|this, _, _, cx| {
                 this.request_quit(cx);
             })));
+
+        let th_tab_idle = if dk { rgb(0x9AA5AE) } else { rgb(0x555E66) };
+        let mut tabs = div().flex().flex_row().items_end().gap_1()
+            .px_2().bg(th_tab_on_bg);
+        for (i, tb) in ribbon::WRITER.iter().enumerate() {
+            let on = i == self.tab;
+            tabs = tabs.child(div()
+                .id(SharedString::from(format!("tab{i}")))
+                .px_2p5().pt_1p5()
+                .text_size(px(12.0))
+                .text_color(if on { th_tab_on_fg } else { th_tab_idle })
+                .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
+                .cursor_pointer()
+                .hover(move |s| s.text_color(th_tab_on_fg))
+                .flex().flex_col().items_center().gap_1()
+                .child(tb.name)
+                // 現在地の青い下線(デスクトップ版の形)
+                .child(div().h(px(2.5)).w_full().rounded_sm()
+                    .bg(if on { th_btn } else { th_tab_on_bg }))
+                .on_click(cx.listener(move |this, _, _, cx| { this.tab = i; cx.notify() })));
+        }
+        tabs = tabs.child(div().flex_1())
+            .child(div().id("tab-find").px_2().pb_1().text_size(px(12.0))
+                .text_color(th_tab_idle).cursor_pointer()
+                .hover(move |s| s.text_color(th_tab_on_fg))
+                .child("🔍")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.run_cmd("replace", cx);
+                    cx.notify()
+                })));
 
         let mut cmds = div().flex().flex_row().flex_wrap().gap_1().items_center()
             .px_3().py_2().bg(th_cmd_bg)
@@ -4085,11 +4136,63 @@ impl Render for Writer {
                     .child(cmd.label));
             }
         }
-        cmds = cmds.child(div().flex_1())
-            .child(div().text_size(px(11.0)).text_color(th_status)
-                   .child(SharedString::from(format!("{}{}",
-                       if self.dirty { "● " } else { "" }, self.status))));
-        let bar = div().flex().flex_col().child(tabs).child(cmds);
+        let bar = div().flex().flex_col().child(top).child(tabs).child(cmds);
+
+        // ---- 下のステータスバー(デスクトップ版: ページ・文字数・ズーム) ----
+        let total_pages = self.page_offsets.len().max(1);
+        let cur_page = self
+            .page_offsets
+            .iter()
+            .rposition(|o| self.scroll_mm >= *o - 0.01)
+            .unwrap_or(0)
+            + 1;
+        let nchars = self
+            .doc
+            .body_text()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .count();
+        let sb_btn = |id: &'static str, label: &'static str| {
+            div().id(id).px_1p5().py_0p5().rounded_sm().cursor_pointer()
+                .text_size(px(11.5)).text_color(th_top_fg)
+                .hover(move |s| s.bg(th_qa_hover))
+                .child(label)
+        };
+        let statusbar = div().flex().flex_row().items_center().gap_3()
+            .px_3().py_0p5().bg(th_top_bg)
+            .border_t_1().border_color(th_cmd_border)
+            .text_size(px(11.0)).text_color(th_status)
+            .child(SharedString::from(format!("{cur_page}/{total_pages} ページ")))
+            .child(SharedString::from(format!("文字数 {nchars}")))
+            .child(div().flex_1().whitespace_nowrap().overflow_hidden()
+                .child(SharedString::from(format!(
+                    "{}{}",
+                    if self.dirty { "● " } else { "" },
+                    self.status
+                ))))
+            .child(sb_btn("sb-spell", "スペル").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("spell", cx);
+                cx.notify()
+            })))
+            .child(sb_btn("sb-zoom-out", "−").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("zoom-out", cx);
+                cx.notify()
+            })))
+            .child(div().id("sb-zoom").px_1().rounded_sm().cursor_pointer()
+                .text_size(px(11.5)).text_color(th_top_fg)
+                .hover(move |s| s.bg(th_qa_hover))
+                .child(SharedString::from(format!(
+                    "ズーム{}%",
+                    (self.zoom * 100.0).round() as i32
+                )))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.zoom = 1.0;
+                    cx.notify()
+                })))
+            .child(sb_btn("sb-zoom-in", "＋").on_click(cx.listener(|this, _, _, cx| {
+                this.run_cmd("zoom-in", cx);
+                cx.notify()
+            })));
 
         // 紙。スクロールは紙ごと上へずらすだけ(中身は全部この容器の子)。
         // ページの色は文書の設定(紙も同じ色に塗られる)
@@ -5389,6 +5492,7 @@ impl Render for Writer {
                     .child(InputSink { view: me })
                     .children(menu),
             )
+            .child(statusbar)
     }
 }
 

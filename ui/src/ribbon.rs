@@ -88,6 +88,11 @@ pub const WRITER: &[Tab] = &[
         c("instextart", "テキストアートの挿入", "instextart"),
         c("dropcap", "ドロップキャップの挿入", "dropcap"),
         c("text-from-file", "ファイルからのテキスト", "text-from-file"),
+        c("edit-header", "ヘッダーの編集", "edit-header"),
+        c("edit-footer", "フッターの編集", "edit-footer"),
+        c("pagenum", "ページ番号", "pagenum"),
+        c("datetime", "日付/時刻", "datetime"),
+        c("numpages", "ページ数", "numpages"),
         c("insequation", "方程式を挿入", "insequation"),
         c("inssymbol", "記号を挿入", "inssymbol"),
         x("コンテンツコントロールの挿入", "controls"),
@@ -130,25 +135,13 @@ pub const WRITER: &[Tab] = &[
         x("複合フィールド", "form-complex"),
         x("署名", "form-signature"),
     ]},
-    Tab { name: "ヘッダー/フッター", cmds: &[
-        c("edit-header", "ヘッダーの編集", "edit-header"),
-        c("edit-footer", "フッターの編集", "edit-footer"),
-        c("pagenum", "ページ番号", "pagenum"),
-        c("datetime", "日付/時刻", "datetime"),
-        c("numpages", "ページ数", "numpages"),
-    ]},
-    Tab { name: "レビュー", cmds: &[
-        c("spell", "スペルチェック", "spell"),
-        c("wordcount", "文字カウント", "wordcount"),
-        c("track-changes", "変更履歴", "track-changes"),
-        c("comment", "コメント", "comment"),
-    ]},
-    Tab { name: "コラボレーション", cmds: &[
+    Tab { name: "共同編集", cmds: &[
         c("coauth-mode", "共同編集モード", "coauth-mode"),
         c("co-addcomment", "コメントを追加", "co-addcomment"),
         c("co-delcomment", "コメントを削除", "co-delcomment"),
         c("co-showcomment", "コメントの表示", "co-showcomment"),
         c("co-chat", "チャット", "co-chat"),
+        c("track-changes", "変更履歴", "track-changes"),
         c("co-history", "バージョン履歴", "co-history"),
     ]},
     Tab { name: "保護", cmds: &[
@@ -312,7 +305,7 @@ pub const CALC: &[Tab] = &[
         x("範囲に変換する", "td-torange"),
         x("テーブルのサイズ変更", "td-resize"),
     ]},
-    Tab { name: "コラボレーション", cmds: &[
+    Tab { name: "共同編集", cmds: &[
         x("共同編集モード", "coauth-mode"),
         c("addcomment", "コメントを追加", "co-addcomment"),
         x("コメントを削除", "co-delcomment"),
@@ -353,7 +346,7 @@ mod tests {
         // 発注者確定(2026-08-04): メニューは制限しない。実装しないものも
         // 場所は本家どおり(灰色)。タブごと消すことはしない
         for tabs in [WRITER, CALC] {
-            for want in ["コラボレーション", "保護", "プラグイン"] {
+            for want in ["共同編集", "保護", "プラグイン"] {
                 assert!(
                     tabs.iter().any(|t| t.name == want),
                     "タブが無い: {want}"
