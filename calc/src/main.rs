@@ -694,6 +694,8 @@ struct Calc {
     auto_calc: bool,
     /// 見張り(ウォッチウィンドウ)。(シート番号, セル)
     watch: Vec<(usize, Pos)>,
+    /// AI に頼み中(終わるまで次の頼みは断る)
+    ai_busy: bool,
     /// 描画の道具(0=ペン 1=蛍光ペン 2=消しゴム)。writer と同じ形
     tool: Option<u8>,
     /// 描きかけの線(ドラッグ中)
@@ -792,6 +794,7 @@ impl Calc {
             dark: false,
             auto_calc: true,
             watch: Vec::new(),
+            ai_busy: false,
             tool: None,
             ink_cur: None,
         };
@@ -2246,6 +2249,55 @@ impl Calc {
                 self.status =
                     "ブックの情報を控えました(保存で xlsx に入ります)".into();
             }
+            "table-resize" => {
+                let p = self.cursor;
+                let Some(i) = self.sheet().tables.iter().position(|t| t.contains(p)) else {
+                    return;
+                };
+                let parse = |t: &str| -> Option<(Pos, Pos)> {
+                    let (x, y) = t.split_once(':')?;
+                    Some((Pos::parse(x.trim())?, Pos::parse(y.trim())?))
+                };
+                match parse(&text) {
+                    None => {
+                        self.status = "範囲は A1:C9 の形で書いてください".into();
+                        self.prompt = Some(("table-resize", Editor::new(&text)));
+                    }
+                    Some((a, b)) if b.row < a.row || b.col < a.col => {
+                        self.status = "左上と右下が逆です(A1:C9 の順で)".into();
+                        self.prompt = Some(("table-resize", Editor::new(&text)));
+                    }
+                    Some((a, b)) => {
+                        self.checkpoint();
+                        {
+                            let t = &mut self.book.sheets[self.active].tables[i];
+                            t.a = a;
+                            t.b = b;
+                        }
+                        self.dirty = true;
+                        self.status = format!(
+                            "表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインの釦でどうぞ)",
+                            a.a1(),
+                            b.a1()
+                        )
+                        .into();
+                    }
+                }
+            }
+            "ai-table" => {
+                if text.is_empty() {
+                    self.status = "文章がありません(何もしていません)".into();
+                } else {
+                    self.ai_go(CalcAi::Table(text), cx);
+                }
+            }
+            "ai-ask" => {
+                if text.is_empty() {
+                    self.status = "用件がありません(何もしていません)".into();
+                } else {
+                    self.ai_go(CalcAi::Ask(text), cx);
+                }
+            }
             "chat" => {
                 if text.is_empty() {
                     self.status = "何も書き残しませんでした".into();
@@ -2710,6 +2762,313 @@ impl Calc {
             }
         }
         None
+    }
+
+    /// 選択範囲(見た目の値)の TSV。AI に渡す形
+    fn tsv_display(&self, a: Pos, b: Pos) -> String {
+        let sh = self.sheet();
+        (a.row..=b.row)
+            .map(|r| {
+                (a.col..=b.col)
+                    .map(|c| sh.get(Pos::new(r, c)).map(|x| x.value.display()).unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// AI に頼んで、返事を表に反映する。**別の糸で待つ**(画面は止めない)。
+    /// 反映は必ず checkpoint してから = **Ctrl+Z の1手で戻る**。
+    /// 宛先が使えなければ理由を言う(黙って空にしない)
+    fn ai_go(&mut self, job: CalcAi, cx: &mut Context<Self>) {
+        if self.sheet().protected {
+            self.status =
+                "シートが保護されています(保護タブの「保護」で解除)".into();
+            return;
+        }
+        if self.ai_busy {
+            self.status = "いま考えています(終わるまでお待ちください)".into();
+            return;
+        }
+        let back = ui::ai::backend();
+        if let Err(e) = ui::ai::ready(back) {
+            self.status = format!("AI: {e}").into();
+            return;
+        }
+        self.commit();
+        // 渡す範囲: 選択があればそこ。要約だけは無選択なら使っている全域
+        let sel = self.anchor.map(|_| self.sel_rect());
+        let (a, b) = match (&job, sel) {
+            (_, Some(r)) => r,
+            (CalcAi::Summary, None) => {
+                let (rows, cols) = self.sheet().extent();
+                if rows == 0 || cols == 0 {
+                    self.status = "表がありません".into();
+                    return;
+                }
+                (Pos::new(0, 0), Pos::new((rows - 1).min(199), cols - 1))
+            }
+            (CalcAi::Table(_) | CalcAi::Ask(_), None) => (self.cursor, self.cursor),
+            _ => {
+                self.status = "範囲を選んでから押してください".into();
+                return;
+            }
+        };
+        if matches!(job, CalcAi::Furigana) && a.col != b.col {
+            self.status =
+                "ふりがなは1列だけ選んでください(読みは右隣の列に入ります)".into();
+            return;
+        }
+        let body = match &job {
+            CalcAi::Table(_) => String::new(),
+            CalcAi::Ask(_) if self.anchor.is_none() => String::new(),
+            _ => self.tsv_display(a, b),
+        };
+        if body.trim().is_empty()
+            && !matches!(job, CalcAi::Table(_) | CalcAi::Ask(_))
+        {
+            self.status = "選んだ範囲が空です".into();
+            return;
+        }
+        let (sys, ask) = job.prompt();
+        let user = match &job {
+            CalcAi::Table(q) => q.clone(),
+            CalcAi::Ask(q) => {
+                if body.trim().is_empty() {
+                    q.clone()
+                } else {
+                    format!("{q}\n\n---\n{body}")
+                }
+            }
+            _ => format!("{ask}\n\n---\n{body}"),
+        };
+        let sys = sys.to_string();
+        let job2 = job.clone();
+        self.ai_busy = true;
+        self.status =
+            format!("AI({})に{}を頼んでいます…", back.label(), job.label()).into();
+        let task = cx
+            .background_executor()
+            .spawn(async move { ui::ai::ask(back, &sys, &user) });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.ai_busy = false;
+                match r {
+                    Ok(out) => this.ai_apply(job2, a, b, out),
+                    Err(e) => this.status = format!("AI: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 返事を表へ入れる。**1手で戻せる**(checkpoint してから)
+    fn ai_apply(&mut self, job: CalcAi, a: Pos, b: Pos, out: String) {
+        let out = out.trim().to_string();
+        if out.is_empty() {
+            self.status = "AI: 答えが空でした(何もしていません)".into();
+            return;
+        }
+        let grid = |t: &str| -> Vec<Vec<String>> {
+            t.lines().map(|l| l.split('\t').map(str::to_string).collect()).collect()
+        };
+        match job {
+            // 要約はカーソルのコメントへ(保存で xlsx に残る)
+            CalcAi::Summary => {
+                let p = self.cursor;
+                self.checkpoint();
+                self.book.sheets[self.active].comments.insert(p, out);
+                self.dirty = true;
+                self.status = format!(
+                    "要約を {} のコメントに付けました(Ctrl+Z で戻せます)",
+                    p.a1()
+                )
+                .into();
+            }
+            // 書き直し・翻訳: 同じ形の TSV を受け、**文字のセルだけ**置き換える
+            CalcAi::Rewrite(_, _) | CalcAi::Translate => {
+                let g = grid(&out);
+                let rows = (b.row - a.row + 1) as usize;
+                if g.len() != rows {
+                    self.status = format!(
+                        "AI: 行数が合いません({} 行の答え / {rows} 行の範囲)— 何もしていません",
+                        g.len()
+                    )
+                    .into();
+                    return;
+                }
+                self.checkpoint();
+                let mut n = 0usize;
+                for (ri, row) in g.iter().enumerate() {
+                    for (ci, v) in row.iter().enumerate() {
+                        let p = Pos::new(a.row + ri as u32, a.col + ci as u32);
+                        if p.col > b.col {
+                            break;
+                        }
+                        let is_text = matches!(
+                            self.sheet().get(p).map(|x| &x.value),
+                            Some(Value::Text(_))
+                        );
+                        if is_text && !v.trim().is_empty() {
+                            let fmt = self
+                                .sheet()
+                                .get(p)
+                                .map(|c| c.fmt.clone())
+                                .unwrap_or_default();
+                            let mut cell = Cell::input(v);
+                            cell.fmt = fmt;
+                            self.book.sheets[self.active].set(p, cell);
+                            n += 1;
+                        }
+                    }
+                }
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.sync_input();
+                self.status = format!(
+                    "{n} 個の文字のセルを直しました(数字と式は触っていません。Ctrl+Z で1手)"
+                )
+                .into();
+            }
+            // ふりがな: 右隣の列へ(空きでなければ断る — 黙って潰さない)
+            CalcAi::Furigana => {
+                let yomi: Vec<&str> = out.lines().collect();
+                let rows = (b.row - a.row + 1) as usize;
+                if yomi.len() != rows {
+                    self.status = format!(
+                        "AI: 行数が合いません({} 行の答え / {rows} 行の範囲)— 何もしていません",
+                        yomi.len()
+                    )
+                    .into();
+                    return;
+                }
+                let dst = a.col + 1;
+                let used = (a.row..=b.row).any(|r| {
+                    self.sheet()
+                        .get(Pos::new(r, dst))
+                        .map(|c| !c.value.display().is_empty() || c.formula.is_some())
+                        .unwrap_or(false)
+                });
+                if used {
+                    self.status =
+                        "右隣の列に中身があります(空けてから — 黙って上書きしません)"
+                            .into();
+                    return;
+                }
+                self.checkpoint();
+                for (i, y) in yomi.iter().enumerate() {
+                    if y.trim().is_empty() {
+                        continue;
+                    }
+                    let p = Pos::new(a.row + i as u32, dst);
+                    self.book.sheets[self.active].set(p, Cell::input(y.trim()));
+                }
+                self.dirty = true;
+                self.status =
+                    "読みを右隣の列に入れました(Ctrl+Z で戻せます)".into();
+            }
+            // 続き: 選択の下の空き行へ(空きでなければ断る)
+            CalcAi::Continue => {
+                let g = grid(&out);
+                let start = b.row + 1;
+                let used = g.iter().enumerate().any(|(ri, row)| {
+                    row.iter().enumerate().any(|(ci, _)| {
+                        self.sheet()
+                            .get(Pos::new(start + ri as u32, a.col + ci as u32))
+                            .map(|c| {
+                                !c.value.display().is_empty() || c.formula.is_some()
+                            })
+                            .unwrap_or(false)
+                    })
+                });
+                if used {
+                    self.status =
+                        "下の行に中身があります(空けてから — 黙って上書きしません)"
+                            .into();
+                    return;
+                }
+                self.checkpoint();
+                let n = paste_values_text(
+                    &mut self.book.sheets[self.active],
+                    Pos::new(start, a.col),
+                    &g,
+                );
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.status = format!(
+                    "続きを {} 行足しました({n} 欄。よく確かめてください — AI の当て推量です。Ctrl+Z で1手)",
+                    g.len()
+                )
+                .into();
+            }
+            // 表にする: カーソルから流し込み(空きでなければ断る)
+            CalcAi::Table(_) => {
+                let g = grid(&out);
+                let at = self.cursor;
+                let used = g.iter().enumerate().any(|(ri, row)| {
+                    row.iter().enumerate().any(|(ci, _)| {
+                        self.sheet()
+                            .get(Pos::new(at.row + ri as u32, at.col + ci as u32))
+                            .map(|c| {
+                                !c.value.display().is_empty() || c.formula.is_some()
+                            })
+                            .unwrap_or(false)
+                    })
+                });
+                if used {
+                    self.status =
+                        "ここには中身があります(空きへカーソルを置いてから)".into();
+                    return;
+                }
+                self.checkpoint();
+                let n = paste_values_text(&mut self.book.sheets[self.active], at, &g);
+                recalc(&mut self.book.sheets[self.active]);
+                self.dirty = true;
+                self.status = format!(
+                    "表を {} に置きました({} 行 {n} 欄。Ctrl+Z で1手)",
+                    at.a1(),
+                    g.len()
+                )
+                .into();
+            }
+            // 頼む: = で始まる1行は式としてカーソルへ。他はコメントへ
+            CalcAi::Ask(_) => {
+                let p = self.cursor;
+                if out.starts_with('=') && !out.contains('\n') {
+                    self.checkpoint();
+                    let fmt =
+                        self.sheet().get(p).map(|c| c.fmt.clone()).unwrap_or_default();
+                    let mut cell = Cell::input(&out);
+                    cell.fmt = fmt;
+                    self.book.sheets[self.active].set(p, cell);
+                    recalc(&mut self.book.sheets[self.active]);
+                    self.dirty = true;
+                    self.sync_input();
+                    let shown = self
+                        .sheet()
+                        .get(p)
+                        .map(|c| c.value.display())
+                        .unwrap_or_default();
+                    self.status = format!(
+                        "{} に式を入れました(= {shown}。式は数式バーで確かめられます。Ctrl+Z で1手)",
+                        p.a1()
+                    )
+                    .into();
+                } else {
+                    self.checkpoint();
+                    self.book.sheets[self.active].comments.insert(p, out);
+                    self.dirty = true;
+                    self.status = format!(
+                        "答えを {} のコメントに付けました(Ctrl+Z で戻せます)",
+                        p.a1()
+                    )
+                    .into();
+                }
+            }
+        }
     }
 
     /// いまの計算方法で再計算する(手動なら何もしない — 「計算」で回す)
@@ -5156,6 +5515,8 @@ calc の隣に置いてください)"
         "subscript", "align-just", "text-orient", "calc-mode",
         "td-torange", "td-resize", "rtl-sheet", "direction",
         "colorschemas", "theme",
+        "ai-where", "ai-summary", "ai-rewrite", "ai-polite", "ai-plain",
+        "ai-translate", "ai-furigana", "ai-continue", "ai-table", "ai-ask",
         "insert-function", "cell-styles", "sheet-view", "watch",
         "pen", "highlighter", "eraser",
     ];
@@ -5167,7 +5528,7 @@ calc の隣に置いてください)"
         "setfilter", "clear-filter",
         "trace-prec", "trace-dep", "remove-arrows", "pivot-select",
         "coauth-mode", "co-showcomment", "co-chat", "co-history", "plug-manage",
-        "prot-doc", "prot-encrypt", "prot-sign",
+        "prot-doc", "prot-encrypt", "prot-sign", "ai-where",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -6058,6 +6419,69 @@ calc の隣に置いてください)"
                     _ => "セルの操作に戻りました".into(),
                 };
             }
+            // AI タブ。**モデルに任せる変換と生成の道具箱**(writer と同じ宛先)
+            "ai-where" => {
+                let next = ui::ai::backend().next();
+                ui::ai::set_backend(next);
+                self.status = match ui::ai::ready(next) {
+                    Ok(_) => format!("AI の宛先: {}(覚えました)", next.label()).into(),
+                    Err(e) => format!(
+                        "AI の宛先: {} — ただし今は使えません: {e}",
+                        next.label()
+                    )
+                    .into(),
+                };
+            }
+            "ai-summary" => self.ai_go(CalcAi::Summary, cx),
+            "ai-rewrite" => self.ai_go(
+                CalcAi::Rewrite(
+                    "あなたは表の中の文字を整える道具です。渡されたタブ区切りの表と\
+                     同じ行数・同じ列数のタブ区切りだけを返します。文字は意味を\
+                     変えずに読みやすく直し、数字と空欄はそのまま写します。",
+                    "次の表の文字を、意味を変えずに読みやすく直してください。",
+                ),
+                cx,
+            ),
+            "ai-polite" => self.ai_go(
+                CalcAi::Rewrite(
+                    "あなたは表の中の文字を整える道具です。渡されたタブ区切りの表と\
+                     同じ行数・同じ列数のタブ区切りだけを返します。文字は内容を\
+                     変えずに丁寧な言い方(です・ます)へ直し、数字と空欄はそのまま\
+                     写します。",
+                    "次の表の文字を、内容を変えずに丁寧な言い方へ直してください。",
+                ),
+                cx,
+            ),
+            "ai-plain" => self.ai_go(
+                CalcAi::Rewrite(
+                    "あなたは表の中の文字をやさしくする道具です。渡されたタブ区切りの\
+                     表と同じ行数・同じ列数のタブ区切りだけを返します。難しい言葉を\
+                     やさしい言葉に置き換え、数字と空欄はそのまま写します。",
+                    "次の表の文字を、内容を変えずにやさしい日本語へ直してください。",
+                ),
+                cx,
+            ),
+            "ai-translate" => self.ai_go(CalcAi::Translate, cx),
+            "ai-furigana" => self.ai_go(CalcAi::Furigana, cx),
+            "ai-continue" => self.ai_go(CalcAi::Continue, cx),
+            "ai-table" => {
+                self.commit();
+                self.prompt = Some(("ai-table", Editor::new("")));
+                self.status = format!(
+                    "AI({})が表にします: 文章を打って(貼って)Enter",
+                    ui::ai::backend().label()
+                )
+                .into();
+            }
+            "ai-ask" => {
+                self.commit();
+                self.prompt = Some(("ai-ask", Editor::new("")));
+                self.status = format!(
+                    "AI({})に頼む: 用件を打って Enter(選んだ範囲があれば一緒に渡します)",
+                    ui::ai::backend().label()
+                )
+                .into();
+            }
             // 配色の変更(テーマ色の組を入れ替える)。テーマ由来の色を
             // 使っているセルは、色がそのまま追従する
             "colorschemas" => {
@@ -6076,6 +6500,59 @@ calc の隣に置いてください)"
                 } else {
                     "画面を明るくしました".into()
                 };
+            }
+            // 範囲に変換する(表オブジェクトを外す。**書式と式は残る**)
+            "td-torange" => {
+                self.commit();
+                let p = self.cursor;
+                match self.sheet().tables.iter().position(|t| t.contains(p)) {
+                    None => {
+                        self.status =
+                            "表の中にカーソルを置いてください(表のない範囲は「表の挿入」で表にできます)"
+                                .into();
+                    }
+                    Some(i) => {
+                        self.checkpoint();
+                        let t = self.book.sheets[self.active].tables.remove(i);
+                        self.dirty = true;
+                        self.status = format!(
+                            "表「{}」を普通の範囲に戻しました(帯や縞々の書式と式はそのまま残ります)",
+                            t.name
+                        )
+                        .into();
+                    }
+                }
+            }
+            // テーブルのサイズ変更(範囲を変える)。板で新しい範囲を聞く
+            "td-resize" => {
+                self.commit();
+                let p = self.cursor;
+                match self.sheet().tables.iter().position(|t| t.contains(p)) {
+                    None => self.status = "表の中にカーソルを置いてください".into(),
+                    Some(i) => {
+                        let t = &self.sheet().tables[i];
+                        let init = format!("{}:{}", t.a.a1(), t.b.a1());
+                        self.status = format!("表「{}」の新しい範囲は?", t.name).into();
+                        self.prompt = Some(("table-resize", Editor::new(&init)));
+                    }
+                }
+            }
+            // シートの方向(右から左へ)。**日本語も右から書くことがある**
+            "rtl-sheet" => {
+                let on = !self.sheet().rtl;
+                self.sheet_mut().rtl = on;
+                self.dirty = true;
+                self.status = if on {
+                    "右から左へ並べます(右横書き。列は右から A B C…)".into()
+                } else {
+                    "左から右へ戻しました".into()
+                };
+            }
+            // 文字の向き(セルの中を右横書きに)。1字ずつ右から並べる
+            "direction" => {
+                self.fmt(|f| f.rtl_text = !f.rtl_text);
+                self.status =
+                    "セルの中を右横書きにしました(1字ずつ右から。昔の看板の書き方)".into();
             }
             // 表示タブ(本家のデスクトップ版に合わせる)。どれも見え方だけ
             "zoom-in" => {
@@ -6381,6 +6858,19 @@ calc の隣に置いてください)"
             // (掛けた書式・式が帳面に残るだけ。切り替え式に見せない。
             // まとめて掛けるなら挿入タブの「表の挿入」)
             "td-header" | "td-band-row" | "td-band-col" | "td-first" | "td-last" => {
+                // 表の中なら、表オブジェクトの性質も一緒に更新する
+                let pcur = self.cursor;
+                if let Some(i) = self.sheet().tables.iter().position(|t| t.contains(pcur)) {
+                    let t = &mut self.book.sheets[self.active].tables[i];
+                    match id {
+                        "td-header" => t.header = !t.header,
+                        "td-band-row" => t.banded_rows = !t.banded_rows,
+                        "td-band-col" => t.banded_cols = !t.banded_cols,
+                        "td-first" => t.first_col = !t.first_col,
+                        _ => t.last_col = !t.last_col,
+                    }
+                    self.dirty = true;
+                }
                 self.commit();
                 if self.anchor.is_none() {
                     self.status = "表の範囲を選んでください".into();
@@ -6505,9 +6995,16 @@ calc の隣に置いてください)"
                             self.book.sheets[self.active].set(p, cell);
                         }
                     }
+                    let n = self.book.sheets.iter().map(|s| s.tables.len()).sum::<usize>() + 1;
+                    self.book.sheets[self.active].tables.push(sheet::model::TableDef {
+                        name: format!("テーブル{n}"),
+                        a,
+                        b,
+                        ..Default::default()
+                    });
                     self.dirty = true;
                     self.status = format!(
-                        "{}:{} に表の書式を掛けました(見出しの帯と縞々。Ctrl+Z で戻せます)",
+                        "{}:{} を表にしました(見出しの帯と縞々。範囲に変換・サイズ変更もできます。Ctrl+Z で戻せます)",
                         a.a1(),
                         b.a1()
                     )
@@ -7812,6 +8309,71 @@ fn sig_path_for(p: &std::path::Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// AI に頼む仕事(calc 流)。writer と同じ10釦だが、表計算なので
+/// 渡すのは選択範囲の TSV、返してもらうのも TSV や式になる。
+#[derive(Clone)]
+enum CalcAi {
+    /// 選択(無ければ使っている範囲)の表を要約 → カーソルのコメントへ
+    Summary,
+    /// 文字のセルを書き直して置き換える(整える・敬語・やさしく)
+    Rewrite(&'static str, &'static str),
+    /// 文字のセルを訳して置き換える
+    Translate,
+    /// 選択した1列の読みを右隣の列へ(名簿のフリガナ欄)
+    Furigana,
+    /// 選択のパターンから続きの行を作り、下の空きへ
+    Continue,
+    /// 文章から表を作り、カーソルから流し込む
+    Table(String),
+    /// 自由に頼む。= で始まる答えは式としてカーソルへ、他はコメントへ
+    Ask(String),
+}
+
+impl CalcAi {
+    /// モデルへの言いつけ(system)と、何を渡すか
+    fn prompt(&self) -> (&'static str, &'static str) {
+        match self {
+            CalcAi::Summary => (
+                "あなたは表を読む道具です。渡されたタブ区切りの表の要点を、                 2〜4文の日本語でまとめてください。前置き・後書きは書かず、                 要約の本文だけを返します。",
+                "次の表を要約してください。",
+            ),
+            CalcAi::Rewrite(sys, ask) => (sys, ask),
+            CalcAi::Translate => (
+                "あなたは表の中の文字を訳す道具です。渡されたタブ区切りの表と                 同じ行数・同じ列数のタブ区切りだけを返します。文字は日本語なら                 英語へ、それ以外なら日本語へ訳し、数字と空欄はそのまま写します。                 説明は書きません。",
+                "次の表の文字を訳してください。",
+            ),
+            CalcAi::Furigana => (
+                "あなたは日本語の読みを返す道具です。渡された1行1語の並びに                 対して、同じ行数で、各行にその語の読みをカタカナだけで返します。                 説明・記号は書きません。読めない行は空行にします。",
+                "次の各行の読みをカタカナで返してください。",
+            ),
+            CalcAi::Continue => (
+                "あなたは表のパターンを読む道具です。渡されたタブ区切りの表の                 規則を読み取り、**続きの行を3行だけ**、同じ列数のタブ区切りで                 返します。元の行は返しません。説明は書きません。",
+                "次の表の続きの行を作ってください。",
+            ),
+            CalcAi::Table(_) => (
+                "あなたは文章を表に整える道具です。渡された文章から表を作り、                 タブ区切り(1行目は見出し)だけを返します。説明・前置き・                 罫線の記号は書きません。",
+                "",
+            ),
+            CalcAi::Ask(_) => (
+                "あなたは表計算を手伝う道具です。数式を頼まれたら = で始まる                 1つの数式だけを返します(使える関数: SUM AVERAGE COUNT COUNTA                  MIN MAX SUMIF COUNTIF ABS MOD POWER SQRT INT ROUND ROUNDUP TRUNC                  PRODUCT PMT PV FV NPER TODAY NOW DATE YEAR MONTH DAY WEEKDAY LEN                  LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE IF AND OR NOT IFERROR                  ISBLANK ISERROR VLOOKUP HLOOKUP INDEX MATCH)。それ以外の頼みには                 答えの本文だけを返します。前置きは書きません。",
+                "",
+            ),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            CalcAi::Summary => "要約",
+            CalcAi::Rewrite(_, _) => "書き直し",
+            CalcAi::Translate => "翻訳",
+            CalcAi::Furigana => "ふりがな",
+            CalcAi::Continue => "続き",
+            CalcAi::Table(_) => "表",
+            CalcAi::Ask(_) => "頼み",
+        }
+    }
+}
+
 /// セルのスタイル(本家の「セルのスタイル」。よく使う組だけ)。
 /// 表オブジェクトは持たない方針どおり、掛けるのは普通の書式 —
 /// どれも Ctrl+Z の1手で戻る
@@ -8799,6 +9361,9 @@ impl Render for Calc {
                 ),
                 "chat" => "チャット — 言伝を書き残す(ブックの隣の .chat.txt)".to_string(),
                 "equation" => "方程式 — 式を打つ(TeX の書き方。清書して画像で置く)".to_string(),
+                "ai-table" => "AI — 表にする文章".to_string(),
+                "ai-ask" => "AI — 頼み(例: 合計の式を書いて)".to_string(),
+                "table-resize" => "テーブルのサイズ変更 — 新しい範囲(A1:C9)".to_string(),
                 "prop-creator" => "ブックの情報 — 作成者".to_string(),
                 "prop-title" => "ブックの情報 — タイトル".to_string(),
                 "prop-keywords" => "ブックの情報 — タグ".to_string(),
@@ -8846,6 +9411,8 @@ impl Render for Calc {
                         "chat" => "生放送ではありません — ファイル越しの言伝。最近の言伝は下の状態行に",
                         "equation" => "例: \\frac{a}{b} / \\sqrt{x^2+1} / \\sum_{i=1}^n i^2 / \\int_0^1 x\\,dx(計算はしません — セルの式とは別物)",
                         "textart" => "太字+縁取り(calc の緑)で描いて、画像としてシートに浮かべます",
+                        "ai-table" => "答えのタブ区切りを、カーソルの位置の空きに流し込みます",
+                        "ai-ask" => "= で始まる答えはカーソルに式として入ります。他はコメントに付きます",
                         "pw-open" => "間違えると開けません(板は残ります)。Esc で開くのをやめる",
                         "pw-set" => "次の保存から AES-128 で包みます。Excel や LibreOffice でも開けます",
                         "subtotal-by" => "使える見出しは下の状態行に出ています。並べ替えてから使うと区切りがまとまります",

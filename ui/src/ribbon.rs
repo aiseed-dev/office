@@ -364,6 +364,18 @@ pub const CALC: &[Tab] = &[
         c("plug-macros", "マクロ", "plug-macros"),
         c("plug-manage", "プラグインの管理", "plug-manage"),
     ]},
+    Tab { name: "AI", cmds: &[
+        c("ai-where", "宛先", "ai-where"),
+        c("ai-summary", "要約", "ai-summary"),
+        c("ai-rewrite", "書き直す", "ai-rewrite"),
+        c("ai-polite", "敬語にする", "ai-polite"),
+        c("ai-plain", "やさしく", "ai-plain"),
+        c("ai-translate", "翻訳", "ai-translate"),
+        c("ai-furigana", "ふりがな", "ai-furigana"),
+        c("ai-continue", "続きを書く", "ai-continue"),
+        c("ai-table", "表にする", "ai-table"),
+        c("ai-ask", "頼む", "ai-ask"),
+    ]},
 ];
 
 /// 実装済みのコマンド数 / 全体(進み具合を隠さない)
