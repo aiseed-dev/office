@@ -588,12 +588,14 @@ struct Writer {
     hover_hint: Option<&'static str>,
     /// 編集領域の幅(px。ページ幅に合わせるの計算に使う)
     view_w_px: f32,
-    /// ナビゲーション(左パネル。見出しの一覧で飛ぶ)
+    /// 左パネル(ナビゲーション)。0=見出し 1=コメント 2=検索
     nav_open: bool,
+    nav_tab: u8,
+    /// 右パネル(いる場所の設定を直す盤)
+    rp_open: bool,
     /// 表示の入切(本家の表示タブ)。釦の帯・ステータスバー・右の板
     show_toolbar: bool,
     show_statusbar: bool,
-    show_right: bool,
     /// ファイルのページ(タブ0)から戻る先のタブ
     prev_tab: usize,
     /// ファイルのページの右側(0=詳細情報 1=最近開いた)
@@ -855,9 +857,10 @@ impl Writer {
             hover_hint: None,
             view_w_px: 900.0,
             nav_open: false,
+            nav_tab: 0,
+            rp_open: false,
             show_toolbar: true,
             show_statusbar: true,
-            show_right: true,
             prev_tab: 1,
             file_view: 0,
             file_field: None,
@@ -1873,7 +1876,7 @@ impl Writer {
             "nav" | "show-left" => self.nav_open,
             "show-toolbar" => self.show_toolbar,
             "show-statusbar" => self.show_statusbar,
-            "show-right" => self.show_right,
+            "show-right" => self.rp_open,
             "ruler" => self.ruler,
             "darkmode" => self.dark,
             "hidenchars" => self.show_marks,
@@ -4204,11 +4207,11 @@ impl Writer {
             "show-statusbar" => self.show_statusbar = !self.show_statusbar,
             "show-left" => self.nav_open = !self.nav_open,
             "show-right" => {
-                self.show_right = !self.show_right;
-                self.status = if self.show_right {
-                    "右のパネルを出します".into()
+                self.rp_open = !self.rp_open;
+                self.status = if self.rp_open {
+                    "右パネル: いる場所の設定を直せます".into()
                 } else {
-                    "右のパネルを隠しました(記入・リンクの板)".into()
+                    "".into()
                 };
             }
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
@@ -6480,42 +6483,309 @@ impl Render for Writer {
             Some(d)
         };
 
-        // ナビゲーション(左パネル)。見出しを押すとそこへ飛ぶ
+        // 左パネル(本家のナビゲーション)。見出し / コメント / 検索の耳を持つ
         let nav_panel = if !self.nav_open {
             None
         } else {
-            let heads = self.headings();
+            let panel_bg = if dk { rgb(0x1B1E21) } else { rgb(0xF1F3F5) };
             let mut d = div().absolute().left(px(0.0)).top(px(0.0))
-                .w(px(240.0)).h_full().overflow_hidden()
-                .p_2().bg(if dk { rgb(0x1B1E21) } else { rgb(0xF1F3F5) })
+                .w(px(250.0)).h_full().overflow_hidden()
+                .p_2().bg(panel_bg)
                 .border_r_1().border_color(th_cmd_border)
-                .flex().flex_col().gap_1()
-                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
-                    .text_color(rgb(0x165E83))
-                    .child("ナビゲーション"));
-            if heads.is_empty() {
-                d = d.child(div().text_size(px(11.0)).text_color(th_status)
-                    .child("(見出しがありません。ホーム > 段落のスタイルで)"));
-            }
-            for (i, (lv, text, byte)) in heads.into_iter().take(40).enumerate() {
-                let b = byte;
-                d = d.child(div()
-                    .id(SharedString::from(format!("nav-{i}")))
+                .flex().flex_col().gap_1();
+            // 耳
+            let mut ears = div().flex().flex_row().gap_1().mb_1();
+            for (i, name) in ["見出し", "コメント", "検索"].into_iter().enumerate() {
+                let on = self.nav_tab == i as u8;
+                ears = ears.child(div()
+                    .id(SharedString::from(format!("navtab-{i}")))
                     .px_2().py_0p5().rounded_sm().cursor_pointer()
-                    .text_size(px(12.0)).text_color(th_top_fg)
-                    .whitespace_nowrap().overflow_hidden()
-                    .hover(|st| st.bg(th_btn_hover))
-                    .child(SharedString::from(format!(
-                        "{}{text}",
-                        "　".repeat((lv as usize).saturating_sub(1))
-                    )))
+                    .text_size(px(11.5))
+                    .text_color(if on { th_btn } else { th_status })
+                    .font_weight(if on {
+                        gpui::FontWeight::BOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
+                    .when(on, |st| st.bg(th_btn_hover))
+                    .child(name)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.switch_target(Target::Body);
-                        this.ed.move_to(b.min(this.ed.text().len()), false);
-                        this.follow_caret();
+                        this.nav_tab = i as u8;
                         cx.notify()
                     })));
             }
+            d = d.child(ears);
+            match self.nav_tab {
+                // 見出し(押すと飛ぶ)
+                0 => {
+                    let heads = self.headings();
+                    if heads.is_empty() {
+                        d = d.child(div().text_size(px(11.0)).text_color(th_status)
+                            .child("(見出しがありません。ホーム > 段落のスタイルで)"));
+                    }
+                    for (i, (lv, text, byte)) in heads.into_iter().take(40).enumerate() {
+                        let b = byte;
+                        d = d.child(div()
+                            .id(SharedString::from(format!("nav-{i}")))
+                            .px_2().py_0p5().rounded_sm().cursor_pointer()
+                            .text_size(px(12.0)).text_color(th_top_fg)
+                            .whitespace_nowrap().overflow_hidden()
+                            .hover(|st| st.bg(th_btn_hover))
+                            .child(SharedString::from(format!(
+                                "{}{text}",
+                                "　".repeat((lv as usize).saturating_sub(1))
+                            )))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.switch_target(Target::Body);
+                                this.ed.move_to(b.min(this.ed.text().len()), false);
+                                this.follow_caret();
+                                cx.notify()
+                            })));
+                    }
+                }
+                // コメント(押すとその段落へ飛ぶ)
+                1 => {
+                    let mut items: Vec<(usize, String, String, usize)> = Vec::new();
+                    let mut at = 0usize;
+                    for (pi, p) in self.doc.paragraphs().enumerate() {
+                        let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+                        for c in &p.comments {
+                            items.push((pi, c.author.clone(), c.text.clone(), at));
+                        }
+                        at += len + 1;
+                    }
+                    if items.is_empty() {
+                        d = d.child(div().text_size(px(11.0)).text_color(th_status)
+                            .child("(コメントはありません)"));
+                    }
+                    for (i, (_, who, text, byte)) in items.into_iter().take(30).enumerate() {
+                        let b = byte;
+                        d = d.child(div()
+                            .id(SharedString::from(format!("navc-{i}")))
+                            .px_2().py_1().rounded_sm().cursor_pointer()
+                            .bg(if dk { rgb(0x22262A) } else { rgb(0xFFFFFF) })
+                            .hover(|st| st.bg(th_btn_hover))
+                            .flex().flex_col()
+                            .child(div().text_size(px(10.5)).text_color(th_status)
+                                .child(SharedString::from(who)))
+                            .child(div().text_size(px(11.5)).text_color(th_top_fg)
+                                .whitespace_nowrap().overflow_hidden()
+                                .child(SharedString::from(text)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.switch_target(Target::Body);
+                                this.ed.move_to(b.min(this.ed.text().len()), false);
+                                this.follow_caret();
+                                cx.notify()
+                            })));
+                    }
+                }
+                // 検索(当たった場所を並べ、押すと飛ぶ)
+                _ => {
+                    let term = self.find_ed.text().to_string();
+                    d = d.child(div()
+                        .id("nav-find")
+                        .px_2().py_1().rounded_sm().cursor_pointer()
+                        .border_1().border_color(rgb(0x1B6E3C))
+                        .bg(if dk { rgb(0x22262A) } else { rgb(0xFFFFFF) })
+                        .text_size(px(12.0)).text_color(th_top_fg)
+                        .whitespace_nowrap().overflow_hidden()
+                        .child(SharedString::from(if term.is_empty() {
+                            "(検索の板で語を打つ → ここに出ます)".to_string()
+                        } else {
+                            term.clone()
+                        }))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.run_cmd("replace", cx);
+                            cx.notify()
+                        })));
+                    if !term.is_empty() {
+                        let text = self.ed.text().to_string();
+                        let mut hits = 0usize;
+                        for (i, at) in text.match_indices(&term).take(30).enumerate() {
+                            hits += 1;
+                            let b = at.0;
+                            let s0 = text[..b].rfind('\n').map(|x| x + 1).unwrap_or(0);
+                            let e0 = text[b..].find('\n').map(|x| b + x).unwrap_or(text.len());
+                            let line: String =
+                                text[s0..e0].chars().take(40).collect();
+                            d = d.child(div()
+                                .id(SharedString::from(format!("navf-{i}")))
+                                .px_2().py_0p5().rounded_sm().cursor_pointer()
+                                .text_size(px(11.5)).text_color(th_top_fg)
+                                .whitespace_nowrap().overflow_hidden()
+                                .hover(|st| st.bg(th_btn_hover))
+                                .child(SharedString::from(line))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.switch_target(Target::Body);
+                                    this.ed.move_to(b, false);
+                                    this.follow_caret();
+                                    cx.notify()
+                                })));
+                        }
+                        if hits == 0 {
+                            d = d.child(div().text_size(px(11.0)).text_color(th_status)
+                                .child("(見つかりません)"));
+                        }
+                    }
+                }
+            }
+            Some(d)
+        };
+
+        // 右パネル(本家の設定パネル)。**いる場所の設定を、その場で直す**
+        let rp_panel = if !self.rp_open {
+            None
+        } else {
+            let panel_bg = if dk { rgb(0x1B1E21) } else { rgb(0xF1F3F5) };
+            let (pi, _) = self.cursor_para();
+            let para = self.doc.paragraphs().nth(pi).cloned();
+            let f = self.doc.char_format_at(self.ed.selection());
+            let size_now = self.doc.size_at(self.ed.selection()).unwrap_or(SIZE_PT);
+            let head = |t: &'static str| {
+                div().text_size(px(11.0)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83)).mt_1().child(t)
+            };
+            // 小さな釦(押すと run_cmd。入っていれば色が付く)
+            let btn = |this: &Writer, id: &'static str, label: &'static str| {
+                let on = this.toggled(id);
+                div().id(SharedString::from(format!("rp-{id}")))
+                    .px_2().py_0p5().rounded_sm().cursor_pointer()
+                    .border_1()
+                    .border_color(if on { th_btn } else { th_cmd_border })
+                    .bg(if on { th_btn_hover } else { gpui::transparent_black().into() })
+                    .text_size(px(11.5))
+                    .text_color(if on { th_btn } else { th_top_fg })
+                    .hover(move |st| st.bg(th_btn_hover))
+                    .child(label)
+            };
+            let row = || div().flex().flex_row().flex_wrap().gap_1();
+            let mut d = div().absolute().right(px(0.0)).top(px(0.0))
+                .w(px(230.0)).h_full().overflow_hidden()
+                .p_2().bg(panel_bg)
+                .border_l_1().border_color(th_cmd_border)
+                .flex().flex_col().gap_1()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("設定 — いる場所を直す"));
+
+            // 文字
+            d = d.child(head("文字"))
+                .child(row()
+                    .child(btn(self, "bold", "太字").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("bold", cx); cx.notify() })))
+                    .child(btn(self, "italic", "斜体").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("italic", cx); cx.notify() })))
+                    .child(btn(self, "underline", "下線").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("underline", cx); cx.notify() })))
+                    .child(btn(self, "strikeout", "取消").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("strikeout", cx); cx.notify() }))))
+                .child(row()
+                    .child(div().text_size(px(11.0)).text_color(th_status)
+                        .child(SharedString::from(format!(
+                            "大きさ {} pt / 書体 {}",
+                            if size_now.fract() == 0.0 {
+                                format!("{}", size_now as i32)
+                            } else {
+                                format!("{size_now}")
+                            },
+                            self.font_name
+                        )))))
+                .child(row()
+                    .child(btn(self, "decfont", "小さく").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("decfont", cx); cx.notify() })))
+                    .child(btn(self, "incfont", "大きく").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("incfont", cx); cx.notify() })))
+                    .child(btn(self, "fontcolor", "色").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("fontcolor", cx); cx.notify() })))
+                    .child(btn(self, "clearstyle", "書式を消す").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("clearstyle", cx); cx.notify() }))));
+            if f.field.is_some() {
+                d = d.child(div().text_size(px(10.5)).text_color(th_status)
+                    .child("(ここは相互参照。更新は 参考資料 > 相互参照)"));
+            }
+            if let Some(rt) = &f.ruby {
+                d = d.child(div().text_size(px(10.5)).text_color(th_status)
+                    .child(SharedString::from(format!("ルビ「{rt}」"))));
+            }
+
+            // 段落
+            let (al, ls, ind, lst) = match &para {
+                Some(p) => (p.align, p.spacing(), p.indent, p.list),
+                None => (Align::Left, 1.0, 0, ListKind::None),
+            };
+            d = d.child(head("段落"))
+                .child(row()
+                    .children([
+                        ("align-left", "左", Align::Left),
+                        ("align-center", "中央", Align::Center),
+                        ("align-right", "右", Align::Right),
+                        ("align-just", "両端", Align::Justify),
+                        ("align-dist", "均等", Align::Distribute),
+                    ].map(|(id, label, a)| {
+                        let on = al == a;
+                        div().id(SharedString::from(format!("rp-{id}")))
+                            .px_2().py_0p5().rounded_sm().cursor_pointer()
+                            .border_1()
+                            .border_color(if on { th_btn } else { th_cmd_border })
+                            .bg(if on { th_btn_hover } else { gpui::transparent_black().into() })
+                            .text_size(px(11.5))
+                            .text_color(if on { th_btn } else { th_top_fg })
+                            .hover(move |st| st.bg(th_btn_hover))
+                            .child(label)
+                            .on_click(cx.listener(move |t, _, _, cx| {
+                                t.run_cmd(id, cx);
+                                cx.notify()
+                            }))
+                    })))
+                .child(row()
+                    .child(div().text_size(px(11.0)).text_color(th_status)
+                        .child(SharedString::from(format!(
+                            "行間 {ls:.2} / 字下げ {ind}"
+                        )))))
+                .child(row()
+                    .child(btn(self, "linespace", "行間").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("linespace", cx); cx.notify() })))
+                    .child(btn(self, "decoffset", "◂ 字下げ").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("decoffset", cx); cx.notify() })))
+                    .child(btn(self, "incoffset", "字下げ ▸").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("incoffset", cx); cx.notify() }))))
+                .child(row()
+                    .child(btn(self, "markers", if lst == ListKind::Bullet {
+                        "箇条書き ✓"
+                    } else {
+                        "箇条書き"
+                    }).on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("markers", cx); cx.notify() })))
+                    .child(btn(self, "numbering", if lst == ListKind::Number {
+                        "番号 ✓"
+                    } else {
+                        "番号"
+                    }).on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("numbering", cx); cx.notify() })))
+                    .child(btn(self, "paracolor", "背景").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("paracolor", cx); cx.notify() })))
+                    .child(btn(self, "borders", "囲み").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("borders", cx); cx.notify() }))));
+
+            // ページ
+            d = d.child(head("ページ"))
+                .child(div().text_size(px(11.0)).text_color(th_status)
+                    .child(SharedString::from(format!(
+                        "{:.0}×{:.0}mm / 余白 {:.0}mm / {}段{}",
+                        self.pg.w_mm, self.pg.h_mm, self.pg.left_mm, self.pg.cols(),
+                        if self.doc.vertical { " / 縦書き" } else { "" }
+                    ))))
+                .child(row()
+                    .child(btn(self, "pageorient", "向き").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("pageorient", cx); cx.notify() })))
+                    .child(btn(self, "pagesize", "用紙").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("pagesize", cx); cx.notify() })))
+                    .child(btn(self, "pagemargins", "余白").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("pagemargins", cx); cx.notify() })))
+                    .child(btn(self, "columns", "段組み").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("columns", cx); cx.notify() })))
+                    .child(btn(self, "direction", "縦書き").on_click(cx.listener(
+                        |t, _, _, cx| { t.run_cmd("direction", cx); cx.notify() }))));
             Some(d)
         };
 
@@ -6999,9 +7269,10 @@ impl Render for Writer {
                     .children(pw_panel)
                     .children(rb_panel)
                     .children(url_panel)
-                    .children(fm_panel.filter(|_| self.show_right))
-                    .children(lk_panel.filter(|_| self.show_right))
+                    .children(fm_panel)
+                    .children(lk_panel)
                     .children(nav_panel)
+                    .children(rp_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)
