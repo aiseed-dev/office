@@ -288,6 +288,69 @@ fn sig_path_for(p: &std::path::Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// 閉域向けの小さな HTTP(http:// だけ。https はまだ — そう言う)。
+/// GET は body=None、POST は form の urlencoded を渡す
+fn http_fetch(url: &str, body: Option<&str>) -> Result<Vec<u8>, String> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or("http:// だけに対応しています(閉域向け。https はまだ)")?;
+    let (hostport, path) = match rest.split_once('/') {
+        Some((h, p)) => (h, format!("/{p}")),
+        None => (rest, "/".to_string()),
+    };
+    let addr = if hostport.contains(':') {
+        hostport.to_string()
+    } else {
+        format!("{hostport}:80")
+    };
+    let mut st = std::net::TcpStream::connect(&addr)
+        .map_err(|e| format!("繋がりません({addr}): {e}"))?;
+    st.set_read_timeout(Some(std::time::Duration::from_secs(10))).ok();
+    use std::io::{BufRead as _, Read as _, Write as _};
+    let req = match body {
+        Some(b) => format!(
+            "POST {path} HTTP/1.1\r\nHost: {hostport}\r\n             Content-Type: application/x-www-form-urlencoded\r\n             Content-Length: {}\r\nConnection: close\r\n\r\n{b}",
+            b.len()
+        ),
+        None => format!(
+            "GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\n\r\n"
+        ),
+    };
+    st.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    let mut r = std::io::BufReader::new(st);
+    let mut status = String::new();
+    r.read_line(&mut status).map_err(|e| e.to_string())?;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if r.read_line(&mut line).map_err(|e| e.to_string())? == 0
+            || line.trim().is_empty()
+        {
+            break;
+        }
+    }
+    let mut out = Vec::new();
+    r.read_to_end(&mut out).map_err(|e| e.to_string())?;
+    if !status.contains(" 200") {
+        return Err(format!("サーバーの答え: {}", status.trim()));
+    }
+    Ok(out)
+}
+
+fn urlenc(s: &str) -> String {
+    let mut o = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                o.push(b as char)
+            }
+            b' ' => o.push('+'),
+            _ => o.push_str(&format!("%{b:02X}")),
+        }
+    }
+    o
+}
+
 fn lock_identity() -> String {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -469,6 +532,15 @@ struct Writer {
     /// 文書の情報で編集中の欄(0=作成者 1=タイトル 2=タグ 3=件名 4=コメント)
     file_field: Option<u8>,
     prop_ed: Editor,
+    /// HTML の記入(form)。開いた HTML の欄と、送り先の起点
+    html_forms: Vec<kumihan::html::Form>,
+    html_origin: Option<String>,
+    fm_open: bool,
+    fm_field: Option<usize>,
+    fm_ed: Editor,
+    /// URL を開く板
+    url_open: bool,
+    url_ed: Editor,
     /// ルビの板(選んだ字に読みを振る)
     rb_open: bool,
     rb_ed: Editor,
@@ -529,6 +601,10 @@ impl HasEditor for Writer {
             &mut self.wm_ed
         } else if self.bm_open {
             &mut self.bm_ed
+        } else if self.url_open {
+            &mut self.url_ed
+        } else if self.fm_field.is_some() {
+            &mut self.fm_ed
         } else if self.rb_open {
             &mut self.rb_ed
         } else if self.chat_open {
@@ -552,6 +628,10 @@ impl HasEditor for Writer {
             &self.wm_ed
         } else if self.bm_open {
             &self.bm_ed
+        } else if self.url_open {
+            &self.url_ed
+        } else if self.fm_field.is_some() {
+            &self.fm_ed
         } else if self.rb_open {
             &self.rb_ed
         } else if self.chat_open {
@@ -565,7 +645,8 @@ impl HasEditor for Writer {
             // パスワード・検索欄への打鍵は文書を変えない
             return;
         }
-        if self.chat_open || self.file_field.is_some() || self.rb_open {
+        if self.chat_open || self.file_field.is_some() || self.rb_open
+            || self.url_open || self.fm_field.is_some() {
             // チャット・文書の情報・ルビの入力欄。打鍵は(確定まで)文書を変えない
             return;
         }
@@ -703,6 +784,13 @@ impl Writer {
             file_view: 0,
             file_field: None,
             prop_ed: Editor::new(""),
+            html_forms: Vec::new(),
+            html_origin: None,
+            fm_open: false,
+            fm_field: None,
+            fm_ed: Editor::new(""),
+            url_open: false,
+            url_ed: Editor::new(""),
             rb_open: false,
             rb_ed: Editor::new(""),
             rb_range: 0..0,
@@ -1646,7 +1734,10 @@ impl Writer {
                 t.into_owned()
             }
         };
-        let (doc, notes) = kumihan::html::parse(&text, SIZE_PT);
+        let (doc, notes, forms) = kumihan::html::parse_full(&text, SIZE_PT);
+        self.html_forms = forms;
+        self.fm_field = None;
+        self.fm_open = !self.html_forms.is_empty();
         self.target = Target::Body;
         self.hf_edit = None;
         self.track = false;
@@ -1663,10 +1754,106 @@ impl Writer {
         self.path = None;
         self.dirty = true;
         self.status = format!(
-            "HTML を読みました — {}(JS は実行しません。保存は docx)",
-            p.file_name().unwrap_or_default().to_string_lossy()
+            "HTML を読みました — {}(JS は実行しません。保存は docx{})",
+            p.file_name().unwrap_or_default().to_string_lossy(),
+            if self.fm_open { "。記入は右上の板から" } else { "" }
         )
         .into();
+    }
+
+    /// URL の板の Enter。GET して HTML として開く(いま繋いだ相手が起点)
+    fn url_commit(&mut self, cx: &mut Context<Self>) {
+        let url = self.url_ed.text().trim().to_string();
+        if url.is_empty() {
+            return;
+        }
+        self.url_open = false;
+        let task = cx.background_executor().spawn(async move {
+            http_fetch(&url, None).map(|b| (url, b))
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok((url, bytes)) => {
+                        // 起点(scheme://host:port)を控える — 送信と相対の解決に使う
+                        let origin = url.strip_prefix("http://").map(|rest| {
+                            let host = rest.split('/').next().unwrap_or(rest);
+                            format!("http://{host}")
+                        });
+                        this.html_origin = origin;
+                        this.open_html(std::path::Path::new(&url), &bytes);
+                    }
+                    Err(e) => this.status = format!("開けません: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        self.status = format!("取りに行っています… {}", self.url_ed.text()).into();
+    }
+
+    /// 記入の欄の Enter。板の欄へ書き戻す
+    fn fm_commit(&mut self) {
+        let Some(i) = self.fm_field.take() else { return };
+        let text = self.fm_ed.text().to_string();
+        if let Some(fm) = self.html_forms.first_mut() {
+            if let Some(f) = fm.fields.get_mut(i) {
+                f.value = text;
+            }
+        }
+        self.status = "記入しました(送信の釦で送る)".into();
+    }
+
+    /// フォームを送る。POST は urlencoded、GET は ?query。
+    /// 網の線引き: いま開いている起点(html_origin)へだけ
+    fn fm_submit(&mut self, cx: &mut Context<Self>) {
+        let Some(fm) = self.html_forms.first().cloned() else { return };
+        let Some(origin) = self.html_origin.clone() else {
+            self.status =
+                "ローカルの HTML からは送れません(URL で開いてください)".into();
+            return;
+        };
+        let url = if fm.action.starts_with("http://") {
+            if !fm.action.starts_with(&origin) {
+                self.status = "送り先が開いた相手と違います(送りません)".into();
+                return;
+            }
+            fm.action.clone()
+        } else if fm.action.starts_with('/') {
+            format!("{origin}{}", fm.action)
+        } else {
+            format!("{origin}/{}", fm.action)
+        };
+        let q: String = fm
+            .fields
+            .iter()
+            .map(|f| format!("{}={}", urlenc(&f.name), urlenc(&f.value)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let post = fm.method == "post";
+        self.status = "送っています…".into();
+        let task = cx.background_executor().spawn(async move {
+            if post {
+                http_fetch(&url, Some(&q))
+            } else {
+                http_fetch(&format!("{url}?{q}"), None)
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok(bytes) => {
+                        // 返ってきた文書を読む(記入 → 送信 → 読む、の往復)
+                        this.open_html(std::path::Path::new("送信の答え"), &bytes);
+                    }
+                    Err(e) => this.status = format!("送れません: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 平文(zip)の docx を読み込む。open と pw_commit の共通の続き
@@ -4005,6 +4192,15 @@ impl Writer {
             cx.notify();
             return;
         }
+        if self.url_open || self.fm_field.is_some() || self.fm_open {
+            if self.fm_field.take().is_none() {
+                self.url_open = false;
+                self.fm_open = false;
+            }
+            self.status = "".into();
+            cx.notify();
+            return;
+        }
         if self.rb_open {
             self.rb_open = false;
             self.status = "".into();
@@ -4112,6 +4308,10 @@ impl Writer {
             self.bm_add();
         } else if self.chat_open {
             self.chat_send();
+        } else if self.url_open {
+            self.url_commit(cx);
+        } else if self.fm_field.is_some() {
+            self.fm_commit();
         } else if self.rb_open {
             self.rb_commit();
         } else {
@@ -4833,6 +5033,15 @@ impl Render for Writer {
                     |this, _, _, cx| {
                         this.tab = this.prev_tab;
                         this.open_dialog(cx);
+                        cx.notify()
+                    })))
+                .child(mk("f-url", "URLを開く", true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.tab = this.prev_tab;
+                        this.url_open = true;
+                        this.url_ed = Editor::new("http://127.0.0.1:8765/");
+                        this.status =
+                            "URL を打って Enter(JS なしの閲覧と記入。http のみ)".into();
                         cx.notify()
                     })))
                 .child(mk("f-recent", "最近開いた", true).on_click(cx.listener(
@@ -5969,6 +6178,90 @@ impl Render for Writer {
                             パスワードを忘れると誰にも開けません")))
         };
 
+        // URL の板(JS なしの閲覧の入口)
+        let url_panel = if !self.url_open {
+            None
+        } else {
+            let mut t = self.url_ed.text().to_string();
+            let cur = self.url_ed.cursor().min(t.len());
+            t.insert(cur, '|');
+            Some(div().absolute().left(px(16.0)).top(px(8.0)).w(px(460.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("URL を開く — Enter で取りに行く(JS は実行しません)"))
+                .child(div().px_2().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).bg(gpui::white())
+                    .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(t))))
+        };
+
+        // 記入の板(HTML の form。欄を押して打ち、送信で送る)
+        let fm_panel = if !self.fm_open || self.html_forms.is_empty() {
+            None
+        } else {
+            let fm = self.html_forms[0].clone();
+            let mut d = div().absolute().right(px(16.0)).top(px(8.0)).w(px(340.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("記入 — 欄を押して打ち、Enter で控え、送信で送る"));
+            for (i, f) in fm.fields.iter().enumerate() {
+                if f.hidden {
+                    continue;
+                }
+                let editing = self.fm_field == Some(i);
+                let shown = if editing {
+                    let mut t = self.fm_ed.text().to_string();
+                    let cur = self.fm_ed.cursor().min(t.len());
+                    t.insert(cur, '|');
+                    t
+                } else {
+                    f.value.clone()
+                };
+                let hint = if f.options.is_empty() {
+                    String::new()
+                } else {
+                    format!("({})", f.options.join(" / "))
+                };
+                let val = f.value.clone();
+                d = d.child(div().flex().flex_row().items_center().gap_2()
+                    .child(div().w(px(90.0)).text_size(px(11.5))
+                        .text_color(rgb(0x66707A))
+                        .whitespace_nowrap().overflow_hidden()
+                        .child(SharedString::from(format!("{}{hint}", f.name))))
+                    .child(div()
+                        .id(SharedString::from(format!("fm-{i}")))
+                        .flex_1().px_2().py_0p5().rounded_sm()
+                        .border_1()
+                        .border_color(if editing { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                        .bg(gpui::white())
+                        .text_size(px(12.5)).cursor_pointer()
+                        .whitespace_nowrap().overflow_hidden()
+                        .child(SharedString::from(shown))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.fm_ed = Editor::new(&val);
+                            this.fm_field = Some(i);
+                            cx.notify()
+                        }))));
+            }
+            d = d.child(div().flex().flex_row().gap_2()
+                .child(div().id("fm-send").px_3().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).text_color(rgb(0x1B6E3C))
+                    .text_size(px(12.0)).cursor_pointer()
+                    .hover(|st| st.bg(rgb(0xEAF5EE)))
+                    .child(format!("送信({} {})", fm.method.to_uppercase(), fm.action))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.fm_submit(cx);
+                        cx.notify()
+                    }))));
+            Some(d)
+        };
+
         // ルビの板(読みの入力)
         let rb_panel = if !self.rb_open {
             None
@@ -6409,6 +6702,8 @@ impl Render for Writer {
                     .children(plug_panel)
                     .children(pw_panel)
                     .children(rb_panel)
+                    .children(url_panel)
+                    .children(fm_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)

@@ -8,8 +8,31 @@ use crate::{
     Block, Cellbox, CharFormat, Document, ListKind, Paragraph, ParaStyle, Run, Table,
 };
 
+/// 記入欄(HTML の form)。writer が板で記入し、GET/POST で送る
+#[derive(Debug, Clone, Default)]
+pub struct Form {
+    pub action: String,
+    pub method: String, // "get" / "post"
+    pub fields: Vec<Field>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Field {
+    pub name: String,
+    pub value: String,
+    pub hidden: bool,
+    /// select の選択肢(空なら自由記入)
+    pub options: Vec<String>,
+}
+
 /// HTML を文書モデルへ写す。返り値は (文書, 帳簿)。
 pub fn parse(src: &str, size_pt: f32) -> (Document, Vec<String>) {
+    let (d, n, _) = parse_full(src, size_pt);
+    (d, n)
+}
+
+/// 記入欄(form)も返す版。
+pub fn parse_full(src: &str, size_pt: f32) -> (Document, Vec<String>, Vec<Form>) {
     let mut b = Builder::new(size_pt);
     let bytes = src.as_bytes();
     let mut i = 0usize;
@@ -77,6 +100,12 @@ struct Builder {
     rt: Option<(String, String, bool)>,
     skip: Option<String>,
     notes: std::collections::BTreeMap<String, usize>,
+    forms: Vec<Form>,
+    cur_form: Option<Form>,
+    /// select / textarea の中身を拾う先
+    sel: Option<Field>,
+    in_option: bool,
+    ta: Option<Field>,
 }
 
 impl Builder {
@@ -99,6 +128,11 @@ impl Builder {
             rt: None,
             skip: None,
             notes: Default::default(),
+            forms: Vec::new(),
+            cur_form: None,
+            sel: None,
+            in_option: false,
+            ta: None,
         }
     }
 
@@ -246,22 +280,59 @@ impl Builder {
                 self.cell = Some(Vec::new());
             }
             "img" => self.note("画像(img。初版では出さない)"),
-            "input" | "select" | "textarea" | "button" | "form" => {
-                // 記入(フォーム)は次の回転。在ることは帳簿に言う
-                if name == "form" {
-                    self.note("フォーム(記入と送信は次の版)");
-                } else {
-                    // 記入欄の在り処は見えるように、下線の空欄で置く
-                    if name != "button" {
-                        self.flush_text();
-                        self.under += 1;
-                        self.cur.push_str("　　　　");
-                        self.flush_text();
-                        self.under -= 1;
+            // 記入(フォーム)。欄は下線の空欄として見せ、中身は Form に集める
+            "form" => {
+                self.cur_form = Some(Form {
+                    action: attr_of(tag, "action").unwrap_or_default(),
+                    method: attr_of(tag, "method")
+                        .unwrap_or_else(|| "get".into())
+                        .to_ascii_lowercase(),
+                    fields: Vec::new(),
+                });
+            }
+            "input" => {
+                let ty = attr_of(tag, "type").unwrap_or_default();
+                if ty == "submit" || ty == "button" {
+                    return;
+                }
+                let f = Field {
+                    name: attr_of(tag, "name").unwrap_or_default(),
+                    value: attr_of(tag, "value").unwrap_or_default(),
+                    hidden: ty == "hidden",
+                    options: Vec::new(),
+                };
+                if !f.hidden {
+                    self.flush_text();
+                    self.under += 1;
+                    self.cur.push_str(if f.value.is_empty() { "　　　　" } else { &f.value });
+                    self.flush_text();
+                    self.under -= 1;
+                }
+                if let Some(fm) = &mut self.cur_form {
+                    if !f.name.is_empty() {
+                        fm.fields.push(f);
                     }
-                    self.note("記入欄(まだ書けない — 次の版)");
                 }
             }
+            "select" => {
+                self.sel = Some(Field {
+                    name: attr_of(tag, "name").unwrap_or_default(),
+                    ..Default::default()
+                });
+            }
+            "option" => {
+                if let Some(f) = &mut self.sel {
+                    f.options.push(String::new());
+                    self.in_option = true;
+                }
+            }
+            "textarea" => {
+                self.ta = Some(Field {
+                    name: attr_of(tag, "name").unwrap_or_default(),
+                    ..Default::default()
+                });
+            }
+            "button" => {}
             "pre" | "code" | "span" | "small" | "label" | "details" | "tbody"
             | "thead" | "html" | "body" | "meta" | "link" | "head" | "option" => {}
             other => {
@@ -329,6 +400,44 @@ impl Builder {
                     }
                 }
             }
+            "form" => {
+                if let Some(fm) = self.cur_form.take() {
+                    if !fm.fields.is_empty() {
+                        self.forms.push(fm);
+                    }
+                }
+            }
+            "option" => self.in_option = false,
+            "select" => {
+                if let Some(mut f) = self.sel.take() {
+                    self.in_option = false;
+                    f.value = f.options.first().cloned().unwrap_or_default();
+                    self.flush_text();
+                    self.under += 1;
+                    self.cur.push_str(if f.value.is_empty() { "　　　　" } else { &f.value });
+                    self.flush_text();
+                    self.under -= 1;
+                    if let Some(fm) = &mut self.cur_form {
+                        if !f.name.is_empty() {
+                            fm.fields.push(f);
+                        }
+                    }
+                }
+            }
+            "textarea" => {
+                if let Some(f) = self.ta.take() {
+                    self.flush_text();
+                    self.under += 1;
+                    self.cur.push_str(if f.value.is_empty() { "　　　　" } else { &f.value });
+                    self.flush_text();
+                    self.under -= 1;
+                    if let Some(fm) = &mut self.cur_form {
+                        if !f.name.is_empty() {
+                            fm.fields.push(f);
+                        }
+                    }
+                }
+            }
             "td" => self.end_cell(),
             "tr" => self.end_row(),
             "table" => {
@@ -351,6 +460,18 @@ impl Builder {
             return;
         }
         let decoded = decode_entities(raw);
+        if self.in_option {
+            if let Some(f) = &mut self.sel {
+                if let Some(o) = f.options.last_mut() {
+                    o.push_str(decoded.trim());
+                }
+            }
+            return;
+        }
+        if let Some(f) = &mut self.ta {
+            f.value.push_str(&decoded);
+            return;
+        }
         if let Some(st) = &mut self.rt {
             if st.2 {
                 st.1.push_str(decoded.trim());
@@ -378,8 +499,9 @@ impl Builder {
         }
     }
 
-    fn finish(mut self) -> (Document, Vec<String>) {
+    fn finish(mut self) -> (Document, Vec<String>, Vec<Form>) {
         self.close("ruby");
+        self.close("form");
         self.close("table");
         self.flush_para();
         // Document::plain("") の空段落が先頭に残っていたら外す
@@ -395,8 +517,22 @@ impl Builder {
             .into_iter()
             .map(|(k, n)| if n > 1 { format!("{k} × {n}") } else { k })
             .collect();
-        (self.doc, notes)
+        (self.doc, notes, self.forms)
     }
+}
+
+/// 開始タグから属性を取り出す(部分集合。` key="値"` / ` key='値'` / ` key=値`)
+fn attr_of(tag: &str, key: &str) -> Option<String> {
+    let pat = format!(" {key}=");
+    let i = tag.find(&pat)? + pat.len();
+    let rest = &tag[i..];
+    let (q, rest) = match rest.chars().next()? {
+        '"' => ('"', &rest[1..]),
+        '\'' => ('\'', &rest[1..]),
+        _ => (' ', rest),
+    };
+    let end = rest.find(q).unwrap_or(rest.len());
+    Some(decode_entities(rest[..end].trim_end_matches('>')))
 }
 
 /// 文字実体参照(最小限)と数値参照を戻す
@@ -444,6 +580,21 @@ fn decode_entities(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn フォームの欄が集まる() {
+        let (_, _, forms) = parse_full(
+            "<form action=\"/order\" method=\"post\">             <input type=\"text\" name=\"品名\" value=\"鉛筆\">             <select name=\"数\"><option>1</option><option>2</option></select>             <textarea name=\"備考\">急ぎ</textarea>             <input type=\"submit\" value=\"送る\"></form>",
+            10.5,
+        );
+        assert_eq!(forms.len(), 1);
+        let f = &forms[0];
+        assert_eq!((f.action.as_str(), f.method.as_str()), ("/order", "post"));
+        assert_eq!(f.fields.len(), 3);
+        assert_eq!(f.fields[0].value, "鉛筆");
+        assert_eq!(f.fields[1].options, vec!["1", "2"]);
+        assert_eq!(f.fields[2].value, "急ぎ");
+    }
 
     #[test]
     fn htmlのルビがうちのルビへ写る() {
