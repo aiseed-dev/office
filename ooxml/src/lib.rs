@@ -1671,7 +1671,9 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
                 let raise = (run.size_pt * 2.0 * 0.9).round() as i32;
                 let _ = w.get_mut().write_all(format!(
                     concat!(
-                        r#"<w:ruby><w:rubyPr><w:rubyAlign w:val="center"/>"#,
+                        // w:ruby は run の中(ECMA-376 §17.3.3.25 — 親は w:r)。
+                        // 段落直下に置くと LibreOffice が基底ごと落とす(実測)
+                        r#"<w:r><w:ruby><w:rubyPr><w:rubyAlign w:val="center"/>"#,
                         r#"<w:hps w:val="{hps}"/><w:hpsRaise w:val="{raise}"/>"#,
                         r#"<w:hpsBaseText w:val="{base}"/><w:lid w:val="ja-JP"/>"#,
                         r#"</w:rubyPr><w:rt><w:r><w:rPr>"#,
@@ -1739,7 +1741,7 @@ fn write_para(w: &mut Writer<Cursor<Vec<u8>>>, p: &Paragraph,
             }
             w.write_event(Event::End(BytesEnd::new("w:r"))).unwrap();
             if ruby_rt.is_some() {
-                let _ = w.get_mut().write_all(b"</w:rubyBase></w:ruby>");
+                let _ = w.get_mut().write_all(b"</w:rubyBase></w:ruby></w:r>");
             }
             if mode != 0 {
                 let tag = if mode == 1 { "ins" } else { "del" };
