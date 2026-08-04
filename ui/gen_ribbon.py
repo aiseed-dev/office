@@ -123,6 +123,7 @@ READY = {
         "insshape": "insshape", "instext": "instext",
         "inssmartart": "inssmartart", "insequation": "insequation",
         "insslicer": "insslicer", "inscheckbox": "inscheckbox",
+        "instextart": "instextart",
         "inssparkline": "inssparkline", "co-addcomment": "addcomment",
         "coauth-mode": "coauth-mode", "co-delcomment": "co-delcomment",
         "co-showcomment": "co-showcomment", "co-chat": "co-chat",
