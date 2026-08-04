@@ -7415,22 +7415,28 @@ calc の隣に置いてください)"
                                   FACT COMBIN PERMUT GCD LCM PI SIN COS TAN ASIN ACOS ATAN ATAN2 \
                                   SINH COSH TANH EXP LN LOG LOG10 DEGREES RADIANS RAND RANDBETWEEN \
                                   SEQUENCE(セル単独であふれて広がる)",
-                    "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE TEXT \
-                                  SUBSTITUTE FIND SEARCH VALUE TEXTJOIN REPT CHAR CODE",
-                    "fn-logical" => "IF IFS SWITCH AND OR NOT TRUE FALSE ISBLANK ISERROR IFERROR",
+                    "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE CONCAT TEXT \
+                                  SUBSTITUTE FIND SEARCH VALUE TEXTJOIN REPT CHAR CODE \
+                                  UNICHAR UNICODE PROPER EXACT CLEAN FIXED YEN NUMBERVALUE \
+                                  LENB LEFTB RIGHTB MIDB ASC JIS DATESTRING(和暦)",
+                    "fn-logical" => "IF IFS SWITCH AND OR NOT TRUE FALSE ISBLANK ISERROR IFERROR \
+                                     IFNA ISNA ISERR ISLOGICAL ISNONTEXT ISNUMBER ISTEXT NA",
                     "fn-datetime" => "TODAY NOW DATE DATEVALUE YEAR MONTH DAY WEEKDAY \
                                       TIME HOUR MINUTE SECOND EDATE EOMONTH DATEDIF \
-                                      WORKDAY NETWORKDAYS(値は通し番号)",
-                    "fn-lookup" => "VLOOKUP HLOOKUP XLOOKUP INDEX MATCH CHOOSE \
-                                    ROW COLUMN ROWS COLUMNS OFFSET INDIRECT \
-                                    FILTER SORT UNIQUE(照合は完全一致。\
-                                    FILTER/SORT/UNIQUE はセル単独であふれて広がる)",
-                    "fn-financial" => "PMT PV FV NPER(RATE のような反復解はまだ)",
+                                      WORKDAY NETWORKDAYS DAYS DAYS360 YEARFRAC \
+                                      WEEKNUM ISOWEEKNUM(値は通し番号)",
+                    "fn-lookup" => "VLOOKUP HLOOKUP XLOOKUP LOOKUP INDEX MATCH CHOOSE \
+                                    ROW COLUMN ROWS COLUMNS OFFSET INDIRECT ADDRESS HYPERLINK \
+                                    FILTER SORT UNIQUE TRANSPOSE(照合は完全一致。\
+                                    FILTER/SORT/UNIQUE/TRANSPOSE はセル単独であふれて広がる)",
+                    "fn-financial" => "PMT PV FV NPER NPV IRR RATE(IRR と RATE は挟み撃ちの反復解)",
                     "fn-more" => "SUMIF SUMIFS COUNTIF COUNTIFS AVERAGEIF AVERAGEIFS \
-                                  MINIFS MAXIFS COUNTA COUNTBLANK TRUNC RANK LARGE SMALL \
+                                  MINIFS MAXIFS COUNTA COUNTBLANK TRUNC \
+                                  RANK RANK.EQ RANK.AVG LARGE SMALL \
                                   MEDIAN MODE STDEV STDEVP VAR VARP PERCENTILE QUARTILE \
-                                  CORREL SLOPE INTERCEPT FORECAST \
-                                  ISNUMBER ISTEXT ISEVEN ISODD — 一覧は各族の釦で",
+                                  CORREL SLOPE INTERCEPT FORECAST AVERAGEA MAXA MINA \
+                                  SUBTOTAL QUOTIENT CEILING.MATH FLOOR.MATH \
+                                  ISEVEN ISODD T N TYPE — 一覧は各族の釦で",
                     _ => "SUM AVERAGE COUNT MAX MIN IF SUMIF COUNTIF VLOOKUP TODAY",
                 };
                 self.status = format!("使える関数: {names}").into();

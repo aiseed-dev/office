@@ -418,7 +418,11 @@ sectPr の tbRl と往復。初版の限界 = 表・段組みは横のまま、A
 fill(名前, 値)/fill_one(writer の macro_script)— w:tag で欄を引いて
 記入、無い名前は例外で断る。独自種類の印とは「jo:email:名前」に合成
 (kumihan::split_tag と ooxml が対)。台本の作法は SEKKEI の記入欄の節。
-※マクロ台本を書く AI への system(fill だけ使う・rows でなめる等)は未着手。
+2026-08-05 続き(発注者「基幹現代化への対応 1〜2 を形にして」):
+前置きに extract(名前)=値を読む と fields()=(名前, 値) の一覧 を追加。
+fill=出口 / extract・fields=入口 の対(SEKKEI の記入欄の節)。
+※マクロ台本を書く AI への system(fill/extract/fields だけ使う・rows で
+なめる等)は未着手。実物様式(機構の実施要領様式1〜5)での一本通しも未。
 
 **writer の画面(2026-08-04。発注者が画像で指示)**: デスクトップ版の
 額縁に合わせた — クイックアクセス行+下線タブ+下のステータスバー、
@@ -545,8 +549,31 @@ ISEVEN/ISODD/COUNTBLANK/SUMSQ。
     (試験「spillの記録がxlsxを往復する」が保証)
 - **範囲の要素ごとの比較**を実装(FILTER(A1:B9, C1:C9>100) の定番)。
   比較の規則は cmp_values に一本化(式の比較と同じ道)
-残: INDIRECT の別シート、FILTER 等を式の中に混ぜる形(配列演算の一般化)、
-日本語系(ASC/JIS/PHONETIC/和暦の表示)。
+**第4段も同日に完了(発注者「Excelで作ったxlsxファイルが読めないと困る」→
+互換の穴埋め)**: 135個 → **約180個(別名込み)**。実物のファイルで出現頻度が
+高いのに #NAME? になっていたものを狙った47個:
+- **SUBTOTAL**(オートフィルターと「小計」機能が自動で埋め込む筆頭。
+  101〜111 は 1〜11 と同じに扱う — この評価器は行の畳みを知らない正直な近似。
+  AGGREGATE も同様に受ける)
+- 新名・別名: CONCAT / RANK.EQ / RANK.AVG / UNICHAR / UNICODE / DBCS /
+  CEILING.MATH / FLOOR.MATH(負の既定が旧 CEILING と違う — 0 へ寄る)/
+  TRUE() FALSE()(**括弧つき**も実物に出てくる)
+- 情報: IFNA / NA / ISNA / ISERR / ISLOGICAL / ISNONTEXT / T / N / TYPE
+  (エラーを受けて働くのでエラー素通し表へ)
+- 古典: LOOKUP(値以下でいちばん大きいもの)、TRANSPOSE(スピルの5つ目)、
+  ADDRESS / HYPERLINK(表示だけ)/ QUOTIENT / AVERAGEA / MAXA / MINA
+- 日付: DAYS / DAYS360 / YEARFRAC(基準1は 365.25 近似 — 厳密式は残)/
+  WEEKNUM / ISOWEEKNUM
+- 財務の反復解: **NPV / IRR / RATE**(符号の変わる区間を探して挟み撃ち =
+  bisect()。「反復解は持たない」の方針はここで撤回 — 解けないときは #NUM!)
+- 文字: PROPER / EXACT / CLEAN / FIXED / YEN / NUMBERVALUE
+- **日本語系(うちの差別化)**: LENB / LEFTB / RIGHTB / MIDB(全角=2、
+  半角カナ=1 — Excel 日本語ロケールの数え方。古い帳票の定番)、
+  **ASC / JIS**(全半角。濁点は ASC で2文字に割れ、JIS で1文字に組み直る —
+  往復の試験あり)、**DATESTRING**(和暦 令和08年08月05日。改元日の境まで試験)
+残: PHONETIC(xlsx の phonetic run をモデルが読んでいない — 読みからの実装)、
+INDIRECT の別シート、FILTER 等を式の中に混ぜる形(配列演算の一般化)、
+和暦の**表示形式**(ggge 系 — DATESTRING はできた)。
 
 小さい残件: 変換下線の位置の実機確認、表入りのヘッダー・フッターの編集。
 暗号化の Agile 方式(Word/Excel 2013+ の既定)を実装(2026-08-04、発注者

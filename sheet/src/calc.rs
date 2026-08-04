@@ -573,6 +573,147 @@ fn today_serial() -> (f64, f64) {
     ((days + EXCEL_EPOCH_DAYS) as f64, frac)
 }
 
+/// LENB 系の1文字の「バイト」数。全角=2、半角(ASCII と半角カナ)=1
+/// (Excel の日本語ロケールと同じ数え方。実際の UTF-8 の長さではない)
+fn jchar_width(c: char) -> usize {
+    if c.is_ascii() || ('\u{FF61}'..='\u{FF9F}').contains(&c) {
+        1
+    } else {
+        2
+    }
+}
+
+/// 全角カタカナ ↔ 半角カナの対応表(並びを揃えてある)
+const KANA_Z: &str = "ァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテト\
+                      ナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン。「」、・";
+const KANA_H: &str = "ｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝ｡｢｣､･";
+/// 濁点つき(→ 半角では2文字になる)
+const DAKU_Z: &str = "ガギグゲゴザジズゼゾダヂヅデドバビブベボヴ";
+const DAKU_H: &str = "ｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾊﾋﾌﾍﾎｳ";
+const HANDAKU_Z: &str = "パピプペポ";
+const HANDAKU_H: &str = "ﾊﾋﾌﾍﾎ";
+
+/// ASC — 全角を半角へ(英数記号・空白・カタカナ)
+fn asc_hankaku(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        // 全角英数記号(!〜~)は 0xFEE0 ずらすと半角
+        if ('\u{FF01}'..='\u{FF5E}').contains(&c) {
+            out.push(char::from_u32(c as u32 - 0xFEE0).unwrap_or(c));
+        } else if c == '\u{3000}' {
+            out.push(' ');
+        } else if let Some(i) = DAKU_Z.chars().position(|z| z == c) {
+            out.push(DAKU_H.chars().nth(i).unwrap());
+            out.push('ﾞ');
+        } else if let Some(i) = HANDAKU_Z.chars().position(|z| z == c) {
+            out.push(HANDAKU_H.chars().nth(i).unwrap());
+            out.push('ﾟ');
+        } else if let Some(i) = KANA_Z.chars().position(|z| z == c) {
+            out.push(KANA_H.chars().nth(i).unwrap());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// JIS — 半角を全角へ(濁点は1文字に組む)
+fn jis_zenkaku(s: &str) -> String {
+    let ch: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < ch.len() {
+        let c = ch[i];
+        let next = ch.get(i + 1).copied();
+        // 濁点・半濁点は前の字と組んで1文字へ
+        if next == Some('ﾞ') {
+            if let Some(k) = DAKU_H.chars().position(|h| h == c) {
+                out.push(DAKU_Z.chars().nth(k).unwrap());
+                i += 2;
+                continue;
+            }
+        }
+        if next == Some('ﾟ') {
+            if let Some(k) = HANDAKU_H.chars().position(|h| h == c) {
+                out.push(HANDAKU_Z.chars().nth(k).unwrap());
+                i += 2;
+                continue;
+            }
+        }
+        if c.is_ascii_graphic() {
+            out.push(char::from_u32(c as u32 + 0xFEE0).unwrap_or(c));
+        } else if c == ' ' {
+            out.push('\u{3000}');
+        } else if let Some(k) = KANA_H.chars().position(|h| h == c) {
+            out.push(KANA_Z.chars().nth(k).unwrap());
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// 通し番号 → 和暦の文字(DATESTRING)。明治より前は西暦のまま
+fn wareki(serial: i64) -> String {
+    let (y, m, d) = civil_from_days(serial - EXCEL_EPOCH_DAYS);
+    let eras: [(i64, &str, i64); 5] = [
+        (date_serial(2019, 5, 1), "令和", 2019),
+        (date_serial(1989, 1, 8), "平成", 1989),
+        (date_serial(1926, 12, 25), "昭和", 1926),
+        (date_serial(1912, 7, 30), "大正", 1912),
+        (date_serial(1868, 10, 23), "明治", 1868),
+    ];
+    for (start, name, base) in eras {
+        if serial >= start {
+            return format!("{name}{:02}年{m:02}月{d:02}日", y - base + 1);
+        }
+    }
+    format!("{y}年{m:02}月{d:02}日")
+}
+
+/// 30/360(米国方式)の日数。DAYS360 と YEARFRAC が使う
+fn days360(s: i64, e: i64) -> i64 {
+    let (sy, sm, mut sd) = civil_from_days(s - EXCEL_EPOCH_DAYS);
+    let (ey, em, mut ed) = civil_from_days(e - EXCEL_EPOCH_DAYS);
+    if sd == 31 {
+        sd = 30;
+    }
+    if ed == 31 && sd == 30 {
+        ed = 30;
+    }
+    (ey - sy) * 360 + (em - sm) * 30 + (ed - sd)
+}
+
+/// 符号の変わる区間を粗く探して挟み撃ち(IRR・RATE の反復解)。
+/// 見つからなければ None(#NUM! — 黙って0を返さない)
+fn bisect(f: &dyn Fn(f64) -> f64, lo: f64, hi: f64) -> Option<f64> {
+    let steps = 400;
+    let mut px = lo;
+    let mut py = f(lo);
+    for i in 1..=steps {
+        let x = lo + (hi - lo) * f64::from(i) / f64::from(steps);
+        let y = f(x);
+        if px.is_finite() && py.is_finite() && y.is_finite() && py * y <= 0.0 {
+            let (mut a, mut b, mut fa) = (px, x, py);
+            for _ in 0..200 {
+                let m = (a + b) / 2.0;
+                let fm = f(m);
+                if fa * fm <= 0.0 {
+                    b = m;
+                } else {
+                    a = m;
+                    fa = fm;
+                }
+            }
+            return Some((a + b) / 2.0);
+        }
+        px = x;
+        py = y;
+    }
+    None
+}
+
 /// 関数の引数。ほとんどの関数は平らな値で足りるが、表を引く関数
 /// (VLOOKUP・INDEX 等)は範囲の**形**(列数)が要る。
 #[derive(Debug, Clone)]
@@ -845,8 +986,9 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
                 }
             });
         }
-        "RANK" => {
-            // RANK(値, 範囲, [順序]) — 省略は大きい方が1位。同値は同順位
+        "RANK" | "RANK.EQ" | "RANK.AVG" => {
+            // RANK(値, 範囲, [順序]) — 省略は大きい方が1位。
+            // .EQ は同値同順位、.AVG は同値の順位の平均
             let x = args.first().map(|g| g.first().as_number()).unwrap_or(0.0);
             let ns: Vec<f64> = args
                 .get(1)
@@ -859,12 +1001,105 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
                 })
                 .unwrap_or_default();
             let asc = args.get(2).map(|g| g.first().as_number() != 0.0).unwrap_or(false);
-            if !ns.iter().any(|v| (v - x).abs() < 1e-9) {
+            let ties = ns.iter().filter(|v| (*v - x).abs() < 1e-9).count();
+            if ties == 0 {
                 return Ok(Value::Error("#N/A".into()));
             }
             let better =
                 ns.iter().filter(|v| if asc { **v < x - 1e-9 } else { **v > x + 1e-9 }).count();
-            return Ok(Value::Number((better + 1) as f64));
+            return Ok(Value::Number(if name == "RANK.AVG" {
+                // 同値が k 個なら (r + r+1 + … + r+k-1) / k
+                (better + 1) as f64 + (ties - 1) as f64 / 2.0
+            } else {
+                (better + 1) as f64
+            }));
+        }
+        "IRR" => {
+            // IRR(額の並び, [推定値]) — 符号の変わる区間を探して挟み撃ち(反復解)
+            let vals: Vec<f64> = args
+                .first()
+                .map(|g| {
+                    g.values()
+                        .iter()
+                        .filter(|v| matches!(v, Value::Number(_)))
+                        .map(|v| v.as_number())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let f = |r: f64| -> f64 {
+                vals.iter().enumerate().map(|(i, v)| v / (1.0 + r).powi(i as i32)).sum()
+            };
+            return Ok(match bisect(&f, -0.9999, 10.0) {
+                Some(r) => Value::Number(r),
+                None => Value::Error("#NUM!".into()),
+            });
+        }
+        "LOOKUP" => {
+            // LOOKUP(値, 探す並び, [結果の並び]) — 昇順前提の古典。
+            // 「値以下でいちばん大きいもの」を選ぶ(Excel と同じ)
+            let key = args.first().map(|g| g.first()).unwrap_or(Value::Empty);
+            let hay = args.get(1).map(|g| g.values()).unwrap_or(&[]);
+            let ret = args.get(2).map(|g| g.values()).unwrap_or(hay);
+            if hay.is_empty() || hay.len() != ret.len() {
+                return Ok(Value::Error("#N/A".into()));
+            }
+            let mut hit: Option<usize> = None;
+            for (i, v) in hay.iter().enumerate() {
+                let le = match (v, &key) {
+                    (Value::Number(a), Value::Number(b)) => a <= b,
+                    (Value::Text(a), Value::Text(b)) => a.as_str() <= b.as_str(),
+                    _ => false,
+                };
+                if le {
+                    hit = Some(i);
+                }
+            }
+            return Ok(hit
+                .and_then(|i| ret.get(i).cloned())
+                .unwrap_or(Value::Error("#N/A".into())));
+        }
+        "SUBTOTAL" | "AGGREGATE" => {
+            // SUBTOTAL(集計番号, 範囲…) — オートフィルターと「小計」が
+            // 自動で埋め込む、実物のファイル頻出の関数。
+            // 101〜111(手で隠した行を飛ばす)は 1〜11 と同じに扱う —
+            // この評価器は行の畳みを知らない(正直な近似。AGGREGATE も同様)
+            let f = args.first().map(|g| g.first().as_number()).unwrap_or(0.0) as i64;
+            let f = if f > 100 { f - 100 } else { f };
+            // AGGREGATE は第2引数が「無視の指定」— 読み飛ばす
+            let skip = if name == "AGGREGATE" { 2 } else { 1 };
+            let ns: Vec<f64> = args
+                .get(skip..)
+                .unwrap_or(&[])
+                .iter()
+                .flat_map(|g| g.values())
+                .filter(|v| matches!(v, Value::Number(_)))
+                .map(|v| v.as_number())
+                .collect();
+            let cnt_a = args
+                .get(skip..)
+                .unwrap_or(&[])
+                .iter()
+                .flat_map(|g| g.values())
+                .filter(|v| !v.is_empty())
+                .count();
+            let n = ns.len() as f64;
+            let mean = if ns.is_empty() { 0.0 } else { ns.iter().sum::<f64>() / n };
+            let ss: f64 = ns.iter().map(|x| (x - mean) * (x - mean)).sum();
+            return Ok(match f {
+                1 if !ns.is_empty() => Value::Number(mean),
+                2 => Value::Number(n),
+                3 => Value::Number(cnt_a as f64),
+                4 => Value::Number(ns.iter().cloned().reduce(f64::max).unwrap_or(0.0)),
+                5 => Value::Number(ns.iter().cloned().reduce(f64::min).unwrap_or(0.0)),
+                6 => Value::Number(ns.iter().product()),
+                7 if ns.len() >= 2 => Value::Number((ss / (n - 1.0)).sqrt()),
+                8 if !ns.is_empty() => Value::Number((ss / n).sqrt()),
+                9 => Value::Number(ns.iter().sum()),
+                10 if ns.len() >= 2 => Value::Number(ss / (n - 1.0)),
+                11 if !ns.is_empty() => Value::Number(ss / n),
+                1 | 7 | 8 | 10 | 11 => Value::Error("#DIV/0!".into()),
+                _ => Value::Error("#VALUE!".into()),
+            });
         }
         _ => {}
     }
@@ -876,6 +1111,7 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
         name,
         "IFERROR" | "ISERROR" | "ISBLANK" | "IF" | "IFS" | "SWITCH" | "CHOOSE"
             | "ISNUMBER" | "ISTEXT" // エラーは数でも文字でもない → FALSE と答える
+            | "IFNA" | "ISNA" | "ISERR" | "ISLOGICAL" | "ISNONTEXT" | "TYPE" | "N" | "T"
     ) {
         if let Some(e) = a.iter().find(|v| matches!(v, Value::Error(_))) {
             return Ok(e.clone());
@@ -1000,7 +1236,10 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
         "OR" => Value::Bool(a.iter().any(|v| v.as_number() != 0.0
             || matches!(v, Value::Bool(true)))),
         "NOT" => Value::Bool(!(a.first().map(|v| v.as_number() != 0.0).unwrap_or(false))),
-        "CONCATENATE" => Value::Text(a.iter().map(|v| v.display()).collect()),
+        "CONCATENATE" | "CONCAT" => Value::Text(a.iter().map(|v| v.display()).collect()),
+        // 引数つきの TRUE()/FALSE() も本物の Excel ファイルには出てくる
+        "TRUE" => Value::Bool(true),
+        "FALSE" => Value::Bool(false),
         // ---- 日付と時刻(値は Excel の通し番号 1899-12-30 起点)----
         "TODAY" => Value::Number(today_serial().0),
         "NOW" => {
@@ -1332,17 +1571,19 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
                 Value::Text(s.repeat(n as usize))
             }
         }
-        "CHAR" => {
+        "CHAR" | "UNICHAR" => {
             let n = a.first().map(|v| v.as_number()).unwrap_or(0.0) as u32;
             match char::from_u32(n) {
                 Some(c) if n > 0 => Value::Text(c.to_string()),
                 _ => Value::Error("#VALUE!".into()),
             }
         }
-        "CODE" => match a.first().map(|v| v.display()).unwrap_or_default().chars().next() {
-            Some(c) => Value::Number(c as u32 as f64),
-            None => Value::Error("#VALUE!".into()),
-        },
+        "CODE" | "UNICODE" => {
+            match a.first().map(|v| v.display()).unwrap_or_default().chars().next() {
+                Some(c) => Value::Number(c as u32 as f64),
+                None => Value::Error("#VALUE!".into()),
+            }
+        }
         // ---- 統計(第2段 2026-08-05)----
         "MEDIAN" => {
             let mut ns = nums(&a);
@@ -1548,9 +1789,306 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
             let x = a.first().map(|v| v.as_number()).unwrap_or(0.0).abs().floor() as i64;
             Value::Bool((x % 2 == 0) == (name == "ISEVEN"))
         }
+        // ---- Excel 互換の穴埋め(第4段 2026-08-05)----
+        "IFNA" => match a.first() {
+            Some(Value::Error(e)) if e == "#N/A" => a.get(1).cloned().unwrap_or(Value::Empty),
+            v => v.cloned().unwrap_or(Value::Empty),
+        },
+        "NA" => Value::Error("#N/A".into()),
+        "ISNA" => Value::Bool(matches!(a.first(), Some(Value::Error(e)) if e == "#N/A")),
+        "ISERR" => Value::Bool(matches!(a.first(), Some(Value::Error(e)) if e != "#N/A")),
+        "ISLOGICAL" => Value::Bool(matches!(a.first(), Some(Value::Bool(_)))),
+        "ISNONTEXT" => Value::Bool(!matches!(a.first(), Some(Value::Text(_)))),
+        "T" => match a.first() {
+            Some(Value::Text(s)) => Value::Text(s.clone()),
+            Some(e @ Value::Error(_)) => e.clone(),
+            _ => Value::Text(String::new()),
+        },
+        "N" => match a.first() {
+            Some(Value::Number(n)) => Value::Number(*n),
+            Some(Value::Bool(b)) => Value::Number(*b as i32 as f64),
+            Some(e @ Value::Error(_)) => e.clone(),
+            _ => Value::Number(0.0),
+        },
+        "TYPE" => Value::Number(match a.first() {
+            Some(Value::Text(_)) => 2.0,
+            Some(Value::Bool(_)) => 4.0,
+            Some(Value::Error(_)) => 16.0,
+            _ => 1.0,
+        }),
+        "PROPER" => {
+            let s = a.first().map(|v| v.display()).unwrap_or_default();
+            let mut out = String::new();
+            let mut head = true;
+            for c in s.chars() {
+                if c.is_alphabetic() {
+                    out.extend(if head { c.to_uppercase().collect::<Vec<_>>() }
+                               else { c.to_lowercase().collect() });
+                    head = false;
+                } else {
+                    out.push(c);
+                    head = true;
+                }
+            }
+            Value::Text(out)
+        }
+        "EXACT" => Value::Bool(
+            a.first().map(|v| v.display()) == a.get(1).map(|v| v.display())),
+        "CLEAN" => Value::Text(
+            a.first().map(|v| v.display()).unwrap_or_default()
+                .chars().filter(|c| !c.is_control()).collect()),
+        "FIXED" | "YEN" | "DOLLAR" => {
+            // 数を文字にする(桁区切りつき)。YEN は ¥、DOLLAR は $ を頭に
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let dec = a.get(1).map(|v| v.as_number()).unwrap_or(2.0) as i32;
+            let no_comma = name == "FIXED"
+                && a.get(2).map(|v| v.as_number() != 0.0).unwrap_or(false);
+            let code = match (name, no_comma) {
+                (_, true) => format!("0.{}", "0".repeat(dec.max(0) as usize)),
+                ("YEN", _) => format!("¥#,##0{}", if dec > 0 {
+                    format!(".{}", "0".repeat(dec as usize)) } else { String::new() }),
+                ("DOLLAR", _) => format!("$#,##0.{}", "0".repeat(dec.max(0) as usize)),
+                _ => format!("#,##0{}", if dec > 0 {
+                    format!(".{}", "0".repeat(dec as usize)) } else { String::new() }),
+            };
+            // 桁数が負なら、その桁で丸める(FIXED(-2) は百の位)
+            let x = if dec < 0 {
+                let f = 10f64.powi(-dec);
+                (x / f).round() * f
+            } else {
+                x
+            };
+            Value::Text(format_value(&Value::Number(x), Some(&code)))
+        }
+        "NUMBERVALUE" => {
+            // NUMBERVALUE(文字列, [小数点], [桁区切り])
+            let s = a.first().map(|v| v.display()).unwrap_or_default();
+            let dec = a.get(1).map(|v| v.display()).unwrap_or_else(|| ".".into());
+            let grp = a.get(2).map(|v| v.display()).unwrap_or_else(|| ",".into());
+            let t: String = s
+                .trim()
+                .chars()
+                .filter(|c| !grp.contains(*c) && !c.is_whitespace())
+                .map(|c| if dec.contains(c) { '.' } else { c })
+                .collect();
+            match t.parse::<f64>() {
+                Ok(n) => Value::Number(n),
+                Err(_) => Value::Error("#VALUE!".into()),
+            }
+        }
+        // バイト数の一族。**日本の古い帳票の定番** — 全角は2、半角(ASCII と
+        // 半角カナ)は1と数える(Excel の日本語ロケールと同じ数え方)
+        "LENB" => Value::Number(
+            a.first().map(|v| v.display()).unwrap_or_default()
+                .chars().map(jchar_width).sum::<usize>() as f64),
+        "LEFTB" | "RIGHTB" | "MIDB" => {
+            let s = a.first().map(|v| v.display()).unwrap_or_default();
+            let ch: Vec<char> = s.chars().collect();
+            let n = |i: usize| a.get(i).map(|v| v.as_number() as usize).unwrap_or(0);
+            let take_bytes = |it: &mut dyn Iterator<Item = &char>, budget: usize| -> String {
+                let mut used = 0;
+                let mut out = String::new();
+                for c in it {
+                    let w = jchar_width(*c);
+                    if used + w > budget {
+                        break;
+                    }
+                    used += w;
+                    out.push(*c);
+                }
+                out
+            };
+            Value::Text(match name {
+                "LEFTB" => take_bytes(&mut ch.iter(), n(1)),
+                "RIGHTB" => {
+                    // 後ろから測って、前から出す
+                    let total: usize = ch.iter().map(|c| jchar_width(*c)).sum();
+                    let skip = total.saturating_sub(n(1));
+                    let mut used = 0;
+                    ch.iter()
+                        .skip_while(|c| {
+                            used += jchar_width(**c);
+                            used <= skip
+                        })
+                        .collect()
+                }
+                _ => {
+                    // MIDB(文字列, 始まり, 数)。始まりは1起点のバイト位置
+                    let start = n(1).saturating_sub(1);
+                    let mut used = 0;
+                    let rest: Vec<&char> = ch
+                        .iter()
+                        .skip_while(|c| {
+                            if used < start {
+                                used += jchar_width(**c);
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .collect();
+                    take_bytes(&mut rest.into_iter(), n(2))
+                }
+            })
+        }
+        // 全角と半角(日本語一級の道具)
+        "ASC" => Value::Text(asc_hankaku(&a.first().map(|v| v.display()).unwrap_or_default())),
+        "JIS" | "DBCS" => {
+            Value::Text(jis_zenkaku(&a.first().map(|v| v.display()).unwrap_or_default()))
+        }
+        "DATESTRING" => {
+            // 通し番号 → 和暦の文字(令和08年08月05日)。明治より前は西暦で
+            let serial = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            Value::Text(wareki(serial))
+        }
+        "ADDRESS" => {
+            // ADDRESS(行, 列, [形式]) — 1=絶対(既定) 4=相対
+            let r = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let c = a.get(1).map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let abs = a.get(2).map(|v| v.as_number()).unwrap_or(1.0) as i64;
+            if r < 1 || c < 1 {
+                Value::Error("#VALUE!".into())
+            } else {
+                let cell = Pos::new(r as u32 - 1, c as u32 - 1).a1();
+                Value::Text(match abs {
+                    4 => cell,
+                    _ => {
+                        let split = cell.find(|ch: char| ch.is_ascii_digit()).unwrap_or(0);
+                        format!("${}${}", &cell[..split], &cell[split..])
+                    }
+                })
+            }
+        }
+        "HYPERLINK" => {
+            // 表示は文字だけ(飛ぶ仕掛けはセルのリンクの仕事)
+            a.get(1).or(a.first()).cloned().unwrap_or(Value::Empty)
+        }
+        "QUOTIENT" => {
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let y = a.get(1).map(|v| v.as_number()).unwrap_or(0.0);
+            if y == 0.0 {
+                Value::Error("#DIV/0!".into())
+            } else {
+                Value::Number((x / y).trunc())
+            }
+        }
+        "CEILING.MATH" | "FLOOR.MATH" => {
+            // 新しい既定の丸め。基準は絶対値で見る(符号の縛りが無い)
+            let x = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let s = a.get(1).map(|v| v.as_number().abs()).unwrap_or(1.0);
+            if s == 0.0 {
+                Value::Number(0.0)
+            } else {
+                let q = x / s;
+                Value::Number(if name == "CEILING.MATH" { q.ceil() } else { q.floor() } * s)
+            }
+        }
+        "AVERAGEA" | "MAXA" | "MINA" => {
+            // A 付き: 文字は0、TRUE は1 と数える(Excel の約束)
+            let ns: Vec<f64> = a
+                .iter()
+                .filter(|v| !v.is_empty())
+                .map(|v| match v {
+                    Value::Number(n) => *n,
+                    Value::Bool(b) => *b as i32 as f64,
+                    _ => 0.0,
+                })
+                .collect();
+            if ns.is_empty() {
+                if name == "AVERAGEA" {
+                    Value::Error("#DIV/0!".into())
+                } else {
+                    Value::Number(0.0)
+                }
+            } else {
+                Value::Number(match name {
+                    "AVERAGEA" => ns.iter().sum::<f64>() / ns.len() as f64,
+                    "MAXA" => ns.iter().cloned().reduce(f64::max).unwrap(),
+                    _ => ns.iter().cloned().reduce(f64::min).unwrap(),
+                })
+            }
+        }
+        "DAYS" => {
+            let end = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            let start = a.get(1).map(|v| v.as_number()).unwrap_or(0.0);
+            Value::Number(end - start)
+        }
+        "DAYS360" => {
+            let s = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let e = a.get(1).map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            Value::Number(days360(s, e) as f64)
+        }
+        "YEARFRAC" => {
+            // 基準 0=30/360(既定) 1=実日数/年平均 2=/360 3=/365 4=欧州30/360
+            let s = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let e = a.get(1).map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let basis = a.get(2).map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let days = (e - s) as f64;
+            Value::Number(match basis {
+                1 => days / 365.25, // 実際の暦の平均(Excel の厳密式の近似)
+                2 => days / 360.0,
+                3 => days / 365.0,
+                4 => days360(s, e) as f64 / 360.0,
+                _ => days360(s, e) as f64 / 360.0,
+            })
+        }
+        "WEEKNUM" => {
+            // 年の何週目か(1=日曜始まり(既定)、2=月曜始まり)
+            let serial = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            let mon = a.get(1).map(|v| v.as_number()).unwrap_or(1.0) as i64 == 2;
+            let (y, _, _) = civil_from_days(serial - EXCEL_EPOCH_DAYS);
+            let jan1 = date_serial(y, 1, 1);
+            let head = if mon { (weekday0(jan1) + 6) % 7 } else { weekday0(jan1) };
+            Value::Number(((serial - jan1 + head) / 7 + 1) as f64)
+        }
+        "ISOWEEKNUM" => {
+            // ISO 8601: 木曜を含む週がその年の第1週
+            let serial = a.first().map(|v| v.as_number()).unwrap_or(0.0) as i64;
+            // その週の木曜へ動かして年内通算で数える
+            let dow = (weekday0(serial) + 6) % 7; // 0=月曜
+            let thu = serial - dow + 3;
+            let (y, _, _) = civil_from_days(thu - EXCEL_EPOCH_DAYS);
+            Value::Number(((thu - date_serial(y, 1, 1)) / 7 + 1) as f64)
+        }
+        "NPV" => {
+            // NPV(利率, 額…) — 1期目の終わりから割り引く(Excel と同じ)
+            let r = a.first().map(|v| v.as_number()).unwrap_or(0.0);
+            if r <= -1.0 {
+                Value::Error("#NUM!".into())
+            } else {
+                Value::Number(
+                    a.get(1..)
+                        .unwrap_or(&[])
+                        .iter()
+                        .filter(|v| !v.is_empty())
+                        .enumerate()
+                        .map(|(i, v)| v.as_number() / (1.0 + r).powi(i as i32 + 1))
+                        .sum(),
+                )
+            }
+        }
+        "RATE" => {
+            // RATE(回数, 定額, 現在価値, [将来価値]) — 反復解
+            let g = |i: usize| a.get(i).map(|v| v.as_number()).unwrap_or(0.0);
+            let (nper, pmt, pv, fv) = (g(0), g(1), g(2), g(3));
+            let f = |r: f64| -> f64 {
+                if r.abs() < 1e-12 {
+                    pv + pmt * nper + fv
+                } else {
+                    let k = (1.0 + r).powf(nper);
+                    pv * k + pmt * (k - 1.0) / r + fv
+                }
+            };
+            match bisect(&f, -0.9999, 10.0) {
+                Some(r) => Value::Number(r),
+                None => Value::Error("#NUM!".into()),
+            }
+        }
         "PY" => Value::Error("#PY単独".into()), // =PY(…) はセル単独でだけ使える
         // あふれる関数もセル単独でだけ(式の中に混ぜる形はまだ)
-        "FILTER" | "SORT" | "UNIQUE" | "SEQUENCE" => Value::Error("#配列単独".into()),
+        "FILTER" | "SORT" | "UNIQUE" | "SEQUENCE" | "TRANSPOSE" => {
+            Value::Error("#配列単独".into())
+        }
         _ => Value::Error("#NAME?".into()),
     })
 }
@@ -1700,7 +2238,7 @@ pub fn is_py_formula(f: &str) -> bool {
 
 /// セル単独で書くと**あふれて広がる**(スピルする)関数。
 /// =PY と同じ制約: 式の中に混ぜては使えない(そのときは #配列単独)
-const ARRAY_FNS: &[&str] = &["FILTER", "SORT", "UNIQUE", "SEQUENCE"];
+const ARRAY_FNS: &[&str] = &["FILTER", "SORT", "UNIQUE", "SEQUENCE", "TRANSPOSE"];
 
 pub fn recalc(sheet: &mut Sheet) {
     // OFFSET/INDIRECT(計算で決まる参照)とスピルは、1回の走査では依存の順が
@@ -2050,6 +2588,18 @@ fn array_call(name: &str, args: Vec<Arg>) -> Result<Vec<Vec<Value>>, Value> {
                 if desc { o.reverse() } else { o }
             });
             Ok(rows)
+        }
+        "TRANSPOSE" => {
+            let rows = rows_of(args.first().ok_or(err("#VALUE!"))?);
+            let h = rows.len();
+            let w = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+            Ok((0..w)
+                .map(|c| {
+                    (0..h)
+                        .map(|r| rows[r].get(c).cloned().unwrap_or(Value::Empty))
+                        .collect()
+                })
+                .collect())
         }
         "FILTER" => {
             // FILTER(範囲, 条件の範囲, [空のとき])
@@ -2974,6 +3524,191 @@ mod dan3_tests {
         let mut s = sheet_with(&[("Z1", "=SUM(SEQUENCE(3,1))+1")]);
         recalc(&mut s);
         assert_eq!(v(&s, "Z1"), Value::Error("#配列単独".into()));
+    }
+}
+
+/// 第4段の拡充(2026-08-05)— Excel で作った実物のファイルが読める穴埋め。
+#[cfg(test)]
+mod dan4_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn sheet_with(cells: &[(&str, &str)]) -> Sheet {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        for (a1, v) in cells {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(v));
+        }
+        s
+    }
+
+    fn value_of(s: &mut Sheet, f: &str) -> Value {
+        s.set(Pos::parse("Z99").unwrap(), Cell::input(f));
+        recalc(s);
+        s.value(Pos::parse("Z99").unwrap())
+    }
+
+    fn n(s: &mut Sheet, f: &str) -> f64 {
+        match value_of(s, f) {
+            Value::Number(x) => x,
+            v => panic!("{f} が数でない: {v:?}"),
+        }
+    }
+
+    fn t(s: &mut Sheet, f: &str) -> String {
+        match value_of(s, f) {
+            Value::Text(x) => x,
+            v => panic!("{f} が文字でない: {v:?}"),
+        }
+    }
+
+    #[test]
+    fn subtotalはフィルターの定番() {
+        let mut s = sheet_with(&[
+            ("A1", "10"), ("A2", "20"), ("A3", "30"), ("A4", "文字"),
+        ]);
+        assert_eq!(n(&mut s, "=SUBTOTAL(9,A1:A4)"), 60.0, "9=SUM");
+        assert_eq!(n(&mut s, "=SUBTOTAL(109,A1:A4)"), 60.0, "109 も SUM と同じに扱う");
+        assert_eq!(n(&mut s, "=SUBTOTAL(1,A1:A3)"), 20.0, "1=AVERAGE");
+        assert_eq!(n(&mut s, "=SUBTOTAL(2,A1:A4)"), 3.0, "2=COUNT(数だけ)");
+        assert_eq!(n(&mut s, "=SUBTOTAL(3,A1:A4)"), 4.0, "3=COUNTA");
+        assert_eq!(n(&mut s, "=SUBTOTAL(4,A1:A3)"), 30.0);
+        assert_eq!(n(&mut s, "=SUBTOTAL(5,A1:A3)"), 10.0);
+    }
+
+    #[test]
+    fn 新名と選択の関数() {
+        let mut s = sheet_with(&[("A1", "70"), ("A2", "90"), ("A3", "90")]);
+        assert_eq!(t(&mut s, "=CONCAT(\"防火\",\"戸\")"), "防火戸");
+        assert_eq!(t(&mut s, "=IFNA(NA(),\"無し\")"), "無し");
+        assert_eq!(value_of(&mut s, "=ISNA(NA())"), Value::Bool(true));
+        assert_eq!(value_of(&mut s, "=ISNA(1/0)"), Value::Bool(false), "#DIV/0! は NA でない");
+        assert_eq!(value_of(&mut s, "=ISERR(1/0)"), Value::Bool(true));
+        assert_eq!(n(&mut s, "=RANK.EQ(90,A1:A3)"), 1.0);
+        assert_eq!(n(&mut s, "=RANK.AVG(90,A1:A3)"), 1.5, "同値2つの順位の平均");
+        assert_eq!(value_of(&mut s, "=TRUE()"), Value::Bool(true), "括弧つきの TRUE()");
+        assert_eq!(t(&mut s, "=HYPERLINK(\"https://例\",\"表示名\")"), "表示名");
+    }
+
+    #[test]
+    fn 新しい丸めと商() {
+        let mut s = sheet_with(&[]);
+        assert_eq!(n(&mut s, "=CEILING.MATH(6.1)"), 7.0, "基準の既定は1");
+        assert_eq!(n(&mut s, "=CEILING.MATH(-6.1,2)"), -6.0, "負は0へ寄るのが既定");
+        assert_eq!(n(&mut s, "=FLOOR.MATH(-6.1,2)"), -8.0);
+        assert_eq!(n(&mut s, "=QUOTIENT(7,2)"), 3.0);
+        assert_eq!(n(&mut s, "=QUOTIENT(-7,2)"), -3.0, "商は0へ切る");
+        assert_eq!(value_of(&mut s, "=QUOTIENT(7,0)"), Value::Error("#DIV/0!".into()));
+    }
+
+    #[test]
+    fn 古典のlookupとtranspose() {
+        let mut s = sheet_with(&[
+            ("A1", "10"), ("B1", "甲"),
+            ("A2", "20"), ("B2", "乙"),
+            ("A3", "30"), ("B3", "丙"),
+            ("D1", "=LOOKUP(25,A1:A3,B1:B3)"),
+            ("E1", "=TRANSPOSE(A1:B3)"),
+        ]);
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("D1").unwrap()), Value::Text("乙".into()),
+            "25以下でいちばん大きい 20 の行");
+        // 3行2列 → 2行3列にあふれる
+        assert_eq!(s.value(Pos::parse("E1").unwrap()), Value::Number(10.0));
+        assert_eq!(s.value(Pos::parse("G1").unwrap()), Value::Number(30.0));
+        assert_eq!(s.value(Pos::parse("E2").unwrap()), Value::Text("甲".into()));
+        assert_eq!(s.value(Pos::parse("G2").unwrap()), Value::Text("丙".into()));
+    }
+
+    #[test]
+    fn 日付の週と日数() {
+        let mut s = sheet_with(&[]);
+        assert_eq!(n(&mut s, "=DAYS(DATE(2026,8,5),DATE(2026,8,1))"), 4.0);
+        assert_eq!(n(&mut s, "=DAYS360(DATE(2026,1,31),DATE(2026,3,1))"), 31.0,
+            "30/360 の数え方");
+        assert!((n(&mut s, "=YEARFRAC(DATE(2026,1,1),DATE(2026,7,1))") - 0.5).abs() < 1e-9);
+        // 2026-01-01 は木曜 → 第1週。2026-08-05 は?(自前の暦で数える)
+        assert_eq!(n(&mut s, "=WEEKNUM(DATE(2026,1,1))"), 1.0);
+        assert_eq!(n(&mut s, "=ISOWEEKNUM(DATE(2026,1,1))"), 1.0,
+            "木曜を含む週が ISO の第1週");
+        assert_eq!(t(&mut s, "=ADDRESS(5,2)"), "$B$5");
+        assert_eq!(t(&mut s, "=ADDRESS(5,2,4)"), "B5", "4=相対");
+    }
+
+    #[test]
+    fn 財務の反復解() {
+        let mut s = sheet_with(&[
+            ("A1", "-1000"), ("A2", "500"), ("A3", "500"), ("A4", "500"),
+        ]);
+        // IRR: -1000 + 500/(1+r) + 500/(1+r)^2 + 500/(1+r)^3 = 0 → 約 23.4%
+        let irr = n(&mut s, "=IRR(A1:A4)");
+        assert!((irr - 0.2337).abs() < 0.001, "IRR がずれる: {irr}");
+        // RATE: PMT(0.01,60,1000000) の逆算 → 月利1%
+        let rate = n(&mut s, "=RATE(60,-22244.4477,1000000)");
+        assert!((rate - 0.01).abs() < 1e-6, "RATE がずれる: {rate}");
+        // NPV: 利率0なら単純合計
+        assert!((n(&mut s, "=NPV(0,A2:A4)") - 1500.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn 文字の道具の残り() {
+        let mut s = sheet_with(&[]);
+        assert_eq!(t(&mut s, "=PROPER(\"hello world\")"), "Hello World");
+        assert_eq!(value_of(&mut s, "=EXACT(\"Abc\",\"abc\")"), Value::Bool(false));
+        assert_eq!(value_of(&mut s, "=EXACT(\"戸\",\"戸\")"), Value::Bool(true));
+        assert_eq!(t(&mut s, "=FIXED(1234.567,1)"), "1,234.6");
+        assert_eq!(t(&mut s, "=YEN(1234567)"), "¥1,234,567.00");
+        assert_eq!(t(&mut s, "=YEN(1234567,0)"), "¥1,234,567");
+        assert_eq!(n(&mut s, "=NUMBERVALUE(\"1.234,56\",\",\",\".\")"), 1234.56,
+            "欧州式の区切りも読める");
+        assert_eq!(t(&mut s, "=T(\"文字\")"), "文字");
+        assert_eq!(t(&mut s, "=T(123)"), "");
+        assert_eq!(n(&mut s, "=N(TRUE)"), 1.0);
+        assert_eq!(n(&mut s, "=TYPE(\"a\")"), 2.0);
+        assert_eq!(n(&mut s, "=TYPE(1/0)"), 16.0, "エラーの型は16");
+        assert_eq!(t(&mut s, "=UNICHAR(12354)"), "あ");
+        assert_eq!(n(&mut s, "=UNICODE(\"あ\")"), 12354.0);
+    }
+
+    #[test]
+    fn バイト数の一族は全角を2と数える() {
+        let mut s = sheet_with(&[]);
+        assert_eq!(n(&mut s, "=LENB(\"防火戸\")"), 6.0);
+        assert_eq!(n(&mut s, "=LENB(\"abc\")"), 3.0);
+        assert_eq!(n(&mut s, "=LENB(\"ｱｲｳ\")"), 3.0, "半角カナは1");
+        assert_eq!(t(&mut s, "=LEFTB(\"防火戸\",4)"), "防火");
+        assert_eq!(t(&mut s, "=LEFTB(\"防火戸\",3)"), "防", "半端な1バイトは取らない");
+        assert_eq!(t(&mut s, "=RIGHTB(\"防火戸\",2)"), "戸");
+        assert_eq!(t(&mut s, "=MIDB(\"防火戸\",3,2)"), "火");
+    }
+
+    #[test]
+    fn 全角半角の変換() {
+        let mut s = sheet_with(&[]);
+        assert_eq!(t(&mut s, "=ASC(\"ＡＢＣ１２３\")"), "ABC123");
+        assert_eq!(t(&mut s, "=ASC(\"カタカナ\")"), "ｶﾀｶﾅ");
+        assert_eq!(t(&mut s, "=ASC(\"ガンダム\")"), "ｶﾞﾝﾀﾞﾑ", "濁点は2文字に割れる");
+        assert_eq!(t(&mut s, "=JIS(\"ｶﾞﾝﾀﾞﾑ\")"), "ガンダム", "濁点が1文字に組み直る");
+        assert_eq!(t(&mut s, "=JIS(\"abc 123\")"), "ａｂｃ　１２３");
+        // 往復して戻る
+        assert_eq!(t(&mut s, "=JIS(ASC(\"パピプペポ・ヴ\"))"), "パピプペポ・ヴ");
+    }
+
+    #[test]
+    fn 和暦の文字() {
+        let mut s = sheet_with(&[]);
+        assert_eq!(t(&mut s, "=DATESTRING(DATE(2026,8,5))"), "令和08年08月05日");
+        assert_eq!(t(&mut s, "=DATESTRING(DATE(1989,1,7))"), "昭和64年01月07日",
+            "改元の前日は前の元号");
+        assert_eq!(t(&mut s, "=DATESTRING(DATE(1989,1,8))"), "平成01年01月08日");
+        assert_eq!(t(&mut s, "=DATESTRING(DATE(2019,5,1))"), "令和01年05月01日");
+    }
+
+    #[test]
+    fn aつきの統計は文字を0と数える() {
+        let mut s = sheet_with(&[("A1", "10"), ("A2", "文字"), ("A3", "20")]);
+        assert_eq!(n(&mut s, "=AVERAGEA(A1:A3)"), 10.0, "(10+0+20)/3");
+        assert_eq!(n(&mut s, "=MAXA(A1:A3)"), 20.0);
+        assert_eq!(n(&mut s, "=MINA(A1:A3)"), 0.0, "文字の0が最小");
     }
 }
 

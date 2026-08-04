@@ -223,7 +223,8 @@ fn find_python() -> std::path::PathBuf {
 }
 
 /// マクロ台本の全文を組む。前置きで d(python-docx の文書)のほかに、
-/// 記入欄へ**名前で**書く fill / fill_one を渡す。鍵は docx の w:tag
+/// 記入欄へ**名前で**書く fill / fill_one、読む extract、名前と値の一覧
+/// fields を渡す(記入=出口と吸い上げ=入口の対)。鍵は docx の w:tag
 /// (フォームタブの「名前」釦で付ける)。無い名前は例外で断る —
 /// ラベルの字を探して隣に書く走査より、名前が様式の背骨(発注者 2026-08-05)
 fn macro_script(
@@ -279,14 +280,41 @@ def fill_one(name, value):
     if not es:
         raise SystemExit('記入欄「%s」が見つかりません' % name)
     _put(es[0], value)
+def _text(sdt):
+    ct = sdt.find(qn('w:sdtContent'))
+    if ct is None:
+        return ''
+    return ''.join(t.text or '' for t in ct.iter(qn('w:t')))
+def extract(name):
+    # 記入欄の値を読む(同じ名前が複数なら最初の一つ)。無い名前は断る
+    es = _sdts(name)
+    if not es:
+        raise SystemExit('記入欄「%s」が見つかりません' % name)
+    return _text(es[0])
+def fields():
+    # 名前つき記入欄の(名前, 値)の一覧 — 様式の仕様書。同じ名前は欄ごとに並ぶ
+    out = []
+    for sdt in d.element.iter(qn('w:sdt')):
+        pr = sdt.find(qn('w:sdtPr'))
+        tag = pr.find(qn('w:tag')) if pr is not None else None
+        if tag is None:
+            continue
+        t = tag.get(qn('w:val')) or ''
+        if t.startswith('jo:'):
+            t = t.split(':', 2)[-1]
+            if t in ('email', 'phone', 'complex', 'signature'):
+                continue  # 種類の印だけ(名前なし)の欄
+        if t:
+            out.append((t, _text(sdt)))
+    return out
 "#;
     format!(
         concat!(
             "import docx\n",
             "d = docx.Document({in_d:?})\n",
             "{fill}",
-            "# ---- 利用者のコード(d = python-docx の文書 / \
-             fill(名前, 値) = 記入欄へ) ----\n",
+            "# ---- 利用者のコード(d = python-docx の文書 / fill(名前, 値)・\
+             extract(名前)・fields() = 記入欄) ----\n",
             "{code}\n",
             "# ----\n",
             "d.save({out_d:?})\n"
@@ -4562,7 +4590,8 @@ impl Writer {
                 .detach();
                 self.status = "マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
                                直します(台本の d が python-docx の文書。\
-                               fill(名前, 値) で名前つき記入欄へ)"
+                               fill(名前, 値)=記入・extract(名前)=読む・\
+                               fields()=名前と値の一覧)"
                     .into();
             }
             // プラグインの管理。置き場の .py を一覧し、マクロと同じ檻で実行
@@ -7658,8 +7687,8 @@ impl Render for Writer {
             if items.is_empty() {
                 d = d.child(div().text_size(px(11.5)).text_color(rgb(0x66707A))
                     .child("(まだありません。置き場に .py を置いてください。\
-                            台本の d が python-docx の文書、\
-                            fill(名前, 値) で名前つき記入欄へ)"));
+                            台本の d が python-docx の文書、fill(名前, 値)・\
+                            extract(名前)・fields() で記入欄の出し入れ)"));
             }
             for (i, q) in items.into_iter().enumerate() {
                 let name = q
@@ -8742,6 +8771,26 @@ mod menu_run_tests {
         assert!(!o.status.success(), "無い名前で通ってしまう");
         let err = String::from_utf8_lossy(&o.stderr);
         assert!(err.contains("住所"), "断りに名前が出ない: {err}");
+        // 吸い上げ(入口): 記入済みから extract で値を読み、fields で一覧
+        let script = macro_script(
+            &out_d,
+            &dir.join("out2.docx"),
+            "print(extract(\"氏名\"))\nfor n, v in fields():\n    print(n, v)",
+        );
+        std::fs::write(&py_path, script).unwrap();
+        let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let out = String::from_utf8_lossy(&o.stdout).to_string();
+        assert!(out.contains("山田太郎"), "extract が読めない: {out}");
+        assert!(
+            out.contains("連絡先 y@example.jp"),
+            "fields に合成 tag の名前が出ない: {out}"
+        );
+        // extract も無い名前は断る
+        let script = macro_script(&out_d, &dir.join("out3.docx"), "extract(\"住所\")");
+        std::fs::write(&py_path, script).unwrap();
+        let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
+        assert!(!o.status.success(), "extract が無い名前で通ってしまう");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
