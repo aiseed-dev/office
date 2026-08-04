@@ -601,6 +601,9 @@ struct Calc {
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
     sa_cat: usize,
+    /// スライサー(列, 選んだ値たち, 複数選択か)。**見え方だけ** —
+    /// 絞り込みと同じで、保存される中身は変わらない
+    slicer: Option<(u32, std::collections::BTreeSet<String>, bool)>,
     /// コメントを見せるか(共同編集タブで切替。隠しても付いたまま)
     show_comments: bool,
     /// 暗号化のパスワード(次の保存から効く。開いた暗号化ブックからも入る)
@@ -718,6 +721,7 @@ impl Calc {
             sub_pend: None,
             solver: None,
             sa_cat: 0,
+            slicer: None,
             show_comments: true,
             pick_paths: Vec::new(),
             encrypt_pw: None,
@@ -903,15 +907,38 @@ impl Calc {
 
     /// 画面に出ている行の並び(絞り込み中はその行だけ。グループ化で畳んだ行は
     /// 飛ばす)。描画と当たり判定で共有する。
+    /// スライサーで残る行か(選びが空なら全部残る)。1行目=見出しは常に残す。
+    fn slicer_keeps(&self, r: u32) -> bool {
+        let Some((col, sel, _)) = &self.slicer else { return true };
+        if sel.is_empty() || r == 0 {
+            return true;
+        }
+        let v = self
+            .sheet()
+            .get(Pos::new(r, *col))
+            .map(|c| c.value.display())
+            .unwrap_or_default();
+        let v = if v.is_empty() { "(空白)".to_string() } else { v };
+        sel.contains(&v)
+    }
+
     fn visible_rows(&self) -> Vec<u32> {
         let hidden = &self.sheet().row_hidden;
         match &self.filter {
             Some((col, v)) => self
                 .matching_rows(*col, v)
                 .into_iter()
-                .filter(|r| !hidden.contains(r))
+                .filter(|r| !hidden.contains(r) && self.slicer_keeps(*r))
                 .take(ROWS as usize)
                 .collect(),
+            None if self.slicer.as_ref().is_some_and(|(_, sel, _)| !sel.is_empty()) => {
+                // スライサーで絞る: 見出し+選んだ値の行(絞り込みと同じ流儀)
+                let (rows, _) = self.sheet().extent();
+                (0..rows)
+                    .filter(|r| !hidden.contains(r) && self.slicer_keeps(*r))
+                    .take(ROWS as usize)
+                    .collect()
+            }
             None => {
                 // 畳んだ行のぶん多めに見て、画面の行数まで詰める
                 let extra = hidden.len() as u32;
@@ -1766,6 +1793,7 @@ impl Calc {
         self.sub_pend = None;
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         if self.solver.take().is_some()
+            || self.slicer.take().is_some()
             || self.prompt.take().is_some()
             || self.pick.take().is_some()
             || self.menu_sub.take().is_some()
@@ -4774,7 +4802,7 @@ calc の隣に置いてください)"
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
-        "inssmartart", "insequation",
+        "inssmartart", "insequation", "insslicer",
         "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
         "co-history", "plug-macros", "plug-manage",
         "prot-doc", "prot-encrypt", "prot-sign",
@@ -5420,6 +5448,28 @@ calc の隣に置いてください)"
                     self.status =
                         "プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)"
                             .into();
+                }
+            }
+            // スライサー。カーソルの列の一意な値を釦で並べ、押して絞る。
+            // 絞り込みと同じく**見え方だけ**(保存される中身は変わらない)
+            "insslicer" => {
+                if self.slicer.take().is_none() {
+                    self.commit();
+                    let col = self.cursor.col;
+                    let (rows, _) = self.sheet().extent();
+                    if rows < 2 {
+                        self.status =
+                            "スライサーにする列を選んでください(見出しの下にデータの行が要ります)"
+                                .into();
+                    } else {
+                        self.slicer =
+                            Some((col, std::collections::BTreeSet::new(), false));
+                        self.status = format!(
+                            "スライサー: {} 列の値を押して絞る(≡=複数選択 / ✕=解除。見え方だけで、中身は変わりません)",
+                            col_name(col)
+                        )
+                        .into();
+                    }
                 }
             }
             // 方程式(数式エディタ)。式を板に打つと mathtext が清書して画像で置く
@@ -8058,6 +8108,116 @@ impl Render for Calc {
                         }))))
         });
 
+        // ---- スライサーの小窓(列の値の釦で絞る) ----
+        let slicer_panel = self.slicer.as_ref().map(|(col, sel, multi)| {
+            let col = *col;
+            let multi = *multi;
+            // 見出し(1行目)と、その下の一意な値。空欄は「(空白)」で最後に
+            let head = self
+                .sheet()
+                .get(Pos::new(0, col))
+                .map(|c| c.value.display())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| format!("列{}", col_name(col)));
+            let (rows, _) = self.sheet().extent();
+            let mut vals: std::collections::BTreeSet<String> = Default::default();
+            let mut has_blank = false;
+            for r in 1..rows {
+                let v = self
+                    .sheet()
+                    .get(Pos::new(r, col))
+                    .map(|c| c.value.display())
+                    .unwrap_or_default();
+                if v.is_empty() {
+                    has_blank = true;
+                } else {
+                    vals.insert(v);
+                }
+            }
+            let mut items: Vec<String> = vals.into_iter().take(64).collect();
+            if has_blank {
+                items.push("(空白)".to_string());
+            }
+            let mut p = div().absolute().right(px(24.0)).top(px(ROW_H + 16.0)).w(px(190.0))
+                .p_2().rounded_md().bg(gpui::white())
+                .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
+                .flex().flex_col().gap_1()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().flex().flex_row().items_center()
+                    .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::BOLD)
+                        .whitespace_nowrap().overflow_hidden()
+                        .child(SharedString::from(head)))
+                    .child(div().flex_1())
+                    // ≡ = 複数選択の入切(本家のスライサーと同じ並び)
+                    .child(div().id("sl-multi").px_1p5().rounded_sm().cursor_pointer()
+                        .text_size(px(12.5))
+                        .bg(if multi { rgb(0xCFE6D8) } else { rgb(0xFFFFFF) })
+                        .hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .child("≡")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some((_, _, m)) = &mut this.slicer {
+                                *m = !*m;
+                                this.status = if *m {
+                                    "複数選択: 押した値を重ねて絞ります".into()
+                                } else {
+                                    "単数選択: 押した値ひとつで絞ります".into()
+                                };
+                            }
+                            cx.notify();
+                        })))
+                    // ✕ = 選びを解除(全部見せる)
+                    .child(div().id("sl-clear").px_1p5().rounded_sm().cursor_pointer()
+                        .text_size(px(12.5)).hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .child("✕")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some((_, sel, _)) = &mut this.slicer {
+                                sel.clear();
+                            }
+                            this.status = "スライサーの絞りを解除しました".into();
+                            cx.notify();
+                        }))));
+            for (i, v) in items.into_iter().enumerate() {
+                let on = sel.contains(&v);
+                p = p.child(div()
+                    .id(SharedString::from(format!("sl{i}")))
+                    .px_2().py_1().rounded_sm().border_1()
+                    .border_color(rgb(0xC6CDD3))
+                    .bg(if on { rgb(0xBBD9EA) } else { rgb(0xFFFFFF) })
+                    .text_size(px(12.0)).cursor_pointer()
+                    .whitespace_nowrap().overflow_hidden()
+                    .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .child(SharedString::from(v.clone()))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some((_, sel, multi)) = &mut this.slicer {
+                            if *multi {
+                                if !sel.remove(&v) {
+                                    sel.insert(v.clone());
+                                }
+                            } else if sel.len() == 1 && sel.contains(&v) {
+                                sel.clear(); // 同じ釦をもう一度 = 解除
+                            } else {
+                                sel.clear();
+                                sel.insert(v.clone());
+                            }
+                            this.status = if sel.is_empty() {
+                                "絞りなし(全部見えています)".into()
+                            } else {
+                                format!(
+                                    "絞り: {}(見え方だけ。中身は変わりません)",
+                                    sel.iter().cloned().collect::<Vec<_>>().join(" / ")
+                                )
+                                .into()
+                            };
+                        }
+                        cx.notify();
+                    })));
+            }
+            p
+        });
+
         // ---- 書式の小窓(セルをフォーマットする) ----
         // モーダルにしない: 範囲を選び直しながら続けて使える道具箱。
         // どの釦も既存の書式の道(fmt / run_cmd)を通り、1手ずつ戻せる
@@ -8359,7 +8519,8 @@ impl Render for Calc {
                    .children(menu)
                    .children(pick_panel)
                    .children(prompt_panel)
-                   .children(solver_panel))
+                   .children(solver_panel)
+                   .children(slicer_panel))
             .child(sheets_bar)
             .children(notes)
     }

@@ -227,7 +227,7 @@ pub const CALC: &[Tab] = &[
         c("inssparkline", "スパークラインを挿入する", "inssparkline"),
         x("グラフを挿入", "smartpicker"),
         c("inshyperlink", "ハイパーリンクを追加", "inshyperlink"),
-        x("スライサーを挿入", "insslicer"),
+        c("insslicer", "スライサーを挿入", "insslicer"),
         c("instext", "テキストボックスを挿入する", "instext"),
         x("instextart", "instextart"),
         c("insequation", "方程式を挿入", "insequation"),
