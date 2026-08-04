@@ -266,6 +266,10 @@ pub struct Sheet {
     /// 保存に残る** — 畳んだ台帳は畳んだまま次の人に渡る
     pub row_hidden: std::collections::BTreeSet<u32>,
     pub col_hidden: std::collections::BTreeSet<u32>,
+    /// シートの保護(xlsx の sheetProtection)。**パスワードは掛けない** —
+    /// 掛けた振りもしない(writer の保護と同じ正直な作法)。
+    /// 効き目はアプリが守る: 保護中は編集を堰き止める
+    pub protected: bool,
     /// 名前の定義(名前, 参照 "A1" か "A1:B2")。式の中で名前が使える。
     /// workbook.xml の definedNames と往復する
     pub names: Vec<(String, String)>,

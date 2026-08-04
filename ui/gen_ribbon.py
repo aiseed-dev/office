@@ -123,6 +123,8 @@ READY = {
         "co-showcomment": "co-showcomment", "co-chat": "co-chat",
         "co-history": "co-history",
         "plug-macros": "plug-macros", "plug-manage": "plug-manage",
+        "prot-doc": "prot-doc", "prot-encrypt": "prot-encrypt",
+        "prot-sign": "prot-sign",
         "td-remdup": "rem-duplicates",
         "td-header": "td-header", "td-total": "td-total",
         "td-band-row": "td-band-row", "td-band-col": "td-band-col",

@@ -479,6 +479,10 @@ struct Calc {
     sub_pend: Option<PivotPend>,
     /// コメントを見せるか(共同編集タブで切替。隠しても付いたまま)
     show_comments: bool,
+    /// 暗号化のパスワード(次の保存から効く。開いた暗号化ブックからも入る)
+    encrypt_pw: Option<String>,
+    /// 「開くために聞いている」パスワード待ちのファイル
+    pw_pending: Option<PathBuf>,
     /// pick の一覧が指す実体(バージョン履歴・プラグインの表示名 → パス)
     pick_paths: Vec<(String, PathBuf)>,
     /// PY のスピルの台帳(シート番号, 錨 → 行×列)。次の @計算 で前の面を消す
@@ -583,6 +587,8 @@ impl Calc {
             sub_pend: None,
             show_comments: true,
             pick_paths: Vec::new(),
+            encrypt_pw: None,
+            pw_pending: None,
             goal: None,
             py_spills: Default::default(),
             trace: Vec::new(),
@@ -1602,6 +1608,7 @@ impl Calc {
         // の順で閉じる
         self.pivot_pend = None; // 聞き取り途中のピボット・小計は Esc でやめる
         self.sub_pend = None;
+        self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         if self.prompt.take().is_some()
             || self.pick.take().is_some()
             || self.menu_sub.take().is_some()
@@ -1826,6 +1833,49 @@ impl Calc {
                     return;
                 };
                 self.goal_seek(target, goal, var);
+            }
+            // パスワードの板。開き待ちがあれば解いて開き、
+            // 無ければ「次の保存から暗号化」を決める(空なら解除)
+            "pw-open" => {
+                let Some(p) = self.pw_pending.take() else { return };
+                let bytes = match std::fs::read(&p) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.status = format!("開けません: {e}").into();
+                        return;
+                    }
+                };
+                match ooxml::crypt::decrypt(&bytes, &text) {
+                    Ok(plain) => {
+                        self.open_plain(p.clone(), plain);
+                        if self.path.as_deref() == Some(p.as_path()) {
+                            self.encrypt_pw = Some(text);
+                            self.status = format!(
+                                "{}(保存も同じパスワードで暗号化します)",
+                                self.status
+                            )
+                            .into();
+                        }
+                    }
+                    Err(e) => {
+                        // 板は開いたまま。打ち直せる
+                        self.pw_pending = Some(p);
+                        self.prompt = Some(("pw-open", Editor::new("")));
+                        self.status = e.into();
+                    }
+                }
+            }
+            "pw-set" => {
+                if text.is_empty() {
+                    self.encrypt_pw = None;
+                    self.status = "暗号化しません(次の保存から普通の xlsx)".into();
+                } else {
+                    self.encrypt_pw = Some(text);
+                    self.dirty = true;
+                    self.status =
+                        "次の保存から、このパスワードで暗号化します(AES-128。Excel や LibreOffice でも開けます)"
+                            .into();
+                }
             }
             "chat" => {
                 if text.is_empty() {
@@ -2235,6 +2285,13 @@ impl Calc {
         if now == text {
             return true;
         }
+        // シートの保護。打ちかけは捨てて元に戻す(黙って通さない)
+        if self.sheet().protected {
+            self.sync_input();
+            self.status =
+                "シートが保護されています(保護タブの「保護」で解除)".into();
+            return false;
+        }
         // 空にするのは常に許す(allowBlank の既定)。式は結果が変わり得るので通す
         if !text.trim().is_empty() && !text.starts_with('=') {
             if let Some(v) = self.sheet().validation_at(cur) {
@@ -2368,10 +2425,30 @@ impl Calc {
     }
 
     fn open(&mut self, p: PathBuf) {
-        match std::fs::File::open(&p)
-            .map_err(|e| e.to_string())
-            .and_then(sheet::xlsx::read)
-        {
+        let bytes = match std::fs::read(&p) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("開けません: {e}").into();
+                return;
+            }
+        };
+        if ooxml::crypt::is_encrypted(&bytes) {
+            // 板でパスワードを聞き、Enter が続きをやる
+            self.pw_pending = Some(p);
+            self.prompt = Some(("pw-open", Editor::new("")));
+            self.status =
+                "このブックは暗号化されています。パスワードを打って Enter".into();
+            return;
+        }
+        self.open_plain(p, bytes);
+    }
+
+    /// 平文(zip)の xlsx を読み込む。open とパスワードの板の共通の続き。
+    fn open_plain(&mut self, p: PathBuf, bytes: Vec<u8>) {
+        // 前のブックのパスワードを引きずらない(暗号化して開いた時だけ
+        // 板の続きが後から入れ直す)
+        self.encrypt_pw = None;
+        match sheet::xlsx::read(std::io::Cursor::new(bytes)) {
             Ok((mut book, rep)) => {
                 for s in &mut book.sheets {
                     recalc(s);
@@ -2488,7 +2565,26 @@ impl Calc {
     /// (保存すると名前を聞く。元へ戻したいなら同じ名前で保存する —
     /// 黙って元のファイルを書き戻したりしない)。
     fn open_version(&mut self, q: &std::path::Path) {
-        match std::fs::File::open(q).map_err(|e| e.to_string()).and_then(sheet::xlsx::read) {
+        let raw = match std::fs::read(q) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("控えが読めません: {e}").into();
+                return;
+            }
+        };
+        let raw = if ooxml::crypt::is_encrypted(&raw) {
+            match self.encrypt_pw.as_ref().map(|pw| ooxml::crypt::decrypt(&raw, pw)) {
+                Some(Ok(b)) => b,
+                _ => {
+                    self.status =
+                        "控えは暗号化されています(いまのパスワードでは解けません)".into();
+                    return;
+                }
+            }
+        } else {
+            raw
+        };
+        match sheet::xlsx::read(std::io::Cursor::new(raw)) {
             Ok((mut book, _rep)) => {
                 for sh in &mut book.sheets {
                     recalc(sh);
@@ -2512,6 +2608,17 @@ impl Calc {
                 self.status = "控えを開きました(名無しの複製。保存で名前を聞きます。元へ戻すなら同じ名前で保存)".into();
             }
             Err(e) => self.status = format!("控えが読めません: {e}").into(),
+        }
+    }
+
+    /// 原本の中身(暗号化されていれば解いた平文)。部品の持ち越しに使う
+    fn original_plain(&self) -> Option<Vec<u8>> {
+        let bytes = std::fs::read(self.path.as_ref()?).ok()?;
+        if ooxml::crypt::is_encrypted(&bytes) {
+            let pw = self.encrypt_pw.as_ref()?;
+            ooxml::crypt::decrypt(&bytes, pw).ok()
+        } else {
+            Some(bytes)
         }
     }
 
@@ -2559,6 +2666,12 @@ impl Calc {
     }
 
     fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
+        if self.sheet().protected {
+            self.status =
+                "シートが保護されています(保護タブの「保護」で解除)".into();
+            cx.notify();
+            return;
+        }
         if let Some(i) = self.shape_sel.take() {
             if self.sheet().shapes_new.len() > i {
                 self.checkpoint();
@@ -2642,6 +2755,12 @@ impl Calc {
 
     /// 貼り付け。編集中なら文字として、そうでなければセルの格子として。
     fn a_paste(&mut self, _: &ui::Paste, _: &mut Window, cx: &mut Context<Self>) {
+        if self.sheet().protected {
+            self.status =
+                "シートが保護されています(保護タブの「保護」で解除)".into();
+            cx.notify();
+            return;
+        }
         let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
             self.status = "貼り付けるものがありません".into();
             cx.notify();
@@ -2881,6 +3000,11 @@ impl Calc {
     ///
     /// **値の無いセルにも掛ける** — 罫線だけを引くのは帳票では普通の操作。
     fn fmt(&mut self, f: impl Fn(&mut CellFormat)) {
+        if self.sheet().protected {
+            self.status =
+                "シートが保護されています(保護タブの「保護」で解除)".into();
+            return;
+        }
         self.commit();
         self.checkpoint();
         // 範囲選択があれば全部に掛ける。罫線も塗りも、帳票は範囲でやる仕事
@@ -4035,9 +4159,26 @@ calc の隣に置いてください)"
         "group", "ungroup", "hide-details", "show-details", "subtotal",
         "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
         "co-history", "plug-macros", "plug-manage",
+        "prot-doc", "prot-encrypt", "prot-sign",
+    ];
+
+    /// シートの保護中でも通す操作(見るだけ・保存・保護の操作そのもの)
+    const PROTECTED_OK: &'static [&'static str] = &[
+        "open", "save", "pdf", "selectall", "undo", "redo",
+        "freeze", "show-formulas", "show-gridlines",
+        "setfilter", "clear-filter",
+        "trace-prec", "trace-dep", "remove-arrows", "pivot-select",
+        "coauth-mode", "co-showcomment", "co-chat", "co-history", "plug-manage",
+        "prot-doc", "prot-encrypt", "prot-sign",
     ];
 
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.sheet().protected && !Self::PROTECTED_OK.contains(&id) {
+            self.status =
+                "シートが保護されています(保護タブの「保護」で解除)".into();
+            cx.notify();
+            return;
+        }
         match id {
             "open" => self.open_dialog(cx),
             "save" => self.save(false, cx),
@@ -4409,6 +4550,111 @@ calc の隣に置いてください)"
                         });
                         self.prompt = Some(("pivot-rows", Editor::new("")));
                     }
+                }
+            }
+            // シートの保護。パスワードは掛けない(掛けた振りもしない)—
+            // Excel でも「保護されたシート」に見え、解除も同じ1手でできる
+            "prot-doc" => {
+                let name = self.sheet().name.clone();
+                if self.sheet().protected {
+                    self.sheet_mut().protected = false;
+                    self.dirty = true;
+                    self.status = format!(
+                        "シート「{name}」の保護を外しました(編集できます。保存で xlsx にも残ります)"
+                    )
+                    .into();
+                } else {
+                    self.commit();
+                    self.sheet_mut().protected = true;
+                    self.dirty = true;
+                    self.status = format!(
+                        "シート「{name}」を保護しました(編集を堰き止めます。同じ釦で解除。パスワードは掛けません — 掛けた振りもしません)"
+                    )
+                    .into();
+                }
+            }
+            // 暗号化。パスワードを決めると、保存で ECMA-376 Standard
+            // (AES-128)の複合ファイルに包む。空 Enter で解除
+            "prot-encrypt" => {
+                self.pw_pending = None;
+                self.prompt = Some(("pw-set", Editor::new("")));
+                self.status = if self.encrypt_pw.is_some() {
+                    "暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)"
+                        .into()
+                } else {
+                    "暗号化: パスワードを打って Enter(次の保存から効きます)".into()
+                };
+            }
+            // デジタル署名。**隣の .sig への添え書き**(Ed25519)。
+            // Excel の署名欄には出ない独自方式 — そう言って出す。
+            // 有効なら報告だけ、無効・未署名なら(作り直して)署名する
+            "prot-sign" => {
+                use ed25519_dalek::{Signer as _, Verifier as _};
+                let Some(p) = self.path.clone() else {
+                    self.status =
+                        "まだファイルになっていません(先に保存してください)".into();
+                    return;
+                };
+                if self.dirty {
+                    self.status =
+                        "未保存の変更があります。保存してから署名してください".into();
+                    return;
+                }
+                let bytes = match std::fs::read(&p) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.status = format!("読めません: {e}").into();
+                        return;
+                    }
+                };
+                let sp = sig_path_for(&p);
+                // 既にある署名を検める
+                if let Ok(txt) = std::fs::read_to_string(&sp) {
+                    let field = |k: &str| -> Option<String> {
+                        txt.lines()
+                            .find(|l| l.starts_with(k))
+                            .map(|l| l[k.len()..].trim().to_string())
+                    };
+                    let ok = (|| -> Option<(String, bool)> {
+                        let signer = field("signer:")?;
+                        let vk: [u8; 32] = unhex(&field("pubkey:")?)?.try_into().ok()?;
+                        let sg: [u8; 64] = unhex(&field("sig:")?)?.try_into().ok()?;
+                        let vk = ed25519_dalek::VerifyingKey::from_bytes(&vk).ok()?;
+                        let sig = ed25519_dalek::Signature::from_bytes(&sg);
+                        Some((signer, vk.verify(&bytes, &sig).is_ok()))
+                    })();
+                    if let Some((signer, true)) = ok {
+                        self.status = format!(
+                            "署名は有効です — {signer} が署名した時のままの中身です"
+                        )
+                        .into();
+                        return;
+                    }
+                }
+                // 無い・壊れている・中身が変わった → 署名し(直し)て添える
+                match load_or_make_key() {
+                    Ok(key) => {
+                        let sig = key.sign(&bytes);
+                        let txt = format!(
+                            "office-sign v1\nsigner: {}\npubkey: {}\nsig: {}\n",
+                            lock_identity(),
+                            to_hex(key.verifying_key().as_bytes()),
+                            to_hex(&sig.to_bytes())
+                        );
+                        match std::fs::write(&sp, txt) {
+                            Ok(_) => {
+                                self.status = format!(
+                                    "署名しました — 隣の {} に添え書き(独自方式。Excel の署名欄には出ません。もう一度押すと検めます)",
+                                    sp.file_name().unwrap_or_default().to_string_lossy()
+                                )
+                                .into();
+                            }
+                            Err(e) => {
+                                self.status = format!("署名が置けません: {e}").into();
+                            }
+                        }
+                    }
+                    Err(e) => self.status = format!("署名できません: {e}").into(),
                 }
             }
             // 共同編集モード。実体はファイルの錠(.~lock)による早い者勝ちの
@@ -5438,22 +5684,35 @@ calc の隣に置いてください)"
 
     /// 決まった場所へ書く。成功すると dirty が消える。
     fn save_to(&mut self, p: PathBuf) {
-        // 原本の部品(図形・テーマ・印刷設定)を持ち越す。読み終えてから書く
-        let original: Option<std::io::Cursor<Vec<u8>>> = self
-            .path
-            .as_ref()
-            .and_then(|old| std::fs::read(old).ok())
-            .map(std::io::Cursor::new);
+        // 原本の部品(図形・テーマ・印刷設定)を持ち越す。読み終えてから書く。
+        // 暗号化されていた原本は解いた平文を渡す
+        let original: Option<std::io::Cursor<Vec<u8>>> =
+            self.original_plain().map(std::io::Cursor::new);
         // 上書きの前に、直前の中身をバージョン履歴に控える
         if p.exists() {
             self.keep_version(&p);
         }
-        match kumihan::atomic::save(&p, |f| {
-            sheet::xlsx::write_with(&self.book, original, std::io::BufWriter::new(f))
-        }) {
+        let saved = if let Some(pw) = self.encrypt_pw.clone() {
+            // 暗号化は zip 丸ごとが単位 — 一度メモリへ書いてから包む
+            let mut plain = Vec::new();
+            sheet::xlsx::write_with(&self.book, original, std::io::Cursor::new(&mut plain))
+                .and_then(|_| ooxml::crypt::encrypt(&plain, &pw))
+                .and_then(|enc| {
+                    kumihan::atomic::save(&p, |mut f| {
+                        use std::io::Write as _;
+                        f.write_all(&enc).map_err(|e| e.to_string())
+                    })
+                })
+        } else {
+            kumihan::atomic::save(&p, |f| {
+                sheet::xlsx::write_with(&self.book, original, std::io::BufWriter::new(f))
+            })
+        };
+        match saved {
             Ok(_) => {
+                let enc_note = if self.encrypt_pw.is_some() { "(暗号化)" } else { "" };
                 self.status = format!(
-                    "保存しました — {}",
+                    "保存しました — {}{enc_note}",
                     p.file_name().unwrap_or_default().to_string_lossy()
                 )
                 .into();
@@ -6075,6 +6334,64 @@ fn plugins_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config/office/plugins")
+}
+
+/// 署名の鍵の置き場。writer と共通の ~/.config/office/sign.key
+fn sign_key_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".config/office/sign.key")
+}
+
+/// 署名の鍵を読む。無ければ作る(/dev/urandom の種。0600 で置く)
+fn load_or_make_key() -> Result<ed25519_dalek::SigningKey, String> {
+    let kp = sign_key_path();
+    if let Ok(bytes) = std::fs::read(&kp) {
+        let seed: [u8; 32] = bytes
+            .get(..32)
+            .and_then(|b| b.try_into().ok())
+            .ok_or("鍵ファイルが壊れています(~/.config/office/sign.key)")?;
+        return Ok(ed25519_dalek::SigningKey::from_bytes(&seed));
+    }
+    let mut seed = [0u8; 32];
+    use std::io::Read as _;
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut seed))
+        .map_err(|e| format!("乱数が取れません: {e}"))?;
+    if let Some(dir) = kp.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&kp)
+        .and_then(|mut f| f.write_all(&seed))
+        .map_err(|e| format!("鍵が置けません: {e}"))?;
+    Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
+}
+
+fn to_hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok())
+        .collect()
+}
+
+/// 署名の添え書きの置き場。ブックの隣の 名前.xlsx.sig
+fn sig_path_for(p: &std::path::Path) -> PathBuf {
+    let mut os = p.as_os_str().to_owned();
+    os.push(".sig");
+    PathBuf::from(os)
 }
 
 fn col_name(c: u32) -> String {
@@ -6706,6 +7023,8 @@ impl Render for Calc {
                     self.find_term.as_deref().unwrap_or("")
                 ),
                 "chat" => "チャット — 言伝を書き残す(ブックの隣の .chat.txt)".to_string(),
+                "pw-open" => "暗号化されたブック — パスワード".to_string(),
+                "pw-set" => "暗号化 — パスワード(空にして Enter で暗号化をやめる)".to_string(),
                 "subtotal-by" => "小計 1/2 — 何の区切りで集めるか(見出しを1つ)".to_string(),
                 "subtotal-vals" => "小計 2/2 — 合計する見出し".to_string(),
                 "pivot-rows" => "ピボット 1/3 — 行に並べる見出し(カンマ区切り可)".to_string(),
@@ -6713,8 +7032,13 @@ impl Render for Calc {
                 "pivot-val" => "ピボット 3/3 — 値にする見出しと集計".to_string(),
                 _ => String::new(),
             };
-            // キャレットは | で見せる(writer の検索欄と同じ割り切り)
-            let mut text = ed.text().to_string();
+            // キャレットは | で見せる(writer の検索欄と同じ割り切り)。
+            // パスワードは伏せ字
+            let mut text = if matches!(*kind, "pw-open" | "pw-set") {
+                "●".repeat(ed.text().chars().count())
+            } else {
+                ed.text().to_string()
+            };
             let cur = ed.cursor().min(text.len());
             text.insert(cur, '|');
             div().absolute().left(px(HEAD_W + 40.0)).top(px(ROW_H + 24.0)).w(px(380.0))
@@ -6738,6 +7062,8 @@ impl Render for Calc {
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         "chat" => "生放送ではありません — ファイル越しの言伝。最近の言伝は下の状態行に",
+                        "pw-open" => "間違えると開けません(板は残ります)。Esc で開くのをやめる",
+                        "pw-set" => "次の保存から AES-128 で包みます。Excel や LibreOffice でも開けます",
                         "subtotal-by" => "使える見出しは下の状態行に出ています。並べ替えてから使うと区切りがまとまります",
                         "subtotal-vals" => "空のまま Enter = 数の列全部に入れます。畳んでも小計と総計は残ります",
                         "pivot-rows" | "pivot-cols" => "使える見出しは下の状態行に出ています。Enter で次へ / Esc で取消",

@@ -7,6 +7,9 @@ license.workspace = true
 [dependencies]
 sheet = { path = "../sheet" }
 paper = { path = "../paper" }
+# 暗号化(ECMA-376 Standard)は writer と同じ ooxml::crypt を使う
+ooxml = { path = "../ooxml" }
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast"] }
 kumihan = { path = "../engine" }
 ui = { path = "../ui" }
 # GPUI は crates.io に無いので、版を固定して zed から直に取る

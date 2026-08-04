@@ -138,7 +138,11 @@ calc の共同編集・プラグインの7釦(writer の仕組みの移植 2026-
 バージョン履歴=.jo-history 9世代・一覧は pick 流用・開くと名無しの複製 /
 マクロ=run_python_file_dialog と同実体 / プラグイン管理=
 ~/.config/office/plugins の一覧実行。保存前の keep_version は save_to に。
-残るは保護タブ3釦=次の仕事)、
+同日、保護タブ3釦も完了: 保護=xlsx の sheetProtection(シート単位。
+堰は commit / fmt / 貼り付け / Del / run_cmd の白表 PROTECTED_OK)、
+暗号化=ooxml::crypt を保存/開くに結線(原本持ち越しは original_plain で
+平文に解いてから)、署名=writer と同じ .sig / sign.key。パスワードの板は
+伏せ字。calc のコラボ・保護・プラグイン灰色ゼロ)、
 表のデザインの実装(表オブジェクトは持たない — 選択に1手ずつ掛ける道具:
 ヘッダー行の帯・縞模様の行/列・最初/最後の列の太字・合計行=下に =SUM の
 行を足す(下に中身があれば断る)・フィルタのボタン=setfilter と同実体。

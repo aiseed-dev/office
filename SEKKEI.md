@@ -583,6 +583,13 @@ run の text が「いま見えている値」。
   先客が去っていれば編集権を取り直す。サーバーの無い共同編集は
   「早い者勝ちの編集権 + 後の人は読むだけ」が正直な形
 
+**calc も同じ機構で全部実装済み(2026-08-04)。** 違いは2つだけ:
+保護は docx の documentProtection ではなく **xlsx の sheetProtection**
+(シート単位。編集の堰は commit / fmt / 貼り付け / Del / run_cmd の白表
+PROTECTED_OK)。マクロは python-docx ではなく **Python in Calc と同実体**
+(b=ブック s=シート)。暗号化・署名・履歴・チャット・錠の顔は共通の
+仕組み(ooxml::crypt / .sig / .jo-history / .chat.txt)をそのまま使う。
+
 ## 画面の額縁 — デスクトップ版に合わせる(2026-08-04 発注者)
 
 発注者がデスクトップ版 ONLYOFFICE の画面を示して「これに合わせて」。

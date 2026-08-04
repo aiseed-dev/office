@@ -797,9 +797,11 @@ dependencies = [
 name = "calc"
 version = "0.0.1"
 dependencies = [
+ "ed25519-dalek",
  "gpui",
  "gpui_platform",
  "kumihan",
+ "ooxml",
  "paper",
  "rfd",
  "sheet",

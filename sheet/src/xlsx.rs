@@ -584,6 +584,11 @@ fn parse_sheet(xml: &str, shared: &[String], styles: &[crate::model::CellFormat]
                     sh.print_gridlines = on("gridLines");
                     sh.print_headings = on("headings");
                 }
+                // シートの保護。sheet="0" と書く道具は保護していない扱い
+                b"sheetProtection" => {
+                    sh.protected =
+                        !matches!(attr(&e, "sheet").as_deref(), Some("0") | Some("false"));
+                }
                 b"brk" => {
                     if let Some(id) = attr(&e, "id").and_then(|v| v.parse().ok()) {
                         sh.row_breaks.push(id);
@@ -1918,6 +1923,15 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             w.write_event(Event::End(BytesEnd::new("row"))).unwrap();
         }
         w.write_event(Event::End(BytesEnd::new("sheetData"))).unwrap();
+        // シートの保護(パスワード無し。効き目はアプリが守る)。
+        // 作法どおり sheetData の直後・mergeCells の前
+        if sh.protected {
+            let mut pr = BytesStart::new("sheetProtection");
+            pr.push_attribute(("sheet", "1"));
+            pr.push_attribute(("objects", "1"));
+            pr.push_attribute(("scenarios", "1"));
+            w.write_event(Event::Empty(pr)).unwrap();
+        }
         // 結合を返す。読めたのに書かないと、開いて保存しただけで帳票が壊れる
         if !sh.merges.is_empty() {
             let mut mc = BytesStart::new("mergeCells");
@@ -2896,6 +2910,18 @@ mod script_roundtrip_tests {
         buf2.set_position(0);
         let (b3, _) = read(buf2).expect("読めない");
         assert_eq!(b3.scripts.len(), 1, "二往復で二重になった");
+    }
+
+    #[test]
+    fn シートの保護が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].protected = true;
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert!(back.sheets[0].protected, "保護が往復しない");
     }
 
     #[test]
