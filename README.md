@@ -151,9 +151,12 @@ OFFICE_LANG=en ./target/release/writer      # temporary override
 #   language = "en"
 ```
 
-Honest limits for now: the ribbon speaks the selected language; **status-bar
-messages and dialogs are still Japanese** (externalizing them is the next stage).
-Only languages with complete words are offered — currently ja and en.
+**The whole UI switches** — ribbon, status-bar messages, and dialogs
+(585 phrases, all translated; `ui/gen_i18n.py` refuses to build a language with
+missing phrases). There is also a settings page: File > Advanced settings shows
+the current language, font, proofreading endpoint, and Python path, and toggles
+the language (applies on next start). Only languages with complete words are
+offered — currently ja and en.
 
 Ribbon tables for further languages are generated from the current Japanese
 table plus Euro-Office locale files (45 languages available as raw material):

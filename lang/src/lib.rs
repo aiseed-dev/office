@@ -24,6 +24,8 @@
 //! **画面の翻訳は言語追加の作業に含まれない。**
 
 pub mod check;
+pub mod i18n;
+pub mod i18n_en;
 pub mod ja;
 pub mod latin;
 pub mod ai;

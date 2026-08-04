@@ -389,10 +389,10 @@ fn parse_pivot_val(text: &str, headers: &[String]) -> Result<(String, &'static s
     };
     let name = parts.join(" ");
     if name.is_empty() {
-        return Err("値にする見出しを書いてください(例: 金額 合計)".into());
+        return Err(ui::t!("値にする見出しを書いてください(例: 金額 合計)").into());
     }
     if !headers.iter().any(|h| *h == name) {
-        return Err(format!("「{name}」は見出しにありません"));
+        return Err(ui::tf!("「{}」は見出しにありません", name));
     }
     Ok((name, agg))
 }
@@ -507,7 +507,7 @@ fn apply_subtotals(s: &mut sheet::Sheet, a: Pos, b: Pos, by: u32, vals: &[u32]) 
         let k = k as u32;
         let (det0, det1, srow) = (start + k, end + k, end + 1 + k);
         sub_rows.push(srow);
-        style(s, Pos::new(srow, by), &format!("{label} 小計"));
+        style(s, Pos::new(srow, by), &ui::tf!("{} 小計", label));
         for c in vals {
             style(
                 s,
@@ -821,7 +821,7 @@ impl Calc {
             s.set(Pos::new(5, 2), Cell::input("合計"));
             s.set(Pos::new(5, 3), Cell::input("=D4+D5"));
             recalc(s);
-            c.status = "セルを選んで打つ。Enter で確定して下へ、Ctrl+S で保存".into();
+            c.status = ui::t!("セルを選んで打つ。Enter で確定して下へ、Ctrl+S で保存").into();
         }
         c.sync_input();
         c
@@ -882,7 +882,7 @@ impl Calc {
 
     fn undo_sheet(&mut self) {
         let Some(batch) = self.undo_stack.pop() else {
-            self.status = "戻すものがありません".into();
+            self.status = ui::t!("戻すものがありません").into();
             return;
         };
         let mut redo = Vec::new();
@@ -900,12 +900,12 @@ impl Calc {
         }
         self.dirty = true;
         self.sync_input();
-        self.status = "戻しました".into();
+        self.status = ui::t!("戻しました").into();
     }
 
     fn redo_sheet(&mut self) {
         let Some(batch) = self.redo_stack.pop() else {
-            self.status = "やり直すものがありません".into();
+            self.status = ui::t!("やり直すものがありません").into();
             return;
         };
         let mut undo = Vec::new();
@@ -923,7 +923,7 @@ impl Calc {
         }
         self.dirty = true;
         self.sync_input();
-        self.status = "やり直しました".into();
+        self.status = ui::t!("やり直しました").into();
     }
 
     /// いまのシートのカーソル・窓・固定を控える。
@@ -958,7 +958,7 @@ impl Calc {
             .get(Pos::new(r, *col))
             .map(|c| c.value.display())
             .unwrap_or_default();
-        let v = if v.is_empty() { "(空白)".to_string() } else { v };
+        let v = if v.is_empty() { ui::t!("(空白)").to_string() } else { v };
         sel.contains(&v)
     }
 
@@ -1043,9 +1043,9 @@ impl Calc {
         self.sync_input();
         let (lo, hi) = (a.min(b), a.max(b));
         self.status = if lo == hi {
-            format!("{}列を選択しました(1〜{rows}行)", col_name(lo)).into()
+            ui::tf!("{}列を選択しました(1〜{}行)", col_name(lo), rows).into()
         } else {
-            format!("{}〜{}列を選択しました(1〜{rows}行)", col_name(lo), col_name(hi)).into()
+            ui::tf!("{}〜{}列を選択しました(1〜{}行)", col_name(lo), col_name(hi), rows).into()
         };
     }
 
@@ -1057,9 +1057,9 @@ impl Calc {
         self.sync_input();
         let (lo, hi) = (a.min(b), a.max(b));
         self.status = if lo == hi {
-            format!("{}行を選択しました", lo + 1).into()
+            ui::tf!("{}行を選択しました", lo + 1).into()
         } else {
-            format!("{}〜{}行を選択しました", lo + 1, hi + 1).into()
+            ui::tf!("{}〜{}行を選択しました", lo + 1, hi + 1).into()
         };
     }
 
@@ -1106,21 +1106,13 @@ impl Calc {
             let w = (base + x - grab).max(9.0) / PX_PER_CHW;
             let w = (w * 100.0).round() / 100.0;
             self.sheet_mut().col_width.insert(idx, w);
-            self.status = format!(
-                "{}列の幅: {w}({:.0}px)",
-                col_name(idx),
-                w * PX_PER_CHW
-            )
+            self.status = ui::tf!("{}列の幅: {}({:.0}px)", col_name(idx), w, w * PX_PER_CHW)
             .into();
         } else {
             let pt = ((base + y - grab) / self.zoom).max(6.0) * 15.0 / 24.0;
             let pt = (pt * 100.0).round() / 100.0;
             self.sheet_mut().row_height.insert(idx, pt);
-            self.status = format!(
-                "{}行の高さ: {pt}pt({:.0}px)",
-                idx + 1,
-                pt * 24.0 / 15.0
-            )
+            self.status = ui::tf!("{}行の高さ: {}pt({:.0}px)", idx + 1, pt, pt * 24.0 / 15.0)
             .into();
         }
         self.dirty = true;
@@ -1152,9 +1144,9 @@ impl Calc {
                             self.checkpoint();
                             self.sheet_mut().shapes_new.remove(i);
                             self.dirty = true;
-                            self.status = "1筆消しました(Ctrl+Z で戻せます)".into();
+                            self.status = ui::t!("1筆消しました(Ctrl+Z で戻せます)").into();
                         }
-                        None => self.status = "線の上をなぞってください".into(),
+                        None => self.status = ui::t!("線の上をなぞってください").into(),
                     }
                 } else {
                     self.ink_cur = Some(vec![(x, y)]);
@@ -1169,9 +1161,9 @@ impl Calc {
             self.shape_sel = Some(i);
             self.shape_drag = Some((i, (x, y), if corner { (sx, sy) } else { (sx, sy) }, corner));
             self.status = if corner {
-                "右下を引いて大きさを変えます".into()
+                ui::t!("右下を引いて大きさを変えます").into()
             } else {
-                "図形を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)".into()
+                ui::t!("図形を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)").into()
             };
             return;
         }
@@ -1238,7 +1230,7 @@ impl Calc {
                 self.anchor = Some(Pos::new(0, 0));
                 self.cursor = Pos::new(rows - 1, cols.saturating_sub(1));
                 self.sync_input();
-                self.status = format!("A1:{} を選択しました", self.cursor.a1()).into();
+                self.status = ui::tf!("A1:{} を選択しました", self.cursor.a1()).into();
             }
             return;
         }
@@ -1247,7 +1239,7 @@ impl Calc {
         if ctrl && !shift {
             if let Some(url) = self.sheet().links.get(&p).cloned() {
                 let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-                self.status = format!("開きます: {url}").into();
+                self.status = ui::tf!("開きます: {}", url).into();
                 return;
             }
         }
@@ -1457,7 +1449,7 @@ impl Calc {
     /// 形式を選択して貼り付け。mode: values / formulas / formats / transpose
     fn paste_special(&mut self, mode: &str, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
-            self.status = "貼り付けるものがありません".into();
+            self.status = ui::t!("貼り付けるものがありません").into();
             return;
         };
         if text.is_empty() {
@@ -1488,8 +1480,7 @@ impl Calc {
             "formats" => {
                 if !internal {
                     self.status =
-                        "書式は他のアプリからは持って来られません(このアプリでコピーした範囲だけ)"
-                            .into();
+                        ui::t!("書式は他のアプリからは持って来られません(このアプリでコピーした範囲だけ)").into();
                     return;
                 }
                 self.commit();
@@ -1516,10 +1507,10 @@ impl Calc {
         self.dirty = true;
         self.sync_input();
         self.status = match mode {
-            "values" => format!("{n} セルに値だけを貼りました(書式は据え置き)"),
-            "formulas" => format!("{n} セルに式をそのまま貼りました(参照はずらしていません)"),
-            "formats" => format!("{n} セルに書式だけを写しました(中身は残っています)"),
-            _ => format!("{n} セルを転置して貼りました(式は値になっています)"),
+            "values" => ui::tf!("{} セルに値だけを貼りました(書式は据え置き)", n),
+            "formulas" => ui::tf!("{} セルに式をそのまま貼りました(参照はずらしていません)", n),
+            "formats" => ui::tf!("{} セルに書式だけを写しました(中身は残っています)", n),
+            _ => ui::tf!("{} セルを転置して貼りました(式は値になっています)", n),
         }
         .into();
     }
@@ -1535,19 +1526,19 @@ impl Calc {
             "font" => {
                 let name = v.to_string();
                 self.fmt(move |f| f.font = Some(name.clone()));
-                self.status = format!("書体を「{v}」にしました").into();
+                self.status = ui::tf!("書体を「{}」にしました", v).into();
             }
             "size" => {
                 if let Ok(pt) = v.parse::<f32>() {
                     self.fmt(move |f| f.size_c = Some((pt * 100.0) as u32));
-                    self.status = format!("文字の大きさを {v}pt にしました").into();
+                    self.status = ui::tf!("文字の大きさを {}pt にしました", v).into();
                 }
             }
             "symbol" => {
                 // 打ちかけの続きに差し込む(セルを置き換えない)
                 self.input.insert(v);
                 self.dirty = true;
-                self.status = format!("「{v}」を差し込みました(Enter で確定)").into();
+                self.status = ui::tf!("「{}」を差し込みました(Enter で確定)", v).into();
             }
             "shape" => {
                 let kind = match v {
@@ -1571,10 +1562,7 @@ impl Calc {
                 });
                 self.shape_sel = Some(self.sheet().shapes_new.len() - 1);
                 self.dirty = true;
-                self.status = format!(
-                    "{v}を {} に置きました(ドラッグで移動 / 右下で大きさ / Del で削除)",
-                    at.a1()
-                )
+                self.status = ui::tf!("{}を {} に置きました(ドラッグで移動 / 右下で大きさ / Del で削除)", v, at.a1())
                 .into();
             }
             "sa-cat" => {
@@ -1584,9 +1572,7 @@ impl Calc {
                         SMARTART[ci].1.iter().map(|(n, _)| n.to_string()).collect();
                     self.pick_kind = "sa-item";
                     self.pick = Some((names, (HEAD_W + 120.0, ROW_H + 20.0)));
-                    self.status = format!(
-                        "SmartArt > {v}: 形を選ぶと図形の集まりとして入ります"
-                    )
+                    self.status = ui::tf!("SmartArt > {}: 形を選ぶと図形の集まりとして入ります", v)
                     .into();
                     return; // pick_kind を "value" に戻さない(2段目へ)
                 }
@@ -1622,9 +1608,7 @@ impl Calc {
                         }
                     }
                     self.dirty = true;
-                    self.status = format!(
-                        "配色を「{v}」にしました({n} 箇所の色が追従。テーマ色を使っていないセルは変わりません)"
-                    )
+                    self.status = ui::tf!("配色を「{}」にしました({} 箇所の色が追従。テーマ色を使っていないセルは変わりません)", v, n)
                     .into();
                 }
             }
@@ -1644,7 +1628,7 @@ impl Calc {
                 if let Some((_, f)) = CELL_STYLES.iter().find(|(n, _)| *n == v) {
                     let f = *f;
                     self.fmt(move |c| f(c));
-                    self.status = format!("セルのスタイル「{v}」を掛けました").into();
+                    self.status = ui::tf!("セルのスタイル「{}」を掛けました", v).into();
                 }
             }
             "unhide" => {
@@ -1655,7 +1639,7 @@ impl Calc {
                             self.book.sheets[i].hidden = false;
                             self.switch_sheet(i);
                             self.dirty = true;
-                            self.status = format!("シート「{v}」を表示に戻しました").into();
+                            self.status = ui::tf!("シート「{}」を表示に戻しました", v).into();
                         }
                     }
                 }
@@ -1668,7 +1652,7 @@ impl Calc {
                     if plugin {
                         match std::fs::read_to_string(&path) {
                             Ok(code) => self.run_python(code, cx),
-                            Err(e) => self.status = format!("読めません: {e}").into(),
+                            Err(e) => self.status = ui::tf!("読めません: {}", e).into(),
                         }
                     } else {
                         self.open_version(&path);
@@ -1692,7 +1676,7 @@ impl Calc {
         recalc_book(&mut self.book, self.active);
         self.dirty = true;
         self.sync_input();
-        self.status = format!("{} に入れました", p.a1()).into();
+        self.status = ui::tf!("{} に入れました", p.a1()).into();
     }
 
     /// メニューの項目を実行する。
@@ -1724,29 +1708,29 @@ impl Calc {
                 recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.sync_input();
-                self.status = format!("{n} セルを消去しました(中身も書式も)").into();
+                self.status = ui::tf!("{} セルを消去しました(中身も書式も)", n).into();
             }
             "clear-text" => {
                 self.checkpoint();
                 let n = self.clear_range();
-                self.status = format!("{n} セルの中身を消しました(書式は残る)").into();
+                self.status = ui::tf!("{} セルの中身を消しました(書式は残る)", n).into();
             }
             "clear-fmt" => self.run_cmd("clear", cx),
             "insrow" => {
                 self.rowcol(|s, p| s.insert_row(p.row));
-                self.status = "行を挿しました(下の式の参照も直っています)".into();
+                self.status = ui::t!("行を挿しました(下の式の参照も直っています)").into();
             }
             "delrow" => {
                 self.rowcol(|s, p| s.remove_row(p.row));
-                self.status = "行を削除しました".into();
+                self.status = ui::t!("行を削除しました").into();
             }
             "inscol" => {
                 self.rowcol(|s, p| s.insert_col(p.col));
-                self.status = "列を挿しました".into();
+                self.status = ui::t!("列を挿しました").into();
             }
             "delcol" => {
                 self.rowcol(|s, p| s.remove_col(p.col));
-                self.status = "列を削除しました".into();
+                self.status = ui::t!("列を削除しました").into();
             }
             "sort-asc" | "sort-desc" => {
                 self.commit();
@@ -1755,11 +1739,7 @@ impl Calc {
                 self.book.sheets[self.active].sort_by_column(c, id == "sort-asc", true);
                 self.dirty = true;
                 recalc_book(&mut self.book, self.active);
-                self.status = format!(
-                    "{} 列で{}に並べ替えました",
-                    Pos::new(0, c).a1().trim_end_matches('1'),
-                    if id == "sort-asc" { "昇順" } else { "降順" }
-                )
+                self.status = ui::tf!("{} 列で{}に並べ替えました", Pos::new(0, c).a1().trim_end_matches('1'), if id == "sort-asc" { "昇順" } else { "降順" })
                 .into();
             }
             "filter-set" => self.run_cmd("setfilter", cx),
@@ -1767,10 +1747,7 @@ impl Calc {
             "reapply" => {
                 if let Some((c, v)) = self.filter.clone() {
                     let n = self.matching_rows(c, &v).len();
-                    self.status = format!(
-                        "{}列を「{v}」で絞り込み直しました({n}行が一致)",
-                        Pos::new(0, c).a1().trim_end_matches('1')
-                    )
+                    self.status = ui::tf!("{}列を「{}」で絞り込み直しました({}行が一致)", Pos::new(0, c).a1().trim_end_matches('1'), v, n)
                     .into();
                 }
             }
@@ -1791,9 +1768,7 @@ impl Calc {
                         self.dirty = true;
                         self.anchor = None;
                         self.sync_input();
-                        self.status = format!(
-                            "{n} セルをシフトしました(動いたセルへの参照も直っています)"
-                        )
+                        self.status = ui::tf!("{} セルをシフトしました(動いたセルへの参照も直っています)", n)
                         .into();
                     }
                     Err(e) => {
@@ -1815,10 +1790,7 @@ impl Calc {
                     fill: None,
                 });
                 self.dirty = true;
-                self.status = format!(
-                    "{}:{} — 0未満を赤字にしました",
-                    range.0.a1(), range.1.a1()
-                ).into();
+                self.status = ui::tf!("{}:{} — 0未満を赤字にしました", range.0.a1(), range.1.a1()).into();
             }
             "cond-gt" => {
                 self.commit();
@@ -1840,7 +1812,7 @@ impl Calc {
                 });
                 let n = before - self.book.sheets[self.active].cond.len();
                 self.dirty = true;
-                self.status = format!("{n} 本の条件を消しました").into();
+                self.status = ui::tf!("{} 本の条件を消しました", n).into();
             }
             "picklist" => self.open_pick_list(),
             "defname" => {
@@ -1948,7 +1920,7 @@ impl Calc {
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         if self.tool.take().is_some() {
             self.ink_cur = None;
-            self.status = "セルの操作に戻りました".into();
+            self.status = ui::t!("セルの操作に戻りました").into();
         }
         if self.solver.take().is_some()
             || self.slicer.take().is_some()
@@ -1965,7 +1937,7 @@ impl Calc {
             // 打ちかけを捨てて、セルの保存内容に戻す
             // (入力規則で堰き止められたときの逃げ道でもある)
             self.sync_input();
-            self.status = "打ちかけを取り消しました".into();
+            self.status = ui::t!("打ちかけを取り消しました").into();
             cx.notify();
         }
     }
@@ -1977,16 +1949,14 @@ impl Calc {
         match kind {
             "name" => {
                 if text.is_empty() {
-                    self.status = "名前を付けませんでした".into();
+                    self.status = ui::t!("名前を付けませんでした").into();
                     return;
                 }
                 let ok = text.chars().all(|c| c.is_alphanumeric() || c == '_')
                     && !text.chars().next().unwrap().is_ascii_digit()
                     && Pos::parse(&text).is_none();
                 if !ok {
-                    self.status = format!(
-                        "「{text}」は名前にできません(文字と数字と _。セル参照の形は不可)"
-                    )
+                    self.status = ui::tf!("「{}」は名前にできません(文字と数字と _。セル参照の形は不可)", text)
                     .into();
                     return;
                 }
@@ -2001,24 +1971,24 @@ impl Calc {
                 s.names.push((text.clone(), range.clone()));
                 recalc_book(&mut self.book, self.active);
                 self.dirty = true;
-                self.status = format!("名前「{text}」= {range}(式の中で使えます)").into();
+                self.status = ui::tf!("名前「{}」= {}(式の中で使えます)", text, range).into();
             }
             "comment" => {
                 let p = self.cursor;
                 if text.is_empty() {
                     if self.book.sheets[self.active].comments.remove(&p).is_some() {
                         self.dirty = true;
-                        self.status = format!("{} のコメントを消しました", p.a1()).into();
+                        self.status = ui::tf!("{} のコメントを消しました", p.a1()).into();
                     }
                 } else {
                     self.book.sheets[self.active].comments.insert(p, text);
                     self.dirty = true;
-                    self.status = format!("{} にコメントを付けました(保存で残ります)", p.a1()).into();
+                    self.status = ui::tf!("{} にコメントを付けました(保存で残ります)", p.a1()).into();
                 }
             }
             "cond-gt" | "cond-lt" => {
                 let Ok(value) = text.parse::<f64>() else {
-                    self.status = format!("「{text}」は数として読めません").into();
+                    self.status = ui::tf!("「{}」は数として読めません", text).into();
                     return;
                 };
                 self.checkpoint();
@@ -2032,11 +2002,7 @@ impl Calc {
                     fill: Some(if gt { "E2EFDA".into() } else { "FCE4D6".into() }),
                 });
                 self.dirty = true;
-                self.status = format!(
-                    "{}:{} — {value} より{}を塗ります",
-                    range.0.a1(), range.1.a1(),
-                    if gt { "大きい値" } else { "小さい値" }
-                ).into();
+                self.status = ui::tf!("{}:{} — {} より{}を塗ります", range.0.a1(), range.1.a1(), value, if gt { "大きい値" } else { "小さい値" }).into();
             }
             "py" => {
                 let t = text.trim().to_string();
@@ -2049,14 +2015,14 @@ impl Calc {
                     let names: Vec<&str> =
                         self.book.scripts.iter().map(|(n, _)| n.as_str()).collect();
                     self.status = if names.is_empty() {
-                        "ブックに載せた Python はありません(@save 名前 で載せる)".into()
+                        ui::t!("ブックに載せた Python はありません(@save 名前 で載せる)").into()
                     } else {
-                        format!("ブックの Python: {}(@名前 で実行)", names.join(" / ")).into()
+                        ui::tf!("ブックの Python: {}(@名前 で実行)", names.join(" / ")).into()
                     };
                 } else if let Some(name) = t.strip_prefix("@save ") {
                     let name = name.trim().to_string();
                     if name.is_empty() {
-                        self.status = "@save 名前 の形で".into();
+                        self.status = ui::t!("@save 名前 の形で").into();
                     } else {
                         self.store_python_dialog(name, cx);
                     }
@@ -2066,9 +2032,9 @@ impl Calc {
                     self.book.scripts.retain(|(n, _)| n != name);
                     if self.book.scripts.len() < before {
                         self.dirty = true;
-                        self.status = format!("「{name}」をブックから外しました").into();
+                        self.status = ui::tf!("「{}」をブックから外しました", name).into();
                     } else {
-                        self.status = format!("「{name}」はありません").into();
+                        self.status = ui::tf!("「{}」はありません", name).into();
                     }
                 } else if let Some(rest) = t.strip_prefix('@') {
                     // ブックに載ったコード = 出所が自分とは限らない。必ず檻の中。
@@ -2083,13 +2049,13 @@ impl Calc {
                             let code = code.clone();
                             if net {
                                 self.status =
-                                    "網あり檻で実行します(ファイルは守られたまま)".into();
+                                    ui::t!("網あり檻で実行します(ファイルは守られたまま)").into();
                             }
                             self.run_python_inner(code, true, net, cx);
                         }
                         None => {
                             self.status =
-                                format!("「{name}」はありません(@list で一覧)").into();
+                                ui::tf!("「{}」はありません(@list で一覧)", name).into();
                         }
                     }
                 } else {
@@ -2106,9 +2072,9 @@ impl Calc {
                     (!text.is_empty()).then(|| text.clone());
                 self.dirty = true;
                 self.status = if text.is_empty() {
-                    "文字を消しました".into()
+                    ui::t!("文字を消しました").into()
                 } else {
-                    "図形に文字を入れました(保存で xlsx に入ります)".into()
+                    ui::t!("図形に文字を入れました(保存で xlsx に入ります)").into()
                 };
             }
             "split-delim" => {
@@ -2127,7 +2093,7 @@ impl Calc {
                     })
                     .collect();
                 if targets.is_empty() {
-                    self.status = format!("「{delim}」で割れるセルが選択にありません").into();
+                    self.status = ui::tf!("「{}」で割れるセルが選択にありません", delim).into();
                     return;
                 }
                 self.checkpoint();
@@ -2154,16 +2120,16 @@ impl Calc {
                 self.dirty = true;
                 self.sync_input();
                 self.status =
-                    format!("{n} 欄に割りました(右のセルは上書き。Ctrl+Z で戻せます)").into();
+                    ui::tf!("{} 欄に割りました(右のセルは上書き。Ctrl+Z で戻せます)", n).into();
             }
             "goal-target" => {
                 // 「D6=765600」の形
                 let Some((cell_s, val_s)) = text.split_once('=') else {
-                    self.status = "「セル=目標値」の形で(例: D6=800000)".into();
+                    self.status = ui::t!("「セル=目標値」の形で(例: D6=800000)").into();
                     return;
                 };
                 let (Some(p), Ok(v)) = (Pos::parse(cell_s), val_s.trim().parse::<f64>()) else {
-                    self.status = "読めません(例: D6=800000)".into();
+                    self.status = ui::t!("読めません(例: D6=800000)").into();
                     return;
                 };
                 self.goal = Some((p, v));
@@ -2172,7 +2138,7 @@ impl Calc {
             "goal-var" => {
                 let Some((target, goal)) = self.goal.take() else { return };
                 let Some(var) = Pos::parse(&text) else {
-                    self.status = "変えるセルが読めません(例: B2)".into();
+                    self.status = ui::t!("変えるセルが読めません(例: B2)").into();
                     return;
                 };
                 self.goal_seek(target, goal, var);
@@ -2184,7 +2150,7 @@ impl Calc {
                 let bytes = match std::fs::read(&p) {
                     Ok(b) => b,
                     Err(e) => {
-                        self.status = format!("開けません: {e}").into();
+                        self.status = ui::tf!("開けません: {}", e).into();
                         return;
                     }
                 };
@@ -2193,10 +2159,7 @@ impl Calc {
                         self.open_plain(p.clone(), plain);
                         if self.path.as_deref() == Some(p.as_path()) {
                             self.encrypt_pw = Some(text);
-                            self.status = format!(
-                                "{}(保存も同じパスワードで暗号化します)",
-                                self.status
-                            )
+                            self.status = ui::tf!("{}(保存も同じパスワードで暗号化します)", self.status)
                             .into();
                         }
                     }
@@ -2211,25 +2174,24 @@ impl Calc {
             "pw-set" => {
                 if text.is_empty() {
                     self.encrypt_pw = None;
-                    self.status = "暗号化しません(次の保存から普通の xlsx)".into();
+                    self.status = ui::t!("暗号化しません(次の保存から普通の xlsx)").into();
                 } else {
                     self.encrypt_pw = Some(text);
                     self.dirty = true;
                     self.status =
-                        "次の保存から、このパスワードで暗号化します(AES-128。Excel や LibreOffice でも開けます)"
-                            .into();
+                        ui::t!("次の保存から、このパスワードで暗号化します(AES-128。Excel や LibreOffice でも開けます)").into();
                 }
             }
             "equation" => {
                 if text.is_empty() {
-                    self.status = "式が空です(何も置きませんでした)".into();
+                    self.status = ui::t!("式が空です(何も置きませんでした)").into();
                 } else {
                     self.insert_py_image(EQ_PY, "eq", text, cx);
                 }
             }
             "textart" => {
                 if text.is_empty() {
-                    self.status = "文字が空です(何も置きませんでした)".into();
+                    self.status = ui::t!("文字が空です(何も置きませんでした)").into();
                 } else {
                     self.insert_py_image(TEXTART_PY, "textart", text, cx);
                 }
@@ -2247,7 +2209,7 @@ impl Calc {
                 *f = text;
                 self.dirty = true;
                 self.status =
-                    "ブックの情報を控えました(保存で xlsx に入ります)".into();
+                    ui::t!("ブックの情報を控えました(保存で xlsx に入ります)").into();
             }
             "table-resize" => {
                 let p = self.cursor;
@@ -2260,11 +2222,11 @@ impl Calc {
                 };
                 match parse(&text) {
                     None => {
-                        self.status = "範囲は A1:C9 の形で書いてください".into();
+                        self.status = ui::t!("範囲は A1:C9 の形で書いてください").into();
                         self.prompt = Some(("table-resize", Editor::new(&text)));
                     }
                     Some((a, b)) if b.row < a.row || b.col < a.col => {
-                        self.status = "左上と右下が逆です(A1:C9 の順で)".into();
+                        self.status = ui::t!("左上と右下が逆です(A1:C9 の順で)").into();
                         self.prompt = Some(("table-resize", Editor::new(&text)));
                     }
                     Some((a, b)) => {
@@ -2275,32 +2237,28 @@ impl Calc {
                             t.b = b;
                         }
                         self.dirty = true;
-                        self.status = format!(
-                            "表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインの釦でどうぞ)",
-                            a.a1(),
-                            b.a1()
-                        )
+                        self.status = ui::tf!("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインの釦でどうぞ)", a.a1(), b.a1())
                         .into();
                     }
                 }
             }
             "ai-table" => {
                 if text.is_empty() {
-                    self.status = "文章がありません(何もしていません)".into();
+                    self.status = ui::t!("文章がありません(何もしていません)").into();
                 } else {
                     self.ai_go(CalcAi::Table(text), cx);
                 }
             }
             "ai-ask" => {
                 if text.is_empty() {
-                    self.status = "用件がありません(何もしていません)".into();
+                    self.status = ui::t!("用件がありません(何もしていません)").into();
                 } else {
                     self.ai_go(CalcAi::Ask(text), cx);
                 }
             }
             "chat" => {
                 if text.is_empty() {
-                    self.status = "何も書き残しませんでした".into();
+                    self.status = ui::t!("何も書き残しませんでした").into();
                 } else if let Some(cp) = self.chat_path() {
                     let stamp = std::process::Command::new("date")
                         .arg("+%Y-%m-%d %H:%M")
@@ -2317,12 +2275,9 @@ impl Calc {
                         .open(&cp)
                         .and_then(|mut f| f.write_all(line.as_bytes()));
                     self.status = match r {
-                        Ok(_) => format!(
-                            "書き残しました({})",
-                            cp.file_name().unwrap_or_default().to_string_lossy()
-                        )
+                        Ok(_) => ui::tf!("書き残しました({})", cp.file_name().unwrap_or_default().to_string_lossy())
                         .into(),
-                        Err(e) => format!("書けません: {e}").into(),
+                        Err(e) => ui::tf!("書けません: {}", e).into(),
                     };
                 }
             }
@@ -2332,7 +2287,7 @@ impl Calc {
                 let t = text.trim().to_string();
                 if !pend.headers.iter().any(|h| *h == t) {
                     self.status =
-                        format!("「{t}」は見出しにありません: {}", pend.headers.join(" / "))
+                        ui::tf!("「{}」は見出しにありません: {}", t, pend.headers.join(" / "))
                             .into();
                     self.sub_pend = Some(pend);
                     self.prompt = Some(("subtotal-by", Editor::new(&text)));
@@ -2340,7 +2295,7 @@ impl Calc {
                 }
                 pend.rows_sel = vec![t];
                 self.status =
-                    "合計する見出し(カンマ区切り可。空 Enter = 数の列全部)".into();
+                    ui::t!("合計する見出し(カンマ区切り可。空 Enter = 数の列全部)").into();
                 self.sub_pend = Some(pend);
                 self.prompt = Some(("subtotal-vals", Editor::new("")));
             }
@@ -2371,7 +2326,7 @@ impl Calc {
                     }
                     if vals.is_empty() {
                         self.status =
-                            "数の列が見つかりません(合計する見出しを書いてください)".into();
+                            ui::t!("数の列が見つかりません(合計する見出しを書いてください)").into();
                         self.sub_pend = Some(pend);
                         self.prompt = Some(("subtotal-vals", Editor::new("")));
                         return;
@@ -2382,7 +2337,7 @@ impl Calc {
                             Some(i) => vals.push(pend.a.col + i as u32),
                             None => {
                                 self.status =
-                                    format!("「{name}」は見出しにありません").into();
+                                    ui::tf!("「{}」は見出しにありません", name).into();
                                 self.sub_pend = Some(pend);
                                 self.prompt = Some(("subtotal-vals", Editor::new(&text)));
                                 return;
@@ -2401,9 +2356,7 @@ impl Calc {
                 recalc_book(&mut self.book, self.active);
                 self.dirty = true;
                 self.sync_input();
-                self.status = format!(
-                    "{n} 区切りに小計と総計を入れ、明細をグループ化しました — 「詳細の非表示」で畳むと合計だけ残ります(Ctrl+Z で1手)"
-                )
+                self.status = ui::tf!("{} 区切りに小計と総計を入れ、明細をグループ化しました — 「詳細の非表示」で畳むと合計だけ残ります(Ctrl+Z で1手)", n)
                 .into();
             }
             // ピボットの聞き取り(行 → 列 → 値と集計)。間違いは板を出し直して言う
@@ -2412,13 +2365,13 @@ impl Calc {
                 let sel = split_fields(&text);
                 if sel.is_empty() {
                     self.status =
-                        format!("行に並べる見出しを1つは選んでください: {}", pend.headers.join(" / ")).into();
+                        ui::tf!("行に並べる見出しを1つは選んでください: {}", pend.headers.join(" / ")).into();
                     self.pivot_pend = Some(pend);
                     self.prompt = Some(("pivot-rows", Editor::new("")));
                     return;
                 }
                 if let Some(bad) = sel.iter().find(|s| !pend.headers.contains(s)) {
-                    self.status = format!("「{bad}」は見出しにありません: {}", pend.headers.join(" / ")).into();
+                    self.status = ui::tf!("「{}」は見出しにありません: {}", bad, pend.headers.join(" / ")).into();
                     self.pivot_pend = Some(pend);
                     self.prompt = Some(("pivot-rows", Editor::new(&text)));
                     return;
@@ -2426,10 +2379,7 @@ impl Calc {
                 pend.rows_sel = sel;
                 let rest: Vec<&String> =
                     pend.headers.iter().filter(|h| !pend.rows_sel.contains(h)).collect();
-                self.status = format!(
-                    "列に広げる見出し(空 Enter = なし): {}",
-                    rest.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" / ")
-                ).into();
+                self.status = ui::tf!("列に広げる見出し(空 Enter = なし): {}", rest.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" / ")).into();
                 self.pivot_pend = Some(pend);
                 self.prompt = Some(("pivot-cols", Editor::new("")));
             }
@@ -2437,13 +2387,13 @@ impl Calc {
                 let Some(mut pend) = self.pivot_pend.take() else { return };
                 let sel = split_fields(&text);
                 if let Some(bad) = sel.iter().find(|s| !pend.headers.contains(s)) {
-                    self.status = format!("「{bad}」は見出しにありません: {}", pend.headers.join(" / ")).into();
+                    self.status = ui::tf!("「{}」は見出しにありません: {}", bad, pend.headers.join(" / ")).into();
                     self.pivot_pend = Some(pend);
                     self.prompt = Some(("pivot-cols", Editor::new(&text)));
                     return;
                 }
                 pend.cols_sel = sel;
-                self.status = "値にする見出しと集計(例: 金額 合計。合計/平均/個数/最大/最小)".into();
+                self.status = ui::t!("値にする見出しと集計(例: 金額 合計。合計/平均/個数/最大/最小)").into();
                 self.pivot_pend = Some(pend);
                 self.prompt = Some(("pivot-val", Editor::new("")));
             }
@@ -2460,7 +2410,7 @@ impl Calc {
             }
             "find" => {
                 if text.is_empty() {
-                    self.status = "探す言葉を入れてください".into();
+                    self.status = ui::t!("探す言葉を入れてください").into();
                     return;
                 }
                 self.find_term = Some(text);
@@ -2482,7 +2432,7 @@ impl Calc {
                     .map(|(p, c)| (*p, c.editable()))
                     .collect();
                 if targets.is_empty() {
-                    self.status = format!("「{find}」は見つかりません").into();
+                    self.status = ui::tf!("「{}」は見つかりません", find).into();
                     self.find_term = Some(find);
                     return;
                 }
@@ -2501,7 +2451,7 @@ impl Calc {
                 self.sync_input();
                 self.find_term = Some(find.clone());
                 self.status =
-                    format!("「{find}」→「{text}」: {n} カ所を置き換えました(Ctrl+Z で戻せます)")
+                    ui::tf!("「{}」→「{}」: {} カ所を置き換えました(Ctrl+Z で戻せます)", find, text, n)
                         .into();
             }
             "validation" => {
@@ -2514,13 +2464,13 @@ impl Calc {
                     // 空で Enter = この範囲の規則を外す
                     let n = self.sheet().validations.iter().filter(|v| overlap(v)).count();
                     if n == 0 {
-                        self.status = "この範囲に入力規則はありません".into();
+                        self.status = ui::t!("この範囲に入力規則はありません").into();
                         return;
                     }
                     self.checkpoint();
                     self.book.sheets[self.active].validations.retain(|v| !overlap(v));
                     self.dirty = true;
-                    self.status = format!("{n} 本の入力規則を外しました").into();
+                    self.status = ui::tf!("{} 本の入力規則を外しました", n).into();
                     return;
                 }
                 // = 始まりは範囲の参照、それ以外は候補の直書き(, 区切り)
@@ -2533,7 +2483,7 @@ impl Calc {
                 if opts.is_empty() {
                     // 読めない規則を作らない(できないものを、できるように見せない)
                     self.status =
-                        "候補が読めません(例: 甲,乙,丙 または =D2:D5)".into();
+                        ui::t!("候補が読めません(例: 甲,乙,丙 または =D2:D5)").into();
                     return;
                 }
                 self.checkpoint();
@@ -2584,7 +2534,7 @@ impl Calc {
             }
         }
         self.dirty = true;
-        self.status = "外枠を引きました".into();
+        self.status = ui::t!("外枠を引きました").into();
     }
 
     /// 書式の小窓の釦。
@@ -2593,16 +2543,16 @@ impl Calc {
             "close" => self.fmt_panel = None,
             "b-all" => {
                 self.fmt(|f| f.borders = Borders::ALL);
-                self.status = "格子の罫線を引きました".into();
+                self.status = ui::t!("格子の罫線を引きました").into();
             }
             "b-out" => self.border_outline(),
             "b-none" => {
                 self.fmt(|f| f.borders = Borders::NONE);
-                self.status = "罫線を消しました".into();
+                self.status = ui::t!("罫線を消しました").into();
             }
             "numfmt-none" => {
                 self.fmt(|f| f.number_format = None);
-                self.status = "表示形式を戻しました".into();
+                self.status = ui::t!("表示形式を戻しました").into();
             }
             id if id.starts_with("fill-") => {
                 let v = id.trim_start_matches("fill-").to_string();
@@ -2652,7 +2602,7 @@ impl Calc {
                 }
             }
             if vals.is_empty() {
-                self.status = "この列にはまだ値がありません".into();
+                self.status = ui::t!("この列にはまだ値がありません").into();
                 return;
             }
             vals.sort();
@@ -2737,9 +2687,9 @@ impl Calc {
         });
         self.dirty = true;
         self.status = if marker {
-            "蛍光ペンで引きました(Ctrl+Z で戻せます)".into()
+            ui::t!("蛍光ペンで引きました(Ctrl+Z で戻せます)").into()
         } else {
-            "ペンで描きました(Ctrl+Z で戻せます)".into()
+            ui::t!("ペンで描きました(Ctrl+Z で戻せます)").into()
         };
     }
 
@@ -2784,11 +2734,11 @@ impl Calc {
     fn ai_go(&mut self, job: CalcAi, cx: &mut Context<Self>) {
         if self.sheet().protected {
             self.status =
-                "シートが保護されています(保護タブの「保護」で解除)".into();
+                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
             return;
         }
         if self.ai_busy {
-            self.status = "いま考えています(終わるまでお待ちください)".into();
+            self.status = ui::t!("いま考えています(終わるまでお待ちください)").into();
             return;
         }
         let back = ui::ai::backend();
@@ -2804,20 +2754,20 @@ impl Calc {
             (CalcAi::Summary, None) => {
                 let (rows, cols) = self.sheet().extent();
                 if rows == 0 || cols == 0 {
-                    self.status = "表がありません".into();
+                    self.status = ui::t!("表がありません").into();
                     return;
                 }
                 (Pos::new(0, 0), Pos::new((rows - 1).min(199), cols - 1))
             }
             (CalcAi::Table(_) | CalcAi::Ask(_), None) => (self.cursor, self.cursor),
             _ => {
-                self.status = "範囲を選んでから押してください".into();
+                self.status = ui::t!("範囲を選んでから押してください").into();
                 return;
             }
         };
         if matches!(job, CalcAi::Furigana) && a.col != b.col {
             self.status =
-                "ふりがなは1列だけ選んでください(読みは右隣の列に入ります)".into();
+                ui::t!("ふりがなは1列だけ選んでください(読みは右隣の列に入ります)").into();
             return;
         }
         let body = match &job {
@@ -2828,7 +2778,7 @@ impl Calc {
         if body.trim().is_empty()
             && !matches!(job, CalcAi::Table(_) | CalcAi::Ask(_))
         {
-            self.status = "選んだ範囲が空です".into();
+            self.status = ui::t!("選んだ範囲が空です").into();
             return;
         }
         let (sys, ask) = job.prompt();
@@ -2869,7 +2819,7 @@ impl Calc {
     fn ai_apply(&mut self, job: CalcAi, a: Pos, b: Pos, out: String) {
         let out = out.trim().to_string();
         if out.is_empty() {
-            self.status = "AI: 答えが空でした(何もしていません)".into();
+            self.status = ui::t!("AI: 答えが空でした(何もしていません)").into();
             return;
         }
         let grid = |t: &str| -> Vec<Vec<String>> {
@@ -2954,8 +2904,7 @@ impl Calc {
                 });
                 if used {
                     self.status =
-                        "右隣の列に中身があります(空けてから — 黙って上書きしません)"
-                            .into();
+                        ui::t!("右隣の列に中身があります(空けてから — 黙って上書きしません)").into();
                     return;
                 }
                 self.checkpoint();
@@ -2968,7 +2917,7 @@ impl Calc {
                 }
                 self.dirty = true;
                 self.status =
-                    "読みを右隣の列に入れました(Ctrl+Z で戻せます)".into();
+                    ui::t!("読みを右隣の列に入れました(Ctrl+Z で戻せます)").into();
             }
             // 続き: 選択の下の空き行へ(空きでなければ断る)
             CalcAi::Continue => {
@@ -2986,8 +2935,7 @@ impl Calc {
                 });
                 if used {
                     self.status =
-                        "下の行に中身があります(空けてから — 黙って上書きしません)"
-                            .into();
+                        ui::t!("下の行に中身があります(空けてから — 黙って上書きしません)").into();
                     return;
                 }
                 self.checkpoint();
@@ -3020,7 +2968,7 @@ impl Calc {
                 });
                 if used {
                     self.status =
-                        "ここには中身があります(空きへカーソルを置いてから)".into();
+                        ui::t!("ここには中身があります(空きへカーソルを置いてから)").into();
                     return;
                 }
                 self.checkpoint();
@@ -3089,7 +3037,7 @@ impl Calc {
         if self.sheet().protected {
             self.sync_input();
             self.status =
-                "シートが保護されています(保護タブの「保護」で解除)".into();
+                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
             return false;
         }
         // 空にするのは常に許す(allowBlank の既定)。式は結果が変わり得るので通す
@@ -3246,7 +3194,7 @@ impl Calc {
             self.pw_pending = Some(p);
             self.prompt = Some(("pw-open", Editor::new("")));
             self.status =
-                "このブックは暗号化されています。パスワードを打って Enter".into();
+                ui::t!("このブックは暗号化されています。パスワードを打って Enter").into();
             return;
         }
         self.open_plain(p, bytes);
@@ -3385,7 +3333,7 @@ impl Calc {
                 Some(Ok(b)) => b,
                 _ => {
                     self.status =
-                        "控えは暗号化されています(いまのパスワードでは解けません)".into();
+                        ui::t!("控えは暗号化されています(いまのパスワードでは解けません)").into();
                     return;
                 }
             }
@@ -3411,7 +3359,7 @@ impl Calc {
                 self.path = None;
                 self.dirty = true;
                 self.sync_input();
-                self.status = "控えを開きました(名無しの複製。保存で名前を聞きます。元へ戻すなら同じ名前で保存)".into();
+                self.status = ui::t!("控えを開きました(名無しの複製。保存で名前を聞きます。元へ戻すなら同じ名前で保存)").into();
             }
             Err(e) => self.status = format!("控えが読めません: {e}").into(),
         }
@@ -3502,7 +3450,7 @@ impl Calc {
     fn new_book(&mut self) -> bool {
         if self.dirty {
             self.status =
-                "未保存の変更があります。先に保存してください(Ctrl+S)".into();
+                ui::t!("未保存の変更があります。先に保存してください(Ctrl+S)").into();
             return false;
         }
         self.release_lock();
@@ -3523,7 +3471,7 @@ impl Calc {
         self.redo_stack.clear();
         self.dirty = false;
         self.sync_input();
-        self.status = "新しいブックです".into();
+        self.status = ui::t!("新しいブックです").into();
         true
     }
 
@@ -3586,7 +3534,7 @@ impl Calc {
     fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
         if self.sheet().protected {
             self.status =
-                "シートが保護されています(保護タブの「保護」で解除)".into();
+                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
             cx.notify();
             return;
         }
@@ -3595,7 +3543,7 @@ impl Calc {
                 self.checkpoint();
                 self.sheet_mut().shapes_new.remove(i);
                 self.dirty = true;
-                self.status = "図形を削除しました(Ctrl+Z で戻せます)".into();
+                self.status = ui::t!("図形を削除しました(Ctrl+Z で戻せます)").into();
             }
             cx.notify();
             return;
@@ -3620,7 +3568,7 @@ impl Calc {
             let sel = self.input.selection();
             if let Some(s) = self.input.text().get(sel) {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(s.to_string()));
-                self.status = "コピーしました".into();
+                self.status = ui::t!("コピーしました").into();
             }
             cx.notify();
             return;
@@ -3652,7 +3600,7 @@ impl Calc {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(s.to_string()));
                 self.input.insert("");
                 self.dirty = true;
-                self.status = "切り取りました".into();
+                self.status = ui::t!("切り取りました").into();
             }
             cx.notify();
             return;
@@ -3675,12 +3623,12 @@ impl Calc {
     fn a_paste(&mut self, _: &ui::Paste, _: &mut Window, cx: &mut Context<Self>) {
         if self.sheet().protected {
             self.status =
-                "シートが保護されています(保護タブの「保護」で解除)".into();
+                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
             cx.notify();
             return;
         }
         let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
-            self.status = "貼り付けるものがありません".into();
+            self.status = ui::t!("貼り付けるものがありません").into();
             cx.notify();
             return;
         };
@@ -3833,7 +3781,7 @@ impl Calc {
             // 使われている範囲の全選択(表計算の Ctrl+A)
             let (rows, cols) = self.sheet().extent();
             if rows == 0 {
-                self.status = "空の表です".into();
+                self.status = ui::t!("空の表です").into();
             } else {
                 self.commit();
                 self.anchor = Some(Pos::new(0, 0));
@@ -3913,7 +3861,7 @@ impl Calc {
                         this.release_lock();
                         cx.quit();
                     }
-                    _ => this.status = "終了をやめました".into(),
+                    _ => this.status = ui::t!("終了をやめました").into(),
                 }
                 cx.notify();
             });
@@ -3932,7 +3880,7 @@ impl Calc {
     fn fmt(&mut self, f: impl Fn(&mut CellFormat)) {
         if self.sheet().protected {
             self.status =
-                "シートが保護されています(保護タブの「保護」で解除)".into();
+                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
             return;
         }
         self.commit();
@@ -3957,7 +3905,7 @@ impl Calc {
         self.checkpoint();
         let (a, b) = self.sel_rect();
         if a == b {
-            self.status = "結合する範囲を Shift+矢印で選んでください".into();
+            self.status = ui::t!("結合する範囲を Shift+矢印で選んでください").into();
             return;
         }
         let sh = &mut self.book.sheets[self.active];
@@ -4140,7 +4088,7 @@ impl Calc {
             series.push((name, values));
         }
         if labels.is_empty() || series.is_empty() {
-            self.status = "グラフにする範囲を選んでください(1列目が項目名、2列目からが数)".into();
+            self.status = ui::t!("グラフにする範囲を選んでください(1列目が項目名、2列目からが数)").into();
             return;
         }
         // JSON は手で組む(依存を増やさない。文字列は最小の逃がし)
@@ -4174,7 +4122,7 @@ impl Calc {
             esc(&out.to_string_lossy())
         ));
         let at = Pos::new(a.row, b.col + 1);
-        self.status = "グラフを描いています…".into();
+        self.status = ui::t!("グラフを描いています…").into();
         let task = cx.background_executor().spawn(async move {
             let json_path = dir.join("chart.json");
             let py_path = dir.join("chart.py");
@@ -4375,7 +4323,7 @@ impl Calc {
                                 };
                                 if !free {
                                     this.status =
-                                        "右に空きが見つかりません(場所を空けてから)".into();
+                                        ui::t!("右に空きが見つかりません(場所を空けてから)").into();
                                 } else {
                                     this.checkpoint_book();
                                     def.dest = Pos::new(a.row, dc);
@@ -4413,8 +4361,7 @@ impl Calc {
                                 });
                                 if occupied {
                                     this.status =
-                                        "広がった分の場所が塞がっています(右下を空けてから更新)"
-                                            .into();
+                                        ui::t!("広がった分の場所が塞がっています(右下を空けてから更新)").into();
                                 } else {
                                     this.checkpoint_book();
                                     for r in 0..old.size.0 {
@@ -4516,7 +4463,7 @@ impl Calc {
             out_x = out_x.to_string_lossy(),
             code = user_code
         );
-        self.status = "Python を実行しています…".into();
+        self.status = ui::t!("Python を実行しています…").into();
         let task = cx.background_executor().spawn(async move {
             let py_path = dir.join("run.py");
             std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
@@ -4524,9 +4471,8 @@ impl Calc {
             let have_bwrap = std::path::Path::new("/usr/bin/bwrap").exists();
             if sandbox && !have_bwrap {
                 return Err(
-                    "檻(bubblewrap)がありません。ブックに載ったコードは檻の外では\
-実行しません(apt install bubblewrap)"
-                        .to_string(),
+                    ui::t!("檻(bubblewrap)がありません。ブックに載ったコードは檻の外では\
+実行しません(apt install bubblewrap)").to_string(),
                 );
             }
             let _ = allow_net;
@@ -4576,10 +4522,9 @@ impl Calc {
                     .unwrap_or("原因不明")
                     .to_string();
                 return Err(if err.contains("No module named 'office_sheet'") {
-                    "office_sheet.so がありません(cargo build -p pysheet --release \
+                    ui::t!("office_sheet.so がありません(cargo build -p pysheet --release \
 --features extension-module して、liboffice_sheet.so を office_sheet.so の名で \
-calc の隣に置いてください)"
-                        .to_string()
+calc の隣に置いてください)").to_string()
                 } else {
                     last
                 });
@@ -4610,7 +4555,7 @@ calc の隣に置いてください)"
                                     .map(|(n, c)| SharedString::from(format!("{n} × {c}")))
                                     .collect();
                                 this.status = if out.is_empty() {
-                                    "Python を実行しました(Ctrl+Z で1手で戻せます)".into()
+                                    ui::t!("Python を実行しました(Ctrl+Z で1手で戻せます)").into()
                                 } else {
                                     let last =
                                         out.lines().last().unwrap_or_default().to_string();
@@ -4667,13 +4612,12 @@ calc の隣に置いてください)"
             }
         }
         if per_sheet.is_empty() {
-            self.status = "=PY(\"関数名\", 引数…) のセルがありません".into();
+            self.status = ui::t!("=PY(\"関数名\", 引数…) のセルがありません").into();
             return;
         }
         if defs.trim().is_empty() {
             self.status =
-                "関数の定義がありません(@save 関数 で def の入った .py をブックに載せる)"
-                    .into();
+                ui::t!("関数の定義がありません(@save 関数 で def の入った .py をブックに載せる)").into();
             return;
         }
         let dir = std::env::temp_dir().join(format!("jo-udf-{}", std::process::id()));
@@ -4688,12 +4632,11 @@ calc の隣に置いてください)"
                 build_udf_script(&defs, calls, &out),
             ));
         }
-        self.status = "PY を計算しています…(檻の中)".into();
+        self.status = ui::t!("PY を計算しています…(檻の中)").into();
         let task = cx.background_executor().spawn(async move {
             if !std::path::Path::new("/usr/bin/bwrap").exists() {
                 return Err(
-                    "檻(bubblewrap)がありません。ブックの関数は檻の外では計算しません"
-                        .to_string(),
+                    ui::t!("檻(bubblewrap)がありません。ブックの関数は檻の外では計算しません").to_string(),
                 );
             }
             let py = find_python();
@@ -4849,7 +4792,7 @@ calc の隣に置いてください)"
             // csv.py という名前は標準ライブラリの csv を隠してしまう(踏んだ)
             let py_path = dir.join("jo_csv.py");
             if std::fs::write(&py_path, CSV_PY).is_err() {
-                return Some(Err("一時ファイルが書けません".to_string()));
+                return Some(Err(ui::t!("一時ファイルが書けません").to_string()));
             }
             let o = std::process::Command::new(find_python())
                 .arg(&py_path)
@@ -4917,7 +4860,7 @@ calc の隣に置いてください)"
             esc(&out.to_string_lossy())
         );
         let at = self.cursor;
-        self.status = "清書しています…".into();
+        self.status = ui::t!("清書しています…").into();
         let task = cx.background_executor().spawn(async move {
             let _ = std::fs::create_dir_all(&dir);
             let json_path = dir.join("eq.json");
@@ -5073,7 +5016,7 @@ calc の隣に置いてください)"
                 kind: kind.into(),
                 fill: if filled { g.clone() } else { None },
                 line: l.clone(),
-                text: if texted { Some("テキスト".into()) } else { None },
+                text: if texted { Some(ui::t!("テキスト").into()) } else { None },
                 ..Default::default()
             });
         }
@@ -5094,11 +5037,11 @@ calc の隣に置いてください)"
         let Some(sv) = &self.solver else { return };
         // ---- 読み取りと検め ----
         let Some(target) = Pos::parse(&sv.target.text().replace('$', "").to_uppercase()) else {
-            self.status = "目的のセルが読めません(例: E6)".into();
+            self.status = ui::t!("目的のセルが読めません(例: E6)").into();
             return;
         };
         let Some(vars) = parse_cell_list(&sv.vars.text(), 64) else {
-            self.status = "変数セルが読めません(例: B2:B4 や B2,C2。最大64個)".into();
+            self.status = ui::t!("変数セルが読めません(例: B2:B4 や B2,C2。最大64個)").into();
             return;
         };
         let mode = sv.mode;
@@ -5106,7 +5049,7 @@ calc の隣に置いてください)"
             match sv.value.text().trim().parse::<f64>() {
                 Ok(v) => v,
                 Err(_) => {
-                    self.status = "「値」が数として読めません".into();
+                    self.status = ui::t!("「値」が数として読めません").into();
                     return;
                 }
             }
@@ -5178,8 +5121,7 @@ calc の隣に置いてください)"
         }
         if !linear {
             self.status =
-                "線形ではありません — 単体法 LP は線形の問題だけを解きます(非線形は未対応。本家と同じ)"
-                    .into();
+                ui::t!("線形ではありません — 単体法 LP は線形の問題だけを解きます(非線形は未対応。本家と同じ)").into();
             return;
         }
         // ---- LP に組む ----
@@ -5232,7 +5174,7 @@ calc の隣に置いてください)"
             sv.nonneg
         );
         let dir = std::env::temp_dir().join(format!("jo-solver-{}", std::process::id()));
-        self.status = "解を探しています…(単体法 LP)".into();
+        self.status = ui::t!("解を探しています…(単体法 LP)").into();
         let task = cx.background_executor().spawn(async move {
             let _ = std::fs::create_dir_all(&dir);
             let json_path = dir.join("solver.json");
@@ -5372,7 +5314,7 @@ calc の隣に置いてください)"
                             }
                             None => {
                                 this.status =
-                                    "この画像は読めません(PNG か JPEG を選んでください)".into();
+                                    ui::t!("この画像は読めません(PNG か JPEG を選んでください)").into();
                             }
                         },
                         Err(e) => this.status = format!("読めません: {e}").into(),
@@ -5418,7 +5360,7 @@ calc の隣に置いてください)"
         }
         if sh.landscape {
             std::mem::swap(&mut paper.width_mm, &mut paper.height_mm);
-            desc.push("横向き".into());
+            desc.push(ui::t!("横向き").into());
         }
         let areas = sh.print_areas.clone();
         let setup = paper::grid::PrintSetup {
@@ -5532,7 +5474,7 @@ calc の隣に置いてください)"
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.sheet().protected && !Self::PROTECTED_OK.contains(&id) {
             self.status =
-                "シートが保護されています(保護タブの「保護」で解除)".into();
+                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
             cx.notify();
             return;
         }
@@ -5592,7 +5534,7 @@ calc の隣に置いてください)"
             "fill-num" => {
                 let (a, b) = self.sel_rect();
                 if a.row == b.row {
-                    self.status = "Shift+↓ で埋める範囲を選んでください(先頭行を下へ写します)".into();
+                    self.status = ui::t!("Shift+↓ で埋める範囲を選んでください(先頭行を下へ写します)").into();
                 } else {
                     self.commit();
                     self.checkpoint();
@@ -5630,7 +5572,7 @@ calc の隣に置いてください)"
                     .map(|c| c.value.display())
                     .unwrap_or_default();
                 if v.is_empty() {
-                    self.status = "空のセルでは絞れません".into();
+                    self.status = ui::t!("空のセルでは絞れません").into();
                 } else {
                     let n = self.matching_rows(p.col, &v).len();
                     self.status = format!(
@@ -5642,7 +5584,7 @@ calc の隣に置いてください)"
             }
             "clear-filter" => {
                 self.filter = None;
-                self.status = "絞り込みを解きました".into();
+                self.status = ui::t!("絞り込みを解きました").into();
             }
             // 印刷の設定。モデルに置き、保存で原文へ織り込み、PDF が従う。
             // どれもシートの控えで1手戻せる
@@ -5706,10 +5648,10 @@ calc の隣に置いてください)"
                     self.checkpoint();
                     self.sheet_mut().print_areas.clear();
                     self.dirty = true;
-                    self.status = "印刷範囲を解きました(全域を印刷します)".into();
+                    self.status = ui::t!("印刷範囲を解きました(全域を印刷します)").into();
                 } else {
                     self.status =
-                        "印刷範囲にする範囲を Shift+矢印かドラッグで選んでください".into();
+                        ui::t!("印刷範囲にする範囲を Shift+矢印かドラッグで選んでください").into();
                 }
             }
             // 大文字小文字。選択の英字に小文字があれば大文字へ、無ければ小文字へ
@@ -5749,7 +5691,7 @@ calc の隣に置いてください)"
                 }
                 if n == 0 {
                     self.undo_stack.pop();
-                    self.status = "選択の中に英字がありません".into();
+                    self.status = ui::t!("選択の中に英字がありません").into();
                 } else {
                     self.dirty = true;
                     self.sync_input();
@@ -5776,7 +5718,7 @@ calc の隣に置いてください)"
                     .map(|f| f.name.clone())
                     .collect();
                 if vals.is_empty() {
-                    self.status = "日本語の書体が見つかりません".into();
+                    self.status = ui::t!("日本語の書体が見つかりません").into();
                 } else {
                     let at = self
                         .cell_origin_px(self.cursor)
@@ -5819,7 +5761,7 @@ calc の隣に置いてください)"
                     .map(|f| sheet::calc::deps(f))
                     .unwrap_or_default();
                 if deps.is_empty() {
-                    self.status = "このセルの式は他のセルを参照していません".into();
+                    self.status = ui::t!("このセルの式は他のセルを参照していません").into();
                 } else {
                     self.status = format!(
                         "{} の参照元 {} セルを光らせました(トレース矢印の削除で消す)",
@@ -5858,15 +5800,14 @@ calc の隣に置いてください)"
             }
             "remove-arrows" => {
                 self.trace.clear();
-                self.status = "トレースを消しました".into();
+                self.status = ui::t!("トレースを消しました").into();
             }
             // 推奨チャート = いまの一手(棒グラフ)をそのまま勧める
             "insrecommend" => {
                 self.commit();
                 if self.anchor.is_none() {
                     self.status =
-                        "グラフにする範囲を選んでください(1列目が項目名、2列目からが数)"
-                            .into();
+                        ui::t!("グラフにする範囲を選んでください(1列目が項目名、2列目からが数)").into();
                 } else {
                     let (a, b) = self.sel_rect();
                     self.insert_chart(a, b, cx);
@@ -5878,11 +5819,11 @@ calc の隣に置いてください)"
                 self.commit();
                 if self.anchor.is_none() {
                     self.status =
-                        "元の表を範囲で選んでください(1行目が見出し)".into();
+                        ui::t!("元の表を範囲で選んでください(1行目が見出し)").into();
                 } else {
                     let (a, b) = self.sel_rect();
                     if b.row <= a.row {
-                        self.status = "見出しの下にデータの行が要ります".into();
+                        self.status = ui::t!("見出しの下にデータの行が要ります").into();
                     } else {
                         let headers: Vec<String> = (a.col..=b.col)
                             .map(|c| {
@@ -5936,10 +5877,9 @@ calc の隣に置いてください)"
                 self.pw_pending = None;
                 self.prompt = Some(("pw-set", Editor::new("")));
                 self.status = if self.encrypt_pw.is_some() {
-                    "暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)"
-                        .into()
+                    ui::t!("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)").into()
                 } else {
-                    "暗号化: パスワードを打って Enter(次の保存から効きます)".into()
+                    ui::t!("暗号化: パスワードを打って Enter(次の保存から効きます)").into()
                 };
             }
             // デジタル署名。**隣の .sig への添え書き**(Ed25519)。
@@ -5949,12 +5889,12 @@ calc の隣に置いてください)"
                 use ed25519_dalek::{Signer as _, Verifier as _};
                 let Some(p) = self.path.clone() else {
                     self.status =
-                        "まだファイルになっていません(先に保存してください)".into();
+                        ui::t!("まだファイルになっていません(先に保存してください)").into();
                     return;
                 };
                 if self.dirty {
                     self.status =
-                        "未保存の変更があります。保存してから署名してください".into();
+                        ui::t!("未保存の変更があります。保存してから署名してください").into();
                     return;
                 }
                 let bytes = match std::fs::read(&p) {
@@ -6019,8 +5959,7 @@ calc の隣に置いてください)"
             "coauth-mode" => match self.path.clone() {
                 None => {
                     self.status =
-                        "まだファイルになっていません(保存すると編集権=錠を取ります)"
-                            .into();
+                        ui::t!("まだファイルになっていません(保存すると編集権=錠を取ります)").into();
                 }
                 Some(p) => {
                     if self.my_lock.is_some() {
@@ -6036,8 +5975,7 @@ calc の隣に置いてください)"
                                 "{who} が編集中です(読めますが上書き保存はできません。相手が閉じたら、またこの釦で確かめてください)"
                             )
                             .into(),
-                            None => "先客が居なくなっていたので、編集権を取り直しました"
-                                .into(),
+                            None => ui::t!("先客が居なくなっていたので、編集権を取り直しました").into(),
                         };
                     }
                 }
@@ -6045,9 +5983,9 @@ calc の隣に置いてください)"
             "co-showcomment" => {
                 self.show_comments = !self.show_comments;
                 self.status = if self.show_comments {
-                    "コメントを表示します".into()
+                    ui::t!("コメントを表示します").into()
                 } else {
-                    "コメントを隠しました(付いてはいます)".into()
+                    ui::t!("コメントを隠しました(付いてはいます)").into()
                 };
             }
             "co-delcomment" => {
@@ -6060,29 +5998,26 @@ calc の隣に置いてください)"
                         format!("{} のコメントを外しました(Ctrl+Z で戻せます)", p.a1())
                             .into();
                 } else {
-                    self.status = "このセルにコメントはありません".into();
+                    self.status = ui::t!("このセルにコメントはありません").into();
                 }
             }
             // バージョン履歴。上書き保存のたびに .jo-history へ残る控えの一覧
             "co-history" => {
                 if self.path.is_none() {
                     self.status =
-                        "まだファイルになっていません(保存すると、上書きのたびに控えが残ります)"
-                            .into();
+                        ui::t!("まだファイルになっていません(保存すると、上書きのたびに控えが残ります)").into();
                 } else {
                     let v = self.versions();
                     if v.is_empty() {
                         self.status =
-                            "控えはまだありません(上書き保存のたびに .jo-history へ残ります)"
-                                .into();
+                            ui::t!("控えはまだありません(上書き保存のたびに .jo-history へ残ります)").into();
                     } else {
                         let names: Vec<String> = v.iter().map(|(n, _)| n.clone()).collect();
                         self.pick_paths = v;
                         self.pick_kind = "history";
                         self.pick = Some((names, (HEAD_W + 60.0, ROW_H + 20.0)));
                         self.status =
-                            "バージョン履歴: 選ぶと控えを名無しの複製で開きます(いまの書きかけは要るなら先に保存)"
-                                .into();
+                            ui::t!("バージョン履歴: 選ぶと控えを名無しの複製で開きます(いまの書きかけは要るなら先に保存)").into();
                     }
                 }
             }
@@ -6091,8 +6026,7 @@ calc の隣に置いてください)"
             "co-chat" => match self.chat_path() {
                 None => {
                     self.status =
-                        "まだファイルになっていません(保存すると、隣に申し送り帳ができます)"
-                            .into();
+                        ui::t!("まだファイルになっていません(保存すると、隣に申し送り帳ができます)").into();
                 }
                 Some(cp) => {
                     let tail = std::fs::read_to_string(&cp)
@@ -6109,7 +6043,7 @@ calc の隣に置いてください)"
                         })
                         .unwrap_or_default();
                     self.status = if tail.is_empty() {
-                        "まだ言伝はありません(打って Enter で書き残します)".into()
+                        ui::t!("まだ言伝はありません(打って Enter で書き残します)").into()
                     } else {
                         format!("言伝: {tail}").into()
                     };
@@ -6121,8 +6055,7 @@ calc の隣に置いてください)"
                 self.commit();
                 self.run_python_file_dialog(cx);
                 self.status =
-                    "マクロ: .py を選ぶと檻の中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)"
-                        .into();
+                    ui::t!("マクロ: .py を選ぶと檻の中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)").into();
             }
             // プラグインの管理。置き場の .py を一覧し、同じ檻で実行
             "plug-manage" => {
@@ -6157,8 +6090,7 @@ calc の隣に置いてください)"
                     self.pick_kind = "plugin";
                     self.pick = Some((names, (HEAD_W + 60.0, ROW_H + 20.0)));
                     self.status =
-                        "プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)"
-                            .into();
+                        ui::t!("プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)").into();
                 }
             }
             // チェックボックス(セルの部品)。空のセルに FALSE を置くと
@@ -6181,7 +6113,7 @@ calc の隣に置いてください)"
                 }
                 if empties.is_empty() && bools == 0 {
                     self.status =
-                        "空のセルを選んでください(中身のあるセルは潰しません)".into();
+                        ui::t!("空のセルを選んでください(中身のあるセルは潰しません)").into();
                 } else {
                     if !empties.is_empty() {
                         self.checkpoint();
@@ -6217,8 +6149,7 @@ calc の隣に置いてください)"
                     let (rows, _) = self.sheet().extent();
                     if rows < 2 {
                         self.status =
-                            "スライサーにする列を選んでください(見出しの下にデータの行が要ります)"
-                                .into();
+                            ui::t!("スライサーにする列を選んでください(見出しの下にデータの行が要ります)").into();
                     } else {
                         self.slicer =
                             Some((col, std::collections::BTreeSet::new(), false));
@@ -6235,14 +6166,14 @@ calc の隣に置いてください)"
                 self.commit();
                 self.prompt = Some(("textart", Editor::new("")));
                 self.status =
-                    "テキストアート: 文字を打つと、太字+縁取りの飾り文字を画像で置きます".into();
+                    ui::t!("テキストアート: 文字を打つと、太字+縁取りの飾り文字を画像で置きます").into();
             }
             // 方程式(数式エディタ)。式を板に打つと mathtext が清書して画像で置く
             "insequation" => {
                 self.commit();
                 self.prompt = Some(("equation", Editor::new("")));
                 self.status =
-                    "方程式: TeX の書き方で(例: \\frac{a}{b} や \\sum_{i=1}^n i^2)。Enter で清書".into();
+                    ui::t!("方程式: TeX の書き方で(例: \\frac{a}{b} や \\sum_{i=1}^n i^2)。Enter で清書").into();
             }
             // SmartArt。分類 → 形の2段の一覧(分類・並び・名前は本家)
             "inssmartart" => {
@@ -6252,7 +6183,7 @@ calc の隣に置いてください)"
                 self.pick_kind = "sa-cat";
                 self.pick = Some((names, (HEAD_W + 60.0, ROW_H + 20.0)));
                 self.status =
-                    "SmartArt: 分類 → 形の順に選ぶ(図形の集まりとして入ります)".into();
+                    ui::t!("SmartArt: 分類 → 形の順に選ぶ(図形の集まりとして入ります)").into();
             }
             // ソルバー。ONLYOFFICE と同じ小窓を開く(解法も同じ単体法 LP)
             "solver" => {
@@ -6265,13 +6196,13 @@ calc の隣に置いてください)"
                     };
                     self.solver = Some(Solver::new(&init));
                     self.status =
-                        "ソルバー: 欄を押して打つ。目的・変数セル・制約を決めて「解を求める」".into();
+                        ui::t!("ソルバー: 欄を押して打つ。目的・変数セル・制約を決めて「解を求める」").into();
                 }
             }
             // 下付き(vertAlign subscript)。上付きは本家 calc にも無い
             "subscript" => {
                 self.fmt(|f| f.subscript = !f.subscript);
-                self.status = "下付きを切り替えました".into();
+                self.status = ui::t!("下付きを切り替えました").into();
             }
             // 両端揃え(セルの横揃え。折り返した行を左右に伸ばす)
             "align-just" => {
@@ -6283,7 +6214,7 @@ calc の隣に置いてください)"
                     };
                     f.wrap = true; // 揃えるには折り返しが要る
                 });
-                self.status = "両端揃えにしました(折り返して全体を表示も入れます)".into();
+                self.status = ui::t!("両端揃えにしました(折り返して全体を表示も入れます)").into();
             }
             // 文字の回転(縦書きのセル。90度ずつ回る)
             "text-orient" => {
@@ -6297,19 +6228,19 @@ calc の隣に置いてください)"
                 });
                 let r = self.sheet().get(self.cursor).map(|c| c.fmt.rotation).unwrap_or(None);
                 self.status = match r {
-                    Some(90) => "文字を 90 度回しました".into(),
-                    Some(180) => "文字を 180 度回しました".into(),
-                    Some(255) => "文字を縦に積みました".into(),
-                    _ => "文字の向きを戻しました".into(),
+                    Some(90) => ui::t!("文字を 90 度回しました").into(),
+                    Some(180) => ui::t!("文字を 180 度回しました").into(),
+                    Some(255) => ui::t!("文字を縦に積みました").into(),
+                    _ => ui::t!("文字の向きを戻しました").into(),
                 };
             }
             // 計算方法(自動 ⇔ 手動)。手動のときは F9 で計算する
             "calc-mode" => {
                 self.auto_calc = !self.auto_calc;
                 self.status = if self.auto_calc {
-                    "計算方法: 自動(いつもすぐ計算します)".into()
+                    ui::t!("計算方法: 自動(いつもすぐ計算します)").into()
                 } else {
-                    "計算方法: 手動(F9 で計算します — 大きな表で待たされない)".into()
+                    ui::t!("計算方法: 手動(F9 で計算します — 大きな表で待たされない)").into()
                 };
             }
             // 関数の挿入 = 分類の一覧を出す(既存の関数一覧と同じ実体)
@@ -6317,12 +6248,12 @@ calc の隣に置いてください)"
                 self.pick_kind = "func-cat";
                 self.pick = Some((
                     vec![
-                        "統計".into(), "数学".into(), "財務".into(), "日付".into(),
-                        "文字列".into(), "論理".into(), "検索".into(),
+                        ui::t!("統計").into(), ui::t!("数学").into(), ui::t!("財務").into(), ui::t!("日付").into(),
+                        ui::t!("文字列").into(), ui::t!("論理").into(), ui::t!("検索").into(),
                     ],
                     (HEAD_W + 60.0, ROW_H + 20.0),
                 ));
-                self.status = "関数の挿入: 分類 → 関数 の順に選ぶ".into();
+                self.status = ui::t!("関数の挿入: 分類 → 関数 の順に選ぶ").into();
             }
             // セルのスタイル(既定の書式の組。押すと一覧から選ぶ)
             "cell-styles" => {
@@ -6331,7 +6262,7 @@ calc の隣に置いてください)"
                     CELL_STYLES.iter().map(|(n, _)| n.to_string()).collect(),
                     (HEAD_W + 60.0, ROW_H + 20.0),
                 ));
-                self.status = "セルのスタイル: 選ぶと選択に掛かります(Ctrl+Z で戻せます)".into();
+                self.status = ui::t!("セルのスタイル: 選ぶと選択に掛かります(Ctrl+Z で戻せます)").into();
             }
             // シートの表示(隠したシートを戻す/いまのシートを隠す)
             "sheet-view" => {
@@ -6346,7 +6277,7 @@ calc の隣に置いてください)"
                 if hidden.is_empty() {
                     // 隠すほう(最後の1枚は隠さない — 見えるシートがゼロになる)
                     if self.book.sheets.iter().filter(|s| !s.hidden).count() <= 1 {
-                        self.status = "最後の1枚は隠せません".into();
+                        self.status = ui::t!("最後の1枚は隠せません").into();
                     } else {
                         let n = self.sheet().name.clone();
                         self.checkpoint_book();
@@ -6371,7 +6302,7 @@ calc の隣に置いてください)"
                         hidden.into_iter().map(|(_, n)| n).collect(),
                         (HEAD_W + 60.0, ROW_H + 20.0),
                     ));
-                    self.status = "隠したシート: 選ぶと表示に戻します".into();
+                    self.status = ui::t!("隠したシート: 選ぶと表示に戻します").into();
                 }
             }
             // ウォッチウィンドウ(見張りの窓)。選んだセルを控えて下に見せる
@@ -6393,7 +6324,7 @@ calc の隣に置いてください)"
                 }
                 if n == 0 && !self.watch.is_empty() {
                     self.watch.clear();
-                    self.status = "見張りを空にしました".into();
+                    self.status = ui::t!("見張りを空にしました").into();
                 } else {
                     self.status = format!(
                         "{n} 個を見張ります(値は下の帯に出ます。もう一度押すと空に)"
@@ -6411,10 +6342,10 @@ calc の隣に置いてください)"
                 self.tool = if self.tool == Some(t) { None } else { Some(t) };
                 self.ink_cur = None;
                 self.status = match self.tool {
-                    Some(0) => "ペン: 表の上をドラッグで描く(もう一度押すか Esc で戻る)".into(),
-                    Some(1) => "蛍光ペン: ドラッグで引く(セルの上に薄く乗る)".into(),
-                    Some(2) => "消しゴム: 線をなぞると1筆ずつ消える".into(),
-                    _ => "セルの操作に戻りました".into(),
+                    Some(0) => ui::t!("ペン: 表の上をドラッグで描く(もう一度押すか Esc で戻る)").into(),
+                    Some(1) => ui::t!("蛍光ペン: ドラッグで引く(セルの上に薄く乗る)").into(),
+                    Some(2) => ui::t!("消しゴム: 線をなぞると1筆ずつ消える").into(),
+                    _ => ui::t!("セルの操作に戻りました").into(),
                 };
             }
             // AI タブ。**モデルに任せる変換と生成の道具箱**(writer と同じ宛先)
@@ -6488,15 +6419,15 @@ calc の隣に置いてください)"
                     sheet::theme::SCHEMES.iter().map(|(n, _)| n.to_string()).collect(),
                     (HEAD_W + 60.0, ROW_H + 20.0),
                 ));
-                self.status = "配色の変更: 選ぶとテーマ色が入れ替わります".into();
+                self.status = ui::t!("配色の変更: 選ぶとテーマ色が入れ替わります").into();
             }
             // インターフェイステーマ(画面の明暗)。**セルは白のまま**
             "theme" => {
                 self.dark = !self.dark;
                 self.status = if self.dark {
-                    "画面を暗くしました(セルは白のまま — 画面と紙の一致を守る)".into()
+                    ui::t!("画面を暗くしました(セルは白のまま — 画面と紙の一致を守る)").into()
                 } else {
-                    "画面を明るくしました".into()
+                    ui::t!("画面を明るくしました").into()
                 };
             }
             // 範囲に変換する(表オブジェクトを外す。**書式と式は残る**)
@@ -6506,8 +6437,7 @@ calc の隣に置いてください)"
                 match self.sheet().tables.iter().position(|t| t.contains(p)) {
                     None => {
                         self.status =
-                            "表の中にカーソルを置いてください(表のない範囲は「表の挿入」で表にできます)"
-                                .into();
+                            ui::t!("表の中にカーソルを置いてください(表のない範囲は「表の挿入」で表にできます)").into();
                     }
                     Some(i) => {
                         self.checkpoint();
@@ -6526,7 +6456,7 @@ calc の隣に置いてください)"
                 self.commit();
                 let p = self.cursor;
                 match self.sheet().tables.iter().position(|t| t.contains(p)) {
-                    None => self.status = "表の中にカーソルを置いてください".into(),
+                    None => self.status = ui::t!("表の中にカーソルを置いてください").into(),
                     Some(i) => {
                         let t = &self.sheet().tables[i];
                         let init = format!("{}:{}", t.a.a1(), t.b.a1());
@@ -6541,16 +6471,16 @@ calc の隣に置いてください)"
                 self.sheet_mut().rtl = on;
                 self.dirty = true;
                 self.status = if on {
-                    "右から左へ並べます(右横書き。列は右から A B C…)".into()
+                    ui::t!("右から左へ並べます(右横書き。列は右から A B C…)").into()
                 } else {
-                    "左から右へ戻しました".into()
+                    ui::t!("左から右へ戻しました").into()
                 };
             }
             // 文字の向き(セルの中を右横書きに)。1字ずつ右から並べる
             "direction" => {
                 self.fmt(|f| f.rtl_text = !f.rtl_text);
                 self.status =
-                    "セルの中を右横書きにしました(1字ずつ右から。昔の看板の書き方)".into();
+                    ui::t!("セルの中を右横書きにしました(1字ずつ右から。昔の看板の書き方)").into();
             }
             // 表示タブ(本家のデスクトップ版に合わせる)。どれも見え方だけ
             "zoom-in" => {
@@ -6564,25 +6494,25 @@ calc の隣に置いてください)"
             "formula-bar" => {
                 self.show_formula_bar = !self.show_formula_bar;
                 self.status = if self.show_formula_bar {
-                    "数式バーを表示します".into()
+                    ui::t!("数式バーを表示します").into()
                 } else {
-                    "数式バーを隠しました(表示タブで戻せます)".into()
+                    ui::t!("数式バーを隠しました(表示タブで戻せます)").into()
                 };
             }
             "show-headings" => {
                 self.show_headers = !self.show_headers;
                 self.status = if self.show_headers {
-                    "見出しを表示します".into()
+                    ui::t!("見出しを表示します").into()
                 } else {
-                    "見出しを隠しました(列幅のドラッグ等は見出しと一緒に戻ります)".into()
+                    ui::t!("見出しを隠しました(列幅のドラッグ等は見出しと一緒に戻ります)").into()
                 };
             }
             "show-zeros" => {
                 self.show_zeros = !self.show_zeros;
                 self.status = if self.show_zeros {
-                    "0 を表示します".into()
+                    ui::t!("0 を表示します").into()
                 } else {
-                    "0 を隠しました(見え方だけ — 値は 0 のまま)".into()
+                    ui::t!("0 を隠しました(見え方だけ — 値は 0 のまま)").into()
                 };
             }
             // 小計(Excel の集計)。本家のデータタブに無い釦だが、グループ化を
@@ -6590,11 +6520,11 @@ calc の隣に置いてください)"
             "subtotal" => {
                 self.commit();
                 if self.anchor.is_none() {
-                    self.status = "表を範囲で選んでください(1行目が見出し)".into();
+                    self.status = ui::t!("表を範囲で選んでください(1行目が見出し)").into();
                 } else {
                     let (a, b) = self.sel_rect();
                     if b.row <= a.row {
-                        self.status = "見出しの下にデータの行が要ります".into();
+                        self.status = ui::t!("見出しの下にデータの行が要ります").into();
                     } else {
                         let headers: Vec<String> = (a.col..=b.col)
                             .map(|c| {
@@ -6629,8 +6559,7 @@ calc の隣に置いてください)"
                 self.commit();
                 if self.anchor.is_none() {
                     self.status =
-                        "まとめたい行(または列)を選んでください(見出しの番号を撫でる)"
-                            .into();
+                        ui::t!("まとめたい行(または列)を選んでください(見出しの番号を撫でる)").into();
                 } else {
                     let (a, b) = self.sel_rect();
                     let (rows_ext, cols_ext) = self.sheet().extent();
@@ -6695,7 +6624,7 @@ calc の隣に置いてください)"
                         .collect();
                     if targets.is_empty() {
                         self.status =
-                            "選択にグループ化した列がありません(先にグループ化)".into();
+                            ui::t!("選択にグループ化した列がありません(先にグループ化)").into();
                     } else {
                         self.checkpoint();
                         let sh = self.sheet_mut();
@@ -6722,7 +6651,7 @@ calc の隣に置いてください)"
                         let sh = self.sheet();
                         let at = self.cursor.row;
                         if !sh.row_outline.contains_key(&at) {
-                            self.status = "グループ化した行の上で押してください(先に データ > グループ化)".into();
+                            self.status = ui::t!("グループ化した行の上で押してください(先に データ > グループ化)").into();
                             cx.notify();
                             return;
                         }
@@ -6741,8 +6670,7 @@ calc の隣に置いてください)"
                         (r0..=r1).filter(|r| sh.row_outline.contains_key(r)).collect();
                     if targets.is_empty() {
                         self.status =
-                            "選択にグループ化した行がありません(先に データ > グループ化)"
-                                .into();
+                            ui::t!("選択にグループ化した行がありません(先に データ > グループ化)").into();
                     } else {
                         self.checkpoint();
                         let sh = self.sheet_mut();
@@ -6774,7 +6702,7 @@ calc の隣に置いてください)"
                     }
                     None => {
                         self.status =
-                            "更新したいピボットの上にカーソルを置いてください".into();
+                            ui::t!("更新したいピボットの上にカーソルを置いてください").into();
                     }
                 }
             }
@@ -6782,7 +6710,7 @@ calc の隣に置いてください)"
                 self.commit();
                 let n = self.book.pivots.len();
                 if n == 0 {
-                    self.status = "このブックにピボットはありません".into();
+                    self.status = ui::t!("このブックにピボットはありません").into();
                 } else {
                     for i in 0..n {
                         let d = self.book.pivots[i].clone();
@@ -6801,10 +6729,10 @@ calc の隣に置いてください)"
                             d.dest.col + d.size.1.saturating_sub(1),
                         ));
                         self.sync_input();
-                        self.status = "ピボット全体を選びました".into();
+                        self.status = ui::t!("ピボット全体を選びました").into();
                     }
                     None => {
-                        self.status = "ピボットの上にカーソルを置いてください".into();
+                        self.status = ui::t!("ピボットの上にカーソルを置いてください").into();
                     }
                 }
             }
@@ -6812,14 +6740,13 @@ calc の隣に置いてください)"
                 self.commit();
                 match self.pivot_at(self.cursor) {
                     None => {
-                        self.status = "ピボットの上にカーソルを置いてください".into();
+                        self.status = ui::t!("ピボットの上にカーソルを置いてください").into();
                     }
                     Some(i) => {
                         let need_two = matches!(id, "pivot-subtotals" | "pivot-blank");
                         if need_two && self.book.pivots[i].rows_sel.len() < 2 {
                             self.status =
-                                "行の見出しが2つ以上のピボットで効きます(挿入で複数選ぶ)"
-                                    .into();
+                                ui::t!("行の見出しが2つ以上のピボットで効きます(挿入で複数選ぶ)").into();
                         } else {
                             let d = &mut self.book.pivots[i];
                             let (name, on) = match id {
@@ -6871,7 +6798,7 @@ calc の隣に置いてください)"
                 }
                 self.commit();
                 if self.anchor.is_none() {
-                    self.status = "表の範囲を選んでください".into();
+                    self.status = ui::t!("表の範囲を選んでください").into();
                 } else {
                     self.checkpoint();
                     let (a, b) = self.sel_rect();
@@ -6930,7 +6857,7 @@ calc の隣に置いてください)"
             "td-total" => {
                 self.commit();
                 if self.anchor.is_none() {
-                    self.status = "合計したい表の範囲を選んでください".into();
+                    self.status = ui::t!("合計したい表の範囲を選んでください").into();
                 } else {
                     let (a, b) = self.sel_rect();
                     let below_used = (a.col..=b.col).any(|c| {
@@ -6943,8 +6870,7 @@ calc の隣に置いてください)"
                     });
                     if below_used {
                         self.status =
-                            "すぐ下の行に中身があります(空けてから — 黙って上書きしません)"
-                                .into();
+                            ui::t!("すぐ下の行に中身があります(空けてから — 黙って上書きしません)").into();
                     } else {
                         self.checkpoint();
                         add_total_row(&mut self.book.sheets[self.active], a, b);
@@ -6964,7 +6890,7 @@ calc の隣に置いてください)"
             "instable" | "table-tpl" => {
                 self.commit();
                 if self.anchor.is_none() {
-                    self.status = "表にする範囲を選んでください".into();
+                    self.status = ui::t!("表にする範囲を選んでください").into();
                 } else {
                     self.checkpoint();
                     let (a, b) = self.sel_rect();
@@ -7034,7 +6960,7 @@ calc の隣に置いてください)"
                 self.commit();
                 if self.anchor.is_none() {
                     self.status =
-                        "割りたいセルを選んでください(選択した列の文字を右へ割ります)".into();
+                        ui::t!("割りたいセルを選んでください(選択した列の文字を右へ割ります)").into();
                 } else {
                     self.prompt = Some(("split-delim", Editor::new("")));
                 }
@@ -7132,7 +7058,7 @@ calc の隣に置いてください)"
                     self.status = format!("{} 行の改ページを外しました", r + 1).into();
                 } else if r == 0 {
                     self.undo_stack.pop();
-                    self.status = "1行目の前では改ページできません".into();
+                    self.status = ui::t!("1行目の前では改ページできません").into();
                 } else {
                     sh.row_breaks.push(r);
                     self.dirty = true;
@@ -7158,10 +7084,10 @@ calc の隣に置いてください)"
                     self.checkpoint();
                     self.sheet_mut().print_title_rows = None;
                     self.dirty = true;
-                    self.status = "タイトル行を解除しました".into();
+                    self.status = ui::t!("タイトル行を解除しました").into();
                 } else {
                     self.status =
-                        "繰り返す行を選んでから押してください(行の見出しをクリック)".into();
+                        ui::t!("繰り返す行を選んでから押してください(行の見出しをクリック)").into();
                 }
             }
             "print-gridlines" => {
@@ -7201,8 +7127,7 @@ calc の隣に置いてください)"
                 self.commit();
                 if self.anchor.is_none() {
                     self.status =
-                        "グラフにする範囲を選んでください(1列目が項目名、2列目からが数)"
-                            .into();
+                        ui::t!("グラフにする範囲を選んでください(1列目が項目名、2列目からが数)").into();
                 } else {
                     let (a, b) = self.sel_rect();
                     self.insert_chart(a, b, cx);
@@ -7233,7 +7158,7 @@ calc の隣に置いてください)"
                 self.commit();
                 if self.anchor.is_none() {
                     self.status =
-                        "折れ線にする数の範囲を選んでください(置き場所はいまのセル)".into();
+                        ui::t!("折れ線にする数の範囲を選んでください(置き場所はいまのセル)").into();
                 } else {
                     let (a, b) = self.sel_rect();
                     let mut vals: Vec<f64> = Vec::new();
@@ -7247,7 +7172,7 @@ calc の隣に置いてください)"
                         }
                     }
                     if vals.len() < 2 {
-                        self.status = "数が2つ以上要ります".into();
+                        self.status = ui::t!("数が2つ以上要ります").into();
                     } else {
                         let (lo, hi) = vals
                             .iter()
@@ -7351,14 +7276,11 @@ calc の隣に置いてください)"
                 self.frozen = match self.frozen {
                     Some(_) => None,
                     None if self.cursor.row == 0 && self.cursor.col == 0 => {
-                        self.status = "固定する位置にカーソルを置いてください(その上と左が留まります)".into();
+                        self.status = ui::t!("固定する位置にカーソルを置いてください(その上と左が留まります)").into();
                         None
                     }
                     None => {
-                        self.status = format!(
-                            "{}行 {}列を固定しました",
-                            self.cursor.row, self.cursor.col
-                        ).into();
+                        self.status = ui::tf!("{}行 {}列を固定しました", self.cursor.row, self.cursor.col).into();
                         Some(self.cursor)
                     }
                 };
@@ -7385,7 +7307,7 @@ calc の隣に置いてください)"
                 self.book.sheets[self.active].sort_by_column(c, true, true);
                 self.dirty = true;
                 recalc_book(&mut self.book, self.active);
-                self.status = format!("{} 列で並べ替えました", Pos::new(0, c).a1()
+                self.status = ui::tf!("{} 列で並べ替えました", Pos::new(0, c).a1()
                     .trim_end_matches('1')).into();
             }
             "rem-duplicates" => {
@@ -7395,7 +7317,7 @@ calc の隣に置いてください)"
                 self.dirty = true;
                 recalc_book(&mut self.book, self.active);
                 // 何件消したかを黙らない
-                self.status = format!("重複した {n} 行を削除しました").into();
+                self.status = ui::tf!("重複した {} 行を削除しました", n).into();
             }
             "currency" => self.fmt(|f| f.number_format = Some("¥#,##0".into())),
             "percents" => self.fmt(|f| f.number_format = Some("0%".into())),
@@ -7433,7 +7355,7 @@ calc の隣に置いてください)"
                                   ISEVEN ISODD T N TYPE — 一覧は各族の釦で",
                     _ => "SUM AVERAGE COUNT MAX MIN IF SUMIF COUNTIF VLOOKUP TODAY",
                 };
-                self.status = format!("使える関数: {names}").into();
+                self.status = ui::tf!("使える関数: {}", names).into();
             }
             f @ ("sum" | "average" | "count" | "max" | "min") => {
                 // 上の連続した数値をまとめる(表計算の当たり前の動き)
@@ -7454,7 +7376,7 @@ calc の隣に置いてください)"
             }
             other => {
                 // ここに来たら結線漏れ。黙らず画面に出す
-                self.status = format!("未配線のコマンド: {other}(不具合です)").into();
+                self.status = ui::tf!("未配線のコマンド: {}(不具合です)", other).into();
             }
         }
     }
@@ -7466,10 +7388,7 @@ calc の隣に置いてください)"
         if let Some(p) = self.path.clone() {
             if self.locked_by.is_some() {
                 // 先客の作業を後勝ちで潰さない。別の名前でなら保存できる
-                self.status = format!(
-                    "{} が開いているため上書きしません。名前を付けて保存してください",
-                    self.locked_by.as_deref().unwrap_or("誰か")
-                )
+                self.status = ui::tf!("{} が開いているため上書きしません。名前を付けて保存してください", self.locked_by.as_deref().unwrap_or("誰か"))
                 .into();
             } else {
                 self.save_to(p);
@@ -7496,7 +7415,7 @@ calc の隣に置いてください)"
                             cx.quit();
                         }
                     }
-                    None => this.status = "保存をやめました(名前が決まっていません)".into(),
+                    None => this.status = ui::t!("保存をやめました(名前が決まっていません)").into(),
                 }
                 cx.notify();
             });
@@ -7535,10 +7454,7 @@ calc の隣に置いてください)"
         match saved {
             Ok(_) => {
                 let enc_note = if self.encrypt_pw.is_some() { "(暗号化)" } else { "" };
-                self.status = format!(
-                    "保存しました — {}{enc_note}",
-                    p.file_name().unwrap_or_default().to_string_lossy()
-                )
+                self.status = ui::tf!("保存しました — {}{}", p.file_name().unwrap_or_default().to_string_lossy(), enc_note)
                 .into();
                 self.acquire_lock(&p);
                 Self::note_recent(&p);
@@ -7554,7 +7470,7 @@ calc の隣に置いてください)"
                 }
                 self.shape_sel = None;
             }
-            Err(e) => self.status = format!("保存できません: {e}").into(),
+            Err(e) => self.status = ui::tf!("保存できません: {}", e).into(),
         }
     }
 }
@@ -7593,7 +7509,7 @@ impl EntityInputHandler for Calc {
             {
                 if self.sheet().protected {
                     self.status =
-                        "シートが保護されています(保護タブの「保護」で解除)".into();
+                        ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
                 } else {
                     self.checkpoint();
                     let p = self.cursor;
@@ -7604,11 +7520,7 @@ impl EntityInputHandler for Calc {
                     recalc_book(&mut self.book, self.active);
                     self.dirty = true;
                     self.sync_input();
-                    self.status = format!(
-                        "{} = {}(空白キーで切替)",
-                        p.a1(),
-                        if b { "☐" } else { "☑" }
-                    )
+                    self.status = ui::tf!("{} = {}(空白キーで切替)", p.a1(), if b { "☐" } else { "☑" })
                     .into();
                 }
                 cx.notify();
@@ -8292,7 +8204,7 @@ fn load_or_make_key() -> Result<ed25519_dalek::SigningKey, String> {
     use std::io::Read as _;
     std::fs::File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut seed))
-        .map_err(|e| format!("乱数が取れません: {e}"))?;
+        .map_err(|e| ui::tf!("乱数が取れません: {}", e))?;
     if let Some(dir) = kp.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -8304,7 +8216,7 @@ fn load_or_make_key() -> Result<ed25519_dalek::SigningKey, String> {
         .mode(0o600)
         .open(&kp)
         .and_then(|mut f| f.write_all(&seed))
-        .map_err(|e| format!("鍵が置けません: {e}"))?;
+        .map_err(|e| ui::tf!("鍵が置けません: {}", e))?;
     Ok(ed25519_dalek::SigningKey::from_bytes(&seed))
 }
 
@@ -8487,7 +8399,7 @@ impl Render for Calc {
             .path
             .as_ref()
             .and_then(|q| q.file_name().map(|n| n.to_string_lossy().to_string()))
-            .unwrap_or_else(|| "無題のブック".into());
+            .unwrap_or_else(|| ui::t!("無題のブック").into());
         let winbtn = |id: &'static str, label: &'static str| {
             div().id(id).px_2p5().py_1().rounded_sm()
                 .text_size(px(12.0)).text_color(rgb(0xCFE6D8))
@@ -8532,7 +8444,7 @@ impl Render for Calc {
                 ))))
             .child(div().flex_1())
             .child(div().pr_2().text_size(px(10.5)).text_color(rgb(0x9CC9AF))
-                .child(SharedString::from(format!("calc — 実装済み {ready}/{all}"))))
+                .child(SharedString::from(ui::tf!("calc — 実装済み {}/{}", ready, all))))
             .child(winbtn("min", "─").on_click(cx.listener(|_, _, window, _| {
                 window.minimize_window();
             })))
@@ -8794,9 +8706,9 @@ impl Render for Calc {
                                     }
                                     this.dirty = true;
                                     this.status = if hidden {
-                                        "詳細を表示しました(+/− でいつでも)".into()
+                                        ui::t!("詳細を表示しました(+/− でいつでも)").into()
                                     } else {
-                                        "詳細を畳みました(+ で開きます)".into()
+                                        ui::t!("詳細を畳みました(+ で開きます)").into()
                                     };
                                     cx.notify()
                                 })))
@@ -9089,7 +9001,7 @@ impl Render for Calc {
                 .border_t_1().border_color(rgb(0xD5DBE0))
                 .text_size(px(11.0)).text_color(rgb(0x1B1B1B));
             w = w.child(div().font_weight(gpui::FontWeight::BOLD)
-                .text_color(rgb(0x1B6E3C)).child("見張り"));
+                .text_color(rgb(0x1B6E3C)).child(ui::t!("見張り")));
             for (si, p) in self.watch.iter().take(24) {
                 let Some(sh) = self.book.sheets.get(*si) else { continue };
                 let v = sh.get(*p).map(|c| c.value.display()).unwrap_or_default();
@@ -9337,7 +9249,7 @@ impl Render for Calc {
             }
         }
         if let Some(u) = self.sheet().links.get(&self.cursor) {
-            tip_lines.push(format!("リンク: {u}(Ctrl+クリックで開く)"));
+            tip_lines.push(ui::tf!("リンク: {}(Ctrl+クリックで開く)", u));
         }
         let tip = if tip_lines.is_empty() {
             None
@@ -9365,43 +9277,37 @@ impl Render for Calc {
                 a.a1()
             };
             let title = match *kind {
-                "name" => format!("名前の定義 — {range} に名前を付ける"),
-                "comment" => format!("コメント — {}(空にして Enter で消す)", self.cursor.a1()),
-                "link" => format!("ハイパーリンク — {}(空にして Enter で外す)", self.cursor.a1()),
-                "cond-gt" => format!("条件付き書式 — {range} で、いくつより大きい値を塗る?"),
-                "cond-lt" => format!("条件付き書式 — {range} で、いくつより小さい値を塗る?"),
-                "validation" => format!("入力規則 — {range} は候補から選ぶ(空にして Enter で解除)"),
-                "find" => "検索と置換 — 探す言葉".to_string(),
-                "split-delim" => format!("区切り位置 — {range} を何で割る?(空 Enter = カンマ)"),
-                "shape-text" => "図形の文字(空にして Enter で消す)".to_string(),
-                "py" => "Python — 一行のコード(空 Enter = .py ファイルを選ぶ)".to_string(),
-                "goal-target" => "ゴールシーク — 目標(セル=値。例: D6=800000)".to_string(),
-                "goal-var" => format!(
-                    "{} をいくつにするか探します — 変えるセルは?(例: B2)",
-                    self.goal.map(|(p, v)| format!("{}={v}", p.a1())).unwrap_or_default()
-                ),
-                "replace-with" => format!(
-                    "「{}」を何に置き換える?",
-                    self.find_term.as_deref().unwrap_or("")
-                ),
-                "chat" => "チャット — 言伝を書き残す(ブックの隣の .chat.txt)".to_string(),
-                "equation" => "方程式 — 式を打つ(TeX の書き方。清書して画像で置く)".to_string(),
-                "ai-table" => "AI — 表にする文章".to_string(),
-                "ai-ask" => "AI — 頼み(例: 合計の式を書いて)".to_string(),
-                "table-resize" => "テーブルのサイズ変更 — 新しい範囲(A1:C9)".to_string(),
-                "prop-creator" => "ブックの情報 — 作成者".to_string(),
-                "prop-title" => "ブックの情報 — タイトル".to_string(),
-                "prop-keywords" => "ブックの情報 — タグ".to_string(),
-                "prop-subject" => "ブックの情報 — 件名".to_string(),
-                "prop-desc" => "ブックの情報 — コメント".to_string(),
-                "textart" => "テキストアート — 飾り文字にする文字を打つ".to_string(),
-                "pw-open" => "暗号化されたブック — パスワード".to_string(),
-                "pw-set" => "暗号化 — パスワード(空にして Enter で暗号化をやめる)".to_string(),
-                "subtotal-by" => "小計 1/2 — 何の区切りで集めるか(見出しを1つ)".to_string(),
-                "subtotal-vals" => "小計 2/2 — 合計する見出し".to_string(),
-                "pivot-rows" => "ピボット 1/3 — 行に並べる見出し(カンマ区切り可)".to_string(),
-                "pivot-cols" => "ピボット 2/3 — 列に広げる見出し(空 Enter = なし)".to_string(),
-                "pivot-val" => "ピボット 3/3 — 値にする見出しと集計".to_string(),
+                "name" => ui::tf!("名前の定義 — {} に名前を付ける", range),
+                "comment" => ui::tf!("コメント — {}(空にして Enter で消す)", self.cursor.a1()),
+                "link" => ui::tf!("ハイパーリンク — {}(空にして Enter で外す)", self.cursor.a1()),
+                "cond-gt" => ui::tf!("条件付き書式 — {} で、いくつより大きい値を塗る?", range),
+                "cond-lt" => ui::tf!("条件付き書式 — {} で、いくつより小さい値を塗る?", range),
+                "validation" => ui::tf!("入力規則 — {} は候補から選ぶ(空にして Enter で解除)", range),
+                "find" => ui::t!("検索と置換 — 探す言葉").to_string(),
+                "split-delim" => ui::tf!("区切り位置 — {} を何で割る?(空 Enter = カンマ)", range),
+                "shape-text" => ui::t!("図形の文字(空にして Enter で消す)").to_string(),
+                "py" => ui::t!("Python — 一行のコード(空 Enter = .py ファイルを選ぶ)").to_string(),
+                "goal-target" => ui::t!("ゴールシーク — 目標(セル=値。例: D6=800000)").to_string(),
+                "goal-var" => ui::tf!("{} をいくつにするか探します — 変えるセルは?(例: B2)", self.goal.map(|(p, v)| format!("{}={v}", p.a1())).unwrap_or_default()),
+                "replace-with" => ui::tf!("「{}」を何に置き換える?", self.find_term.as_deref().unwrap_or("")),
+                "chat" => ui::t!("チャット — 言伝を書き残す(ブックの隣の .chat.txt)").to_string(),
+                "equation" => ui::t!("方程式 — 式を打つ(TeX の書き方。清書して画像で置く)").to_string(),
+                "ai-table" => ui::t!("AI — 表にする文章").to_string(),
+                "ai-ask" => ui::t!("AI — 頼み(例: 合計の式を書いて)").to_string(),
+                "table-resize" => ui::t!("テーブルのサイズ変更 — 新しい範囲(A1:C9)").to_string(),
+                "prop-creator" => ui::t!("ブックの情報 — 作成者").to_string(),
+                "prop-title" => ui::t!("ブックの情報 — タイトル").to_string(),
+                "prop-keywords" => ui::t!("ブックの情報 — タグ").to_string(),
+                "prop-subject" => ui::t!("ブックの情報 — 件名").to_string(),
+                "prop-desc" => ui::t!("ブックの情報 — コメント").to_string(),
+                "textart" => ui::t!("テキストアート — 飾り文字にする文字を打つ").to_string(),
+                "pw-open" => ui::t!("暗号化されたブック — パスワード").to_string(),
+                "pw-set" => ui::t!("暗号化 — パスワード(空にして Enter で暗号化をやめる)").to_string(),
+                "subtotal-by" => ui::t!("小計 1/2 — 何の区切りで集めるか(見出しを1つ)").to_string(),
+                "subtotal-vals" => ui::t!("小計 2/2 — 合計する見出し").to_string(),
+                "pivot-rows" => ui::t!("ピボット 1/3 — 行に並べる見出し(カンマ区切り可)").to_string(),
+                "pivot-cols" => ui::t!("ピボット 2/3 — 列に広げる見出し(空 Enter = なし)").to_string(),
+                "pivot-val" => ui::t!("ピボット 3/3 — 値にする見出しと集計").to_string(),
                 _ => String::new(),
             };
             // キャレットは | で見せる(writer の検索欄と同じ割り切り)。
@@ -9509,7 +9415,7 @@ impl Render for Calc {
             if sv.cons.is_empty() {
                 list = list.child(div().flex_1().flex().items_center().justify_center()
                     .text_size(px(11.5)).text_color(rgb(0xB6BDC4))
-                    .child("まだ制約はありません。左辺・記号・右辺を打って「追加」"));
+                    .child(ui::t!("まだ制約はありません。左辺・記号・右辺を打って「追加」")));
             } else {
                 for (i, (l, op, r)) in sv.cons.iter().enumerate() {
                     let on = sel == Some(i);
@@ -9540,7 +9446,7 @@ impl Render for Calc {
                 .flex().flex_col().gap_1()
                 .child(div().flex().flex_row().items_center()
                     .child(div().text_size(px(13.0)).font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(0x1B6E3C)).child("ソルバーのパラメータ"))
+                        .text_color(rgb(0x1B6E3C)).child(ui::t!("ソルバーのパラメータ")))
                     .child(div().flex_1())
                     .child(div().id("sv-x").px_2().cursor_pointer().text_size(px(13.0))
                         .text_color(rgb(0x66707A)).hover(|s| s.text_color(rgb(0xC0392B)))
@@ -9577,7 +9483,7 @@ impl Render for Calc {
                         })))
                     .child(field("sv-conr", 4, show(&sv.con_r, focus == 4), cx)))
                 .child(div().mt_1().flex().flex_row().gap_1()
-                    .child(btn("sv-add", "追加", true).child("追加")
+                    .child(btn("sv-add", "追加", true).child(ui::t!("追加"))
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
                             if let Some(sv) = &mut this.solver {
@@ -9586,7 +9492,7 @@ impl Render for Calc {
                                      sv.con_r.text().trim().to_string());
                                 if l.is_empty() || r.is_empty() {
                                     this.status =
-                                        "制約の左辺と右辺を先に打ってください".into();
+                                        ui::t!("制約の左辺と右辺を先に打ってください").into();
                                 } else {
                                     sv.cons.push((l, SOLVER_OPS[sv.con_op], r));
                                     sv.con_l = Editor::new("");
@@ -9596,7 +9502,7 @@ impl Render for Calc {
                             }
                             cx.notify();
                         })))
-                    .child(btn("sv-edit", "変更", sel.is_some()).child("変更")
+                    .child(btn("sv-edit", "変更", sel.is_some()).child(ui::t!("変更"))
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
                             if let Some(sv) = &mut this.solver {
@@ -9612,7 +9518,7 @@ impl Render for Calc {
                             cx.notify();
                         })))
                     .child(div().flex_1())
-                    .child(btn("sv-del", "削除", sel.is_some()).child("削除")
+                    .child(btn("sv-del", "削除", sel.is_some()).child(ui::t!("削除"))
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
                             if let Some(sv) = &mut this.solver {
@@ -9628,7 +9534,7 @@ impl Render for Calc {
                 .child(div().id("sv-nonneg").mt_1().flex().flex_row().items_center().gap_1()
                     .cursor_pointer().text_size(px(12.0))
                     .child(if nonneg { "☑" } else { "☐" })
-                    .child("制約のない変数を非負にする")
+                    .child(ui::t!("制約のない変数を非負にする"))
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                         cx.stop_propagation();
                         if let Some(sv) = &mut this.solver {
@@ -9638,13 +9544,13 @@ impl Render for Calc {
                     })))
                 .child(div().mt_1().flex().flex_row().items_center().gap_2()
                     .child(div().text_size(px(12.0)).font_weight(gpui::FontWeight::BOLD)
-                        .child("解法の方法"))
+                        .child(ui::t!("解法の方法")))
                     .child(div().px_2().py_0p5().border_1().border_color(rgb(0xC6CDD3))
-                        .rounded_sm().text_size(px(11.5)).child("単体法 LP")))
+                        .rounded_sm().text_size(px(11.5)).child(ui::t!("単体法 LP"))))
                 .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
-                    .child("線形の問題を LP シンプレックスで解きます(裏方 scipy)。非線形はまだ解けません — そのときは断ります"))
+                    .child(ui::t!("線形の問題を LP シンプレックスで解きます(裏方 scipy)。非線形はまだ解けません — そのときは断ります")))
                 .child(div().mt_1p5().flex().flex_row().gap_1()
-                    .child(btn("sv-reset", "すべてリセット", true).child("すべてリセット")
+                    .child(btn("sv-reset", "すべてリセット", true).child(ui::t!("すべてリセット"))
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
                             let init = this.cursor.a1();
@@ -9656,13 +9562,13 @@ impl Render for Calc {
                         .bg(rgb(0x1B6E3C)).text_color(rgb(0xFFFFFF))
                         .text_size(px(12.0)).cursor_pointer()
                         .hover(|s| s.bg(rgb(0x2E8B57)))
-                        .child("解を求める")
+                        .child(ui::t!("解を求める"))
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
                             this.solve_solver(cx);
                             cx.notify();
                         })))
-                    .child(btn("sv-close", "閉じる", true).child("閉じる")
+                    .child(btn("sv-close", "閉じる", true).child(ui::t!("閉じる"))
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
                             this.solver = None;
@@ -9688,25 +9594,25 @@ impl Render for Calc {
             let sb = div().w(px(280.0)).bg(rgb(0xF1F3F5))
                 .border_r_1().border_color(rgb(0xE1E6EA))
                 .flex().flex_col().py_2()
-                .child(mk("f-back", "‹ 戻る", true).on_click(cx.listener(|this, _, _, cx| {
+                .child(mk("f-back", ui::t!("‹ 戻る"), true).on_click(cx.listener(|this, _, _, cx| {
                     this.tab = this.prev_tab;
                     cx.notify()
                 })))
                 .child(div().h(px(10.0)))
-                .child(mk("f-new", "新規作成", true).on_click(cx.listener(|this, _, _, cx| {
+                .child(mk("f-new", ui::t!("新規作成"), true).on_click(cx.listener(|this, _, _, cx| {
                     if this.new_book() {
                         this.tab = this.prev_tab;
                     }
                     cx.notify()
                 })))
-                .child(mk("f-tpl", "テンプレートから作成", false))
-                .child(mk("f-open", "開く", true).on_click(cx.listener(|this, _, _, cx| {
+                .child(mk("f-tpl", ui::t!("テンプレートから作成"), false))
+                .child(mk("f-open", ui::t!("開く"), true).on_click(cx.listener(|this, _, _, cx| {
                     this.tab = this.prev_tab;
                     this.open_dialog(cx);
                     cx.notify()
                 })))
                 .child({
-                    let d = mk("f-recent", "最近開いた", true).on_click(cx.listener(
+                    let d = mk("f-recent", ui::t!("最近開いた"), true).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.file_view = 1;
                             cx.notify()
@@ -9714,20 +9620,20 @@ impl Render for Calc {
                     if self.file_view == 1 { d.bg(item_bg) } else { d }
                 })
                 .child(div().h(px(10.0)))
-                .child(mk("f-save", "保存", true).on_click(cx.listener(|this, _, _, cx| {
+                .child(mk("f-save", ui::t!("保存"), true).on_click(cx.listener(|this, _, _, cx| {
                     this.save(false, cx);
                     cx.notify()
                 })))
-                .child(mk("f-saveas", "名前を付けて保存", true).on_click(cx.listener(
+                .child(mk("f-saveas", ui::t!("名前を付けて保存"), true).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.save_as(cx);
                         cx.notify()
                     })))
-                .child(mk("f-print", "印刷", true).on_click(cx.listener(|this, _, _, cx| {
+                .child(mk("f-print", ui::t!("印刷"), true).on_click(cx.listener(|this, _, _, cx| {
                     this.run_cmd("pdf", cx);
                     cx.notify()
                 })))
-                .child(mk("f-protect", "保護する", true).on_click(cx.listener(
+                .child(mk("f-protect", ui::t!("保護する"), true).on_click(cx.listener(
                     |this, _, _, cx| {
                         if let Some(i) =
                             ribbon::CALC.iter().position(|t| t.name == "保護")
@@ -9739,14 +9645,14 @@ impl Render for Calc {
                     })))
                 .child(div().h(px(10.0)))
                 .child({
-                    let d = mk("f-info", "詳細情報", true).on_click(cx.listener(
+                    let d = mk("f-info", ui::t!("詳細情報"), true).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.file_view = 0;
                             cx.notify()
                         }));
                     if self.file_view == 0 { d.bg(item_bg) } else { d }
                 })
-                .child(mk("f-place", "ファイルの場所を開く", true).on_click(cx.listener(
+                .child(mk("f-place", ui::t!("ファイルの場所を開く"), true).on_click(cx.listener(
                     |this, _, _, cx| {
                         match this.path.as_ref().and_then(|p| p.parent()) {
                             Some(dir) => {
@@ -9755,30 +9661,81 @@ impl Render for Calc {
                                     .spawn();
                             }
                             None => {
-                                this.status = "まだファイルになっていません".into();
+                                this.status = ui::t!("まだファイルになっていません").into();
                             }
                         }
                         cx.notify()
                     })))
                 .child(div().h(px(10.0)))
-                .child(mk("f-quit", "終了", true).on_click(cx.listener(|this, _, _, cx| {
+                .child(mk("f-quit", ui::t!("終了"), true).on_click(cx.listener(|this, _, _, cx| {
                     this.request_quit(cx);
                     cx.notify()
                 })))
                 .child(div().flex_1())
-                .child(mk("f-opts", "詳細設定", false))
-                .child(mk("f-help", "ヘルプ", false))
-                .child(mk("f-req", "機能のリクエスト", false));
+                .child({
+                    let d = mk("f-opts", ui::t!("詳細設定"), true).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.file_view = 2;
+                            cx.notify()
+                        }));
+                    if self.file_view == 2 { d.bg(item_bg) } else { d }
+                })
+                .child(mk("f-help", ui::t!("ヘルプ"), false))
+                .child(mk("f-req", ui::t!("機能のリクエスト"), false));
             let mut pane = div().flex_1().bg(gpui::white()).p_8()
                 .flex().flex_col().gap_3().text_size(px(12.5)).text_color(fg);
-            if self.file_view == 1 {
+            if self.file_view == 2 {
+                // 詳細設定 — 器は ~/.config/office/settings.toml
+                // (SEKKEI「設定 — 器と言語」。環境変数が一時上書きで優先)
+                let lang_now = ui::settings::get("language").unwrap_or_else(|| "ja".into());
+                let row = |label: &'static str, value: String| {
+                    div().flex().flex_row().items_center().gap_2()
+                        .child(div().w(px(200.0)).text_color(dim).child(label))
+                        .child(div().child(SharedString::from(value)))
+                };
+                pane = pane
+                    .child(div().text_size(px(16.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(ui::t!("詳細設定")))
+                    .child(div().text_color(dim).child(SharedString::from(
+                        ui::tf!("置き場: {}", ui::settings::path().display()))))
+                    .child(div().h(px(6.0)))
+                    .child(div().flex().flex_row().items_center().gap_2()
+                        .child(div().w(px(200.0)).text_color(dim)
+                            .child(ui::t!("言語(リボンと文言)")))
+                        .child(div().id("set-lang")
+                            .px_3().py_1().rounded_sm().cursor_pointer()
+                            .bg(item_bg)
+                            .child(SharedString::from(
+                                if lang_now == "en" { "English" } else { "日本語" }))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let cur = ui::settings::get("language")
+                                    .unwrap_or_else(|| "ja".into());
+                                let next = if cur == "en" { "ja" } else { "en" };
+                                ui::settings::set("language", next);
+                                this.status = ui::t!("言語を控えました(次の起動から効きます。環境変数 OFFICE_LANG があればそちらが優先)").into();
+                                cx.notify()
+                            }))))
+                    .child(div().h(px(10.0)))
+                    .child(row(ui::t!("書体(OFFICE_FONT)"),
+                        std::env::var("OFFICE_FONT")
+                            .unwrap_or_else(|_| ui::t!("(文書に従う)").into())))
+                    .child(row(ui::t!("校正の宛先"), {
+                        let ep = ui::Endpoint::default();
+                        format!("{}:{} / {}", ep.host, ep.port, ep.model)
+                    }))
+                    .child(row(ui::t!("Python の経路"),
+                        std::env::var("JO_PYTHON")
+                            .unwrap_or_else(|_| ui::t!("(自動: .venv → python3)").into())))
+                    .child(row(ui::t!("名前(ロック・チャット・署名)"), lock_identity()));
+            } else if self.file_view == 1 {
                 pane = pane.child(div().text_size(px(16.0))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .child("最近開いた"));
+                    .child(ui::t!("最近開いた")));
                 let list = Self::recent_list();
                 if list.is_empty() {
                     pane = pane.child(div().text_color(dim)
-                        .child("(まだありません。開く・保存すると残ります)"));
+                        .child(ui::t!("(まだありません。開く・保存すると残ります)")));
                 }
                 for (i, q) in list.into_iter().enumerate() {
                     let name = q.file_name()
@@ -9822,10 +9779,10 @@ impl Render for Calc {
                     .sum();
                 pane = pane.child(div().text_size(px(16.0))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .child("ブックの情報"))
+                    .child(ui::t!("ブックの情報")))
                     .child(div().text_size(px(13.5))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child("統計"));
+                        .child(ui::t!("統計")));
                 for (k, v) in [
                     ("シート", sheets_n),
                     ("使っているセル", cells_n),
@@ -9839,7 +9796,7 @@ impl Render for Calc {
                 pane = pane.child(div().h(px(6.0)))
                     .child(div().text_size(px(13.5))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child("プロパティ"));
+                        .child(ui::t!("プロパティ")));
                 let pr = &self.book.props;
                 for (k, v, kind) in [
                     ("作成者", pr.creator.clone(), "prop-creator"),
@@ -9861,7 +9818,7 @@ impl Render for Calc {
                             .whitespace_nowrap().overflow_hidden()
                             .text_color(if empty { gray } else { fg })
                             .child(SharedString::from(if empty {
-                                "テキストの追加".to_string()
+                                ui::t!("テキストの追加").to_string()
                             } else {
                                 v
                             }))
@@ -9871,7 +9828,7 @@ impl Render for Calc {
                             }))));
                 }
                 pane = pane.child(div().text_size(px(11.5)).text_color(dim)
-                    .child("欄を押して打ち、Enter で控える(保存で xlsx の情報に入ります)"));
+                    .child(ui::t!("欄を押して打ち、Enter で控える(保存で xlsx の情報に入ります)")));
             }
             div().absolute().inset_0().bg(gpui::white())
                 .flex().flex_row()
@@ -9890,7 +9847,7 @@ impl Render for Calc {
                 .get(Pos::new(0, col))
                 .map(|c| c.value.display())
                 .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| format!("列{}", col_name(col)));
+                .unwrap_or_else(|| ui::tf!("列{}", col_name(col)));
             let (rows, _) = self.sheet().extent();
             let mut vals: std::collections::BTreeSet<String> = Default::default();
             let mut has_blank = false;
@@ -9908,7 +9865,7 @@ impl Render for Calc {
             }
             let mut items: Vec<String> = vals.into_iter().take(64).collect();
             if has_blank {
-                items.push("(空白)".to_string());
+                items.push(ui::t!("(空白)").to_string());
             }
             let mut p = div().absolute().right(px(24.0)).top(px(ROW_H + 16.0)).w(px(190.0))
                 .p_2().rounded_md().bg(gpui::white())
@@ -9931,9 +9888,9 @@ impl Render for Calc {
                             if let Some((_, _, m)) = &mut this.slicer {
                                 *m = !*m;
                                 this.status = if *m {
-                                    "複数選択: 押した値を重ねて絞ります".into()
+                                    ui::t!("複数選択: 押した値を重ねて絞ります").into()
                                 } else {
-                                    "単数選択: 押した値ひとつで絞ります".into()
+                                    ui::t!("単数選択: 押した値ひとつで絞ります").into()
                                 };
                             }
                             cx.notify();
@@ -9947,7 +9904,7 @@ impl Render for Calc {
                             if let Some((_, sel, _)) = &mut this.slicer {
                                 sel.clear();
                             }
-                            this.status = "スライサーの絞りを解除しました".into();
+                            this.status = ui::t!("スライサーの絞りを解除しました").into();
                             cx.notify();
                         }))));
             for (i, v) in items.into_iter().enumerate() {
@@ -9975,12 +9932,9 @@ impl Render for Calc {
                                 sel.insert(v.clone());
                             }
                             this.status = if sel.is_empty() {
-                                "絞りなし(全部見えています)".into()
+                                ui::t!("絞りなし(全部見えています)").into()
                             } else {
-                                format!(
-                                    "絞り: {}(見え方だけ。中身は変わりません)",
-                                    sel.iter().cloned().collect::<Vec<_>>().join(" / ")
-                                )
+                                ui::tf!("絞り: {}(見え方だけ。中身は変わりません)", sel.iter().cloned().collect::<Vec<_>>().join(" / "))
                                 .into()
                             };
                         }
@@ -10037,7 +9991,7 @@ impl Render for Calc {
                 .child(div().flex().flex_row().items_center().justify_between()
                     .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(0x1B6E3C))
-                        .child("セルの書式(選んでいる範囲に効く)"))
+                        .child(ui::t!("セルの書式(選んでいる範囲に効く)")))
                     .child(div().id("fmtclose").px_2().rounded_sm().cursor_pointer()
                         .text_size(px(12.0)).text_color(rgb(0x66707A))
                         .hover(|s| s.bg(rgb(0xE1E6EA)))
@@ -10050,9 +10004,9 @@ impl Render for Calc {
                             }))))
                 .child(title("罫線"))
                 .child(row()
-                    .child(btn("b-all", "格子"))
-                    .child(btn("b-out", "外枠"))
-                    .child(btn("b-none", "なし")))
+                    .child(btn("b-all", ui::t!("格子")))
+                    .child(btn("b-out", ui::t!("外枠")))
+                    .child(btn("b-none", ui::t!("なし"))))
                 .child(title("塗り"))
                 .child(row()
                     .child(swatch("fill-none", None))
@@ -10070,21 +10024,21 @@ impl Render for Calc {
                     .child(swatch("color-7F7F7F", Some("7F7F7F"))))
                 .child(title("文字"))
                 .child(row()
-                    .child(btn("bold", "太字"))
-                    .child(btn("italic", "斜体"))
-                    .child(btn("underline", "下線"))
-                    .child(btn("strikeout", "取り消し"))
-                    .child(btn("incfont", "大きく"))
-                    .child(btn("decfont", "小さく")))
+                    .child(btn("bold", ui::t!("太字")))
+                    .child(btn("italic", ui::t!("斜体")))
+                    .child(btn("underline", ui::t!("下線")))
+                    .child(btn("strikeout", ui::t!("取り消し")))
+                    .child(btn("incfont", ui::t!("大きく")))
+                    .child(btn("decfont", ui::t!("小さく"))))
                 .child(title("揃え"))
                 .child(row()
-                    .child(btn("align-left", "左"))
-                    .child(btn("align-center", "中央"))
-                    .child(btn("align-right", "右"))
-                    .child(btn("top", "上"))
-                    .child(btn("middle", "中"))
-                    .child(btn("bottom", "下"))
-                    .child(btn("wrap", "折り返し")))
+                    .child(btn("align-left", ui::t!("左")))
+                    .child(btn("align-center", ui::t!("中央")))
+                    .child(btn("align-right", ui::t!("右")))
+                    .child(btn("top", ui::t!("上")))
+                    .child(btn("middle", ui::t!("中")))
+                    .child(btn("bottom", ui::t!("下")))
+                    .child(btn("wrap", ui::t!("折り返し"))))
                 .child(title("表示形式"))
                 .child(row()
                     .child(btn("comma", "1,000"))
@@ -10092,7 +10046,7 @@ impl Render for Calc {
                     .child(btn("percents", "%"))
                     .child(btn("digit-inc", ".0+"))
                     .child(btn("digit-dec", ".0−"))
-                    .child(btn("numfmt-none", "なし")))
+                    .child(btn("numfmt-none", ui::t!("なし"))))
         });
 
         // ---- ドロップダウンリスト(同じ列の値の一覧) ----
@@ -10125,7 +10079,7 @@ impl Render for Calc {
             let mut n = div().px_4().py_2().bg(rgb(0xFFF6E6))
                 .border_t_1().border_color(rgb(0xE8D5A8))
                 .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
-                       .text_color(rgb(0x8A4B00)).child("この版で読み飛ばしたもの"));
+                       .text_color(rgb(0x8A4B00)).child(ui::t!("この版で読み飛ばしたもの")));
             for x in &self.notes {
                 n = n.child(div().text_size(px(11.0)).text_color(rgb(0x8A4B00))
                             .child(x.clone()));
@@ -10380,10 +10334,7 @@ fn main() {
                                 let w = if i % 2 == 0 { 20.0 } else { 5.0 };
                                 c.book.sheets[0].col_width.insert(1, w);
                                 eprintln!("tick {}", i + 1);
-                                c.status = format!(
-                                    "自己診断 {}/15: B列の幅 {w}(勝手に動けば描画は健全)",
-                                    i + 1
-                                )
+                                c.status = ui::tf!("自己診断 {}/15: B列の幅 {}(勝手に動けば描画は健全)", i + 1, w)
                                 .into();
                                 cx.notify();
                             });

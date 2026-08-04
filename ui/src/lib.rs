@@ -14,6 +14,24 @@ pub use lang::ja::{furigana, proof};
 pub use lang::{check, spell, Language, Target};
 pub use lang::model::Endpoint;
 pub use lang::ai;
+pub use lang::i18n::{tr, trf};
+
+/// 画面の文言(そのままの文)。ja の文が鍵 — ja では何も変わらない
+#[macro_export]
+macro_rules! t {
+    ($s:literal) => {
+        $crate::tr($s)
+    };
+}
+
+/// 画面の文言(穴埋めつき)。対応する書式は {} / {:.0} / {:?}
+#[macro_export]
+macro_rules! tf {
+    ($s:literal $(, $a:expr)* $(,)?) => {
+        $crate::trf($s, &[$(&$a as &dyn ::std::fmt::Display),*])
+    };
+}
+
 pub mod icons;
 pub mod ribbon;
 pub mod ribbon_en;

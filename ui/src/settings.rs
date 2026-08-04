@@ -12,9 +12,9 @@
 //! ```
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
-fn path() -> PathBuf {
+/// settings.toml の置き場(recent・sign.key の隣)
+pub fn path() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default()
@@ -22,37 +22,54 @@ fn path() -> PathBuf {
 }
 
 /// settings.toml から素朴に1つの鍵を読む(`key = "value"` の行)
-fn from_file(key: &str) -> Option<String> {
+pub fn get(key: &str) -> Option<String> {
     let s = std::fs::read_to_string(path()).ok()?;
     for line in s.lines() {
         let line = line.trim();
         if line.starts_with('#') || line.starts_with('[') {
             continue;
         }
-        let (k, v) = line.split_once('=')?;
-        if k.trim() == key {
-            return Some(v.trim().trim_matches('"').to_string());
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == key {
+                return Some(v.trim().trim_matches('"').to_string());
+            }
         }
     }
     None
 }
 
-/// リボンの言葉。**文言が揃った言語だけ**を受ける(いまは ja と en —
-/// できないものを、できるように見せない)。それ以外の指定は ja に落ちる。
-/// 環境変数 OFFICE_LANG が一時上書きの口
-pub fn language() -> &'static str {
-    static LANG: OnceLock<String> = OnceLock::new();
-    LANG.get_or_init(|| {
-        let raw = std::env::var("OFFICE_LANG")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| from_file("language"))
-            .unwrap_or_default();
-        match raw.as_str() {
-            "en" => "en".into(),
-            _ => "ja".into(),
+/// settings.toml に1つの鍵を書く(他の行は保つ。無ければ行を足す)
+pub fn set(key: &str, value: &str) {
+    let p = path();
+    if let Some(d) = p.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let cur = std::fs::read_to_string(&p).unwrap_or_default();
+    let mut lines: Vec<String> = Vec::new();
+    let mut done = false;
+    for line in cur.lines() {
+        let t = line.trim();
+        if !done && !t.starts_with('#') && !t.starts_with('[') {
+            if let Some((k, _)) = t.split_once('=') {
+                if k.trim() == key {
+                    lines.push(format!("{key} = \"{value}\""));
+                    done = true;
+                    continue;
+                }
+            }
         }
-    })
+        lines.push(line.to_string());
+    }
+    if !done {
+        lines.push(format!("{key} = \"{value}\""));
+    }
+    let _ = std::fs::write(&p, lines.join("\n") + "\n");
+}
+
+/// リボンと文言の言語。実体は lang::i18n(1本道 — 表計算の関数や
+/// 校正と同じ crate に置き、gpui を知らない層でも引けるように)
+pub fn language() -> &'static str {
+    lang::i18n::language()
 }
 
 #[cfg(test)]
