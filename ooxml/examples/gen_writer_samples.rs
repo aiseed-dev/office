@@ -342,6 +342,75 @@ fn houkoku_sample() -> Document {
     d
 }
 
+// ---- 5. 道具くらべ(釦を試すための的) ----
+// 「押してみる」ための材料を1枚に集める。試験(menu_run_tests)は
+// この文書も開いて全部の釦を通す
+fn dougu_sample() -> Document {
+    let mut d = Document::plain("", PT);
+    d.blocks.clear();
+    d.props.title = "道具くらべ".into();
+
+    d.blocks.push(Block::Para(heading(1, "道具くらべ — 釦を試す紙")));
+    d.blocks.push(Block::Para(p(
+        "リボンの釦を順に押して確かめるための紙です。どの釦も1手で戻せます         (Ctrl+Z)。中身はすべて架空です。",
+    )));
+
+    d.blocks.push(Block::Para(heading(2, "字と段落")));
+    d.blocks.push(Block::Para(para(vec![
+        run("この行を選んで "),
+        run_fmt("太字", CharFormat { bold: true, ..Default::default() }),
+        run("・"),
+        run_fmt("斜体", CharFormat { italic: true, ..Default::default() }),
+        run("・"),
+        run_fmt("下線", CharFormat { underline: true, ..Default::default() }),
+        run("・"),
+        run_fmt(
+            "蛍光ペン",
+            CharFormat { highlight: Some("yellow".into()), ..Default::default() },
+        ),
+        run(" を試します。"),
+    ])));
+    d.blocks.push(Block::Para(Paragraph {
+        align: Align::Center,
+        ..p("中央揃えの行(揃えの釦で左・右・両端・均等に変えられます)")
+    }));
+    d.blocks.push(Block::Para(Paragraph {
+        list: ListKind::Number,
+        ..p("番号の付いた行。Tab で深さが変わります")
+    }));
+
+    d.blocks.push(Block::Para(heading(2, "参考資料の的")));
+    d.blocks.push(Block::Para(Paragraph {
+        bookmarks: vec!["的".into()],
+        ..p("この段落には「的」というしおりが付いています — 相互参照の             行き先として使えます。参考資料 > 目次 と 図表目次 もこの紙で試せます。")
+    }));
+    d.blocks.push(Block::Para(Paragraph {
+        align: Align::Center,
+        ..p("図 1　図表番号の見本")
+    }));
+
+    d.blocks.push(Block::Para(heading(2, "レビューと共同編集の的")));
+    d.blocks.push(Block::Para(Paragraph {
+        comments: vec![Comment {
+            author: "確認".into(),
+            text: "コメントの表示・削除を試す的".into(),
+        }],
+        ..p("この段落にはコメントが付いています(コメントの表示で出し入れ)。             変更履歴を入れてから字を直し、保存すると w:ins / w:del になります。")
+    }));
+
+    d.blocks.push(Block::Para(heading(2, "表")));
+    d.blocks.push(Block::Table(Table {
+        col_mm: vec![40.0, 60.0, 40.0],
+        rows: vec![
+            vec![bold_cell("道具"), bold_cell("試すこと"), bold_cell("戻し方")],
+            vec![cell("ペン"), cell("紙に線を引く"), cell("Ctrl+Z")],
+            vec![cell("透かし"), cell("字を入れて紙に薄く出す"), cell("空にする")],
+            vec![cell("段組み"), cell("2段に組み直す"), cell("もう一度押す")],
+        ],
+    }));
+    d
+}
+
 fn main() {
     let _ = std::fs::create_dir_all("sample/writer");
     let mut a4 = PageSetup::default();
@@ -353,6 +422,7 @@ fn main() {
         ("02_縦書きの手紙.docx", tategaki_sample()),
         ("03_申込書.docx", moushikomi_sample()),
         ("04_月次報告.docx", houkoku_sample()),
+        ("05_道具くらべ.docx", dougu_sample()),
     ] {
         doc.page = Some(a4);
         save(name, &doc);

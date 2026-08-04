@@ -20,3 +20,7 @@ paper = { path = "../paper" }
 gpui = { git = "https://github.com/zed-industries/zed", rev = "5e1fd392f67e27fa1da91bad43eef7db1a5dec23" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "5e1fd392f67e27fa1da91bad43eef7db1a5dec23", features = ["wayland", "x11"] }
 rfd = "0.14"
+
+[dev-dependencies]
+# 釦を全部おす試験のため(GUI は起こさない)
+gpui = { git = "https://github.com/zed-industries/zed", rev = "5e1fd392f67e27fa1da91bad43eef7db1a5dec23", features = ["test-support"] }

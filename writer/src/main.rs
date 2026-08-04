@@ -7876,6 +7876,261 @@ mod find_tests {
     }
 }
 
+/// **メニューの釦を全部おして、落ちないか・繋がっているかを見る。**
+/// リボンに ready で並ぶものは、ここで実際に run_cmd を通す
+/// (ダイアログを開くものだけは、開いた窓が閉じられないので外す)。
+/// GUI は起こさない — gpui の試験用の場で Writer を作って叩く
+#[cfg(test)]
+mod menu_run_tests {
+    use super::*;
+
+    /// ファイル選択の窓を開く釦。**試験では押さない** —
+    /// rfd は実際に窓を出しに行くので、画面の無い試験では返ってこない
+    /// (踏んで確かめた。実機での確認に回す)
+    const DIALOG: &[&str] = &[
+        "open", "save", "pdf", "plug-macros", "insimage", "text-from-file",
+        "insshape", "inssmartart", "inschart", "smartpicker", "instextart",
+        "insequation",
+    ];
+
+    #[gpui::test]
+    fn 全部の釦が落ちずに通る(cx: &mut gpui::TestAppContext) {
+        let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
+        for tab in ui::ribbon::WRITER {
+            for cmd in tab.cmds {
+                if !cmd.ready || DIALOG.contains(&cmd.id) {
+                    continue;
+                }
+                let id = cmd.id;
+                let label = cmd.label;
+                w.update(cx, |this, cx| {
+                    // 本文が空だと何も起きない釦があるので、毎回中身を入れておく
+                    if this.ed.text().is_empty() {
+                        this.set_doc(Document::plain("見出し\n本文の字。", SIZE_PT));
+                    }
+                    this.ed.select_all();
+                    this.run_cmd(id, cx);
+                    let st = this.status.to_string();
+                    assert!(
+                        !st.contains("未配線"),
+                        "「{label}」({id}) が未配線: {st}"
+                    );
+                });
+            }
+        }
+    }
+
+    /// 押すと入切する釦は、2回押すと元に戻る(1手で戻せる家訓)
+    #[gpui::test]
+    fn 入切の釦は二度おすと戻る(cx: &mut gpui::TestAppContext) {
+        let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
+        for id in [
+            "ruler", "darkmode", "hidenchars", "line-numbers", "nav",
+            "show-statusbar", "show-right", "co-showcomment", "direction",
+            "multipage", "prot-doc",
+        ] {
+            w.update(cx, |this, cx| {
+                let before = this.toggled(id);
+                this.run_cmd(id, cx);
+                let mid = this.toggled(id);
+                assert_ne!(before, mid, "「{id}」を押しても変わらない");
+                this.run_cmd(id, cx);
+                assert_eq!(before, this.toggled(id), "「{id}」が元に戻らない");
+            });
+        }
+    }
+
+    /// **見本の文書を開いた状態でも**全部の釦が通る。
+    /// 空の文書と違い、表・見出し・記入欄・縦書きが入っているので、
+    /// 「前提があるときの道」も通る(sample/writer が検査の材料)
+    #[gpui::test]
+    fn 見本を開いても全部の釦が通る(cx: &mut gpui::TestAppContext) {
+        let dir = std::path::Path::new("../sample/writer");
+        let dir = if dir.exists() {
+            dir.to_path_buf()
+        } else {
+            std::path::Path::new("sample/writer").to_path_buf()
+        };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return; // 見本が無い環境では黙って飛ばす(失敗にはしない)
+        };
+        let mut files: Vec<std::path::PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("docx"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "見本が無い: {}", dir.display());
+        let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
+        for f in files {
+            w.update(cx, |this, _| this.open(f.clone()));
+            for tab in ui::ribbon::WRITER {
+                for cmd in tab.cmds {
+                    if !cmd.ready || DIALOG.contains(&cmd.id) {
+                        continue;
+                    }
+                    let (id, label) = (cmd.id, cmd.label);
+                    let name = f.file_name().unwrap().to_string_lossy().to_string();
+                    w.update(cx, |this, cx| {
+                        this.run_cmd(id, cx);
+                        let st = this.status.to_string();
+                        assert!(
+                            !st.contains("未配線"),
+                            "{name} で「{label}」({id}) が未配線: {st}"
+                        );
+                    });
+                }
+            }
+        }
+    }
+
+    /// **押した結果が本当に文書に出るか。** status だけ見ても
+    /// 「押せるのに何も起きない」は捕まらないので、モデルを見る
+    #[gpui::test]
+    fn 主な釦は文書を実際に変える(cx: &mut gpui::TestAppContext) {
+        let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
+        let fresh = |this: &mut Writer| {
+            this.set_doc(Document::plain("あいうえお\nかきくけこ", SIZE_PT));
+            this.ed.move_to(0, false);
+            this.ed.move_to(15, true); // 1段落目を選ぶ
+        };
+        // 文字書式
+        for (id, get) in [
+            ("bold", (|f: &kumihan::CharFormat| f.bold) as fn(&kumihan::CharFormat) -> bool),
+            ("italic", |f| f.italic),
+            ("underline", |f| f.underline),
+            ("strikeout", |f| f.strike),
+            ("superscript", |f| f.superscript),
+        ] {
+            w.update(cx, |this, cx| {
+                fresh(this);
+                this.run_cmd(id, cx);
+                let f = this.doc.char_format_at(0..15);
+                assert!(get(&f), "「{id}」が字に効いていない");
+            });
+        }
+        // 段落の性質
+        w.update(cx, |this, cx| {
+            fresh(this);
+            this.run_cmd("align-center", cx);
+            assert_eq!(this.doc.paragraphs().next().unwrap().align, Align::Center);
+            this.run_cmd("align-dist", cx);
+            assert_eq!(this.doc.paragraphs().next().unwrap().align, Align::Distribute);
+            this.run_cmd("markers", cx);
+            assert_eq!(this.doc.paragraphs().next().unwrap().list, ListKind::Bullet);
+            this.run_cmd("incoffset", cx);
+            assert!(this.doc.paragraphs().next().unwrap().indent >= 1);
+            this.run_cmd("paracolor", cx);
+            assert!(this.doc.paragraphs().next().unwrap().shade.is_some());
+            this.run_cmd("borders", cx);
+            assert!(this.doc.paragraphs().next().unwrap().boxed);
+            this.run_cmd("dropcap", cx);
+            assert!(this.doc.paragraphs().next().unwrap().dropcap);
+        });
+        // 文書ぜんたい
+        w.update(cx, |this, cx| {
+            fresh(this);
+            let n0 = this.doc.paragraphs().count();
+            this.run_cmd("instable", cx);
+            assert_eq!(this.doc.tables().count(), 1, "表が入らない");
+            this.run_cmd("blankpage", cx);
+            assert!(this.doc.paragraphs().count() > n0, "空白ページが入らない");
+            this.run_cmd("watermark", cx);
+            assert!(this.wm_edit, "透かしの板が開かない");
+            this.run_cmd("watermark", cx);
+            this.run_cmd("pagecolor", cx);
+            assert!(this.doc.page_color.is_some(), "紙の色が変わらない");
+            this.run_cmd("columns", cx);
+            assert!(this.pg.cols() > 1, "段組みにならない");
+            this.run_cmd("pageorient", cx);
+            assert!(this.pg.w_mm > this.pg.h_mm, "向きが変わらない");
+            this.run_cmd("hyphenation", cx);
+            assert!(this.doc.hyphenate, "ハイフネーションが入らない");
+        });
+        // 見出し → 目次 → 相互参照の的(しおり)
+        w.update(cx, |this, cx| {
+            this.set_doc(Document::plain("章のはじめ\n本文です。", SIZE_PT));
+            this.ed.move_to(0, false);
+            // 見出しにするのは「テキストの追加」(parastyle は一覧の板を開く)
+            this.run_cmd("add-text", cx);
+            assert!(
+                matches!(
+                    this.doc.paragraphs().next().unwrap().style,
+                    kumihan::ParaStyle::Heading(_)
+                ),
+                "見出しにならない"
+            );
+            this.run_cmd("parastyle", cx);
+            assert!(this.style_list, "段落のスタイルの一覧が開かない");
+            this.run_cmd("parastyle", cx);
+            this.run_cmd("toc", cx);
+            assert!(
+                this.doc
+                    .paragraphs()
+                    .any(|p| matches!(p.style, kumihan::ParaStyle::Toc(_))),
+                "目次が入らない"
+            );
+            this.run_cmd("caption", cx);
+            assert!(
+                this.doc.body_text().contains("図 "),
+                "図表番号が入らない: {}",
+                this.doc.body_text()
+            );
+        });
+        // 配色(見出しの色が付く)
+        w.update(cx, |this, cx| {
+            this.set_doc(Document::plain("題", SIZE_PT));
+            this.ed.move_to(0, false);
+            this.run_cmd("add-text", cx);
+            this.run_cmd("colorschemas", cx);
+            let colored = this
+                .doc
+                .paragraphs()
+                .flat_map(|p| &p.runs)
+                .any(|r| r.fmt.color.is_some());
+            assert!(colored, "配色で色が付かない");
+        });
+        // ペン(描いた筆が文書に残る)
+        w.update(cx, |this, cx| {
+            this.set_doc(Document::plain("紙", SIZE_PT));
+            this.run_cmd("pen", cx);
+            assert!(this.tool.is_some(), "ペンにならない");
+            this.ink_begin(10.0, 10.0);
+            this.ink_move(20.0, 20.0);
+            this.ink_end();
+            assert!(!this.doc.ink.is_empty(), "筆が残らない");
+        });
+    }
+
+    /// 記入欄(フォーム)は押した種類の欄が本当に入る
+    #[gpui::test]
+    fn フォームの釦が記入欄を入れる(cx: &mut gpui::TestAppContext) {
+        use kumihan::SdtKind as K;
+        let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
+        for (id, want) in [
+            ("form-text", K::Text),
+            ("form-image", K::Picture),
+            ("form-email", K::Email),
+            ("form-phone", K::Phone),
+            ("form-complex", K::Complex),
+            ("form-signature", K::Signature),
+            ("controls", K::Text),
+        ] {
+            w.update(cx, |this, cx| {
+                this.set_doc(Document::plain("", SIZE_PT));
+                this.run_cmd(id, cx);
+                let kinds: Vec<_> = this
+                    .doc
+                    .paragraphs()
+                    .flat_map(|p| &p.runs)
+                    .filter_map(|r| r.fmt.sdt.as_ref().map(|s| s.kind))
+                    .collect();
+                assert!(kinds.contains(&want), "「{id}」で {want:?} が入らない: {kinds:?}");
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod url_tests {
     use super::resolve_url;
