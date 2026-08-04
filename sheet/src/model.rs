@@ -336,6 +336,12 @@ pub struct Sheet {
     /// (drawing・rels・media)ごと書き出す。読んだ画像と持ち場を分ける —
     /// 混ぜると保存で二重になる(writer と同じ構図)
     pub images_new: Vec<SheetImage>,
+    /// 動的配列のスピル(起点 → 高さ, 幅)。=FILTER 等があふれた先の記録。
+    /// 再計算はここを見て前回の影を消してから置き直す(残骸を残さない)。
+    /// xlsx へは独自部品 xl/joSpill.xml で往復(joPivot と同じ作法) —
+    /// これが無いと、開き直したとき自分のスピル跡を他人のデータと
+    /// 見分けられず、偽の #SPILL! になる
+    pub spills: std::collections::BTreeMap<Pos, (u32, u32)>,
 }
 
 /// シートに浮かぶ図形。**中身はベクタ**(発注者案 2026-08-04: SVG で作る —

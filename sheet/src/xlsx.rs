@@ -1247,6 +1247,42 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
             }
         }
     }
+    // スピルの記録(独自部品 xl/joSpill.xml)。これが無いと、開き直したとき
+    // 自分のスピル跡が他人のデータに見えて偽の #SPILL! になる
+    {
+        let mut sx = String::new();
+        if let Ok(mut f) = zip.by_name("xl/joSpill.xml") {
+            let _ = f.read_to_string(&mut sx);
+        }
+        if !sx.is_empty() {
+            let mut r = Reader::from_str(&sx);
+            let mut buf = Vec::new();
+            loop {
+                match r.read_event_into(&mut buf) {
+                    Ok(Event::Eof) | Err(_) => break,
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if local(e.name().as_ref()) == b"s" =>
+                    {
+                        let sheet = attr_un(&e, "sheet").unwrap_or_default();
+                        let at = attr(&e, "at").and_then(|v| Pos::parse(&v));
+                        let h: u32 =
+                            attr(&e, "h").and_then(|v| v.parse().ok()).unwrap_or(0);
+                        let w: u32 =
+                            attr(&e, "w").and_then(|v| v.parse().ok()).unwrap_or(0);
+                        if let Some(at) = at.filter(|_| h > 0 && w > 0) {
+                            if let Some(s) =
+                                book.sheets.iter_mut().find(|s| s.name == sheet)
+                            {
+                                s.spills.insert(at, (h, w));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                buf.clear();
+            }
+        }
+    }
     // 印刷範囲は編集の対象なのでモデルへ(他の definedName は原文のまま)。
     // 読めない形だけ原文に残す — 黙って捨てない
     let mut rest = Vec::new();
@@ -1875,8 +1911,10 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
     }
 
-    // ブックに載せた Python とピボットの指図はモデルが正(古い部品は写さない)
-    carried.retain(|(name, _)| name != "xl/joPython.xml" && name != "xl/joPivot.xml");
+    // ブックに載せた Python・ピボット・スピルの記録はモデルが正(古い部品は写さない)
+    carried.retain(|(name, _)| {
+        name != "xl/joPython.xml" && name != "xl/joPivot.xml" && name != "xl/joSpill.xml"
+    });
     let carry = !carried.is_empty();
     // ブックの情報。原本に core.xml が無い・新規ブックでも、書いた情報は残す
     let pr = &book.props;
@@ -2017,6 +2055,22 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         px.push_str("</joPivot>");
         put("xl/joPivot.xml", &px)?;
+    }
+    if book.sheets.iter().any(|s| !s.spills.is_empty()) {
+        let mut sx = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<joSpill>",
+        );
+        for s in &book.sheets {
+            for (at, (h, w)) in &s.spills {
+                sx.push_str(&format!(
+                    "<s sheet=\"{}\" at=\"{}\" h=\"{h}\" w=\"{w}\"/>",
+                    esc(&s.name),
+                    at.a1()
+                ));
+            }
+        }
+        sx.push_str("</joSpill>");
+        put("xl/joSpill.xml", &sx)?;
     }
     if !carry {
         if core_fresh {

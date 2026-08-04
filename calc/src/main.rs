@@ -7413,7 +7413,8 @@ calc の隣に置いてください)"
                     "fn-math" => "SUM AVERAGE ROUND ROUNDUP ROUNDDOWN INT ABS MOD POWER SQRT \
                                   PRODUCT SUMPRODUCT SUMSQ CEILING FLOOR MROUND EVEN ODD SIGN \
                                   FACT COMBIN PERMUT GCD LCM PI SIN COS TAN ASIN ACOS ATAN ATAN2 \
-                                  SINH COSH TANH EXP LN LOG LOG10 DEGREES RADIANS RAND RANDBETWEEN",
+                                  SINH COSH TANH EXP LN LOG LOG10 DEGREES RADIANS RAND RANDBETWEEN \
+                                  SEQUENCE(セル単独であふれて広がる)",
                     "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE TEXT \
                                   SUBSTITUTE FIND SEARCH VALUE TEXTJOIN REPT CHAR CODE",
                     "fn-logical" => "IF IFS SWITCH AND OR NOT TRUE FALSE ISBLANK ISERROR IFERROR",
@@ -7421,7 +7422,9 @@ calc の隣に置いてください)"
                                       TIME HOUR MINUTE SECOND EDATE EOMONTH DATEDIF \
                                       WORKDAY NETWORKDAYS(値は通し番号)",
                     "fn-lookup" => "VLOOKUP HLOOKUP XLOOKUP INDEX MATCH CHOOSE \
-                                    ROW COLUMN ROWS COLUMNS(照合は完全一致)",
+                                    ROW COLUMN ROWS COLUMNS OFFSET INDIRECT \
+                                    FILTER SORT UNIQUE(照合は完全一致。\
+                                    FILTER/SORT/UNIQUE はセル単独であふれて広がる)",
                     "fn-financial" => "PMT PV FV NPER(RATE のような反復解はまだ)",
                     "fn-more" => "SUMIF SUMIFS COUNTIF COUNTIFS AVERAGEIF AVERAGEIFS \
                                   MINIFS MAXIFS COUNTA COUNTBLANK TRUNC RANK LARGE SMALL \

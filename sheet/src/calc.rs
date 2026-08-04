@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::model::{format_value, Pos, Sheet, Value};
+use crate::model::{format_value, Cell, Pos, Sheet, Value};
 
 // ---------- 字句 ----------
 
@@ -259,10 +259,32 @@ impl<'a> P<'a> {
             return Ok(out);
         }
         loop {
-            if let Some(Tok::Range(a, z)) = self.peek().cloned() {
+            if let Some(r) = self.try_ref_call() {
+                // OFFSET / INDIRECT の答えの範囲も、形(列数)を保って渡す
+                match r? {
+                    Ok((a, z)) => {
+                        let cols = a.col.abs_diff(z.col) + 1;
+                        out.push(Arg::Rect(cols, self.range_values(a, z)));
+                    }
+                    Err(v) => out.push(Arg::One(v)),
+                }
+            } else if let Some(Tok::Range(a, z)) = self.peek().cloned() {
                 self.next();
                 let cols = a.col.abs_diff(z.col) + 1;
-                out.push(Arg::Rect(cols, self.range_values(a, z)));
+                if let Some(Tok::Cmp(op)) = self.peek().cloned() {
+                    // 範囲と値の比較は**要素ごと**の真偽の並びになる
+                    // (FILTER(A1:B9, C1:C9>100) の条件の定番)
+                    self.next();
+                    let rhs = self.add()?;
+                    let vals = self
+                        .range_values(a, z)
+                        .into_iter()
+                        .map(|v| Value::Bool(cmp_values(&op, &v, &rhs)))
+                        .collect();
+                    out.push(Arg::Rect(cols, vals));
+                } else {
+                    out.push(Arg::Rect(cols, self.range_values(a, z)));
+                }
             } else {
                 out.push(Arg::One(self.expr()?));
             }
@@ -273,6 +295,76 @@ impl<'a> P<'a> {
             }
         }
         Ok(out)
+    }
+
+    /// OFFSET / INDIRECT — **計算して決まる参照**。答えは参照(範囲)そのもの。
+    /// Ok(Ok(範囲)) / Ok(Err(エラー値)) / Err(構文エラー) の3層
+    fn ref_call(&mut self, name: &str) -> Result<Result<(Pos, Pos), Value>, String> {
+        if name == "INDIRECT" {
+            // INDIRECT(文字列) — "A1" か "A1:B2"。別のシートはまだ(黙って自シートと読まない)
+            let v = self.expr()?;
+            match self.next() {
+                Some(Tok::RParen) => {}
+                _ => return Err("引数の括弧が閉じていません".into()),
+            }
+            if let Value::Error(_) = v {
+                return Ok(Err(v));
+            }
+            let s = v.display();
+            if s.contains('!') {
+                return Ok(Err(Value::Error("#REF!".into())));
+            }
+            let r = match s.split_once(':') {
+                Some((a, z)) => Pos::parse(a).zip(Pos::parse(z)),
+                None => Pos::parse(&s).map(|p| (p, p)),
+            };
+            return Ok(r.ok_or(Value::Error("#REF!".into())));
+        }
+        // OFFSET(基準, 行, 列, [高さ], [幅])
+        let (a, z) = match self.next() {
+            Some(Tok::Ref(p)) => (p, p),
+            Some(Tok::Range(a, z)) => (a, z),
+            _ => return Ok(Err(Value::Error("#VALUE!".into()))),
+        };
+        let mut vals = Vec::new();
+        loop {
+            match self.next() {
+                Some(Tok::Comma) => vals.push(self.expr()?.as_number()),
+                Some(Tok::RParen) => break,
+                _ => return Err("引数の括弧が閉じていません".into()),
+            }
+        }
+        if !(2..=4).contains(&vals.len()) {
+            return Ok(Err(Value::Error("#VALUE!".into())));
+        }
+        let (r0, c0) = (a.row.min(z.row) as i64, a.col.min(z.col) as i64);
+        let (dr, dc) = (vals[0] as i64, vals[1] as i64);
+        let h = vals.get(2).map(|v| *v as i64).unwrap_or(i64::from(a.row.abs_diff(z.row)) + 1);
+        let w = vals.get(3).map(|v| *v as i64).unwrap_or(i64::from(a.col.abs_diff(z.col)) + 1);
+        let (nr, nc) = (r0 + dr, c0 + dc);
+        // 表の外に出た参照は #REF!(Excel と同じ数え方の上限)
+        if nr < 0 || nc < 0 || h < 1 || w < 1 || nr + h > 1_048_576 || nc + w > 16_384 {
+            return Ok(Err(Value::Error("#REF!".into())));
+        }
+        Ok(Ok((
+            Pos::new(nr as u32, nc as u32),
+            Pos::new((nr + h - 1) as u32, (nc + w - 1) as u32),
+        )))
+    }
+
+    /// 次の札が OFFSET( / INDIRECT( なら消費して参照を計算する
+    fn try_ref_call(&mut self) -> Option<Result<Result<(Pos, Pos), Value>, String>> {
+        if let Some(Tok::Name(n)) = self.peek() {
+            if matches!(n.as_str(), "OFFSET" | "INDIRECT")
+                && self.t.get(self.i + 1) == Some(&Tok::LParen)
+            {
+                let n = n.clone();
+                self.next();
+                self.next();
+                return Some(self.ref_call(&n));
+            }
+        }
+        None
     }
 
     /// ROW / COLUMN / ROWS / COLUMNS — 参照の位置と大きさを答える。
@@ -327,6 +419,14 @@ impl<'a> P<'a> {
                         if matches!(name.as_str(), "ROW" | "COLUMN" | "ROWS" | "COLUMNS") {
                             return self.pos_fn(&name);
                         }
+                        // 計算して決まる参照。式の中では1セルの値として使う
+                        if matches!(name.as_str(), "OFFSET" | "INDIRECT") {
+                            return Ok(match self.ref_call(&name)? {
+                                Ok((a, z)) if a == z => self.cell(a),
+                                Ok(_) => Value::Error("#VALUE!".into()),
+                                Err(v) => v,
+                            });
+                        }
                         let args = self.args()?;
                         call(&name, args)
                     }
@@ -338,6 +438,32 @@ impl<'a> P<'a> {
                 }
             }
             other => Err(format!("式が途中で終わっています: {other:?}")),
+        }
+    }
+}
+
+/// 比較の中身。文字同士は文字として、それ以外は数として比べる
+/// (式の比較と、範囲の要素ごとの比較が同じ規則を通る)
+fn cmp_values(op: &str, lhs: &Value, rhs: &Value) -> bool {
+    match (lhs, rhs) {
+        (Value::Text(a), Value::Text(b)) => match op {
+            "=" => a == b,
+            "<>" => a != b,
+            "<" => a < b,
+            ">" => a > b,
+            "<=" => a <= b,
+            _ => a >= b,
+        },
+        _ => {
+            let (a, b) = (lhs.as_number(), rhs.as_number());
+            match op {
+                "=" => a == b,
+                "<>" => a != b,
+                "<" => a < b,
+                ">" => a > b,
+                "<=" => a <= b,
+                _ => a >= b,
+            }
         }
     }
 }
@@ -1423,6 +1549,8 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
             Value::Bool((x % 2 == 0) == (name == "ISEVEN"))
         }
         "PY" => Value::Error("#PY単独".into()), // =PY(…) はセル単独でだけ使える
+        // あふれる関数もセル単独でだけ(式の中に混ぜる形はまだ)
+        "FILTER" | "SORT" | "UNIQUE" | "SEQUENCE" => Value::Error("#配列単独".into()),
         _ => Value::Error("#NAME?".into()),
     })
 }
@@ -1570,7 +1698,38 @@ pub fn is_py_formula(f: &str) -> bool {
     false
 }
 
+/// セル単独で書くと**あふれて広がる**(スピルする)関数。
+/// =PY と同じ制約: 式の中に混ぜては使えない(そのときは #配列単独)
+const ARRAY_FNS: &[&str] = &["FILTER", "SORT", "UNIQUE", "SEQUENCE"];
+
 pub fn recalc(sheet: &mut Sheet) {
+    // OFFSET/INDIRECT(計算で決まる参照)とスピルは、1回の走査では依存の順が
+    // 読めないことがある — そのときだけ、値が動かなくなるまで回す(上限つき。
+    // RAND/NOW 入りの式は毎回変わるので、比較からは外している)
+    let dynamic = !sheet.spills.is_empty()
+        || sheet.cells.values().any(|c| {
+            c.formula
+                .as_ref()
+                .map(|f| {
+                    let u = f.to_ascii_uppercase();
+                    u.contains("OFFSET") || u.contains("INDIRECT")
+                        || ARRAY_FNS.iter().any(|n| u.contains(n))
+                })
+                .unwrap_or(false)
+        });
+    if !dynamic {
+        recalc_pass(sheet);
+        return;
+    }
+    for _ in 0..5 {
+        if !recalc_pass(sheet) {
+            break;
+        }
+    }
+}
+
+/// 再計算の1周。値が動いたら true(まだ安定していないかもしれない)
+fn recalc_pass(sheet: &mut Sheet) -> bool {
     // PY セルはここでは計算しない(最後に計算した値を保つ)。
     // まだ一度も計算していなければ「#PY?」の印を置く(空白で誤魔化さない)
     let py_cells: Vec<Pos> = sheet
@@ -1587,16 +1746,44 @@ pub fn recalc(sheet: &mut Sheet) {
             }
         }
     }
-    let formulas: Vec<(Pos, String)> = sheet
-        .cells
+    // 式を集める。セル単独の =FILTER(…) 等は「配列の式」として別扱い
+    let mut formulas: Vec<(Pos, String)> = Vec::new();
+    let mut arrays: Vec<(Pos, String)> = Vec::new();
+    for (p, c) in &sheet.cells {
+        let Some(f) = c.formula.as_ref().filter(|f| !is_py_formula(f)) else { continue };
+        let f = expand_names(f, &sheet.names);
+        if is_array_formula(&f) {
+            arrays.push((*p, f));
+        } else {
+            formulas.push((*p, f));
+        }
+    }
+    // RAND/NOW/TODAY 入りの式は毎回値が変わる — 安定の判定から外す
+    let volatile: HashSet<Pos> = formulas
         .iter()
-        .filter_map(|(p, c)| {
-            c.formula
-                .as_ref()
-                .filter(|f| !is_py_formula(f))
-                .map(|f| (*p, expand_names(f, &sheet.names)))
+        .chain(arrays.iter())
+        .filter(|(_, f)| {
+            let u = f.to_ascii_uppercase();
+            u.contains("RAND") || u.contains("NOW") || u.contains("TODAY")
         })
+        .map(|(p, _)| *p)
         .collect();
+    // 前回のスピルの影(起点以外)。**ここではまだ消さない** — 先に消すと
+    // 通常の式が「消された直後」を読んで、値が縮んだまま安定してしまう。
+    // 影の席は「置き直してよい席」として覚えるだけ。掃除は置き場所が
+    // 決まったあと(この関数の後半)
+    let mut freed: HashSet<Pos> = HashSet::new();
+    for (o, (h, w)) in sheet.spills.iter() {
+        for r in o.row..o.row + h {
+            for c in o.col..o.col + w {
+                let p = Pos::new(r, c);
+                if p != *o {
+                    freed.insert(p);
+                }
+            }
+        }
+    }
+    let mut changed = false;
 
     let mut resolved: HashMap<Pos, Value> = HashMap::new();
     let mut visiting: HashSet<Pos> = HashSet::new();
@@ -1648,9 +1835,247 @@ pub fn recalc(sheet: &mut Sheet) {
     for (p, v) in resolved {
         if let Some(c) = sheet.cells.get_mut(&p) {
             if c.formula.is_some() {
+                if c.value != v && !volatile.contains(&p) {
+                    changed = true;
+                }
                 c.value = v;
             }
         }
+    }
+
+    // 配列の式(スピル)。通常の式のあとに評価し、置き先をまず全部決めてから
+    // (掃除 → 書き込み)の順で反映する
+    let mut new_spills: std::collections::BTreeMap<Pos, (u32, u32)> = Default::default();
+    let mut writes: Vec<(Pos, Value)> = Vec::new();
+    let mut written: HashSet<Pos> = HashSet::new();
+    for (origin, f) in &arrays {
+        let put_origin = |sheet: &mut Sheet, v: Value, changed: &mut bool| {
+            if let Some(c) = sheet.cells.get_mut(origin) {
+                if c.value != v && !volatile.contains(origin) {
+                    *changed = true;
+                }
+                c.value = v;
+            }
+        };
+        let rows = match eval_array(sheet, f, *origin) {
+            Err(e) => {
+                put_origin(sheet, e, &mut changed);
+                continue;
+            }
+            Ok(r) => r,
+        };
+        let h = rows.len() as u32;
+        let w = rows.iter().map(|r| r.len()).max().unwrap_or(0) as u32;
+        if h == 0 || w == 0 || h.saturating_mul(w) > 200_000 {
+            put_origin(sheet, Value::Error("#NUM!".into()), &mut changed);
+            continue;
+        }
+        // 席の検査: 既に中身のあるセルへは**あふれない**(黙って潰さない)。
+        // 前回の自分たちの影(freed)は空席と見る。同じ周の別のスピルとも争わない
+        let mut blocked = false;
+        'seek: for r in 0..h {
+            for c in 0..w {
+                let p = Pos::new(origin.row + r, origin.col + c);
+                if p == *origin {
+                    continue;
+                }
+                if written.contains(&p) {
+                    blocked = true;
+                    break 'seek;
+                }
+                if let Some(cell) = sheet.cells.get(&p) {
+                    if cell.formula.is_some()
+                        || (!cell.value.is_empty() && !freed.contains(&p))
+                    {
+                        blocked = true;
+                        break 'seek;
+                    }
+                }
+            }
+        }
+        if blocked {
+            put_origin(sheet, Value::Error("#SPILL!".into()), &mut changed);
+            continue;
+        }
+        for (r, row) in rows.iter().enumerate() {
+            for c in 0..w as usize {
+                let p = Pos::new(origin.row + r as u32, origin.col + c as u32);
+                let v = row.get(c).cloned().unwrap_or(Value::Empty);
+                if p == *origin {
+                    put_origin(sheet, v, &mut changed);
+                } else {
+                    written.insert(p);
+                    writes.push((p, v));
+                }
+            }
+        }
+        new_spills.insert(*origin, (h, w));
+    }
+    // 掃除: 前回の影のうち、今回書かない席だけ空にする(書式は残す)
+    for p in &freed {
+        if written.contains(p) {
+            continue;
+        }
+        if let Some(cell) = sheet.cells.get_mut(p) {
+            if cell.formula.is_none() && !cell.value.is_empty() {
+                changed = true;
+                cell.value = Value::Empty;
+            }
+        }
+        if sheet
+            .cells
+            .get(p)
+            .map(|c| c.formula.is_none() && c.value.is_empty() && c.fmt == Default::default())
+            .unwrap_or(false)
+        {
+            sheet.cells.remove(p);
+        }
+    }
+    // 書き込み
+    for (p, v) in writes {
+        match sheet.cells.get_mut(&p) {
+            Some(cell) => {
+                if cell.value != v {
+                    changed = true;
+                }
+                cell.value = v;
+            }
+            None => {
+                if !v.is_empty() {
+                    changed = true;
+                }
+                sheet.cells.insert(p, Cell { formula: None, value: v, fmt: Default::default() });
+            }
+        }
+    }
+    if sheet.spills != new_spills {
+        changed = true;
+        sheet.spills = new_spills;
+    }
+    changed
+}
+
+/// セル単独の =FILTER(…) 等か(式の頭がその関数で、それが式の全部)
+fn is_array_formula(f: &str) -> bool {
+    let up = f.trim_start().to_ascii_uppercase();
+    ARRAY_FNS.iter().any(|n| up.starts_with(&format!("{n}(")))
+}
+
+/// 配列の式を評価して、行ごとの値にする
+fn eval_array(sheet: &Sheet, f: &str, at: Pos) -> Result<Vec<Vec<Value>>, Value> {
+    let err = |s: &str| Value::Error(s.into());
+    let toks = lex(f).map_err(|_| err("#ERROR!"))?;
+    let resolved = HashMap::new();
+    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at };
+    let name = match p.next() {
+        Some(Tok::Name(n)) => n,
+        _ => return Err(err("#ERROR!")),
+    };
+    if p.next() != Some(Tok::LParen) {
+        return Err(err("#ERROR!"));
+    }
+    let args = p.args().map_err(|_| err("#ERROR!"))?;
+    if p.i != toks.len() {
+        // =FILTER(…)+1 のような使い方はまだ — 正直に断る
+        return Err(err("#配列単独"));
+    }
+    array_call(&name, args)
+}
+
+fn array_call(name: &str, args: Vec<Arg>) -> Result<Vec<Vec<Value>>, Value> {
+    let err = |s: &str| Value::Error(s.into());
+    // 範囲を行ごとに割る
+    let rows_of = |a: &Arg| -> Vec<Vec<Value>> {
+        match a {
+            Arg::One(v) => vec![vec![v.clone()]],
+            Arg::Rect(w, vals) => {
+                let w = (*w).max(1) as usize;
+                vals.chunks(w).map(|r| r.to_vec()).collect()
+            }
+        }
+    };
+    match name {
+        "SEQUENCE" => {
+            // SEQUENCE(行, [列], [始まり], [間隔])
+            let g = |i: usize| args.get(i).map(|a| a.first().as_number());
+            let rows = g(0).unwrap_or(f64::NAN);
+            let cols = g(1).unwrap_or(1.0);
+            let start = g(2).unwrap_or(1.0);
+            let step = g(3).unwrap_or(1.0);
+            if !(1.0..=200_000.0).contains(&rows)
+                || !(1.0..=200_000.0).contains(&cols)
+                || rows * cols > 200_000.0
+            {
+                return Err(err("#NUM!"));
+            }
+            let (rows, cols) = (rows as usize, cols as usize);
+            Ok((0..rows)
+                .map(|r| {
+                    (0..cols)
+                        .map(|c| Value::Number(start + step * (r * cols + c) as f64))
+                        .collect()
+                })
+                .collect())
+        }
+        "UNIQUE" => {
+            let rows = rows_of(args.first().ok_or(err("#VALUE!"))?);
+            let mut seen = HashSet::new();
+            let mut out = Vec::new();
+            for row in rows {
+                let key: String =
+                    row.iter().map(|v| v.display()).collect::<Vec<_>>().join("\u{1}");
+                if seen.insert(key) {
+                    out.push(row);
+                }
+            }
+            Ok(out)
+        }
+        "SORT" => {
+            // SORT(範囲, [鍵の列], [順序 1/-1])
+            let mut rows = rows_of(args.first().ok_or(err("#VALUE!"))?);
+            let w = rows.first().map(|r| r.len()).unwrap_or(0);
+            let idx = args.get(1).map(|a| a.first().as_number() as usize).unwrap_or(1);
+            let desc = args.get(2).map(|a| a.first().as_number() < 0.0).unwrap_or(false);
+            if idx == 0 || idx > w {
+                return Err(err("#VALUE!"));
+            }
+            rows.sort_by(|x, y| {
+                let (a, b) = (&x[idx - 1], &y[idx - 1]);
+                let o = match (a, b) {
+                    (Value::Number(p), Value::Number(q)) => {
+                        p.partial_cmp(q).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                    _ => a.display().cmp(&b.display()),
+                };
+                if desc { o.reverse() } else { o }
+            });
+            Ok(rows)
+        }
+        "FILTER" => {
+            // FILTER(範囲, 条件の範囲, [空のとき])
+            let rows = rows_of(args.first().ok_or(err("#VALUE!"))?);
+            let inc: Vec<Value> =
+                args.get(1).map(|a| a.values().to_vec()).unwrap_or_default();
+            if inc.len() != rows.len() {
+                return Err(err("#VALUE!"));
+            }
+            let out: Vec<Vec<Value>> = rows
+                .into_iter()
+                .zip(&inc)
+                .filter(|(_, i)| i.as_number() != 0.0)
+                .map(|(r, _)| r)
+                .collect();
+            if out.is_empty() {
+                // 1件も無いときは第3引数(無ければ #CALC! — Excel と同じ)
+                match args.get(2) {
+                    Some(d) => Ok(vec![vec![d.first()]]),
+                    None => Err(err("#CALC!")),
+                }
+            } else {
+                Ok(out)
+            }
+        }
+        _ => Err(err("#NAME?")),
     }
 }
 
@@ -2388,6 +2813,167 @@ mod dan2_tests {
         assert_eq!(value_of(&mut s, "=ISEVEN(4)"), Value::Bool(true));
         assert_eq!(value_of(&mut s, "=ISODD(4)"), Value::Bool(false));
         assert_eq!(n(&mut s, "=COUNTBLANK(A1:A5)"), 3.0);
+    }
+}
+
+/// 第3段の拡充(2026-08-05)— 計算で決まる参照とスピル。
+#[cfg(test)]
+mod dan3_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn sheet_with(cells: &[(&str, &str)]) -> Sheet {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        for (a1, v) in cells {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(v));
+        }
+        s
+    }
+
+    fn v(s: &Sheet, a1: &str) -> Value {
+        s.value(Pos::parse(a1).unwrap())
+    }
+
+    #[test]
+    fn offsetは参照をずらす() {
+        let mut s = sheet_with(&[
+            ("A1", "10"), ("B1", "20"),
+            ("A2", "30"), ("B2", "40"),
+            ("A3", "50"),
+            ("Z1", "=OFFSET(A1,1,1)"),
+            ("Z2", "=SUM(OFFSET(A1,0,0,3,1))"),
+            ("Z3", "=OFFSET(A1,-1,0)"),
+            ("Z4", "=OFFSET(A1,0,0,2,2)"),
+        ]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "Z1"), Value::Number(40.0), "1行1列ずらして B2");
+        assert_eq!(v(&s, "Z2"), Value::Number(90.0), "高さ3の範囲を SUM に渡す");
+        assert_eq!(v(&s, "Z3"), Value::Error("#REF!".into()), "表の外は正直に #REF!");
+        assert_eq!(v(&s, "Z4"), Value::Error("#VALUE!".into()),
+            "複数セルを1セルの場所に置けない");
+    }
+
+    #[test]
+    fn indirectは文字列の参照を解く() {
+        let mut s = sheet_with(&[
+            ("B2", "99"),
+            ("C1", "2"),
+            ("Z1", "=INDIRECT(\"B2\")"),
+            ("Z2", "=INDIRECT(\"B\"&C1)"),
+            ("Z3", "=SUM(INDIRECT(\"B1:B3\"))"),
+            ("Z4", "=INDIRECT(\"別の表!A1\")"),
+            ("Z5", "=INDIRECT(\"ほげ\")"),
+        ]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "Z1"), Value::Number(99.0));
+        assert_eq!(v(&s, "Z2"), Value::Number(99.0), "組み立てた参照が解けない");
+        assert_eq!(v(&s, "Z3"), Value::Number(99.0), "範囲の間接参照が関数に渡らない");
+        assert_eq!(v(&s, "Z4"), Value::Error("#REF!".into()),
+            "別のシートはまだ — 黙って自シートと読まない");
+        assert_eq!(v(&s, "Z5"), Value::Error("#REF!".into()));
+    }
+
+    #[test]
+    fn 間接参照の先が式でも追いつく() {
+        // A1 は B1 を間接参照、B1 は C1 の式 — 依存が読めないので複数周で収束
+        let mut s = sheet_with(&[
+            ("A1", "=INDIRECT(\"B1\")"),
+            ("B1", "=C1+1"),
+            ("C1", "5"),
+        ]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "A1"), Value::Number(6.0), "1周目の古い値で止まっている");
+    }
+
+    #[test]
+    fn sequenceがあふれて広がる() {
+        let mut s = sheet_with(&[("A1", "=SEQUENCE(3,2)")]);
+        recalc(&mut s);
+        for (a1, n) in [("A1", 1.0), ("B1", 2.0), ("A2", 3.0), ("B2", 4.0),
+                        ("A3", 5.0), ("B3", 6.0)] {
+            assert_eq!(v(&s, a1), Value::Number(n), "{a1} が違う");
+        }
+        assert_eq!(s.spills.get(&Pos::parse("A1").unwrap()), Some(&(3, 2)));
+        // 縮めたら残骸は消える
+        s.set(Pos::parse("A1").unwrap(), Cell::input("=SEQUENCE(2,1)"));
+        recalc(&mut s);
+        assert_eq!(v(&s, "A2"), Value::Number(2.0));
+        assert_eq!(v(&s, "A3"), Value::Empty, "縮めた後に残骸が残った");
+        assert_eq!(v(&s, "B1"), Value::Empty);
+        assert_eq!(s.spills.get(&Pos::parse("A1").unwrap()), Some(&(2, 1)));
+    }
+
+    #[test]
+    fn 先客がいればあふれない() {
+        let mut s = sheet_with(&[
+            ("A1", "=SEQUENCE(3,1)"),
+            ("A3", "既にある"),
+        ]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "A1"), Value::Error("#SPILL!".into()),
+            "先客を黙って潰してはいけない");
+        assert_eq!(v(&s, "A3"), Value::Text("既にある".into()), "先客が消えた");
+        assert_eq!(v(&s, "A2"), Value::Empty, "途中まで書いてはいけない");
+        // 先客がどけば次の再計算であふれる
+        s.set(Pos::parse("A3").unwrap(), Cell::default());
+        recalc(&mut s);
+        assert_eq!(v(&s, "A1"), Value::Number(1.0));
+        assert_eq!(v(&s, "A3"), Value::Number(3.0));
+    }
+
+    #[test]
+    fn filterとsortとunique() {
+        let mut s = sheet_with(&[
+            ("A1", "筆"), ("B1", "100"), ("C1", "1"),
+            ("A2", "紙"), ("B2", "300"), ("C2", "0"),
+            ("A3", "机"), ("B3", "200"), ("C3", "1"),
+            ("E1", "=FILTER(A1:B3,C1:C3)"),
+            ("H1", "=SORT(A1:B3,2,-1)"),
+            ("K1", "=UNIQUE(C1:C3)"),
+            ("M1", "=FILTER(A1:B3,B1:B3>999,\"該当なし\")"),
+        ]);
+        recalc(&mut s);
+        // FILTER: C=1 の行だけ
+        assert_eq!(v(&s, "E1"), Value::Text("筆".into()));
+        assert_eq!(v(&s, "F1"), Value::Number(100.0));
+        assert_eq!(v(&s, "E2"), Value::Text("机".into()));
+        // SORT: 金額の大きい順
+        assert_eq!(v(&s, "H1"), Value::Text("紙".into()));
+        assert_eq!(v(&s, "H2"), Value::Text("机".into()));
+        assert_eq!(v(&s, "H3"), Value::Text("筆".into()));
+        // UNIQUE: 1 と 0
+        assert_eq!(v(&s, "K1"), Value::Number(1.0));
+        assert_eq!(v(&s, "K2"), Value::Number(0.0));
+        assert_eq!(s.spills.get(&Pos::parse("K1").unwrap()), Some(&(2, 1)));
+        // 1件も無いときは第3引数
+        assert_eq!(v(&s, "M1"), Value::Text("該当なし".into()));
+    }
+
+    #[test]
+    fn spillの記録がxlsxを往復する() {
+        let mut book = crate::Book::new();
+        book.sheets[0] = sheet_with(&[("A1", "=SEQUENCE(3,1)"), ("C1", "=SUM(A1:A3)")]);
+        book.sheets[0].name = "Sheet1".into();
+        recalc(&mut book.sheets[0]);
+        assert_eq!(v(&book.sheets[0], "C1"), Value::Number(6.0),
+            "スピルの結果を普通の式が拾えない");
+        let mut buf = std::io::Cursor::new(Vec::new());
+        crate::xlsx::write(&book, &mut buf).unwrap();
+        let (mut back, _) = crate::xlsx::read(std::io::Cursor::new(buf.into_inner())).unwrap();
+        assert_eq!(back.sheets[0].spills.get(&Pos::parse("A1").unwrap()), Some(&(3, 1)),
+            "スピルの記録が往復しない");
+        // 開き直して再計算しても、自分の跡を先客と間違えない
+        recalc(&mut back.sheets[0]);
+        assert_eq!(v(&back.sheets[0], "A1"), Value::Number(1.0),
+            "開き直しで偽の #SPILL! になった");
+        assert_eq!(v(&back.sheets[0], "A3"), Value::Number(3.0));
+    }
+
+    #[test]
+    fn 式の中に混ぜたら正直に断る() {
+        let mut s = sheet_with(&[("Z1", "=SUM(SEQUENCE(3,1))+1")]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "Z1"), Value::Error("#配列単独".into()));
     }
 }
 
