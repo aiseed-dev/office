@@ -13,6 +13,7 @@ quick-xml = "0.36"
 cfb = "0.10"
 aes = "0.8"
 sha1 = "0.10"
+sha2 = "0.10"   # Agile 方式(2013+ の既定)は SHA-512
 
 [dev-dependencies]
 sheet = { path = "../sheet" }

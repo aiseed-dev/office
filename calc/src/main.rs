@@ -6564,10 +6564,12 @@ calc の隣に置いてください)"
             self.keep_version(&p);
         }
         let saved = if let Some(pw) = self.encrypt_pw.clone() {
-            // 暗号化は zip 丸ごとが単位 — 一度メモリへ書いてから包む
+            // 暗号化は zip 丸ごとが単位 — 一度メモリへ書いてから包む。
+            // Agile 方式(AES-256。Excel 2013+ の既定)で書く — 本物と相互
+            // 検証済み。読みは Standard(2007)も Agile も両方できる
             let mut plain = Vec::new();
             sheet::xlsx::write_with(&self.book, original, std::io::Cursor::new(&mut plain))
-                .and_then(|_| ooxml::crypt::encrypt(&plain, &pw))
+                .and_then(|_| ooxml::crypt::encrypt_agile(&plain, &pw))
                 .and_then(|enc| {
                     kumihan::atomic::save(&p, |mut f| {
                         use std::io::Write as _;

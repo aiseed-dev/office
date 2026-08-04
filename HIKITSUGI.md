@@ -370,5 +370,18 @@ sectPr の tbRl と往復。初版の限界 = 表・段組みは横のまま、A
   場所へ写して渡す)だけ設計が要る(SEKKEI「pykobo は畳める」)
 
 小さい残件: 変換下線の位置の実機確認、表入りのヘッダー・フッターの編集。
-暗号化の残件: Agile 方式(Word 2013+ の既定)の読み。
+暗号化の Agile 方式(Word/Excel 2013+ の既定)を実装(2026-08-04、発注者
+「作れますか」→「やって」): ooxml/src/crypt.rs の後半。SHA-512 の鍵導出を
+spinCount 回(10万)+AES-256-CBC の 4096 バイト区分+HMAC-SHA512 の完全性。
+base64・HMAC・CBC(ECB の器で連鎖)・XML 属性引きは依存を増やさず自作。
+decrypt() は minor==4 を見て agile_decrypt に振る(呼び側は無変更)。
+**本物と相互検証**(.venv の msoffcrypto + python-uno の LibreOffice で):
+自作の出力を msoffcrypto が解け、LibreOffice が書いた本物を自作が解いた
+結果は msoffcrypto と1バイト一致。calc の暗号化保存は encrypt_agile へ
+切り替え(AES-256。読みは Standard も Agile も両対応)。
+**writer も encrypt_agile に替えれば AES-256 になる — 申し送り**
+(いまは Standard の encrypt。crypt.rs 冒頭の相互検証の注記も参照)。
+※罠: msoffcrypto の encrypt は壊れた CFB(宣言長と実体長が食い違う)を
+書く道具なので、書きの検証には使えない — 読みの参照専用。書きの検証は
+LibreOffice(python-uno、自分のプロファイルと別ポートで起動)で。
 (「すべて置換」の書式均しは 2026-08-04 に解消済み — 1置換ごとに写す)
