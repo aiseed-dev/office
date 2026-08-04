@@ -4238,7 +4238,7 @@ impl Writer {
                     (空のまま Enter で暗号化をやめる)"
                         .into()
                 } else {
-                    "暗号化: パスワードを打って Enter(次の保存から効きます)".into()
+                    "暗号化: パスワードを打って Enter(AES-256。次の保存から)".into()
                 };
             }
             // デジタル署名。**隣の .sig への添え書き**(Ed25519)。
@@ -6674,7 +6674,7 @@ impl Render for Writer {
                     .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
                     .child(SharedString::from(masked)))
                 .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
-                    .child("方式は ECMA-376 Standard(AES-128)。\
+                    .child("方式は ECMA-376 Agile(AES-256)。\
                             Word や LibreOffice でも開けます。\
                             パスワードを忘れると誰にも開けません")))
         };
