@@ -2692,7 +2692,7 @@ impl Writer {
         "open", "save", "undo", "redo", "selectall", "pdf",
         "bold", "italic", "underline", "strikeout", "fontcolor",
         "superscript", "subscript", "highlight", "clearstyle",
-        "align-left", "align-center", "align-right", "align-just",
+        "align-left", "align-center", "align-right", "align-just", "align-dist",
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
         "instable", "inssymbol", "replace", "changecase", "blankpage",
@@ -2911,6 +2911,8 @@ impl Writer {
             "align-center" => self.set_align(Align::Center),
             "align-right" => self.set_align(Align::Right),
             "align-just" => self.set_align(Align::Justify),
+            // 均等割付(日本語一級)。最後の行も行長いっぱいに字間を配る
+            "align-dist" => self.set_align(Align::Distribute),
             // 文字の大きさ
             "incfont" => self.size(|s| s + 1.0),
             "decfont" => self.size(|s| s - 1.0),
@@ -4279,6 +4281,7 @@ impl Render for Writer {
                 ("fontcolor", None), ("clearstyle", None), ("‖", None),
                 ("align-left", None), ("align-center", None),
                 ("align-right", None), ("align-just", None),
+                ("align-dist", None),
                 ("hidenchars", None), ("paracolor", None), ("borders", None),
                 ("‖", None), ("replace", None),
             ],
@@ -5068,16 +5071,19 @@ impl Render for Writer {
                     let a = m.start.max(ls) - ls;
                     let b = m.end.min(le) - ls;
                     let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
-                    let w = |upto: usize| -> f32 {
+                    // 幅は x 位置から出す(均等割付で字間が広がってもずれない)
+                    let xr = |upto: usize| -> f32 {
                         line.cells.iter()
-                            .take_while(|c| c.off - base < upto)
-                            .map(|c| c.w_mm)
-                            .sum()
+                            .find(|c| c.off - base >= upto)
+                            .map(|c| c.x_mm)
+                            .or_else(|| line.cells.last().map(|c| c.x_mm + c.w_mm))
+                            .unwrap_or(0.0)
+                            - line.cells[0].x_mm
                     };
                     paper = paper.child(div().absolute()
-                        .left(px((x0 + w(a)) * pxmm))
+                        .left(px((x0 + xr(a)) * pxmm))
                         .top(px(top + sz * (1.05 + HALF_LEADING)))
-                        .w(px((w(b) - w(a)).max(1.0) * pxmm))
+                        .w(px((xr(b) - xr(a)).max(1.0) * pxmm))
                         .h(px(2.0)).bg(rgb(0x165E83)));
                 }
                 }
@@ -5095,16 +5101,18 @@ impl Render for Writer {
                     let a = selr.start.max(ls) - ls;
                     let b = selr.end.min(le) - ls;
                     let base = line.cells.iter().map(|c| c.off).min().unwrap_or(0);
-                    let w = |upto: usize| -> f32 {
+                    let xr = |upto: usize| -> f32 {
                         line.cells.iter()
-                            .take_while(|c| c.off - base < upto)
-                            .map(|c| c.w_mm)
-                            .sum()
+                            .find(|c| c.off - base >= upto)
+                            .map(|c| c.x_mm)
+                            .or_else(|| line.cells.last().map(|c| c.x_mm + c.w_mm))
+                            .unwrap_or(0.0)
+                            - line.cells[0].x_mm
                     };
                     paper = paper.child(div().absolute()
-                        .left(px((x0 + w(a)) * pxmm))
+                        .left(px((x0 + xr(a)) * pxmm))
                         .top(px(top + sz * HALF_LEADING))
-                        .w(px((w(b) - w(a)).max(1.5) * pxmm))
+                        .w(px((xr(b) - xr(a)).max(1.5) * pxmm))
                         .h(px(sz * 1.2))
                         // 半透明の青。文字より下・蛍光ペンより上に敷く
                         .bg(gpui::Rgba { r: 0.40, g: 0.60, b: 0.85, a: 0.35 }));
@@ -5120,6 +5128,13 @@ impl Render for Writer {
                     && line.cells[j].fmt == c0.fmt
                     && line.cells[j].size_pt == c0.size_pt
                     && line.cells[j].font == c0.font
+                    // 字間が広げられた行(均等割付)は1本で描けない —
+                    // x が飛んだら連なりを切る
+                    && (line.cells[j].x_mm
+                        - line.cells[j - 1].x_mm
+                        - line.cells[j - 1].w_mm)
+                        .abs()
+                        < 0.05
                 {
                     j += 1;
                 }

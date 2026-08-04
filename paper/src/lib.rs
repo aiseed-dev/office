@@ -166,6 +166,12 @@ pub fn to_pdf_with<W: Write, F: Fn(usize) -> Vec<kumihan::Line>>(
             while j < line.cells.len()
                 && line.cells[j].fmt == c0.fmt
                 && line.cells[j].size_pt == c0.size_pt
+                // 均等割付などで字間が広がった行は、x が飛んだら切る
+                && (line.cells[j].x_mm
+                    - line.cells[j - 1].x_mm
+                    - line.cells[j - 1].w_mm)
+                    .abs()
+                    < 0.05
             {
                 j += 1;
             }

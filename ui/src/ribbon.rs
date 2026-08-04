@@ -73,6 +73,7 @@ pub const WRITER: &[Tab] = &[
         c("align-center", "中央揃え", "align-center"),
         c("align-right", "右揃え", "align-right"),
         c("align-just", "両端揃え", "align-just"),
+        c("align-dist", "均等割付", "align-dist"),
         c("hidenchars", "非表示文字", "hidenchars"),
         c("paracolor", "段落の背景色", "paracolor"),
         c("borders", "罫線", "borders"),

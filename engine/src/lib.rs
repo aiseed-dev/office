@@ -84,6 +84,9 @@ pub enum Align {
     Right,
     /// 両端揃え
     Justify,
+    /// 均等割付(docx の distribute)。**最後の行も**行長いっぱいに
+    /// 字間を配る — 両端揃えとの違いはそこ。見出しや表の項目名の作法
+    Distribute,
 }
 
 impl Align {
@@ -94,13 +97,15 @@ impl Align {
             Align::Center => "center",
             Align::Right => "right",
             Align::Justify => "both",
+            Align::Distribute => "distribute",
         }
     }
     pub fn from_docx(v: &str) -> Align {
         match v {
             "center" => Align::Center,
             "right" | "end" => Align::Right,
-            "both" | "distribute" => Align::Justify,
+            "both" => Align::Justify,
+            "distribute" => Align::Distribute,
             _ => Align::Left,
         }
     }
@@ -1315,13 +1320,19 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
                     let w: f32 = cells.iter().map(|c| c.w_mm).sum();
                     let slack = (measure - w).max(0.0);
                     let mut x = indent_mm + cap_shift + match para.align {
-                        Align::Left | Align::Justify => 0.0,
+                        Align::Left | Align::Justify | Align::Distribute => 0.0,
                         Align::Center => slack / 2.0,
                         Align::Right => slack,
                     };
+                    // 均等割付: 差を字間に等しく配る(最後の行も配る)
+                    let gap = if para.align == Align::Distribute && cells.len() >= 2 {
+                        slack / (cells.len() - 1) as f32
+                    } else {
+                        0.0
+                    };
                     let cells: Vec<Cell> = cells
                         .into_iter()
-                        .map(|mut c| { c.x_mm = x; x += c.w_mm; c })
+                        .map(|mut c| { c.x_mm = x; x += c.w_mm + gap; c })
                         .collect();
                     // 行頭の字の段落内位置から、本文の絶対位置を出す。
                     // 箇条書きの印は off=0 で入っているので、最小値を取れば
@@ -1393,15 +1404,20 @@ pub fn layout_hf(
             let w: f32 = cells.iter().map(|c| c.w_mm).sum();
             let slack = (measure - w).max(0.0);
             let mut x = match para.align {
-                Align::Left | Align::Justify => 0.0,
+                Align::Left | Align::Justify | Align::Distribute => 0.0,
                 Align::Center => slack / 2.0,
                 Align::Right => slack,
+            };
+            let gap = if para.align == Align::Distribute && cells.len() >= 2 {
+                slack / (cells.len() - 1) as f32
+            } else {
+                0.0
             };
             let cells: Vec<Cell> = cells
                 .into_iter()
                 .map(|mut c| {
                     c.x_mm = x;
-                    x += c.w_mm;
+                    x += c.w_mm + gap;
                     c
                 })
                 .collect();
@@ -2055,6 +2071,31 @@ mod list_tests {
             let right = l.cells.last().map(|c| c.x_mm + c.w_mm).unwrap_or(0.0);
             assert!(right <= 100.5, "行長を超えた: {right}mm");
         }
+    }
+}
+
+#[cfg(test)]
+mod distribute_tests {
+    use super::*;
+
+    #[test]
+    fn 均等割付は最後の行も行長いっぱいに広がる() {
+        let data = font::load(font::for_document(None).unwrap().0).unwrap();
+        let m = Metrics::new(&data).unwrap();
+        let mut d = Document::plain("氏名", 10.5);
+        if let Some(Block::Para(p)) = d.blocks.first_mut() {
+            p.align = Align::Distribute;
+        }
+        let sheet = layout(&d, &m,
+            &Frame { measure_mm: 100.0, line_height_mm: 6.0, y0_mm: 20.0 });
+        let line = &sheet.lines[0];
+        let last = line.cells.last().unwrap();
+        assert!(
+            (last.x_mm + last.w_mm - 100.0).abs() < 0.5,
+            "右端に届いていない: {}",
+            last.x_mm + last.w_mm
+        );
+        assert!(line.cells[0].x_mm < 0.5, "左端から始まっていない");
     }
 }
 
