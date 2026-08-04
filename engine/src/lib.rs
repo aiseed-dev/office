@@ -11,6 +11,7 @@
 //! 縦書き・ルビ・均等割付・ぶら下げは K4(モデルはそれを妨げない形にする)。
 
 pub mod edit;
+pub mod html;
 pub use edit::Editor;
 
 use ttf_parser::Face;

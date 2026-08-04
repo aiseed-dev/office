@@ -1611,6 +1611,13 @@ impl Writer {
                 return;
             }
         };
+        // HTML(JS なしの閲覧 — SEKKEI「writer の HTML」)
+        if p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm")
+        }) {
+            self.open_html(&p, &bytes);
+            return;
+        }
         if ooxml::crypt::is_encrypted(&bytes) {
             // 板でパスワードを聞き、Enter(pw_commit)が続きをやる
             self.pw_pending = Some(p);
@@ -1621,6 +1628,45 @@ impl Writer {
             return;
         }
         self.open_plain(p, bytes);
+    }
+
+    /// HTML を開く。文書モデルに写すので、画面・PDF・docx 保存はそのまま
+    /// 効く(HTML 書き出しは作らない — 互換は書式の境界で守る)。
+    /// JS は実行しない。理解しない要素は帳簿へ。文字コードは UTF-8 → CP932
+    fn open_html(&mut self, p: &std::path::Path, bytes: &[u8]) {
+        let text = match std::str::from_utf8(bytes) {
+            Ok(t) => t.to_string(),
+            Err(_) => {
+                let (t, _, bad) = encoding_rs::SHIFT_JIS.decode(bytes);
+                if bad {
+                    self.status =
+                        "文字コードが読めません(UTF-8 でも CP932 でもない)".into();
+                    return;
+                }
+                t.into_owned()
+            }
+        };
+        let (doc, notes) = kumihan::html::parse(&text, SIZE_PT);
+        self.target = Target::Body;
+        self.hf_edit = None;
+        self.track = false;
+        self.track_base = None;
+        self.encrypt_pw = None;
+        self.release_lock();
+        self.locked_by = None;
+        self.notes = notes.into_iter().map(SharedString::from).collect();
+        self.pg = kumihan::PageSetup::default();
+        self.set_doc(doc);
+        self.adopt_font();
+        self.relayout_keep();
+        // 保存は docx として名前を聞く(HTML には書き戻さない)
+        self.path = None;
+        self.dirty = true;
+        self.status = format!(
+            "HTML を読みました — {}(JS は実行しません。保存は docx)",
+            p.file_name().unwrap_or_default().to_string_lossy()
+        )
+        .into();
     }
 
     /// 平文(zip)の docx を読み込む。open と pw_commit の共通の続き
@@ -2934,7 +2980,9 @@ impl Writer {
     /// 開くファイルを選ぶ(**ダイアログは別の糸**)。
     fn open_dialog(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
-            rfd::FileDialog::new().add_filter("Word文書", &["docx"]).pick_file()
+            rfd::FileDialog::new()
+                .add_filter("Word文書とHTML", &["docx", "html", "htm"])
+                .pick_file()
         });
         cx.spawn(async move |this, cx| {
             let r = ask.await;

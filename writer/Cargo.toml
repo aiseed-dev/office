@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# HTML の文字コード(CP932 の実物を読むため)
+encoding_rs = "0.8"
 # デジタル署名(隣の .sig への添え書き。Ed25519)
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast"] }
 kumihan = { path = "../engine" }
