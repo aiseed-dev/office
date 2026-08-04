@@ -432,10 +432,82 @@ else:
     b
 }
 
+/// 受注台帳 — e-shop の販売管理側(SEKKEI「e-shop」の段②)。
+/// 店(catalog_server)に溜まった注文を @取り込み net で引き取り、
+/// 売上はピボット・小計・条件付き書式など calc の既存道具で見る。
+fn juchu() -> Book {
+    let mut b = Book::new();
+    let s = &mut b.sheets[0];
+    s.name = "受注台帳".into();
+    head(s, &[
+        ("受付", 7.0), ("社名", 20.0), ("品番", 9.0), ("品名", 22.0),
+        ("数量", 8.0), ("単価", 10.0), ("金額", 12.0), ("発送済", 8.0),
+    ]);
+    // 集計と控え(J〜K 列。取込済の件数は @取り込み が使う)
+    let mut l = Cell::input("売上合計");
+    l.fmt.bold = true;
+    s.set(Pos::new(0, 9), l);
+    let mut f = Cell::input("=SUM(G2:G500)");
+    f.fmt.number_format = Some("¥#,##0".into());
+    f.fmt.bold = true;
+    s.set(Pos::new(1, 9), f);
+    let mut l = Cell::input("取込済");
+    l.fmt.bold = true;
+    s.set(Pos::new(0, 10), l);
+    s.set(Pos::new(1, 10), Cell::input("0"));
+    s.col_width.insert(9, 12.0);
+    // 台帳は記録なので**空で出荷**する(見本の行を持つと、店の実際の
+    // 受付番号と衝突して取りこぼす — 実測で踏んだ)。行は @取り込み が刻む
+    s.print_title_rows = Some((0, 0));
+    recalc(s);
+
+    b.scripts.push((
+        "取り込み".into(),
+        r#"# 店(catalog_server)に溜まった注文を台帳へ追記する。
+# 実行は「@取り込み net」(網あり檻 — 許可はその場の操作だけ)。
+# 取込済の件数(K2)を控えているので、新しい注文だけが入る。
+URL = "http://127.0.0.1:8765"
+
+import urllib.request, json, csv, io
+orders = json.loads(urllib.request.urlopen(URL + "/orders", timeout=5).read().decode("utf-8"))
+raw = urllib.request.urlopen(URL + "/catalog.csv", timeout=5).read().decode("utf-8")
+master = {r[0]: (r[2], int(r[4])) for r in list(csv.reader(io.StringIO(raw)))[1:]}
+done = int(float(s["K2"] or 0))
+new = orders[done:]
+if not new:
+    print(f"新しい注文はありません(累計 {len(orders)} 件)")
+else:
+    n = 2
+    while s[f"A{n}"] not in (None, ""):
+        n += 1
+    lines = 0
+    for i, o in enumerate(new, start=done + 1):
+        for line in o.get("明細", []):
+            code = str(line.get("品番", ""))
+            name, price = master.get(code, ("(不明な品番)", 0))
+            s[f"A{n}"] = i
+            s[f"B{n}"] = o.get("社名", "")
+            s[f"C{n}"] = code
+            s[f"D{n}"] = name
+            s[f"E{n}"] = int(line.get("数量", 0))
+            s[f"F{n}"] = price
+            s[f"G{n}"] = f"=E{n}*F{n}"
+            s[f"H{n}"] = "FALSE"
+            n += 1
+            lines += 1
+    s["K2"] = len(orders)
+    b.recalc()
+    print(f"{len(new)} 件({lines} 行)を取り込みました(累計 {len(orders)} 件)")
+"#.into(),
+    ));
+    b
+}
+
 fn main() {
     std::fs::create_dir_all("sample").expect("sample/ が作れない");
     save(&mitsumori(), "sample/見積書.xlsx");
     save(&suitou(), "sample/出納帳.xlsx");
     save(&seiseki(), "sample/成績表.xlsx");
     save(&chumon(), "sample/注文書.xlsx");
+    save(&juchu(), "sample/受注台帳.xlsx");
 }
