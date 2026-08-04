@@ -20,6 +20,8 @@ import csv
 import html
 import io
 import json
+import os
+import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -323,7 +325,20 @@ class Handler(BaseHTTPRequestHandler):
         print("受信:", fmt % args)
 
 
+def load_csv(path):
+    """商品マスタを CSV から差し替える(e-shop プラグインの出力を受ける口)。
+    列: 品番,分類,品名,説明,単価。正本は販売者の文書 — CSV はその写し。"""
+    global PRODUCTS
+    rows = list(csv.reader(open(path, encoding="utf-8")))[1:]
+    PRODUCTS = [(a, b, c, d, int(e)) for a, b, c, d, e in rows if a]
+    print(f"商品マスタ: {path}({len(PRODUCTS)} 品目)")
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        load_csv(sys.argv[1])                      # 明示指定
+    elif os.path.exists("sample/商品マスタ.csv"):
+        load_csv("sample/商品マスタ.csv")           # eshop.py の出力があれば使う
     addr = ("127.0.0.1", 8765)
     print(f"商品マスタのサーバー: http://{addr[0]}:{addr[1]}/catalog.csv(Ctrl+C で止める)")
     HTTPServer(addr, Handler).serve_forever()

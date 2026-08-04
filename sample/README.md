@@ -78,6 +78,24 @@ writer の HTML 読み(SEKKEI「JS なしの閲覧と記入」)が入るまで�
   (bubblewrap)の中 — net の許可もその場で打ったときだけ。式の入った
   行を増やすときは既存の行を Ctrl+C → Ctrl+V で写す。
 
+## e-shop の試作 — Word で店を書く(eshop.py)
+
+「販売者が Word で店を書き、プラグインが店を開く」の一本道の実証
+(SEKKEI「e-shop」の節。本実装は writer のプラグインになる予定):
+
+```bash
+.venv/bin/python sample/eshop.py        # カタログ.docx → 商品マスタ.csv
+python3 sample/catalog_server.py        # 店が開く(CSV があれば自動で読む)
+```
+
+- **店の正本は文書。** 品を足す・値を直すのは writer(または Word)で
+  カタログ.docx を直し、上の2つを回し直すだけ — Web の知識は要らない。
+  分類は見出し、商品は表(品番/品名/説明/単価)から取る。記入欄など
+  商品表でない表は飛ばす
+- 商品マスタ.csv は生成物なので追跡しない(正本は文書)
+- 注文は店の /orders に溜まる — 受注台帳(calc)の `@取り込み net` で
+  引き取るのが次の段(販売管理は calc の既存道具: ピボット・条件付き書式)
+
 ## writer の HTML 読みの受入サンプル(html/)
 
 writer の「HTML — JS なしの閲覧と記入」を実装するときの受入試験の材料。

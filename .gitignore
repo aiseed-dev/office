@@ -16,6 +16,8 @@ logo.svg
 # 検証で出るもの
 *.pdf
 lang/corpus/txt/
+# e-shop 試作の生成物(正本は sample/カタログ.docx — eshop.py が作り直す)
+sample/商品マスタ.csv
 
 # 開いている印(排他ロック)。閉じれば消える — 決して追跡しない
 .~lock.*
