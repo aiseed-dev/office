@@ -9110,6 +9110,140 @@ render({"顧客名": "青森県庁", "担当者": "山田",
         ui::ai::set_backend(keep);
     }
 
+    /// **実物様式の一本通し**: 様式1(参加表明 — ラベル段落型・同じラベルが
+    /// 3組ある)に名前つき記入欄を付け、fill で記入 → extract で吸い上げる。
+    /// 様式や道具が無い環境では黙って飛ばす
+    #[test]
+    fn 実物様式1で名前付けから吸い上げまで通る() {
+        let src = std::path::Path::new(
+            "/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/実施要領様式1_参加表明.docx",
+        );
+        if !src.exists() {
+            return;
+        }
+        let py = if std::path::Path::new("../.venv/bin/python").exists() {
+            std::path::PathBuf::from("../.venv/bin/python")
+        } else {
+            find_python()
+        };
+        if !std::process::Command::new(&py)
+            .args(["-c", "import docx"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let bytes = std::fs::read(src).unwrap();
+        let (mut doc, _) = ooxml::read(std::io::Cursor::new(bytes.clone())).unwrap();
+        // ラベル段落の末尾に、節ごとの名前で記入欄を挿す
+        // (「…印」で終わる段落は、印の前に挿す)
+        let labels: &[(&str, &str)] = &[
+            ("住所", "住所"),
+            ("商号または名称", "商号"),
+            ("代表者職氏名", "代表者"),
+            ("所属", "所属"),
+            ("氏名", "氏名"),
+            ("電話番号", "電話"),
+            ("E-mail", "メール"),
+        ];
+        let mut section = String::new();
+        let mut kyoryoku = 0;
+        let mut named = 0usize;
+        for b in &mut doc.blocks {
+            let kumihan::Block::Para(p) = b else { continue };
+            let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+            let t = text.trim();
+            if t.contains("代表事業者") {
+                section = "代表".into();
+                continue;
+            }
+            if t.contains("協力事業者") {
+                kyoryoku += 1;
+                section = format!("協力{kyoryoku}");
+                continue;
+            }
+            if t.contains("担当者代表") {
+                section = "担当".into();
+                continue;
+            }
+            let Some((_, suffix)) =
+                labels.iter().find(|(l, _)| t == *l || t.starts_with(*l)).copied()
+            else {
+                continue;
+            };
+            if section.is_empty() {
+                continue;
+            }
+            let name = format!("{section}・{suffix}");
+            let base = p.runs.first().cloned();
+            let mut field = kumihan::Run {
+                text: "　　　　　　　　".into(),
+                size_pt: base.as_ref().map(|r| r.size_pt).unwrap_or(SIZE_PT),
+                font: base.as_ref().and_then(|r| r.font.clone()),
+                fmt: Default::default(),
+            };
+            field.fmt.sdt = Some(Box::new(kumihan::Sdt {
+                kind: kumihan::SdtKind::Text,
+                alias: name.clone(),
+                tag: name,
+                items: Vec::new(),
+            }));
+            // 「印」で終わる段落(代表者職氏名 … 印)は印の前に挿す
+            let sz = field.size_pt;
+            let last = p.runs.last_mut().unwrap();
+            if let Some(at) = last.text.rfind('印') {
+                let tail = last.text[at..].to_string();
+                last.text.truncate(at);
+                p.runs.push(field);
+                p.runs.push(kumihan::Run {
+                    text: tail,
+                    size_pt: sz,
+                    font: None,
+                    fmt: Default::default(),
+                });
+            } else {
+                p.runs.push(field);
+            }
+            named += 1;
+        }
+        assert_eq!(named, 13, "名前を付けた欄の数が想定と違う: {named}");
+        let dir =
+            std::env::temp_dir().join(format!("jo-yoshiki1-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let named_d = dir.join("named.docx");
+        let f = std::fs::File::create(&named_d).unwrap();
+        ooxml::write_with(
+            &doc,
+            Some(std::io::Cursor::new(bytes)),
+            std::io::BufWriter::new(f),
+        )
+        .unwrap();
+        // 台本: 名前で記入し、読み戻して報告する(同名ラベル3組でも誤爆しない)
+        let code = r#"fill("代表・住所", "徳島県徳島市山城町東浜傍示1番地1")
+fill("代表・商号", "日本フネン株式会社")
+fill("担当・氏名", "山田太郎")
+fill("担当・メール", "yamada@example.jp")
+assert extract("代表・商号") == "日本フネン株式会社"
+assert extract("協力1・住所") .strip() == ""
+print(len(fields()))
+"#;
+        let out_d = dir.join("out.docx");
+        let py_path = dir.join("run.py");
+        std::fs::write(&py_path, macro_script(&named_d, &out_d, code)).unwrap();
+        let o = std::process::Command::new(&py).arg(&py_path).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        assert_eq!(stdout.trim(), "13", "fields の数が違う: {stdout}");
+        // 記入済みを writer で読み直しても、値と欄が生きている
+        let (doc2, _) =
+            ooxml::read(std::io::Cursor::new(std::fs::read(&out_d).unwrap())).unwrap();
+        let body = doc2.body_text();
+        assert!(body.contains("日本フネン株式会社"), "記入が残らない");
+        assert!(body.contains("山城町東浜傍示"), "住所が残らない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 「名前」釦で記入欄に名前が付く(docx の w:tag。マクロの fill の鍵)
     #[gpui::test]
     fn 記入欄に名前を付けられる(cx: &mut gpui::TestAppContext) {
