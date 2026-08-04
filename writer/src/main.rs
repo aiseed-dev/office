@@ -210,6 +210,26 @@ fn lock_path_for(p: &std::path::Path) -> PathBuf {
 }
 
 /// 自分の名乗り(誰が開いているか)。user@host。
+/// Python の探し方(calc と同じ)。JO_PYTHON > .venv > python3
+fn find_python() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("JO_PYTHON") {
+        return p.into();
+    }
+    let venv = std::path::Path::new(".venv/bin/python");
+    if venv.exists() {
+        return venv.into();
+    }
+    "python3".into()
+}
+
+/// プラグイン(.py)の置き場。~/.config/office/plugins
+fn plugins_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".config/office/plugins")
+}
+
 fn lock_identity() -> String {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -380,6 +400,10 @@ struct Writer {
     bm_ed: Editor,
     /// バージョン履歴の板(上書き保存のたびに残る控えの一覧)
     hist_open: bool,
+    /// プラグインの板(置き場の .py 一覧)
+    plug_open: bool,
+    /// マクロで置き換える直前の文書(Ctrl+Z で1手で戻すため)
+    doc_undo: Option<Document>,
     /// チャット(文書の隣の申し送り帳)の板と入力欄
     chat_open: bool,
     chat_ed: Editor,
@@ -584,6 +608,8 @@ impl Writer {
             bm_open: false,
             bm_ed: Editor::new(""),
             hist_open: false,
+            plug_open: false,
+            doc_undo: None,
             chat_open: false,
             chat_ed: Editor::new(""),
             xr_open: false,
@@ -938,6 +964,162 @@ impl Writer {
     /// 読み取り専用の保護が掛かっているか(保護タブの「保護」で入切)
     fn protected(&self) -> bool {
         self.doc.protection.is_some()
+    }
+
+    /// マクロ = **檻(bubblewrap)の中の Python** が python-docx で文書の
+    /// **複製**を直し、直った複製を読み込む(失敗しても文書は無傷)。
+    /// 文書にコードは載せない — 「開く=実行」を作らない設計はそのまま。
+    /// 台本の中で d が python-docx の Document。戻すのは Ctrl+Z の1手
+    fn run_macro_file(&mut self, py_file: PathBuf, cx: &mut Context<Self>) {
+        self.flush_target();
+        let user_code = match std::fs::read_to_string(&py_file) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status = format!("マクロが読めません: {e}").into();
+                return;
+            }
+        };
+        let dir = std::env::temp_dir().join(format!("jo-wmacro-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let in_d = dir.join("in.docx");
+        let out_d = dir.join("out.docx");
+        // 複製は保存と同じ道で作る(原本の部品も持ち越す)
+        let original: Option<std::io::Cursor<Vec<u8>>> = self
+            .path
+            .as_ref()
+            .and_then(|old| std::fs::read(old).ok())
+            .map(std::io::Cursor::new);
+        let doc_out = self.doc_for_save();
+        let w = std::fs::File::create(&in_d)
+            .map_err(|e| e.to_string())
+            .and_then(|f| ooxml::write_with(&doc_out, original, std::io::BufWriter::new(f)));
+        if let Err(e) = w {
+            self.status = format!("マクロに渡せません: {e}").into();
+            return;
+        }
+        let script = format!(
+            concat!(
+                "import docx
+",
+                "d = docx.Document({in_d:?})
+",
+                "# ---- 利用者のコード(d = python-docx の文書) ----
+",
+                "{code}
+",
+                "# ----
+",
+                "d.save({out_d:?})
+"
+            ),
+            in_d = in_d.to_string_lossy(),
+            out_d = out_d.to_string_lossy(),
+            code = user_code
+        );
+        let name = py_file
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.status = format!("マクロ {name} を実行しています…(檻の中の Python)").into();
+        let task = cx.background_executor().spawn(async move {
+            let py_path = dir.join("run.py");
+            std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
+            let py = find_python();
+            let have_bwrap = std::path::Path::new("/usr/bin/bwrap").exists();
+            let mut cmd = if have_bwrap {
+                // 檻: / は読み取り専用、ホームは空、書けるのは作業場だけ、
+                // ネット無し(calc の Python と同じ檻)
+                let venv = std::fs::canonicalize(".venv").unwrap_or_default();
+                let mut c = std::process::Command::new("/usr/bin/bwrap");
+                c.args(["--ro-bind", "/", "/", "--tmpfs", "/home", "--tmpfs", "/tmp"]);
+                if venv.exists() {
+                    c.arg("--ro-bind").arg(&venv).arg(&venv);
+                }
+                c.arg("--bind").arg(&dir).arg(&dir);
+                c.args([
+                    "--unshare-net",
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--die-with-parent",
+                    "--new-session",
+                    "--setenv",
+                    "HOME",
+                    "/tmp",
+                    "--",
+                ]);
+                c.arg(&py);
+                c
+            } else {
+                std::process::Command::new(&py)
+            };
+            let o = cmd
+                .arg(&py_path)
+                .output()
+                .map_err(|e| format!("Python が起動できません: {e}"))?;
+            let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !o.status.success() {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let last = err
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("原因不明")
+                    .to_string();
+                return Err(if err.contains("No module named 'docx'") {
+                    "python-docx がありません(pip install python-docx。\
+                     .venv があればそちらへ)"
+                        .to_string()
+                } else {
+                    last
+                });
+            }
+            std::fs::read(&out_d)
+                .map_err(|e| format!("結果が読めません: {e}"))
+                .map(|b| (b, out))
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok((bytes, out)) => {
+                        match ooxml::read(std::io::Cursor::new(bytes)) {
+                            Ok((doc, rep)) => {
+                                this.doc_undo = Some(this.doc.clone());
+                                this.target = Target::Body;
+                                this.notes = rep
+                                    .unsupported
+                                    .iter()
+                                    .map(|(n, c)| {
+                                        SharedString::from(format!("{n} × {c}"))
+                                    })
+                                    .collect();
+                                this.pg = doc.page.clone().unwrap_or_default();
+                                this.set_doc(doc);
+                                this.adopt_font();
+                                this.relayout_keep();
+                                this.dirty = true;
+                                this.status = if out.is_empty() {
+                                    format!("マクロ {name} を実行しました(Ctrl+Z で戻せます)")
+                                        .into()
+                                } else {
+                                    format!(
+                                        "マクロ {name}: {}(Ctrl+Z で戻せます)",
+                                        out.lines().last().unwrap_or_default()
+                                    )
+                                    .into()
+                                };
+                            }
+                            Err(e) => this.status = format!("結果が読めません: {e}").into(),
+                        }
+                    }
+                    Err(e) => this.status = format!("マクロ: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 上書きの前に、直前の中身を控えとして残す(最大9世代)。
@@ -2233,6 +2415,7 @@ impl Writer {
         "pen", "highlighter", "eraser", "track-changes", "dropcap", "hyphenation",
         "crossref", "co-addcomment", "co-delcomment", "co-showcomment",
         "prot-doc", "coauth-mode", "co-history", "co-chat",
+        "plug-macros", "plug-manage",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -3015,6 +3198,40 @@ impl Writer {
                         "チャット: 打って Enter で書き残す(文書の隣の .chat.txt)".into();
                 }
             }
+            // マクロ。.py を選ぶと檻の中の Python が文書の複製を直す
+            "plug-macros" => {
+                let ask = cx.background_executor().spawn(async {
+                    rfd::FileDialog::new().add_filter("Python", &["py"]).pick_file()
+                });
+                cx.spawn(async move |this, cx| {
+                    let r = ask.await;
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(p) = r {
+                            this.run_macro_file(p, cx);
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+                self.status = "マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
+                               直します(台本の d が python-docx の文書)"
+                    .into();
+            }
+            // プラグインの管理。置き場の .py を一覧し、マクロと同じ檻で実行
+            "plug-manage" => {
+                self.plug_open = !self.plug_open;
+                if self.plug_open {
+                    self.hist_open = false;
+                    self.chat_open = false;
+                    self.bm_open = false;
+                    self.xr_open = false;
+                    self.status = format!(
+                        "プラグイン: {} に .py を置くと、ここに並びます",
+                        plugins_dir().display()
+                    )
+                    .into();
+                }
+            }
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -3166,9 +3383,10 @@ impl Writer {
             cx.notify();
             return;
         }
-        if self.hist_open || self.chat_open {
+        if self.hist_open || self.chat_open || self.plug_open {
             self.hist_open = false;
             self.chat_open = false;
+            self.plug_open = false;
             self.status = "".into();
             cx.notify();
             return;
@@ -3310,6 +3528,14 @@ impl Writer {
         // 板(ヘッダー等)を編集中なら、その板の一手を戻す
         if self.editor().undo() {
             self.on_edited();
+        } else if let Some(prev) = self.doc_undo.take() {
+            // マクロで置き換えた文書を、1手で元へ戻す
+            self.target = Target::Body;
+            self.pg = prev.page.clone().unwrap_or_default();
+            self.set_doc(prev);
+            self.relayout_keep();
+            self.dirty = true;
+            self.status = "マクロの前に戻しました".into();
         }
         cx.notify();
     }
@@ -4418,6 +4644,55 @@ impl Render for Writer {
             Some(d)
         };
 
+        // プラグインの板(置き場の .py 一覧。押すと檻の中で実行)
+        let plug_panel = if !self.plug_open {
+            None
+        } else {
+            let dir = plugins_dir();
+            let mut items: Vec<PathBuf> = std::fs::read_dir(&dir)
+                .ok()
+                .map(|rd| {
+                    rd.flatten()
+                        .map(|e| e.path())
+                        .filter(|p| p.extension().is_some_and(|e| e == "py"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            items.sort();
+            let mut d = div().absolute().left(px(16.0)).top(px(8.0)).w(px(420.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("プラグイン — 押すと檻(bubblewrap)の中で実行"))
+                .child(div().text_size(px(11.0)).text_color(rgb(0x66707A))
+                    .child(SharedString::from(format!("置き場: {}", dir.display()))));
+            if items.is_empty() {
+                d = d.child(div().text_size(px(11.5)).text_color(rgb(0x66707A))
+                    .child("(まだありません。置き場に .py を置いてください。\
+                            台本の d が python-docx の文書)"));
+            }
+            for (i, q) in items.into_iter().enumerate() {
+                let name = q
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                d = d.child(div()
+                    .id(SharedString::from(format!("plug-{i}")))
+                    .px_2().py_0p5().rounded_sm()
+                    .text_size(px(12.5)).cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF2F7)))
+                    .child(SharedString::from(name))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.plug_open = false;
+                        this.run_macro_file(q.clone(), cx);
+                        cx.notify()
+                    })));
+            }
+            Some(d)
+        };
+
         // 相互参照の板(しおり一覧 → 文字/ページを挿す。更新もここ)
         let xr_panel = if !self.xr_open {
             None
@@ -4784,6 +5059,7 @@ impl Render for Writer {
                     .children(xr_panel)
                     .children(hist_panel)
                     .children(chat_panel)
+                    .children(plug_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)

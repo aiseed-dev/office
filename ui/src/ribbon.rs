@@ -163,8 +163,8 @@ pub const WRITER: &[Tab] = &[
         c("darkmode", "ダークモード", "darkmode"),
     ]},
     Tab { name: "プラグイン", cmds: &[
-        x("マクロ", "plug-macros"),
-        x("プラグインの管理", "plug-manage"),
+        c("plug-macros", "マクロ", "plug-macros"),
+        c("plug-manage", "プラグインの管理", "plug-manage"),
     ]},
 ];
 

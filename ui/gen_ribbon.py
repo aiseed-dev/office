@@ -76,6 +76,7 @@ READY = {
         "co-showcomment": "co-showcomment",
         "coauth-mode": "coauth-mode", "prot-doc": "prot-doc",
         "co-chat": "co-chat", "co-history": "co-history",
+        "plug-macros": "plug-macros", "plug-manage": "plug-manage",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
