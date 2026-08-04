@@ -687,6 +687,9 @@ struct Calc {
     show_headers: bool,
     /// 0 の値を見せるか(表示タブ。消しても値は 0 のまま)
     show_zeros: bool,
+    /// 画面を暗くする(インターフェイステーマ)。**セルは白のまま** —
+    /// 画面と紙の一致を守る(writer の「紙は白のまま」と同じ考え)
+    dark: bool,
     /// 自動で再計算するか(数式タブの「計算方法」。手動のときは F9)
     auto_calc: bool,
     /// 見張り(ウォッチウィンドウ)。(シート番号, セル)
@@ -786,6 +789,7 @@ impl Calc {
             show_formula_bar: true,
             show_headers: true,
             show_zeros: true,
+            dark: false,
             auto_calc: true,
             watch: Vec::new(),
             tool: None,
@@ -1591,6 +1595,34 @@ impl Calc {
                 if let Some((name, key)) = hit {
                     let (name, key) = (name.to_string(), key.to_string());
                     self.insert_smartart(&name, &key);
+                }
+            }
+            "scheme" => {
+                if let Some((_, cols)) = sheet::theme::SCHEMES.iter().find(|(n, _)| *n == v) {
+                    self.checkpoint_book();
+                    self.book.theme = cols.iter().map(|c| c.to_string()).collect();
+                    // テーマ由来の色を持つセルを解き直す(配色に追従させる)
+                    let theme = self.book.theme.clone();
+                    let mut n = 0usize;
+                    for sh in &mut self.book.sheets {
+                        for cell in sh.cells.values_mut() {
+                            if let Some((i, t)) = cell.fmt.color_theme {
+                                cell.fmt.color =
+                                    Some(sheet::theme::resolve(&theme, i, t as f32 / 1000.0));
+                                n += 1;
+                            }
+                            if let Some((i, t)) = cell.fmt.fill_theme {
+                                cell.fmt.fill =
+                                    Some(sheet::theme::resolve(&theme, i, t as f32 / 1000.0));
+                                n += 1;
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                    self.status = format!(
+                        "配色を「{v}」にしました({n} 箇所の色が追従。テーマ色を使っていないセルは変わりません)"
+                    )
+                    .into();
                 }
             }
             "func-cat" => {
@@ -5123,6 +5155,7 @@ calc の隣に置いてください)"
         "zoom-in", "zoom-out", "formula-bar", "show-headings", "show-zeros",
         "subscript", "align-just", "text-orient", "calc-mode",
         "td-torange", "td-resize", "rtl-sheet", "direction",
+        "colorschemas", "theme",
         "insert-function", "cell-styles", "sheet-view", "watch",
         "pen", "highlighter", "eraser",
     ];
@@ -6023,6 +6056,25 @@ calc の隣に置いてください)"
                     Some(1) => "蛍光ペン: ドラッグで引く(セルの上に薄く乗る)".into(),
                     Some(2) => "消しゴム: 線をなぞると1筆ずつ消える".into(),
                     _ => "セルの操作に戻りました".into(),
+                };
+            }
+            // 配色の変更(テーマ色の組を入れ替える)。テーマ由来の色を
+            // 使っているセルは、色がそのまま追従する
+            "colorschemas" => {
+                self.pick_kind = "scheme";
+                self.pick = Some((
+                    sheet::theme::SCHEMES.iter().map(|(n, _)| n.to_string()).collect(),
+                    (HEAD_W + 60.0, ROW_H + 20.0),
+                ));
+                self.status = "配色の変更: 選ぶとテーマ色が入れ替わります".into();
+            }
+            // インターフェイステーマ(画面の明暗)。**セルは白のまま**
+            "theme" => {
+                self.dark = !self.dark;
+                self.status = if self.dark {
+                    "画面を暗くしました(セルは白のまま — 画面と紙の一致を守る)".into()
+                } else {
+                    "画面を明るくしました".into()
                 };
             }
             // 表示タブ(本家のデスクトップ版に合わせる)。どれも見え方だけ
@@ -7832,6 +7884,16 @@ impl Render for Calc {
         // 2段目 = 白地のタブ+現在地の緑の下線。右端に 🔍。
         // 下端 = ステータスバー(シートの耳+状態の文言+選択の生きた値)
         let (ready, all) = ribbon::progress(ribbon::CALC);
+        // 画面の明暗(インターフェイステーマ)。**セルは白のまま** —
+        // 暗くするのは周り(帯・タブ・釦・見出し・耳)だけ
+        let dk = self.dark;
+        let th_bar = if dk { rgb(0x14432A) } else { rgb(0x1B6E3C) };
+        let th_band = if dk { rgb(0x1B1E21) } else { rgb(0xFFFFFF) };
+        let th_fg = if dk { rgb(0xCFD6DC) } else { rgb(0x444B52) };
+        let th_gray = if dk { rgb(0x565D64) } else { rgb(0xB6BDC4) };
+        let th_hover = if dk { rgb(0x2C333A) } else { rgb(0xEAF5EE) };
+        let th_line = if dk { rgb(0x33383D) } else { rgb(0xE1E6EA) };
+        let th_head = if dk { rgb(0x22262A) } else { rgb(0xEFF2F4) };
         let qa = |id: &'static str, icon: &'static str| {
             div().id(id).px_2().py_1().rounded_sm().cursor_pointer()
                 .hover(move |s| s.bg(rgb(0x2E8B57)))
@@ -7855,7 +7917,7 @@ impl Render for Calc {
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
         let top = div().id("titlebar").flex().flex_row().items_center().gap_0p5()
-            .px_2().py_0p5().bg(rgb(0x1B6E3C))
+            .px_2().py_0p5().bg(th_bar)
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                 |_, e: &gpui::MouseDownEvent, window, _| {
                     if e.click_count >= 2 {
@@ -7901,14 +7963,14 @@ impl Render for Calc {
             })));
 
         let mut tabs = div().flex().flex_row().items_end().gap_1()
-            .px_2().bg(gpui::white());
+            .px_2().bg(th_band);
         for (i, tb) in ribbon::CALC.iter().enumerate() {
             let on = i == self.tab;
             tabs = tabs.child(div()
                 .id(SharedString::from(format!("tab{i}")))
                 .px_2p5().pt_1p5()
                 .text_size(px(12.0))
-                .text_color(if on { rgb(0x1B6E3C) } else { rgb(0x555E66) })
+                .text_color(if on { rgb(0x2E8B57) } else { th_fg })
                 .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                 .cursor_pointer()
                 .hover(|s| s.text_color(rgb(0x1B6E3C)))
@@ -7916,7 +7978,7 @@ impl Render for Calc {
                 .child(tb.name)
                 // 現在地の緑の下線(デスクトップ版の形)
                 .child(div().h(px(2.5)).w_full().rounded_sm()
-                    .bg(if on { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) }))
+                    .bg(if on { rgb(0x2E8B57) } else { th_band }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.tab != 0 {
                         this.prev_tab = this.tab;
@@ -7956,12 +8018,10 @@ impl Render for Calc {
             ("eraser", "消しゴム"),
             ("plug-macros", "マクロ"), ("plug-manage", "プラグインの管理"),
         ];
-        let th_cmd_border = rgb(0xE1E6EA);
-        let th_btn_hover = rgb(0xEAF5EE);
-        let th_fg = rgb(0x444B52);
-        let th_gray = rgb(0xB6BDC4);
+        let th_cmd_border = th_line;
+        let th_btn_hover = th_hover;
         let mut cmds = div().flex().flex_col().gap_0p5()
-            .px_3().py_1().bg(gpui::white())
+            .px_3().py_1().bg(th_band)
             .border_b_1().border_color(th_cmd_border);
         let items = ribbon::CALC[self.tab].cmds;
         let split = if ribbon::CALC[self.tab].name == "ホーム" {
@@ -8059,7 +8119,7 @@ impl Render for Calc {
         let mut grid = div().flex().flex_col();
         // 列見出し
         let mut head = div().flex().flex_row()
-            .child(div().w(px(HEAD_W)).h(px(ROW_H)).bg(rgb(0xEFF2F4))
+            .child(div().w(px(HEAD_W)).h(px(ROW_H)).bg(th_head)
                    .border_r_1().border_b_1().border_color(rgb(0xD5DBE0)));
         let (sel_a, sel_b) = self.sel_rect();
         let has_sel = self.anchor.is_some();
@@ -8067,12 +8127,12 @@ impl Render for Calc {
             // 選択に入っている列の見出しは色を変える(いまどこを選んでいるかの道標)
             let on = has_sel && (sel_a.col..=sel_b.col).contains(&c) || c == self.cursor.col;
             head = head.child(div().w(px(self.col_px(c))).h(px(ROW_H))
-                .bg(if on { rgb(0xCFE6D8) } else { rgb(0xEFF2F4) })
+                .bg(if on { rgb(0xCFE6D8) } else { th_head })
                 .border_r_1().border_b_1()
                 .border_color(rgb(0xD5DBE0))
                 .flex().items_center().justify_center()
                 .text_size(px(11.5))
-                .text_color(if on { rgb(0x1B6E3C) } else { rgb(0x66707A) })
+                .text_color(if on { rgb(0x1B6E3C) } else if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) })
                 .child(SharedString::from(col_name(c)))
                 // 右端の帯は幅を変える取っ手(カーソル形状の誘いだけ。
                 // 当たり判定は InputSink の窓レベルで size_grip_at がやる)
@@ -8091,12 +8151,12 @@ impl Render for Calc {
             let row_on = has_sel && (sel_a.row..=sel_b.row).contains(&r) || r == self.cursor.row;
             let mut row = div().flex().flex_row()
                 .child(div().w(px(HEAD_W)).h(px(rh))
-                    .bg(if row_on { rgb(0xCFE6D8) } else { rgb(0xEFF2F4) })
+                    .bg(if row_on { rgb(0xCFE6D8) } else { th_head })
                     .border_r_1().border_b_1()
                     .border_color(rgb(0xD5DBE0))
                     .flex().items_center().justify_center()
                     .text_size(px(11.5))
-                    .text_color(if row_on { rgb(0x1B6E3C) } else { rgb(0x66707A) })
+                    .text_color(if row_on { rgb(0x1B6E3C) } else if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) })
                     .child(SharedString::from((r + 1).to_string()))
                     // 下端の帯は高さを変える取っ手(列見出しの右端と同じ仕掛け)
                     .relative().children((std::env::var_os("JO_NO_STRIPS").is_none()).then(|| {
@@ -8372,7 +8432,7 @@ impl Render for Calc {
 
         // ---- シートの耳(Excel と同じく下に置く) ----
         let mut sheets_bar = div().flex().flex_row().items_center().gap_1()
-            .px_3().py_1().bg(rgb(0xEFF2F4))
+            .px_3().py_1().bg(th_head)
             .border_t_1().border_color(rgb(0xD5DBE0));
         for (i, s) in self.book.sheets.iter().enumerate() {
             if s.hidden {

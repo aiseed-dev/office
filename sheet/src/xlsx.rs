@@ -718,10 +718,18 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     // 書式表を先に読む。セルの s= はこの索引
     let mut styles: Vec<crate::model::CellFormat> = Vec::new();
     let mut dxfs: Vec<(Option<String>, Option<String>)> = Vec::new();
+    // テーマの色(styles より先に読む — 色を解くのに要る)
+    let theme_colors: Vec<String> = {
+        let mut tx = String::new();
+        if let Ok(mut f) = zip.by_name("xl/theme/theme1.xml") {
+            let _ = f.read_to_string(&mut tx);
+        }
+        crate::theme::parse(&tx)
+    };
     if let Ok(mut f) = zip.by_name("xl/styles.xml") {
         let mut s = String::new();
         let _ = f.read_to_string(&mut s);
-        styles = crate::styles::parse(&s);
+        styles = crate::styles::parse(&s, &theme_colors);
         dxfs = parse_dxfs(&s);
     }
 
@@ -804,7 +812,12 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     let mut paths = paths;
     paths.sort();
 
-    let mut book = Book { sheets: Vec::new(), names_raw: defined_raw, ..Default::default() };
+    let mut book = Book {
+        sheets: Vec::new(),
+        names_raw: defined_raw,
+        theme: theme_colors.clone(),
+        ..Default::default()
+    };
     // ブックの情報(docProps/core.xml)。読んで見せる。保存は原文持ち越し
     // なので、開いたファイルの情報は保存で消えない
     if let Ok(mut f) = zip.by_name("docProps/core.xml") {
@@ -1668,6 +1681,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     carried.push((name, patched.into_bytes()));
                     continue;
                 }
+                if name == "xl/theme/theme1.xml" {
+                    continue; // テーマの色はモデルが正(配色の変更が効く)
+                }
                 if name.starts_with("xl/tables/") {
                     continue; // 表オブジェクトはモデルから作り直す
                 }
@@ -1945,6 +1961,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 ));
             }
         }
+        if !book.theme.is_empty() && !ct.contains("/xl/theme/theme1.xml") {
+            add.push_str(r#"<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>"#);
+        }
         if core_fresh && !ct.contains("core-properties") {
             add.push_str(r#"<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>"#);
         }
@@ -2027,9 +2046,13 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         .collect();
     put("xl/_rels/workbook.xml.rels", &format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{wrels}<Relationship Id="rIdSS" Type="{RNS}/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rIdST" Type="{RNS}/styles" Target="styles.xml"/></Relationships>"#))?;
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{wrels}<Relationship Id="rIdSS" Type="{RNS}/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rIdST" Type="{RNS}/styles" Target="styles.xml"/><Relationship Id="rIdTH" Type="{RNS}/theme" Target="theme/theme1.xml"/></Relationships>"#))?;
     }
 
+    // テーマの色。読んだものをそのまま返し、配色を変えたときは新しい組を書く
+    if !book.theme.is_empty() {
+        put("xl/theme/theme1.xml", &crate::theme::to_xml(&book.theme))?;
+    }
     put("xl/styles.xml", &styles_xml)?;
 
     let si: String = shared.iter()
@@ -3292,6 +3315,33 @@ mod script_roundtrip_tests {
         let sp = &back.sheets[0].shapes[0];
         assert!((sp.dx_px - 30.0).abs() < 0.2, "colOff が往復しない: {}", sp.dx_px);
         assert!((sp.dy_px - 12.0).abs() < 0.2, "rowOff が往復しない: {}", sp.dy_px);
+    }
+
+    #[test]
+    fn テーマ色が往復し配色を変えると追従する() {
+        let mut b = Book::new();
+        b.theme = crate::theme::OFFICE.iter().map(|s| s.to_string()).collect();
+        let p = Pos::parse("A1").unwrap();
+        let mut c = Cell::input("色");
+        // アクセント1(4番)を明るくした色を、由来つきで持つ
+        c.fmt.color_theme = Some((4, 400));
+        c.fmt.color = Some(crate::theme::resolve(&b.theme, 4, 0.4));
+        b.sheets[0].set(p, c);
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let f = &back.sheets[0].get(p).unwrap().fmt;
+        assert_eq!(f.color_theme, Some((4, 400)), "テーマ由来が往復しない");
+        assert_eq!(f.color.as_deref(), Some(crate::theme::resolve(&back.theme, 4, 0.4).as_str()), "色が解けない");
+        // 配色を変えると、同じ由来から別の色が出る(追従の土台)
+        let warm = crate::theme::SCHEMES[1].1;
+        let after = crate::theme::resolve(
+            &warm.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            4,
+            0.4,
+        );
+        assert_ne!(after, f.color.clone().unwrap(), "配色を変えても色が変わらない");
     }
 
     #[test]

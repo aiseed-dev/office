@@ -8,6 +8,7 @@
 pub mod calc;
 pub mod model;
 pub mod styles;
+pub mod theme;
 pub mod xlsx;
 
 pub use calc::recalc;

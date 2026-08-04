@@ -178,6 +178,18 @@ pub const WRITER: &[Tab] = &[
         c("plug-macros", "マクロ", "plug-macros"),
         c("plug-manage", "プラグインの管理", "plug-manage"),
     ]},
+    Tab { name: "AI", cmds: &[
+        c("ai-where", "宛先", "ai-where"),
+        c("ai-summary", "要約", "ai-summary"),
+        c("ai-rewrite", "書き直す", "ai-rewrite"),
+        c("ai-polite", "敬語にする", "ai-polite"),
+        c("ai-plain", "やさしく", "ai-plain"),
+        c("ai-translate", "翻訳", "ai-translate"),
+        c("ai-furigana", "ふりがな", "ai-furigana"),
+        c("ai-continue", "続きを書く", "ai-continue"),
+        c("ai-table", "表にする", "ai-table"),
+        c("ai-ask", "頼む", "ai-ask"),
+    ]},
 ];
 
 pub const CALC: &[Tab] = &[
@@ -263,7 +275,7 @@ pub const CALC: &[Tab] = &[
         c("rtl-sheet", "最初の列が右側に来るようにシートの方向を切り替える", "rtl-sheet"),
         c("print-gridlines", "枠線も印刷", "print-gridlines"),
         c("print-headings", "見出しも印刷", "print-headings"),
-        x("配色の変更", "colorschemas"),
+        c("colorschemas", "配色の変更", "colorschemas"),
     ]},
     Tab { name: "数式", cmds: &[
         c("insert-function", "関数の挿入", "additional-formula"),
@@ -341,7 +353,7 @@ pub const CALC: &[Tab] = &[
         c("sheet-view", "シートの表示", "sheet-view"),
         c("zoom-in", "拡大", "zoom-in"),
         c("zoom-out", "縮小", "zoom-out"),
-        x("インターフェイステーマ", "theme"),
+        c("theme", "インターフェイステーマ", "theme"),
         c("freeze", "ウィンドウ枠の固定", "freeze"),
         c("formula-bar", "数式バー", "formula-bar"),
         c("show-gridlines", "枠線表示", "show-gridlines"),

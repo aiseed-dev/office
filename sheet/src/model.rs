@@ -182,6 +182,11 @@ pub struct CellFormat {
     pub fill: Option<String>,
     /// 文字色 `RRGGBB`
     pub color: Option<String>,
+    /// 文字色がテーマ由来なら(番号, 明るさの加減×1000)。
+    /// **配色を変えると色が追従する**ため、由来を覚えておく
+    pub color_theme: Option<(u8, i32)>,
+    /// 塗りがテーマ由来なら(番号, 明るさの加減×1000)
+    pub fill_theme: Option<(u8, i32)>,
     /// 書体の名前(xlsx の `<font><name>`)。文書の設定
     pub font: Option<String>,
     /// 文字の大きさ(pt×100 で持つ。f32 だと Ord が付かない)
@@ -690,6 +695,8 @@ pub struct Book {
     pub sheets: Vec<Sheet>,
     /// ブックの情報(ファイルの全面ページで見せる)
     pub props: BookProps,
+    /// テーマの色の組(12色)。空なら Office の既定
+    pub theme: Vec<String>,
     /// こちらが理解できなかった definedName の原文(Print_Area など)。
     /// **理解はしないが、捨てない。** 保存でそのまま返す
     pub names_raw: Vec<String>,
