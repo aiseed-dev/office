@@ -47,7 +47,9 @@ python3 sample/catalog_server.py           # マスタを配る(127.0.0.1:8765)
 
 同じサーバーが同じ商品マスタから **JS なしの HTML** も出す(1ソース多形態):
 
-- `GET /catalog.html` — カタログ。読む・刷る
+- `GET /catalog.html` — カタログ。読む・刷る。**検索つき**(`?q=テープ` —
+  サーバー側 Python がページを組み直す)、分類は details/summary で
+  開閉できる(HTML の宣言 — 実行コードなしの「動き」の見本)
 - `GET /order.html` — 注文書のフォーム。**記入して「注文を送る」だけ** —
   form の POST は JavaScript 以前からの素の仕組みで、JS は一切無い
 - `POST /order` — フォームからも、注文書.xlsx の @送信 net(JSON)からも受ける。

@@ -32,6 +32,10 @@ th, td { border: 1px solid #999; padding: 0.3rem 0.6rem; text-align: left; }
 th { background: #dce6f1; }
 td.num, th.num { text-align: right; }
 input { padding: 0.2rem; }
+tr:hover td { background: #f4f8fc; }              /* 動き: CSS の宣言だけ */
+summary { cursor: pointer; font-size: 1.2rem; font-weight: bold;
+          margin: 1rem 0 0.3rem; }
+details { border-left: 3px solid #dce6f1; padding-left: 0.8rem; }
 </style>"""
 
 
@@ -41,24 +45,38 @@ def page(title, body):
             f"<body>{body}</body></html>").encode("utf-8")
 
 
-def catalog_page():
+def catalog_page(q=""):
+    """カタログ。「動き」は2層とも実行コードなし —
+    検索はサーバー側 Python がページを組み直す(form の GET)、
+    分類の開閉は details/summary(HTML の宣言)。"""
+    hit = [p for p in PRODUCTS
+           if not q or q in p[0] or q in p[2] or q in p[3]]
     b = ["<h1>事務用品カタログ(2026年秋)</h1>",
          "<p>例示文具株式会社 — 価格はすべて税抜。"
-         "ご注文は <a href=\"/order.html\">注文書</a> で。</p>"]
+         "ご注文は <a href=\"/order.html\">注文書</a> で。</p>",
+         "<form method=\"get\" action=\"/catalog.html\">"
+         f"<input name=\"q\" size=\"20\" value=\"{html.escape(q)}\" "
+         "placeholder=\"品名・説明で絞る\"> <input type=\"submit\" value=\"検索\">"
+         "</form>"]
+    if q:
+        b.append(f"<p>「{html.escape(q)}」で {len(hit)} 品目 — "
+                 "<a href=\"/catalog.html\">すべて見る</a></p>")
     cats = []
-    for p in PRODUCTS:
+    for p in hit:
         if p[1] not in cats:
             cats.append(p[1])
     for cat in cats:
-        b.append(f"<h2>{html.escape(cat)}</h2>")
+        b.append(f"<details open><summary>{html.escape(cat)}</summary>")
         b.append("<table><tr><th>品番</th><th>品名</th><th>説明</th>"
                  "<th class=\"num\">単価(税抜)</th></tr>")
-        for code, c, name, desc, price in PRODUCTS:
+        for code, c, name, desc, price in hit:
             if c == cat:
                 b.append(f"<tr><td>{code}</td><td>{html.escape(name)}</td>"
                          f"<td>{html.escape(desc)}</td>"
                          f"<td class=\"num\">{price:,}円</td></tr>")
-        b.append("</table>")
+        b.append("</table></details>")
+    if not hit:
+        b.append("<p>該当なし。</p>")
     return page("事務用品カタログ", "".join(b))
 
 
@@ -129,8 +147,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        elif self.path == "/catalog.html":
-            self.reply_html(catalog_page())
+        elif self.path.split("?")[0] == "/catalog.html":
+            qs = urllib.parse.urlparse(self.path).query
+            q = urllib.parse.parse_qs(qs).get("q", [""])[0].strip()
+            self.reply_html(catalog_page(q))
         elif self.path == "/order.html":
             self.reply_html(order_page())
         elif self.path == "/orders":
