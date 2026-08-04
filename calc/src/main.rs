@@ -2034,6 +2034,13 @@ impl Calc {
                             .into();
                 }
             }
+            "equation" => {
+                if text.is_empty() {
+                    self.status = "式が空です(何も置きませんでした)".into();
+                } else {
+                    self.insert_equation(text, cx);
+                }
+            }
             "chat" => {
                 if text.is_empty() {
                     self.status = "何も書き残しませんでした".into();
@@ -4162,6 +4169,76 @@ calc の隣に置いてください)"
         .detach();
     }
 
+    /// 方程式(数式エディタ)。writer の方式(図は Python で描いて画像で
+    /// 貼る)を calc 流に自動化: 式(matplotlib の mathtext = TeX の部分集合)を
+    /// 板に打つと、裏方が清書して画像としてシートに浮かべる。
+    fn insert_equation(&mut self, tex: String, cx: &mut Context<Self>) {
+        let esc = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
+        let dir = std::env::temp_dir().join(format!("jo-eq-{}", std::process::id()));
+        let out = dir.join("eq.png");
+        let font = kumihan::font::for_document(None)
+            .ok()
+            .map(|(fam, _)| fam.path.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let json = format!(
+            "{{\"tex\":\"{}\",\"font\":\"{}\",\"out\":\"{}\"}}",
+            esc(&tex),
+            esc(&font),
+            esc(&out.to_string_lossy())
+        );
+        let at = self.cursor;
+        self.status = "清書しています…".into();
+        let task = cx.background_executor().spawn(async move {
+            let _ = std::fs::create_dir_all(&dir);
+            let json_path = dir.join("eq.json");
+            let py_path = dir.join("eq.py");
+            std::fs::write(&json_path, json).map_err(|e| e.to_string())?;
+            std::fs::write(&py_path, EQ_PY).map_err(|e| e.to_string())?;
+            let o = std::process::Command::new(find_python())
+                .arg(&py_path)
+                .arg(&json_path)
+                .output()
+                .map_err(|e| format!("Python が起動できません: {e}"))?;
+            if !o.status.success() {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("原因不明");
+                return Err(if err.contains("No module named") {
+                    format!("matplotlib がありません({last})")
+                } else {
+                    format!("式が読めません: {last}")
+                });
+            }
+            std::fs::read(&out).map_err(|e| e.to_string())
+        });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match r {
+                    Ok(data) => {
+                        let (w, h) = image_px(&data).unwrap_or((200, 60));
+                        this.checkpoint();
+                        // 200dpi で描いたので画面では半分の大きさに置く
+                        this.sheet_mut().images_new.push(sheet::model::SheetImage {
+                            at,
+                            width_px: w as f32 / 2.0,
+                            height_px: h as f32 / 2.0,
+                            data,
+                        });
+                        this.dirty = true;
+                        this.status = format!(
+                            "方程式を {} に置きました(画像。保存で xlsx に入ります。Ctrl+Z で1手)",
+                            at.a1()
+                        )
+                        .into();
+                    }
+                    Err(e) => this.status = e.into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// SmartArt を図形の集まりとして組む。1手 = checkpoint 一回(全部まとめて
     /// Ctrl+Z で戻る)。各図形は普通の図形なので、選んで動かす・Enter で
     /// 文字を書く・Del で消す、が全部効く。xlsx へは prstGeom の図形として
@@ -4697,7 +4774,7 @@ calc の隣に置いてください)"
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
-        "inssmartart",
+        "inssmartart", "insequation",
         "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
         "co-history", "plug-macros", "plug-manage",
         "prot-doc", "prot-encrypt", "prot-sign",
@@ -5344,6 +5421,13 @@ calc の隣に置いてください)"
                         "プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)"
                             .into();
                 }
+            }
+            // 方程式(数式エディタ)。式を板に打つと mathtext が清書して画像で置く
+            "insequation" => {
+                self.commit();
+                self.prompt = Some(("equation", Editor::new("")));
+                self.status =
+                    "方程式: TeX の書き方で(例: \\frac{a}{b} や \\sum_{i=1}^n i^2)。Enter で清書".into();
             }
             // SmartArt。分類 → 形の2段の一覧(分類・並び・名前は本家)
             "inssmartart" => {
@@ -6793,6 +6877,30 @@ out = "\x1e".join("\x1f".join(row) for row in rows)
 sys.stdout.buffer.write(out.encode("utf-8"))
 "#;
 
+/// 方程式の台本(matplotlib の mathtext)。式を清書して透過 PNG に描く。
+const EQ_PY: &str = r#"
+import json, sys
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
+
+spec = json.load(open(sys.argv[1], encoding="utf-8"))
+if spec.get("font"):
+    try:
+        font_manager.fontManager.addfont(spec["font"])
+        plt.rcParams["font.family"] = font_manager.FontProperties(
+            fname=spec["font"]).get_name()
+    except Exception:
+        pass
+fig = plt.figure()
+t = fig.text(0.05, 0.5, "$%s$" % spec["tex"], fontsize=20)
+fig.canvas.draw()  # 式が読めなければここで止まる(黙って白紙にしない)
+bbox = t.get_window_extent()
+fig.set_size_inches(bbox.width / fig.dpi + 0.15, bbox.height / fig.dpi + 0.15)
+plt.savefig(spec["out"], dpi=200, transparent=True)
+"#;
+
 /// ソルバーの台本(scipy)。指図は JSON、答えは \x1f 区切りの変数の値。
 const SOLVER_PY: &str = r#"
 import json, sys
@@ -7677,6 +7785,7 @@ impl Render for Calc {
                     self.find_term.as_deref().unwrap_or("")
                 ),
                 "chat" => "チャット — 言伝を書き残す(ブックの隣の .chat.txt)".to_string(),
+                "equation" => "方程式 — 式を打つ(TeX の書き方。清書して画像で置く)".to_string(),
                 "pw-open" => "暗号化されたブック — パスワード".to_string(),
                 "pw-set" => "暗号化 — パスワード(空にして Enter で暗号化をやめる)".to_string(),
                 "subtotal-by" => "小計 1/2 — 何の区切りで集めるか(見出しを1つ)".to_string(),
@@ -7716,6 +7825,7 @@ impl Render for Calc {
                         "goal-target" | "goal-var" => "式のセルが目標の値になるよう、変えるセルの数を探します",
                         "replace-with" => "Enter で全て置き換え / **空のまま Enter = 検索だけ** / Esc で取消",
                         "chat" => "生放送ではありません — ファイル越しの言伝。最近の言伝は下の状態行に",
+                        "equation" => "例: \\frac{a}{b} / \\sqrt{x^2+1} / \\sum_{i=1}^n i^2 / \\int_0^1 x\\,dx(計算はしません — セルの式とは別物)",
                         "pw-open" => "間違えると開けません(板は残ります)。Esc で開くのをやめる",
                         "pw-set" => "次の保存から AES-128 で包みます。Excel や LibreOffice でも開けます",
                         "subtotal-by" => "使える見出しは下の状態行に出ています。並べ替えてから使うと区切りがまとまります",
@@ -8704,6 +8814,54 @@ mod solver_tests {
         assert_eq!(xs.len(), 2, "答えの形が違う: {out:?}");
         assert!(xs[0].abs() < 1e-6 && (xs[1] - 4.0).abs() < 1e-6,
                 "最適解が違う: {xs:?}");
+    }
+}
+
+#[cfg(test)]
+mod equation_tests {
+    use super::*;
+
+    #[test]
+    fn 台本が実際にmathtextで清書する() {
+        // .venv が無い機械では黙って飛ぶ(HIKITSUGI の作法)
+        let py = ["../.venv/bin/python", ".venv/bin/python"]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .find(|p| p.exists());
+        let Some(py) = py else { return };
+        let dir = std::env::temp_dir().join(format!("jo-eq-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let out = dir.join("eq.png");
+        let spec = format!(
+            "{{\"tex\":\"\\\\frac{{a}}{{b}}+\\\\sqrt{{x^2+1}}\",\"font\":\"\",\"out\":\"{}\"}}",
+            out.to_string_lossy()
+        );
+        let json_path = dir.join("eq.json");
+        let py_path = dir.join("eq.py");
+        std::fs::write(&json_path, spec).unwrap();
+        std::fs::write(&py_path, EQ_PY).unwrap();
+        let o = std::process::Command::new(&py)
+            .arg(&py_path)
+            .arg(&json_path)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let data = std::fs::read(&out).unwrap();
+        assert!(data.starts_with(&[0x89, b'P', b'N', b'G']), "PNG が出ていない");
+        let (w, h) = image_px(&data).expect("大きさが読めない");
+        assert!(w > 40 && h > 20, "清書が小さすぎる: {w}x{h}");
+        // 読めない式は黙って白紙にせず、ちゃんと失敗する
+        let bad = format!(
+            "{{\"tex\":\"\\\\frac{{a\",\"font\":\"\",\"out\":\"{}\"}}",
+            out.to_string_lossy()
+        );
+        std::fs::write(&json_path, bad).unwrap();
+        let o = std::process::Command::new(&py)
+            .arg(&py_path)
+            .arg(&json_path)
+            .output()
+            .unwrap();
+        assert!(!o.status.success(), "壊れた式が通ってしまった");
     }
 }
 

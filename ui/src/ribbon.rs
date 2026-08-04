@@ -230,7 +230,7 @@ pub const CALC: &[Tab] = &[
         x("スライサーを挿入", "insslicer"),
         c("instext", "テキストボックスを挿入する", "instext"),
         x("instextart", "instextart"),
-        x("方程式を挿入", "insequation"),
+        c("insequation", "方程式を挿入", "insequation"),
         c("inssymbol", "記号を挿入", "inssymbol"),
     ]},
     Tab { name: "描画", cmds: &[

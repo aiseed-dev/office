@@ -171,6 +171,10 @@ web-apps の define.js + ja.json の現物、SMARTART 表に採録。挿入は�
 ピラミッド)。**SheetShape に dx_px/dy_px を新設**(錨セルからのずらし。
 oneCellAnchor の colOff/rowOff へ書き、画面・PDF・当たり判定・ドラッグが
 織り込む — ドラッグは px 精度になった。読みはまだ 0 のまま=表示専用)、
+方程式(発注者「writer の仕組みを移せば」: writer の方式=図は Python で
+描いて画像で貼る、を calc 流に自動化 — 板に TeX(mathtext)を打つと
+EQ_PY が清書して透過 PNG をカーソルへ。読めない式は canvas.draw で
+止まって status に出る。試験は実 matplotlib で PNG の中身まで)、
 calc のファイル選択の別糸化(開く・保存・PDF。保存が済んだときだけ終了)、
 PDF の塗り・文字色・条件付き書式(切れた列の数も返して status に出す)、
 データの入力規則(list を読み・効かせ・往復・リボンから作成/解除。
