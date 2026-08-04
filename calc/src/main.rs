@@ -7582,12 +7582,31 @@ impl Render for Calc {
                         d = d.font_family(SharedString::from(fam.name.clone()));
                     }
                 }
-                // 引いてある辺だけ濃くする(引いていない辺は表の薄い線のまま)
+                // 引いてある辺だけ濃くする(引いていない辺は表の薄い線のまま)。
+                // border_color は div の**全辺に1色**なので使わない —
+                // 使うと、外枠の上辺だけのセルで右・下の灰色の格子線まで
+                // 黒くなり、外枠が格子に化ける(発注者報告)。
+                // 辺ごとに細い帯を重ねて描く
                 let ink = rgb(0x1B1B1B);
-                if f.borders.top { d = d.border_t_1().border_color(ink) }
-                if f.borders.bottom { d = d.border_b_1().border_color(ink) }
-                if f.borders.left { d = d.border_l_1().border_color(ink) }
-                if f.borders.right { d = d.border_r_1().border_color(ink) }
+                if f.borders.top || f.borders.bottom || f.borders.left || f.borders.right {
+                    d = d.relative();
+                    if f.borders.top {
+                        d = d.child(div().absolute().left(px(0.0)).top(px(0.0))
+                            .w_full().h(px(1.0)).bg(ink));
+                    }
+                    if f.borders.bottom {
+                        d = d.child(div().absolute().left(px(0.0)).bottom(px(0.0))
+                            .w_full().h(px(1.0)).bg(ink));
+                    }
+                    if f.borders.left {
+                        d = d.child(div().absolute().left(px(0.0)).top(px(0.0))
+                            .w(px(1.0)).h_full().bg(ink));
+                    }
+                    if f.borders.right {
+                        d = d.child(div().absolute().right(px(0.0)).top(px(0.0))
+                            .w(px(1.0)).h_full().bg(ink));
+                    }
+                }
                 // 太い枠は**選択の範囲の外周**に出す(Excel の作法)。
                 // カーソルのセルに出すと、ドラッグ中は枠がマウスに付いて回る
                 if self.anchor.is_some() {
