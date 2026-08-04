@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""ribbon.rs(正)から、別ロケールのリボン表を起こす。
+
+gen_ribbon.py(テンプレートから ja の表を起こす)と役割が違う:
+こちらは **いまの ui/src/ribbon.rs を構造の正** とし、語だけを
+Euro-Office のロケール(vendor/web-apps の ja.json → <locale>.json の対訳)で
+置き換える。手で足したボタン(AI タブなど本家に無いもの)は OVERRIDES 表で
+訳す。**訳が見つからない語があれば止まる**(黙って日本語のまま出さない)。
+
+    python3 ui/gen_ribbon_locale.py en > ui/src/ribbon_en.rs
+
+id・並び・ready・icon は ja と同一になる(試験 ribbon.rs 側で保証)。
+"""
+import json
+import re
+import sys
+from collections import Counter
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent / "vendor/web-apps/apps"
+RIBBON = Path(__file__).resolve().parent / "src/ribbon.rs"
+
+# 本家に無い・こちらで足した語の対訳。ここに無い未解決語が出たら
+# このスクリプトは止まる — その語をここに足してから出し直す
+OVERRIDES = {
+    "en": {
+        # タブ
+        "AI": "AI",
+        # ファイル
+        "印刷": "Print",
+        # AI タブ(こちらの設計。calc-manual.md の英語版と同じ語)
+        "宛先": "Destination",
+        "要約": "Summarize",
+        "書き直す": "Rewrite",
+        "敬語にする": "Politer",
+        "やさしく": "Plainer",
+        "翻訳": "Translate",
+        "ふりがな": "Furigana",
+        "続きを書く": "Continue",
+        "表にする": "To table",
+        "頼む": "Ask",
+        # writer 独自
+        "ルビ": "Ruby",
+        "縦書き": "Vertical text",
+        "テキスト方向": "Text direction",
+        "均等割付": "Distributed",
+        "図表番号の挿入": "Insert caption",
+        "URL を開く": "Open URL",
+        "洋子さんの索引": "Index",
+        "青空文庫の注記": "Aozora notes",
+        "でんでん記法": "Denden markup",
+        "履歴の記録": "Track changes",
+        "変更履歴の表示": "Show changes",
+        "校正": "Proofread",
+        "文字数": "Character count",
+        "スペルチェック": "Spell check",
+        "類語辞典": "Thesaurus",
+        "誤変換": "Misconversion",
+        "表記ゆれ": "Inconsistency",
+        # calc 独自
+        "小計": "Subtotal",
+        "計算方法": "Calculation",
+        "右横書き": "Right-to-left text",
+        "シートの方向": "Sheet direction",
+        "Python": "Python",
+        "チェックボックス": "Checkbox",
+        "外部リンク": "External links",
+        "推奨チャート": "Recommended chart",
+        # 共同編集・保護(writer/calc 共通の言い換え)
+        "共同編集モード": "Co-editing mode",
+        "バージョン履歴": "Version history",
+        "チャット": "Chat",
+        "保護する": "Protect",
+        "暗号化する": "Encrypt",
+        "デジタル署名を追加": "Add digital signature",
+        "マクロ": "Macros",
+        "プラグインの管理": "Manage plugins",
+        # 本家の語と言い回しが少し違うもの(Word/Excel の標準語で)
+        "0を表示する": "Show zeros",
+        "100%に拡大する": "Zoom to 100%",
+        "インターフェイステーマ": "Interface theme",
+        "ウォッチウィンドウ": "Watch window",
+        "オートSUM": "AutoSum",
+        "コメントを削除": "Delete comment",
+        "ソルバー": "Solver",
+        "テキストからデータ": "Text to data",
+        "トレース矢印の削除": "Remove arrows",
+        "フィル": "Fill",
+        "フィルターを解除": "Clear filter",
+        "マクロを書く": "Write macro",
+        "区切り位置": "Text to columns",
+        "図表番号": "Caption",
+        "図表目次": "Table of figures",
+        "図表目次の更新": "Update table of figures",
+        "外部リンク(値で取り込む)": "External links (import as values)",
+        "数学/三角": "Math & Trig",
+        "数式の表示": "Show formulas",
+        "文字の向き(右横書き)": "Right-to-left text",
+        "文字列操作": "Text",
+        "日付/時刻": "Date & Time",
+        "最近使った関数": "Recently used",
+        "枠線も印刷": "Print gridlines",
+        "目次の更新": "Update table of contents",
+        "縞模様の列": "Banded columns",
+        "見出しも印刷": "Print headings",
+        "詳細の非表示": "Hide detail",
+        "重複の削除": "Remove duplicates",
+        "関数の挿入": "Insert function",
+    },
+}
+
+
+def load(app, loc):
+    p = ROOT / app / f"main/locale/{loc}.json"
+    if not p.exists():
+        sys.exit(f"ロケールの現物が見つかりません: {p}")
+    return json.load(open(p, encoding="utf-8"))
+
+
+def build_map(apps, target):
+    """ja の語 → target の語。同じ ja 語に複数候補があれば多数決 →
+    短い順 → 辞書順(決定的に選ぶ)"""
+    cand: dict[str, Counter] = {}
+    for app in apps:
+        ja = load(app, "ja")
+        tr = load(app, target)
+        for k, jv in ja.items():
+            tv = tr.get(k)
+            if not isinstance(jv, str) or not isinstance(tv, str):
+                continue
+            if not jv.strip() or not tv.strip():
+                continue
+            cand.setdefault(jv, Counter())[tv] += 1
+    out = {}
+    for jv, c in cand.items():
+        best = sorted(c.items(), key=lambda kv: (-kv[1], len(kv[0]), kv[0]))[0][0]
+        out[jv] = best
+    return out
+
+
+def parse_ribbon(src):
+    """ribbon.rs の WRITER / CALC を (名前, [(kind, フィールド…)]) に読む"""
+    tables = {}
+    for const in ("WRITER", "CALC"):
+        m = re.search(
+            rf"pub const {const}: &\[Tab\] = &\[(.*?)\n\];", src, re.S)
+        if not m:
+            sys.exit(f"{const} が見つかりません")
+        body = m.group(1)
+        tabs = []
+        for tm in re.finditer(
+                r'Tab \{ name: "([^"]+)", cmds: &\[(.*?)\]\s*\}', body, re.S):
+            name, cmds_src = tm.group(1), tm.group(2)
+            cmds = []
+            for cm in re.finditer(
+                    r'\b(c|x)\("((?:[^"\\]|\\.)*)"(?:, "((?:[^"\\]|\\.)*)")?'
+                    r'(?:, "((?:[^"\\]|\\.)*)")?\)', cmds_src):
+                kind = cm.group(1)
+                args = [a for a in cm.groups()[1:] if a is not None]
+                cmds.append((kind, args))
+            tabs.append((name, cmds))
+        tables[const] = tabs
+    return tables
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit("使い方: gen_ribbon_locale.py <locale>  (例: en)")
+    target = sys.argv[1]
+    over = OVERRIDES.get(target, {})
+    doc_map = build_map(["documenteditor", "spreadsheeteditor"], target)
+    cell_map = build_map(["spreadsheeteditor", "documenteditor"], target)
+    src = open(RIBBON, encoding="utf-8").read()
+    tables = parse_ribbon(src)
+
+    missing = []
+
+    def tr(label, m):
+        if label in over:
+            return over[label]
+        if label in m:
+            return m[label]
+        missing.append(label)
+        return label
+
+    out = []
+    out.append(f"""//! リボンの {target} 版 — **語だけが ja(ribbon.rs)と違う**。
+//! id・並び・ready・icon は ja と同一(ribbon.rs の試験が保証する)。
+//!
+//! このファイルは手で書かない:
+//!
+//! ```text
+//! python3 ui/gen_ribbon_locale.py {target} > ui/src/ribbon_{target}.rs
+//! ```
+//!
+//! 対訳は vendor/web-apps のロケール(本家の語)。本家に無いこちらの
+//! ボタンは gen_ribbon_locale.py の OVERRIDES 表で訳す。
+
+use super::ribbon::{{c, x, Tab}};
+""")
+    for const, tabs in tables.items():
+        m = doc_map if const == "WRITER" else cell_map
+        out.append(f"pub const {const}: &[Tab] = &[")
+        for name, cmds in tabs:
+            out.append(f'    Tab {{ name: "{tr(name, m)}", cmds: &[')
+            for kind, args in cmds:
+                if kind == "c":
+                    cid, label, icon = args
+                    out.append(f'        c("{cid}", "{tr(label, m)}", "{icon}"),')
+                else:
+                    label, icon = args
+                    out.append(f'        x("{tr(label, m)}", "{icon}"),')
+            out.append("    ]},")
+        out.append("];\n")
+
+    if missing:
+        uniq = sorted(set(missing))
+        sys.exit(
+            f"訳の見つからない語が {len(uniq)} 個あります"
+            f"(OVERRIDES に足してから出し直してください):\n  "
+            + "\n  ".join(uniq))
+    print("\n".join(out))
+
+
+if __name__ == "__main__":
+    main()

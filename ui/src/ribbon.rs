@@ -29,11 +29,30 @@ pub struct Cmd {
     pub ready: bool,
 }
 
-const fn c(id: &'static str, label: &'static str, icon: &'static str) -> Cmd {
+pub(crate) const fn c(id: &'static str, label: &'static str, icon: &'static str) -> Cmd {
     Cmd { id, label, icon, ready: true }
 }
-const fn x(label: &'static str, icon: &'static str) -> Cmd {
+#[allow(dead_code)] // 灰色ゼロの今は未使用だが、ロケール表の生成が使う形
+pub(crate) const fn x(label: &'static str, icon: &'static str) -> Cmd {
     Cmd { id: "", label, icon, ready: false }
+}
+
+/// いまの言語のリボン。**語だけが違う** — id・並び・ready・icon は
+/// どの言語でも ja(WRITER/CALC)と同一(下の試験が保証)。
+/// 内部の論理(タブ名の照合など)は ja の表で書いてよい —
+/// 添字がそのまま対応する
+pub fn writer_tabs() -> &'static [Tab] {
+    match crate::settings::language() {
+        "en" => crate::ribbon_en::WRITER,
+        _ => WRITER,
+    }
+}
+
+pub fn calc_tabs() -> &'static [Tab] {
+    match crate::settings::language() {
+        "en" => crate::ribbon_en::CALC,
+        _ => CALC,
+    }
 }
 
 pub struct Tab {
@@ -390,6 +409,28 @@ pub fn progress(tabs: &[Tab]) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 各言語の表は語だけが違う() {
+        // id・並び・ready・icon が ja と一致しない表は配線が壊れる —
+        // ここで固定する(語は違ってよい。空の語は出さない)
+        for (ja, other) in [
+            (WRITER, crate::ribbon_en::WRITER),
+            (CALC, crate::ribbon_en::CALC),
+        ] {
+            assert_eq!(ja.len(), other.len(), "タブの数が違う");
+            for (a, b) in ja.iter().zip(other) {
+                assert!(!b.name.is_empty(), "タブ名が空");
+                assert_eq!(a.cmds.len(), b.cmds.len(), "「{}」の釦の数が違う", a.name);
+                for (x, y) in a.cmds.iter().zip(b.cmds) {
+                    assert_eq!(x.id, y.id, "id がずれた(配線が壊れる)");
+                    assert_eq!(x.icon, y.icon, "「{}」の icon が違う", x.id);
+                    assert_eq!(x.ready, y.ready, "「{}」の ready が違う", x.id);
+                    assert!(!y.label.is_empty(), "「{}」の語が空", x.id);
+                }
+            }
+        }
+    }
 
     #[test]
     fn 本家のタブが全部ある() {

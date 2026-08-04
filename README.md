@@ -143,13 +143,27 @@ which is why display and print never disagree.
 
 ## Localization
 
-Per-language differences are contained in `Language` in the `lang` crate; implementing
-one trait is enough. UI strings can be generated from Euro-Office locales (45 languages).
+**The ribbon language switches at runtime**: `ja` (default) and `en` are built in.
 
 ```bash
-python3 ui/gen_ribbon.py --list      # available locales
-python3 ui/gen_ribbon.py en > ui/src/ribbon.rs
+OFFICE_LANG=en ./target/release/writer      # temporary override
+# or persistently, in ~/.config/office/settings.toml:
+#   language = "en"
 ```
+
+Honest limits for now: the ribbon speaks the selected language; **status-bar
+messages and dialogs are still Japanese** (externalizing them is the next stage).
+Only languages with complete words are offered — currently ja and en.
+
+Ribbon tables for further languages are generated from the current Japanese
+table plus Euro-Office locale files (45 languages available as raw material):
+
+```bash
+python3 ui/gen_ribbon_locale.py en > ui/src/ribbon_en.rs
+```
+
+Per-language logic (line breaking, proofing) is contained in `Language` in the
+`lang` crate; implementing one trait is enough.
 
 ## License
 

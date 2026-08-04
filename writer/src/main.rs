@@ -5646,7 +5646,7 @@ impl Render for Writer {
         // 空きの帯だけを取っ手にすると、タブが多い窓では幅がゼロになり
         // 掴む場所が無くなる(踏んで直した)。釦の類いは stop_propagation で
         // 取っ手より先に効く
-        let (ready, all) = ribbon::progress(ribbon::WRITER);
+        let (ready, all) = ribbon::progress(ribbon::writer_tabs());
         // ダークモードは**紙以外**を暗くする — 紙は白いまま(印刷と同じ)。
         // 文書は何も変わらない(見え方だけ)
         let dk = self.dark;
@@ -5737,7 +5737,7 @@ impl Render for Writer {
         let th_tab_idle = if dk { rgb(0x9AA5AE) } else { rgb(0x555E66) };
         let mut tabs = div().flex().flex_row().items_end().gap_1()
             .px_2().bg(th_tab_on_bg);
-        for (i, tb) in ribbon::WRITER.iter().enumerate() {
+        for (i, tb) in ribbon::writer_tabs().iter().enumerate() {
             let on = i == self.tab;
             tabs = tabs.child(div()
                 .id(SharedString::from(format!("tab{i}")))
@@ -5927,7 +5927,7 @@ impl Render for Writer {
                             })));
                         continue;
                     }
-                    let Some(cmd) = ribbon::WRITER[self.tab]
+                    let Some(cmd) = ribbon::writer_tabs()[self.tab]
                         .cmds
                         .iter()
                         .find(|c| c.id == id || (!c.ready && c.icon == id))
@@ -5936,6 +5936,12 @@ impl Render for Writer {
                         continue;
                     };
                     let label = cmd.label;
+                    // 名札の短い形は ja 向け — 他の言語では表の語を使う
+                    let big = if ui::settings::language() == "ja" {
+                        big
+                    } else {
+                        big.map(|_| cmd.label)
+                    };
                     let icon = cmd.icon;
                     let hoverable = cx.listener(move |this: &mut Writer, on: &bool, _, cx| {
                         if *on {
@@ -6033,7 +6039,7 @@ impl Render for Writer {
             }
         } else {
             let mut row = div().flex().flex_row().flex_wrap().gap_1().items_center().py_1();
-            for cmd in ribbon::WRITER[self.tab].cmds {
+            for cmd in ribbon::writer_tabs()[self.tab].cmds {
                 if cmd.ready {
                     let id = cmd.id;
                     row = row.child(div()

@@ -138,13 +138,27 @@ pysheet/  sheet の Python 束縛(import office_sheet)
 
 ## 各国語版
 
-言語ごとの差は `lang` の `Language` に閉じてあります。1つ実装すれば足ります。
-画面の言葉は Euro-Office のロケール(45言語)から起こせます。
+**リボンの言葉は実行時に切り替えられます**: ja(既定)と en を同梱。
 
 ```bash
-python3 ui/gen_ribbon.py --list      # 使えるロケール
-python3 ui/gen_ribbon.py en > ui/src/ribbon.rs
+OFFICE_LANG=en ./target/release/writer      # 一時的な上書き
+# 恒久には ~/.config/office/settings.toml に:
+#   language = "en"
 ```
+
+いまの正直な限界: リボンは選んだ言語になりますが、**ステータスバーと
+ダイアログの文言はまだ日本語**です(外部化は次の段階)。
+文言が揃った言語だけを選択肢に出します — いまは ja と en。
+
+新しい言語の表は、現行の日本語の表 + Euro-Office のロケール
+(材料は45言語)から起こします:
+
+```bash
+python3 ui/gen_ribbon_locale.py en > ui/src/ribbon_en.rs
+```
+
+言語ごとの組版・校正の差は `lang` の `Language` に閉じてあります。
+1つ実装すれば足ります。
 
 ## ライセンス
 

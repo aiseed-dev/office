@@ -8464,7 +8464,7 @@ impl Render for Calc {
         // 表計算の色は緑(デスクトップ版の app 色分けと同じ)。
         // 2段目 = 白地のタブ+現在地の緑の下線。右端に 🔍。
         // 下端 = ステータスバー(シートの耳+状態の文言+選択の生きた値)
-        let (ready, all) = ribbon::progress(ribbon::CALC);
+        let (ready, all) = ribbon::progress(ribbon::calc_tabs());
         // 画面の明暗(インターフェイステーマ)。**セルは白のまま** —
         // 暗くするのは周り(帯・タブ・釦・見出し・耳)だけ
         let dk = self.dark;
@@ -8545,7 +8545,7 @@ impl Render for Calc {
 
         let mut tabs = div().flex().flex_row().items_end().gap_1()
             .px_2().bg(th_band);
-        for (i, tb) in ribbon::CALC.iter().enumerate() {
+        for (i, tb) in ribbon::calc_tabs().iter().enumerate() {
             let on = i == self.tab;
             tabs = tabs.child(div()
                 .id(SharedString::from(format!("tab{i}")))
@@ -8604,7 +8604,7 @@ impl Render for Calc {
         let mut cmds = div().flex().flex_col().gap_0p5()
             .px_3().py_1().bg(th_band)
             .border_b_1().border_color(th_cmd_border);
-        let items = ribbon::CALC[self.tab].cmds;
+        let items = ribbon::calc_tabs()[self.tab].cmds;
         let split = if ribbon::CALC[self.tab].name == "ホーム" {
             items.len().div_ceil(2)
         } else {
@@ -8617,6 +8617,12 @@ impl Render for Calc {
                 let icon = cmd.icon;
                 let has_icon = ui::icons::find(icon).is_some();
                 let big = BIG.iter().find(|(k, _)| *k == icon).map(|(_, s)| *s);
+                // 名札の短い形は ja 向け — 他の言語では表の語を使う
+                let big = if ui::settings::language() == "ja" {
+                    big
+                } else {
+                    big.map(|_| cmd.label)
+                };
                 let hoverable = cx.listener(move |this: &mut Calc, on: &bool, _, cx| {
                     if *on {
                         this.hover_hint = Some(label);
