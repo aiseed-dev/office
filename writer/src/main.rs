@@ -586,6 +586,14 @@ struct Writer {
     plug_open: bool,
     /// リボンの絵釦に乗ったときの説明(下のステータスバーに出す)
     hover_hint: Option<&'static str>,
+    /// 編集領域の幅(px。ページ幅に合わせるの計算に使う)
+    view_w_px: f32,
+    /// ナビゲーション(左パネル。見出しの一覧で飛ぶ)
+    nav_open: bool,
+    /// 表示の入切(本家の表示タブ)。釦の帯・ステータスバー・右の板
+    show_toolbar: bool,
+    show_statusbar: bool,
+    show_right: bool,
     /// ファイルのページ(タブ0)から戻る先のタブ
     prev_tab: usize,
     /// ファイルのページの右側(0=詳細情報 1=最近開いた)
@@ -845,6 +853,11 @@ impl Writer {
             hist_open: false,
             plug_open: false,
             hover_hint: None,
+            view_w_px: 900.0,
+            nav_open: false,
+            show_toolbar: true,
+            show_statusbar: true,
+            show_right: true,
             prev_tab: 1,
             file_view: 0,
             file_field: None,
@@ -1851,6 +1864,60 @@ impl Writer {
         })
         .detach();
         self.status = format!("取りに行っています… {}", self.url_ed.text()).into();
+    }
+
+    /// 入切の釦が「いま入っているか」。押した結果が画面に残るものは、
+    /// 釦の側にも出す(押したのに何も変わらないように見えるのを防ぐ)
+    fn toggled(&self, id: &str) -> bool {
+        match id {
+            "nav" | "show-left" => self.nav_open,
+            "show-toolbar" => self.show_toolbar,
+            "show-statusbar" => self.show_statusbar,
+            "show-right" => self.show_right,
+            "ruler" => self.ruler,
+            "darkmode" => self.dark,
+            "hidenchars" => self.show_marks,
+            "line-numbers" => self.line_numbers,
+            "direction" => self.doc.vertical,
+            "track-changes" => self.track,
+            "co-showcomment" => self.show_comments,
+            "prot-doc" => self.doc.protection.is_some(),
+            "prot-encrypt" => self.encrypt_pw.is_some(),
+            _ => false,
+        }
+    }
+
+    /// ページ幅・ページ全体に合わせる(見えている大きさから倍率を出す)。
+    /// width=true なら幅だけ、false なら高さも見て小さい方に合わせる
+    fn fit_zoom(&mut self, width: bool) {
+        // 紙は左 28px に置き、右にも同じだけ余白を見る
+        let zw = (self.view_w_px - 56.0) / (self.pg.w_mm * PX_PER_MM);
+        let z = if width {
+            zw
+        } else {
+            zw.min((self.view_h_px - 28.0) / (self.pg.h_mm * PX_PER_MM))
+        };
+        self.zoom = z.clamp(0.2, 5.0);
+        self.status = format!(
+            "{}に合わせました(ズーム {}%)",
+            if width { "幅" } else { "ページ" },
+            (self.zoom * 100.0).round() as i32
+        )
+        .into();
+    }
+
+    /// 見出しの一覧(ナビゲーション用)。(深さ, 字, 本文のバイト位置)
+    fn headings(&self) -> Vec<(u8, String, usize)> {
+        let mut out = Vec::new();
+        let mut at = 0usize;
+        for p in self.doc.paragraphs() {
+            let text: String = p.runs.iter().map(|r| r.text.as_str()).collect();
+            if let kumihan::ParaStyle::Heading(n) = p.style {
+                out.push((n, text.clone(), at));
+            }
+            at += text.len() + 1;
+        }
+        out
     }
 
     /// 取ってきた HTML を開き、起点と土台を控える(リンクと送信の解決に使う)
@@ -3121,6 +3188,8 @@ impl Writer {
         "superscript", "subscript", "highlight", "clearstyle",
         "align-left", "align-center", "align-right", "align-just", "align-dist",
         "ruby", "direction",
+        "nav", "fit-page", "fit-width", "zoom100",
+        "show-toolbar", "show-statusbar", "show-left", "show-right",
         "incfont", "decfont", "markers", "numbering",
         "incoffset", "decoffset", "linespace", "pagebreak",
         "instable", "inssymbol", "replace", "changecase", "blankpage",
@@ -4109,6 +4178,39 @@ impl Writer {
                 Some(text) if !text.is_empty() => handler::replace(self, None, &text),
                 _ => self.status = "貼り付けるものがありません".into(),
             },
+            // 表示(本家の表示タブ)。見え方だけを変える — 文書は変わらない
+            "nav" => {
+                self.nav_open = !self.nav_open;
+                self.status = if self.nav_open {
+                    "ナビゲーション: 見出しを押すとそこへ飛びます".into()
+                } else {
+                    "".into()
+                };
+            }
+            "fit-page" => self.fit_zoom(false),
+            "fit-width" => self.fit_zoom(true),
+            "zoom100" => {
+                self.zoom = 1.0;
+                self.status = "100% に戻しました".into();
+            }
+            "show-toolbar" => {
+                self.show_toolbar = !self.show_toolbar;
+                self.status = if self.show_toolbar {
+                    "ツールバーを常に表示します".into()
+                } else {
+                    "ツールバーを畳みました(タブを押すと出ます)".into()
+                };
+            }
+            "show-statusbar" => self.show_statusbar = !self.show_statusbar,
+            "show-left" => self.nav_open = !self.nav_open,
+            "show-right" => {
+                self.show_right = !self.show_right;
+                self.status = if self.show_right {
+                    "右のパネルを出します".into()
+                } else {
+                    "右のパネルを隠しました(記入・リンクの板)".into()
+                };
+            }
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -4612,6 +4714,7 @@ impl Render for Writer {
         // 編集領域の高さを実測しておく(キャレット追従・スクロールの止めに使う)。
         // リボンのぶん(約110px)を引いた近似で足りる
         self.view_h_px = (f32::from(window.viewport_size().height) - 136.0).max(100.0);
+        self.view_w_px = f32::from(window.viewport_size().width).max(200.0);
         let marked = self.ed.marked_range();
         let (cx_mm, cy_mm, caret_pt) = self.caret_xy();
 
@@ -4823,10 +4926,23 @@ impl Render for Writer {
             ("prot-encrypt", Some("暗号化")), ("prot-sign", Some("署名")),
             ("prot-doc", Some("保護")),
         ]];
-        const VIEW_ROWS: &[&[LItem]] = &[&[
-            ("zoom-in", Some("拡大")), ("zoom-out", Some("縮小")), ("‖", None),
-            ("ruler", None), ("darkmode", None),
-        ]];
+        // 表示は本家どおり2段(発注者の画像 2026-08-04)
+        const VIEW_ROWS: &[&[LItem]] = &[
+            &[
+                ("nav", Some("ナビゲーション")), ("‖", None),
+                ("fit-page", Some("ページに合わせる")),
+                ("zoom100", Some("100%に拡大する")), ("zoom-in", None),
+                ("‖", None), ("darkmode", None), ("ruler", None),
+                ("‖", None), ("show-toolbar", None), ("show-left", None),
+            ],
+            &[
+                ("‖", None),
+                ("fit-width", Some("幅に合わせる")),
+                ("multipage", Some("複数ページ")), ("zoom-out", None),
+                ("‖", None), ("‖", None),
+                ("‖", None), ("show-statusbar", None), ("show-right", None),
+            ],
+        ];
         const PLUG_ROWS: &[&[LItem]] = &[&[
             ("plug-macros", Some("マクロ")),
             ("plug-manage", Some("プラグインの管理")),
@@ -4909,7 +5025,14 @@ impl Render for Writer {
                     let has_icon = ui::icons::find(icon).is_some();
                     if let Some(short) = big {
                         // 名札つきの大釦(絵の下に短い名前。本家の言い方)
-                        let fg = if cmd.ready { th_top_fg } else { th_gray_fg };
+                        let on = cmd.ready && self.toggled(cmd.id);
+                        let fg = if !cmd.ready {
+                            th_gray_fg
+                        } else if on {
+                            th_btn
+                        } else {
+                            th_top_fg
+                        };
                         let mut b = div()
                             .id(SharedString::from(format!("h-{icon}")))
                             .px_2().h(px(48.0)).rounded_sm()
@@ -4924,6 +5047,9 @@ impl Render for Writer {
                             }))
                             .child(div().text_size(px(10.5)).text_color(fg)
                                 .child(short));
+                        if on {
+                            b = b.bg(th_btn_hover).border_1().border_color(th_btn);
+                        }
                         if cmd.ready {
                             let cid = cmd.id;
                             b = b.cursor_pointer()
@@ -4936,12 +5062,17 @@ impl Render for Writer {
                         row = row.child(b);
                         continue;
                     }
+                    let on = cmd.ready && self.toggled(cmd.id);
                     let mut b = div()
                         .id(SharedString::from(format!("h-{icon}")))
                         .h(px(26.0)).rounded_sm()
                         .flex().items_center().justify_center()
                         .on_hover(hoverable);
                     b = if has_icon { b.w(px(26.0)) } else { b.px_1p5() };
+                    if on {
+                        // 入っている印(押した結果が画面に残るもの)
+                        b = b.bg(th_btn_hover).border_1().border_color(th_btn);
+                    }
                     if cmd.ready {
                         let cid = cmd.id;
                         b = b.cursor_pointer()
@@ -4950,7 +5081,7 @@ impl Render for Writer {
                                 gpui::svg()
                                     .path(SharedString::from(format!("icons/{icon}.svg")))
                                     .size(px(18.0))
-                                    .text_color(th_top_fg)
+                                    .text_color(if on { th_btn } else { th_top_fg })
                             }))
                             .children((!has_icon).then(|| {
                                 div().text_size(px(10.5)).text_color(th_btn)
@@ -5016,8 +5147,9 @@ impl Render for Writer {
             }
             cmds = cmds.child(row);
         }
-        let bar = if self.tab == 0 {
-            // ファイルのページ(本家の File メニュー)は釦の帯を持たない
+        let bar = if self.tab == 0 || !self.show_toolbar {
+            // ファイルのページ(本家の File メニュー)と、畳んだツールバーは
+            // 釦の帯を持たない(タブは残る — 押せば中身へ行ける)
             div().flex().flex_col().child(top).child(tabs)
         } else {
             div().flex().flex_col().child(top).child(tabs).child(cmds)
@@ -6348,6 +6480,45 @@ impl Render for Writer {
             Some(d)
         };
 
+        // ナビゲーション(左パネル)。見出しを押すとそこへ飛ぶ
+        let nav_panel = if !self.nav_open {
+            None
+        } else {
+            let heads = self.headings();
+            let mut d = div().absolute().left(px(0.0)).top(px(0.0))
+                .w(px(240.0)).h_full().overflow_hidden()
+                .p_2().bg(if dk { rgb(0x1B1E21) } else { rgb(0xF1F3F5) })
+                .border_r_1().border_color(th_cmd_border)
+                .flex().flex_col().gap_1()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("ナビゲーション"));
+            if heads.is_empty() {
+                d = d.child(div().text_size(px(11.0)).text_color(th_status)
+                    .child("(見出しがありません。ホーム > 段落のスタイルで)"));
+            }
+            for (i, (lv, text, byte)) in heads.into_iter().take(40).enumerate() {
+                let b = byte;
+                d = d.child(div()
+                    .id(SharedString::from(format!("nav-{i}")))
+                    .px_2().py_0p5().rounded_sm().cursor_pointer()
+                    .text_size(px(12.0)).text_color(th_top_fg)
+                    .whitespace_nowrap().overflow_hidden()
+                    .hover(|st| st.bg(th_btn_hover))
+                    .child(SharedString::from(format!(
+                        "{}{text}",
+                        "　".repeat((lv as usize).saturating_sub(1))
+                    )))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.switch_target(Target::Body);
+                        this.ed.move_to(b.min(this.ed.text().len()), false);
+                        this.follow_caret();
+                        cx.notify()
+                    })));
+            }
+            Some(d)
+        };
+
         // リンクの板(押すと辿る。公開 Web も見える — JS は実行しない)
         let lk_panel = if !self.lk_open || self.html_links.is_empty() {
             None
@@ -6828,8 +6999,9 @@ impl Render for Writer {
                     .children(pw_panel)
                     .children(rb_panel)
                     .children(url_panel)
-                    .children(fm_panel)
-                    .children(lk_panel)
+                    .children(fm_panel.filter(|_| self.show_right))
+                    .children(lk_panel.filter(|_| self.show_right))
+                    .children(nav_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)
@@ -6838,7 +7010,7 @@ impl Render for Writer {
                     .child(InputSink { view: me })
                     .children(menu)
             })
-            .child(statusbar)
+            .children(self.show_statusbar.then_some(statusbar))
     }
 }
 
