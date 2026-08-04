@@ -7407,7 +7407,7 @@ calc の隣に置いてください)"
                                   PRODUCT SUMPRODUCT SUMSQ CEILING FLOOR MROUND EVEN ODD SIGN \
                                   FACT COMBIN PERMUT GCD LCM PI SIN COS TAN ASIN ACOS ATAN ATAN2 \
                                   SINH COSH TANH EXP LN LOG LOG10 DEGREES RADIANS RAND RANDBETWEEN \
-                                  SEQUENCE(セル単独であふれて広がる)",
+                                  SEQUENCE(隣へあふれる。=SEQUENCE(3)+1 のような式も可)",
                     "fn-text" => "LEN LEFT RIGHT MID TRIM UPPER LOWER CONCATENATE CONCAT TEXT \
                                   SUBSTITUTE FIND SEARCH VALUE TEXTJOIN REPT CHAR CODE \
                                   UNICHAR UNICODE PROPER EXACT CLEAN FIXED YEN NUMBERVALUE \
@@ -7422,7 +7422,7 @@ calc の隣に置いてください)"
                     "fn-lookup" => "VLOOKUP HLOOKUP XLOOKUP LOOKUP INDEX MATCH CHOOSE \
                                     ROW COLUMN ROWS COLUMNS OFFSET INDIRECT ADDRESS HYPERLINK \
                                     FILTER SORT UNIQUE TRANSPOSE(照合は完全一致。\
-                                    FILTER/SORT/UNIQUE/TRANSPOSE はセル単独であふれて広がる)",
+                                    FILTER 等は隣へあふれ、四則と組み合わせても効く)",
                     "fn-financial" => "PMT PV FV NPER NPV IRR RATE(IRR と RATE は挟み撃ちの反復解)",
                     "fn-more" => "SUMIF SUMIFS COUNTIF COUNTIFS AVERAGEIF AVERAGEIFS \
                                   MINIFS MAXIFS COUNTA COUNTBLANK TRUNC \

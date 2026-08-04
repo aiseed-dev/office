@@ -265,46 +265,33 @@ impl<'a> P<'a> {
     }
 
     fn args(&mut self) -> Result<Vec<Arg>, String> {
-        // 関数の引数。範囲は**形(列数)を残して**包む — VLOOKUP・INDEX は
-        // 表の縦横が要る。平らな値しか要らない関数は flatten で崩す
+        // 関数の引数は**配列数式として**読む — 範囲は形(列数)を保ち、
+        // あふれる関数(FILTER 等)や要素ごとの演算(C1:C9>100、
+        // SEQUENCE(3)*2)もそのまま並びとして渡る。
+        // 1つの値に落ちるものは従来どおり1つの値
         let mut out = Vec::new();
         if let Some(Tok::RParen) = self.peek() {
             self.next();
             return Ok(out);
         }
         loop {
-            if let Some(r) = self.try_array_arg() {
-                out.push(r?);
-            } else if let Some(r) = self.try_ref_call() {
-                // OFFSET / INDIRECT の答えの範囲も、形(列数)を保って渡す
-                match r? {
-                    RefAns::At(a, z) => {
-                        let cols = a.col.abs_diff(z.col) + 1;
-                        out.push(Arg::Rect(cols, self.range_values(a, z)));
+            let v = {
+                let mut ap = AP { p: self };
+                ap.expr()?
+            };
+            out.push(match v {
+                AVal::One(x) => Arg::One(x),
+                AVal::Arr(rows) => {
+                    let w = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+                    let mut vals = Vec::new();
+                    for row in &rows {
+                        for c in 0..w {
+                            vals.push(row.get(c).cloned().unwrap_or(Value::Empty));
+                        }
                     }
-                    RefAns::Rect(cols, vals) => out.push(Arg::Rect(cols, vals)),
-                    RefAns::Bad(v) => out.push(Arg::One(v)),
+                    Arg::Rect(w as u32, vals)
                 }
-            } else if let Some(Tok::Range(a, z)) = self.peek().cloned() {
-                self.next();
-                let cols = a.col.abs_diff(z.col) + 1;
-                if let Some(Tok::Cmp(op)) = self.peek().cloned() {
-                    // 範囲と値の比較は**要素ごと**の真偽の並びになる
-                    // (FILTER(A1:B9, C1:C9>100) の条件の定番)
-                    self.next();
-                    let rhs = self.add()?;
-                    let vals = self
-                        .range_values(a, z)
-                        .into_iter()
-                        .map(|v| Value::Bool(cmp_values(&op, &v, &rhs)))
-                        .collect();
-                    out.push(Arg::Rect(cols, vals));
-                } else {
-                    out.push(Arg::Rect(cols, self.range_values(a, z)));
-                }
-            } else {
-                out.push(Arg::One(self.expr()?));
-            }
+            });
             match self.next() {
                 Some(Tok::Comma) => continue,
                 Some(Tok::RParen) => break,
@@ -389,51 +376,6 @@ impl<'a> P<'a> {
             Pos::new(nr as u32, nc as u32),
             Pos::new((nr + h - 1) as u32, (nc + w - 1) as u32),
         ))
-    }
-
-    /// 次の札があふれる関数(FILTER 等)なら、**引数の場**では値の並びとして
-    /// 受ける — SUM(FILTER(…)) や COUNTA(UNIQUE(…)) の形。セルへはあふれない
-    /// (あふれるのはセル単独で書いたときだけ)
-    fn try_array_arg(&mut self) -> Option<Result<Arg, String>> {
-        if let Some(Tok::Name(n)) = self.peek() {
-            if ARRAY_FNS.contains(&n.as_str())
-                && self.t.get(self.i + 1) == Some(&Tok::LParen)
-            {
-                let n = n.clone();
-                self.next();
-                self.next();
-                let r = self.args().map(|args| match array_call(&n, args) {
-                    Ok(rows) => {
-                        let w = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
-                        let mut vals = Vec::new();
-                        for row in &rows {
-                            for c in 0..w {
-                                vals.push(row.get(c).cloned().unwrap_or(Value::Empty));
-                            }
-                        }
-                        Arg::Rect(w as u32, vals)
-                    }
-                    Err(e) => Arg::One(e),
-                });
-                return Some(r);
-            }
-        }
-        None
-    }
-
-    /// 次の札が OFFSET( / INDIRECT( なら消費して参照を計算する
-    fn try_ref_call(&mut self) -> Option<Result<RefAns, String>> {
-        if let Some(Tok::Name(n)) = self.peek() {
-            if matches!(n.as_str(), "OFFSET" | "INDIRECT")
-                && self.t.get(self.i + 1) == Some(&Tok::LParen)
-            {
-                let n = n.clone();
-                self.next();
-                self.next();
-                return Some(self.ref_call(&n));
-            }
-        }
-        None
     }
 
     /// ROW / COLUMN / ROWS / COLUMNS — 参照の位置と大きさを答える。
@@ -534,6 +476,200 @@ impl<'a> P<'a> {
                 }
             }
             other => Err(format!("式が途中で終わっています: {other:?}")),
+        }
+    }
+}
+
+/// 配列数式の途中の値 — 1つの値か、2次元の並び。
+enum AVal {
+    One(Value),
+    Arr(Vec<Vec<Value>>),
+}
+
+impl AVal {
+    fn dims(&self) -> (usize, usize) {
+        match self {
+            AVal::One(_) => (1, 1),
+            AVal::Arr(r) => (r.len(), r.iter().map(|x| x.len()).max().unwrap_or(0)),
+        }
+    }
+    /// 要素を取る。1行・1列の側は引き伸ばす(Excel のブロードキャストと同じ)。
+    /// 引き伸ばせない外側は #N/A(Excel の配列数式と同じ答え)
+    fn at(&self, r: usize, c: usize) -> Value {
+        match self {
+            AVal::One(v) => v.clone(),
+            AVal::Arr(rows) => {
+                let (h, w) = self.dims();
+                let rr = if h == 1 { 0 } else { r };
+                let cc = if w == 1 { 0 } else { c };
+                if rr >= h || cc >= w {
+                    Value::Error("#N/A".into())
+                } else {
+                    rows[rr].get(cc).cloned().unwrap_or(Value::Empty)
+                }
+            }
+        }
+    }
+}
+
+/// 要素ごとの2項演算。両方が1つの値なら普通の計算、
+/// 並びが混ざれば大きい方の形に広げて1要素ずつ
+fn zip_aval(a: &AVal, b: &AVal, f: impl Fn(&Value, &Value) -> Value) -> AVal {
+    if let (AVal::One(x), AVal::One(y)) = (a, b) {
+        return AVal::One(f(x, y));
+    }
+    let (ha, wa) = a.dims();
+    let (hb, wb) = b.dims();
+    let (h, w) = (ha.max(hb), wa.max(wb));
+    AVal::Arr(
+        (0..h)
+            .map(|r| {
+                (0..w)
+                    .map(|c| {
+                        // エラーは伝播する(表計算の作法)
+                        let x = a.at(r, c);
+                        if let Value::Error(_) = x {
+                            return x;
+                        }
+                        let y = b.at(r, c);
+                        if let Value::Error(_) = y {
+                            return y;
+                        }
+                        f(&x, &y)
+                    })
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+/// 配列数式の評価器。文法は P と同じで、**演算が要素ごとに働く**。
+/// =SEQUENCE(3)+1 のように、あふれる関数を四則・比較・& と組み合わせた
+/// 式はこちらを通る(範囲もここでは並びとして扱う)
+struct AP<'a, 'b> {
+    p: &'b mut P<'a>,
+}
+
+impl AP<'_, '_> {
+    fn expr(&mut self) -> Result<AVal, String> {
+        let lhs = self.add()?;
+        if let Some(Tok::Cmp(op)) = self.p.peek().cloned() {
+            self.p.next();
+            let rhs = self.add()?;
+            return Ok(zip_aval(&lhs, &rhs, |x, y| Value::Bool(cmp_values(&op, x, y))));
+        }
+        Ok(lhs)
+    }
+
+    fn add(&mut self) -> Result<AVal, String> {
+        let mut v = self.mul()?;
+        while let Some(Tok::Op(o @ ('+' | '-' | '&'))) = self.p.peek().cloned() {
+            self.p.next();
+            let r = self.mul()?;
+            v = zip_aval(&v, &r, |x, y| match o {
+                '+' => Value::Number(x.as_number() + y.as_number()),
+                '-' => Value::Number(x.as_number() - y.as_number()),
+                _ => Value::Text(format!("{}{}", x.display(), y.display())),
+            });
+        }
+        Ok(v)
+    }
+
+    fn mul(&mut self) -> Result<AVal, String> {
+        let mut v = self.pow()?;
+        while let Some(Tok::Op(o @ ('*' | '/'))) = self.p.peek().cloned() {
+            self.p.next();
+            let r = self.pow()?;
+            v = zip_aval(&v, &r, |x, y| {
+                if o == '/' && y.as_number() == 0.0 {
+                    Value::Error("#DIV/0!".into())
+                } else if o == '*' {
+                    Value::Number(x.as_number() * y.as_number())
+                } else {
+                    Value::Number(x.as_number() / y.as_number())
+                }
+            });
+        }
+        Ok(v)
+    }
+
+    fn pow(&mut self) -> Result<AVal, String> {
+        let v = self.unary()?;
+        if let Some(Tok::Op('^')) = self.p.peek() {
+            self.p.next();
+            let r = self.pow()?;
+            return Ok(zip_aval(&v, &r, |x, y| {
+                Value::Number(x.as_number().powf(y.as_number()))
+            }));
+        }
+        Ok(v)
+    }
+
+    fn unary(&mut self) -> Result<AVal, String> {
+        match self.p.peek().cloned() {
+            Some(Tok::Op('-')) => {
+                self.p.next();
+                let v = self.unary()?;
+                Ok(zip_aval(&v, &AVal::One(Value::Number(0.0)), |x, _| match x {
+                    e @ Value::Error(_) => e.clone(),
+                    v => Value::Number(-v.as_number()),
+                }))
+            }
+            Some(Tok::Op('+')) => {
+                self.p.next();
+                self.unary()
+            }
+            _ => self.atom(),
+        }
+    }
+
+    fn atom(&mut self) -> Result<AVal, String> {
+        match self.p.peek().cloned() {
+            // 配列数式の中では、範囲は並びそのもの
+            Some(Tok::Range(a, z)) => {
+                self.p.next();
+                let cols = (a.col.abs_diff(z.col) + 1) as usize;
+                let vals = self.p.range_values(a, z);
+                Ok(AVal::Arr(vals.chunks(cols.max(1)).map(|r| r.to_vec()).collect()))
+            }
+            Some(Tok::LParen) => {
+                self.p.next();
+                let v = self.expr()?;
+                match self.p.next() {
+                    Some(Tok::RParen) => Ok(v),
+                    _ => Err("括弧が閉じていません".into()),
+                }
+            }
+            Some(Tok::Name(n)) if self.p.t.get(self.p.i + 1) == Some(&Tok::LParen) => {
+                if ARRAY_FNS.contains(&n.as_str()) {
+                    // あふれる関数の呼び出し — 並びのまま持つ
+                    self.p.next();
+                    self.p.next();
+                    let args = self.p.args()?;
+                    Ok(match array_call(&n, args) {
+                        Ok(rows) => AVal::Arr(rows),
+                        Err(e) => AVal::One(e),
+                    })
+                } else if matches!(n.as_str(), "OFFSET" | "INDIRECT") {
+                    self.p.next();
+                    self.p.next();
+                    Ok(match self.p.ref_call(&n)? {
+                        RefAns::At(a, z) => {
+                            let cols = (a.col.abs_diff(z.col) + 1) as usize;
+                            let vals = self.p.range_values(a, z);
+                            AVal::Arr(
+                                vals.chunks(cols.max(1)).map(|r| r.to_vec()).collect())
+                        }
+                        RefAns::Rect(cols, vals) => AVal::Arr(
+                            vals.chunks((cols as usize).max(1)).map(|r| r.to_vec()).collect()),
+                        RefAns::Bad(v) => AVal::One(v),
+                    })
+                } else {
+                    // 普通の関数は1つの値(集計は中で並びを受けている)
+                    Ok(AVal::One(self.p.atom()?))
+                }
+            }
+            _ => Ok(AVal::One(self.p.atom()?)),
         }
     }
 }
@@ -2191,10 +2327,6 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
             }
         }
         "PY" => Value::Error("#PY単独".into()), // =PY(…) はセル単独でだけ使える
-        // あふれる関数もセル単独でだけ(式の中に混ぜる形はまだ)
-        "FILTER" | "SORT" | "UNIQUE" | "SEQUENCE" | "TRANSPOSE" => {
-            Value::Error("#配列単独".into())
-        }
         _ => Value::Error("#NAME?".into()),
     })
 }
@@ -2342,8 +2474,8 @@ pub fn is_py_formula(f: &str) -> bool {
     false
 }
 
-/// セル単独で書くと**あふれて広がる**(スピルする)関数。
-/// =PY と同じ制約: 式の中に混ぜては使えない(そのときは #配列単独)
+/// 並びを返す関数(スピルする関数)。セル単独でも、四則・比較・& と
+/// 組み合わせた配列数式でも使える。答えが2次元なら隣へあふれる
 const ARRAY_FNS: &[&str] = &["FILTER", "SORT", "UNIQUE", "SEQUENCE", "TRANSPOSE"];
 
 pub fn recalc(sheet: &mut Sheet) {
@@ -2424,7 +2556,7 @@ fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
             }
         }
     }
-    // 式を集める。セル単独の =FILTER(…) 等は「配列の式」として別扱い
+    // 式を集める。あふれる関数の入った式は「配列数式」として別扱い
     let mut formulas: Vec<(Pos, String)> = Vec::new();
     let mut arrays: Vec<(Pos, String)> = Vec::new();
     for (p, c) in &sheet.cells {
@@ -2549,6 +2681,12 @@ fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
             put_origin(sheet, Value::Error("#NUM!".into()), &mut changed);
             continue;
         }
+        // 1×1 の答えは普通の値として置く(=SUM(FILTER(…))+1 のような集計)
+        if h == 1 && w == 1 {
+            let v = rows[0].first().cloned().unwrap_or(Value::Empty);
+            put_origin(sheet, v, &mut changed);
+            continue;
+        }
         // 席の検査: 既に中身のあるセルへは**あふれない**(黙って潰さない)。
         // 前回の自分たちの影(freed)は空席と見る。同じ周の別のスピルとも争わない
         let mut blocked = false;
@@ -2634,13 +2772,19 @@ fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
     changed
 }
 
-/// セル単独の =FILTER(…) 等か(式の頭がその関数で、それが式の全部)
+/// 配列数式か — あふれる関数(FILTER 等)が式のどこかに入っているか。
+/// 文字列の中の "FILTER" を拾わないよう、字句にしてから見る
 fn is_array_formula(f: &str) -> bool {
-    let up = f.trim_start().to_ascii_uppercase();
-    ARRAY_FNS.iter().any(|n| up.starts_with(&format!("{n}(")))
+    lex(f)
+        .map(|toks| {
+            toks.iter()
+                .any(|t| matches!(t, Tok::Name(n) if ARRAY_FNS.contains(&n.as_str())))
+        })
+        .unwrap_or(false)
 }
 
-/// 配列の式を評価して、行ごとの値にする
+/// 配列数式を評価して、行ごとの値にする。
+/// =SEQUENCE(3)+1 のように演算子と組み合わせた式も、要素ごとに計算される
 fn eval_array(
     sheet: &Sheet,
     others: &[&Sheet],
@@ -2651,19 +2795,17 @@ fn eval_array(
     let toks = lex(f).map_err(|_| err("#ERROR!"))?;
     let resolved = HashMap::new();
     let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at, others };
-    let name = match p.next() {
-        Some(Tok::Name(n)) => n,
-        _ => return Err(err("#ERROR!")),
+    let v = {
+        let mut ap = AP { p: &mut p };
+        ap.expr().map_err(|_| err("#ERROR!"))?
     };
-    if p.next() != Some(Tok::LParen) {
+    if p.i != toks.len() {
         return Err(err("#ERROR!"));
     }
-    let args = p.args().map_err(|_| err("#ERROR!"))?;
-    if p.i != toks.len() {
-        // =FILTER(…)+1 のような使い方はまだ — 正直に断る
-        return Err(err("#配列単独"));
-    }
-    array_call(&name, args)
+    Ok(match v {
+        AVal::One(x) => vec![vec![x]],
+        AVal::Arr(rows) => rows,
+    })
 }
 
 fn array_call(name: &str, args: Vec<Arg>) -> Result<Vec<Vec<Value>>, Value> {
@@ -3666,12 +3808,13 @@ mod dan3_tests {
     }
 
     #[test]
-    fn 式の中に混ぜたら正直に断る() {
-        // 関数の引数の場は通る(SUM(SEQUENCE(…)) — dan5 の試験)。
-        // **裸の式の場**はまだ — そこは正直に断る
-        let mut s = sheet_with(&[("Z1", "=SEQUENCE(3,1)+1")]);
+    fn 演算子と組み合わせた配列数式もあふれる() {
+        // 2026-08-05 まで #配列単独 と断っていた形。要素ごとに計算して広がる
+        let mut s = sheet_with(&[("A1", "=SEQUENCE(3,1)+1")]);
         recalc(&mut s);
-        assert_eq!(v(&s, "Z1"), Value::Error("#配列単独".into()));
+        assert_eq!(v(&s, "A1"), Value::Number(2.0));
+        assert_eq!(v(&s, "A2"), Value::Number(3.0));
+        assert_eq!(v(&s, "A3"), Value::Number(4.0));
     }
 }
 
@@ -3953,6 +4096,87 @@ mod dan5_tests {
         let mut alone = sheet_with(&[("A1", "=INDIRECT(\"台帳!B2\")")]);
         recalc(&mut alone);
         assert_eq!(alone.value(Pos::parse("A1").unwrap()), Value::Error("#REF!".into()));
+    }
+}
+
+/// 配列数式と演算子の組み合わせ(2026-08-05)。
+#[cfg(test)]
+mod dan6_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn sheet_with(cells: &[(&str, &str)]) -> Sheet {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        for (a1, v) in cells {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(v));
+        }
+        s
+    }
+
+    fn v(s: &Sheet, a1: &str) -> Value {
+        s.value(Pos::parse(a1).unwrap())
+    }
+
+    #[test]
+    fn 要素ごとの四則と文字連結() {
+        let mut s = sheet_with(&[
+            ("A1", "10"), ("A2", "20"), ("A3", "30"),
+            ("C1", "=SEQUENCE(3,1)*10+A1:A3"),
+            ("E1", "=\"第\"&SEQUENCE(3,1)&\"回\""),
+        ]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "C1"), Value::Number(20.0), "10*1+10");
+        assert_eq!(v(&s, "C2"), Value::Number(40.0));
+        assert_eq!(v(&s, "C3"), Value::Number(60.0));
+        assert_eq!(v(&s, "E1"), Value::Text("第1回".into()));
+        assert_eq!(v(&s, "E3"), Value::Text("第3回".into()));
+    }
+
+    #[test]
+    fn 比較と括弧() {
+        let mut s = sheet_with(&[
+            ("A1", "=SEQUENCE(3,1)>=2"),
+            ("C1", "=(SEQUENCE(2,1)+1)*2"),
+        ]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "A1"), Value::Bool(false));
+        assert_eq!(v(&s, "A2"), Value::Bool(true));
+        assert_eq!(v(&s, "A3"), Value::Bool(true));
+        assert_eq!(v(&s, "C1"), Value::Number(4.0));
+        assert_eq!(v(&s, "C2"), Value::Number(6.0));
+    }
+
+    #[test]
+    fn 形が合わない要素はエラーになる() {
+        // {1;2;3} + {1;2} → 3行目は #N/A(Excel の配列数式と同じ)
+        let mut s = sheet_with(&[("A1", "=SEQUENCE(3,1)+SEQUENCE(2,1)")]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "A1"), Value::Number(2.0));
+        assert_eq!(v(&s, "A2"), Value::Number(4.0));
+        assert_eq!(v(&s, "A3"), Value::Error("#N/A".into()));
+    }
+
+    #[test]
+    fn 引数の中でも要素ごとに計算できる() {
+        let mut s = sheet_with(&[
+            ("A1", "1"), ("A2", "2"), ("A3", "3"),
+            ("C1", "=SUM(SEQUENCE(3,1)*2)"),
+            ("C2", "=SUM(A1:A3*10)"),
+            ("C3", "=SUMPRODUCT(A1:A3,A1:A3)"),
+        ]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "C1"), Value::Number(12.0), "SUM(SEQUENCE*2)");
+        assert_eq!(v(&s, "C2"), Value::Number(60.0), "範囲の要素ごとの倍が SUM に渡らない");
+        assert_eq!(v(&s, "C3"), Value::Number(14.0), "既存の SUMPRODUCT はそのまま");
+    }
+
+    #[test]
+    fn 集計に落ちれば1つの値のまま() {
+        let mut s = sheet_with(&[("A1", "=SUM(SEQUENCE(3,1))+1"), ("B1", "9")]);
+        recalc(&mut s);
+        assert_eq!(v(&s, "A1"), Value::Number(7.0));
+        assert!(s.spills.is_empty(), "1つの値なのにスピルの記録が残った");
+        assert_eq!(v(&s, "B1"), Value::Number(9.0), "隣に何も書いていない");
     }
 }
 
