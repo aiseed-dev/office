@@ -102,6 +102,17 @@ pub static OWN_ICONS: &[(&str, &[u8])] = &[
     ("align-left", include_bytes!("../icons/align-left.svg")),
     ("align-right", include_bytes!("../icons/align-right.svg")),
     ("hidenchars", include_bytes!("../icons/hidenchars.svg")),
+    ("instable", include_bytes!("../icons/instable.svg")),
+    ("insertimage", include_bytes!("../icons/insimage.svg")),
+    ("insshape", include_bytes!("../icons/insshape.svg")),
+    ("inssmartart", include_bytes!("../icons/inssmartart.svg")),
+    ("inschart", include_bytes!("../icons/inschart.svg")),
+    ("smartpicker", include_bytes!("../icons/smartpicker.svg")),
+    ("instext", include_bytes!("../icons/instext.svg")),
+    ("edit-header", include_bytes!("../icons/edit-header.svg")),
+    ("edit-footer", include_bytes!("../icons/edit-footer.svg")),
+    ("pagenum", include_bytes!("../icons/pagenum.svg")),
+    ("numpages", include_bytes!("../icons/numpages.svg")),
 ];
 
 pub fn find(id: &str) -> Option<&'static [u8]> {

@@ -4126,40 +4126,69 @@ impl Render for Writer {
         let mut cmds = div().flex().flex_col().gap_0p5()
             .px_3().py_1().bg(th_cmd_bg)
             .border_b_1().border_color(th_cmd_border);
-        if ribbon::WRITER[self.tab].name == "ホーム" {
-            // ホームは本家の形: 2段・絵だけの釦・群の区切り線。
-            // 釦の名前は乗ったときに下のステータスバーへ出す(hover_hint)
-            const ROW1: &[&str] = &[
-                "copy", "cut", "‖", "fontname", "fontsize", "incfont", "decfont",
-                "changecase", "‖", "markers", "numbering", "multilevels",
-                "decoffset", "incoffset", "linespace", "direction", "‖",
-                "parastyle",
-            ];
-            const ROW2: &[&str] = &[
-                "paste", "selectall", "‖", "bold", "italic", "underline",
-                "strikeout", "superscript", "subscript", "highlight", "fontcolor",
-                "clearstyle", "‖", "align-left", "align-center", "align-right",
-                "align-just", "hidenchars", "paracolor", "borders", "‖",
-                "replace",
-            ];
+        // 本家風のタブ配置。(id, 大釦の名札)。"‖" は群の区切り線。
+        // 名札つきは絵の下に短い名前(本家の言い方)、無印は絵だけの釦。
+        // 釦の名前は乗ったときに下のステータスバーへ出す(hover_hint)
+        type LItem = (&'static str, Option<&'static str>);
+        // ホームは2段(発注者の画像 2026-08-04)
+        const HOME_ROWS: &[&[LItem]] = &[
+            &[
+                ("copy", None), ("cut", None), ("‖", None), ("fontname", None),
+                ("fontsize", None), ("incfont", None), ("decfont", None),
+                ("changecase", None), ("‖", None), ("markers", None),
+                ("numbering", None), ("multilevels", None), ("decoffset", None),
+                ("incoffset", None), ("linespace", None), ("direction", None),
+                ("‖", None), ("parastyle", None),
+            ],
+            &[
+                ("paste", None), ("selectall", None), ("‖", None), ("bold", None),
+                ("italic", None), ("underline", None), ("strikeout", None),
+                ("superscript", None), ("subscript", None), ("highlight", None),
+                ("fontcolor", None), ("clearstyle", None), ("‖", None),
+                ("align-left", None), ("align-center", None),
+                ("align-right", None), ("align-just", None),
+                ("hidenchars", None), ("paracolor", None), ("borders", None),
+                ("‖", None), ("replace", None),
+            ],
+        ];
+        // 挿入は一段(発注者の画像 2026-08-04)。主要な釦は名札つきの大釦
+        const INS_ROWS: &[&[LItem]] = &[&[
+            ("blankpage", Some("空白ページ")), ("pagebreak", Some("区切り")),
+            ("‖", None), ("instable", Some("表")), ("‖", None),
+            ("insimage", Some("画像")), ("insshape", Some("図形")),
+            ("inssmartart", None), ("inschart", None), ("smartpicker", None),
+            ("‖", None), ("instext", None), ("instextart", None),
+            ("dropcap", None), ("text-from-file", None), ("‖", None),
+            ("edit-header", None), ("edit-footer", None), ("pagenum", None),
+            ("numpages", None), ("datetime", None), ("‖", None),
+            ("insequation", None), ("inssymbol", None), ("‖", None),
+            ("controls", None),
+        ]];
+        let rows: Option<&[&[LItem]]> = match ribbon::WRITER[self.tab].name {
+            "ホーム" => Some(HOME_ROWS),
+            "挿入" => Some(INS_ROWS),
+            _ => None,
+        };
+        if let Some(rows) = rows {
             let size_now = self.doc.size_at(self.ed.selection()).unwrap_or(SIZE_PT);
             let size_disp = if size_now.fract() == 0.0 {
                 format!("{}", size_now as i32)
             } else {
                 format!("{size_now}")
             };
-            for ids in [ROW1, ROW2] {
+            for ids in rows {
+                let tall = ids.iter().any(|(_, b)| b.is_some());
                 let mut row = div().flex().flex_row().items_center().gap_0p5();
-                for id in ids {
-                    if *id == "‖" {
-                        row = row.child(div().w(px(1.0)).h(px(22.0))
+                for &(id, big) in *ids {
+                    if id == "‖" {
+                        row = row.child(div().w(px(1.0))
+                            .h(px(if tall { 40.0 } else { 22.0 }))
                             .bg(th_cmd_border).mx_1());
                         continue;
                     }
                     // コンボ風(フォント名と大きさは今の値を見せる)
-                    if *id == "fontname" || *id == "fontsize" {
-                        let cid: &'static str =
-                            if *id == "fontname" { "fontname" } else { "fontsize" };
+                    if id == "fontname" || id == "fontsize" {
+                        let cid = id;
                         let text = if cid == "fontname" {
                             self.font_name.to_string()
                         } else {
@@ -4187,7 +4216,7 @@ impl Render for Writer {
                     let Some(cmd) = ribbon::WRITER[self.tab]
                         .cmds
                         .iter()
-                        .find(|c| c.id == *id || (!c.ready && c.icon == *id))
+                        .find(|c| c.id == id || (!c.ready && c.icon == id))
                         .copied()
                     else {
                         continue;
@@ -4203,6 +4232,35 @@ impl Render for Writer {
                         cx.notify()
                     });
                     let has_icon = ui::icons::find(icon).is_some();
+                    if let Some(short) = big {
+                        // 名札つきの大釦(絵の下に短い名前。本家の言い方)
+                        let fg = if cmd.ready { th_top_fg } else { th_gray_fg };
+                        let mut b = div()
+                            .id(SharedString::from(format!("h-{icon}")))
+                            .px_2().h(px(48.0)).rounded_sm()
+                            .flex().flex_col().items_center().justify_center()
+                            .gap_1()
+                            .on_hover(hoverable)
+                            .children(has_icon.then(|| {
+                                gpui::svg()
+                                    .path(SharedString::from(format!("icons/{icon}.svg")))
+                                    .size(px(20.0))
+                                    .text_color(fg)
+                            }))
+                            .child(div().text_size(px(10.5)).text_color(fg)
+                                .child(short));
+                        if cmd.ready {
+                            let cid = cmd.id;
+                            b = b.cursor_pointer()
+                                .hover(move |st| st.bg(th_btn_hover))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.run_cmd(cid, cx);
+                                    cx.notify()
+                                }));
+                        }
+                        row = row.child(b);
+                        continue;
+                    }
                     let mut b = div()
                         .id(SharedString::from(format!("h-{icon}")))
                         .h(px(26.0)).rounded_sm()
