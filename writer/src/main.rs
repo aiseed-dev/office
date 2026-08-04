@@ -378,6 +378,11 @@ struct Writer {
     /// しおりの板(名前の入力欄つきの一覧)
     bm_open: bool,
     bm_ed: Editor,
+    /// バージョン履歴の板(上書き保存のたびに残る控えの一覧)
+    hist_open: bool,
+    /// チャット(文書の隣の申し送り帳)の板と入力欄
+    chat_open: bool,
+    chat_ed: Editor,
     /// 相互参照の板(しおり一覧から「文字」「ページ」を挿す)
     xr_open: bool,
     /// 描画の道具(0=ペン 1=蛍光ペン 2=消しゴム)。Some の間はマウスが筆
@@ -419,6 +424,8 @@ impl HasEditor for Writer {
             &mut self.wm_ed
         } else if self.bm_open {
             &mut self.bm_ed
+        } else if self.chat_open {
+            &mut self.chat_ed
         } else {
             &mut self.ed
         }
@@ -434,6 +441,8 @@ impl HasEditor for Writer {
             &self.wm_ed
         } else if self.bm_open {
             &self.bm_ed
+        } else if self.chat_open {
+            &self.chat_ed
         } else {
             &self.ed
         }
@@ -441,6 +450,10 @@ impl HasEditor for Writer {
     fn on_edited(&mut self) {
         if self.find_open {
             // 検索欄への打鍵は文書を変えない
+            return;
+        }
+        if self.chat_open {
+            // チャットの入力欄。打鍵は文書を変えない
             return;
         }
         if self.protected() {
@@ -570,6 +583,9 @@ impl Writer {
             wm_ed: Editor::new(""),
             bm_open: false,
             bm_ed: Editor::new(""),
+            hist_open: false,
+            chat_open: false,
+            chat_ed: Editor::new(""),
             xr_open: false,
             tool: None,
             ink_cur: None,
@@ -924,6 +940,160 @@ impl Writer {
         self.doc.protection.is_some()
     }
 
+    /// 上書きの前に、直前の中身を控えとして残す(最大9世代)。
+    /// 置き場は同じフォルダの .jo-history/<ファイル名>/<日時>.docx。
+    /// 名前は**その中身を保存した日時**(ファイルの mtime)— いつの姿かが分かる
+    fn keep_version(&self, p: &std::path::Path) {
+        let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            return;
+        };
+        let dir = p
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(".jo-history")
+            .join(&name);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return; // 控えられなくても保存は止めない
+        }
+        let stamp = std::process::Command::new("date")
+            .arg("-r")
+            .arg(p)
+            .arg("+%Y%m%d-%H%M%S")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "0".into());
+        let _ = std::fs::copy(p, dir.join(format!("{stamp}.docx")));
+        // 増えすぎたら古い控えから消す
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            let mut old: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+            old.sort();
+            while old.len() > 9 {
+                let _ = std::fs::remove_file(old.remove(0));
+            }
+        }
+    }
+
+    /// 控えの一覧(新しい順)。(表示名, パス)
+    fn versions(&self) -> Vec<(String, PathBuf)> {
+        let Some(p) = &self.path else { return Vec::new() };
+        let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else {
+            return Vec::new();
+        };
+        let dir = p
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(".jo-history")
+            .join(&name);
+        let Ok(rd) = std::fs::read_dir(&dir) else { return Vec::new() };
+        let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        v.sort();
+        v.reverse();
+        v.into_iter()
+            .map(|q| {
+                let stem = q
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                // 20260804-183012 → 2026-08-04 18:30(名前は ASCII の日時)
+                let disp = if stem.len() >= 13 && stem.is_ascii() {
+                    format!(
+                        "{}-{}-{} {}:{}",
+                        &stem[0..4], &stem[4..6], &stem[6..8], &stem[9..11], &stem[11..13]
+                    )
+                } else {
+                    stem
+                };
+                let kb = std::fs::metadata(&q).map(|m| m.len() / 1024).unwrap_or(0);
+                (format!("{disp}({kb} KB)"), q)
+            })
+            .collect()
+    }
+
+    /// 控えを開く。いまのファイルは動かさず、**名無しの複製**として読む
+    /// (保存すると名前を聞く。元へ戻したいなら同じ名前で保存する — 
+    /// 黙って元のファイルを書き戻したりしない)
+    fn open_version(&mut self, q: &std::path::Path) {
+        match std::fs::File::open(q).map_err(|e| e.to_string()).and_then(ooxml::read) {
+            Ok((doc, rep)) => {
+                self.release_lock();
+                self.locked_by = None;
+                self.hist_open = false;
+                self.target = Target::Body;
+                self.notes = rep
+                    .unsupported
+                    .iter()
+                    .map(|(n, c)| SharedString::from(format!("{n} × {c}")))
+                    .collect();
+                self.pg = doc.page.unwrap_or_default();
+                self.set_doc(doc);
+                self.adopt_font();
+                self.relayout_keep();
+                self.path = None;
+                self.dirty = true;
+                self.status = "控えを開きました(名無しの複製。保存で名前を聞きます。\
+                               元へ戻すなら同じ名前で保存)"
+                    .into();
+            }
+            Err(e) => self.status = format!("控えが読めません: {e}").into(),
+        }
+    }
+
+    /// チャット(申し送り帳)の置き場。文書の隣の 名前.docx.chat.txt
+    fn chat_path(&self) -> Option<PathBuf> {
+        self.path.as_ref().map(|p| {
+            let mut os = p.as_os_str().to_owned();
+            os.push(".chat.txt");
+            PathBuf::from(os)
+        })
+    }
+
+    /// 申し送りの最近の行(古い順で最大12行)
+    fn chat_lines(&self) -> Vec<String> {
+        let Some(cp) = self.chat_path() else { return Vec::new() };
+        let Ok(text) = std::fs::read_to_string(cp) else { return Vec::new() };
+        let mut v: Vec<String> =
+            text.lines().rev().take(12).map(str::to_string).collect();
+        v.reverse();
+        v
+    }
+
+    /// 申し送り帳に名乗りと日時つきで1行書き足す
+    fn chat_send(&mut self) {
+        let text = self.chat_ed.text().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let Some(cp) = self.chat_path() else {
+            self.status =
+                "まだファイルになっていません(保存すると申し送り帳が持てます)".into();
+            return;
+        };
+        let stamp = std::process::Command::new("date")
+            .arg("+%Y-%m-%d %H:%M")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let line = format!("[{stamp}] {}: {text}\n", lock_identity());
+        use std::io::Write as _;
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&cp)
+            .and_then(|mut f| f.write_all(line.as_bytes()))
+        {
+            Ok(_) => {
+                self.chat_ed = Editor::new("");
+                self.status =
+                    "書き残しました(文書の隣の .chat.txt。開いた人が読めます)".into();
+            }
+            Err(e) => self.status = format!("チャットに書けません: {e}").into(),
+        }
+    }
+
     /// 自分のロックを外す(閉じる・別のファイルへ移るとき)。
     fn release_lock(&mut self) {
         if let Some(lp) = self.my_lock.take() {
@@ -1052,6 +1222,10 @@ impl Writer {
             .and_then(|old| std::fs::read(old).ok())
             .map(std::io::Cursor::new);
         let doc_out = self.doc_for_save();
+        // バージョン履歴: 上書きの前に、いままでの中身を控えとして残す
+        if p.exists() {
+            self.keep_version(&p);
+        }
         match kumihan::atomic::save(&p, |f| {
             ooxml::write_with(&doc_out, original, std::io::BufWriter::new(f))
         }) {
@@ -2058,7 +2232,7 @@ impl Writer {
         "caption", "tof", "tof-update", "columns",
         "pen", "highlighter", "eraser", "track-changes", "dropcap", "hyphenation",
         "crossref", "co-addcomment", "co-delcomment", "co-showcomment",
-        "prot-doc", "coauth-mode",
+        "prot-doc", "coauth-mode", "co-history", "co-chat",
     ];
 
     /// 画像を読んで、カーソルの段落の下に挿す。
@@ -2193,6 +2367,7 @@ impl Writer {
             "open", "save", "pdf", "zoom-in", "zoom-out", "ruler", "darkmode",
             "line-numbers", "hidenchars", "selectall", "spell", "wordcount",
             "co-showcomment", "replace", "prot-doc", "coauth-mode",
+            "co-history", "co-chat",
         ];
         if self.protected() && !READONLY_OK.contains(&id) {
             self.status =
@@ -2810,6 +2985,36 @@ impl Writer {
                     }
                 }
             },
+            // バージョン履歴。上書き保存のたびに .jo-history へ残る控えの一覧
+            "co-history" => {
+                self.hist_open = !self.hist_open;
+                if self.hist_open {
+                    self.chat_open = false;
+                    self.bm_open = false;
+                    self.xr_open = false;
+                    self.status = if self.path.is_none() {
+                        "まだファイルになっていません(保存すると、上書きのたびに\
+                         控えが残ります)"
+                            .into()
+                    } else {
+                        "バージョン履歴: 押すと控えを名無しの複製で開きます".into()
+                    };
+                }
+            }
+            // チャット。文書の隣の申し送り帳(.chat.txt)へ名乗り付きで追記。
+            // サーバーは無いので生放送ではない — ファイル越しの言伝(ことづて)
+            "co-chat" => {
+                self.chat_open = !self.chat_open;
+                if self.chat_open {
+                    self.hist_open = false;
+                    self.bm_open = false;
+                    self.xr_open = false;
+                    self.find_open = false;
+                    self.chat_ed = Editor::new("");
+                    self.status =
+                        "チャット: 打って Enter で書き残す(文書の隣の .chat.txt)".into();
+                }
+            }
             "zoom-out" => self.zoom = (self.zoom - 0.1).max(0.5),
             "linespace" => self.para(|p| {
                 p.line_spacing = match p.spacing() {
@@ -2961,6 +3166,13 @@ impl Writer {
             cx.notify();
             return;
         }
+        if self.hist_open || self.chat_open {
+            self.hist_open = false;
+            self.chat_open = false;
+            self.status = "".into();
+            cx.notify();
+            return;
+        }
         if self.font_list || self.size_list || self.symbols || self.style_list {
             self.font_list = false;
             self.size_list = false;
@@ -3042,6 +3254,8 @@ impl Writer {
             self.find_next();
         } else if self.bm_open {
             self.bm_add();
+        } else if self.chat_open {
+            self.chat_send();
         } else {
             self.editor().insert("\n");
             self.on_edited();
@@ -4132,6 +4346,78 @@ impl Render for Writer {
             Some(d)
         };
 
+        // バージョン履歴の板(控えの一覧。押すと名無しの複製で開く)
+        let hist_panel = if !self.hist_open {
+            None
+        } else {
+            let items = self.versions();
+            let mut d = div().absolute().left(px(16.0)).top(px(8.0)).w(px(360.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("バージョン履歴 — 上書き保存のたびの控え(9世代まで)"));
+            if items.is_empty() {
+                d = d.child(div().text_size(px(11.5)).text_color(rgb(0x66707A))
+                    .child("(まだ控えはありません。上書き保存すると増えます)"));
+            }
+            for (i, (disp, q)) in items.into_iter().enumerate() {
+                d = d.child(div()
+                    .id(SharedString::from(format!("hist-{i}")))
+                    .px_2().py_0p5().rounded_sm()
+                    .text_size(px(12.5)).cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF2F7)))
+                    .child(SharedString::from(disp))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_version(&q);
+                        cx.notify()
+                    })));
+            }
+            Some(d)
+        };
+
+        // チャットの板(申し送り帳の最近の行+入力欄)
+        let chat_panel = if !self.chat_open {
+            None
+        } else {
+            let mut t = self.chat_ed.text().to_string();
+            let cur = self.chat_ed.cursor().min(t.len());
+            t.insert(cur, '|');
+            let lines = self.chat_lines();
+            let mut d = div().absolute().left(px(16.0)).top(px(8.0)).w(px(420.0))
+                .p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .border_1().border_color(rgb(0xC6CDD3))
+                .flex().flex_col().gap_2()
+                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x165E83))
+                    .child("チャット — 文書の隣の申し送り帳(.chat.txt)"));
+            if lines.is_empty() {
+                d = d.child(div().text_size(px(11.5)).text_color(rgb(0x66707A))
+                    .child("(まだ書き込みはありません)"));
+            }
+            for l in lines {
+                d = d.child(div().text_size(px(12.0))
+                    .whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(l)));
+            }
+            d = d.child(div().flex().flex_row().gap_2().items_center()
+                .child(div().flex_1().px_2().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).bg(gpui::white())
+                    .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(t)))
+                .child(div().id("chat-send").px_2p5().py_1().rounded_sm()
+                    .border_1().border_color(rgb(0x1B6E3C)).text_color(rgb(0x1B6E3C))
+                    .text_size(px(11.5)).cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .child("送信 (Enter)")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.chat_send();
+                        cx.notify()
+                    }))));
+            Some(d)
+        };
+
         // 相互参照の板(しおり一覧 → 文字/ページを挿す。更新もここ)
         let xr_panel = if !self.xr_open {
             None
@@ -4496,6 +4782,8 @@ impl Render for Writer {
                     .children(wm_panel)
                     .children(bm_panel)
                     .children(xr_panel)
+                    .children(hist_panel)
+                    .children(chat_panel)
                     .children(font_panel)
                     .children(size_panel)
                     .children(style_panel)

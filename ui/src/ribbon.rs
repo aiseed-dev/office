@@ -148,8 +148,8 @@ pub const WRITER: &[Tab] = &[
         c("co-addcomment", "コメントを追加", "co-addcomment"),
         c("co-delcomment", "コメントを削除", "co-delcomment"),
         c("co-showcomment", "コメントの表示", "co-showcomment"),
-        x("チャット", "co-chat"),
-        x("バージョン履歴", "co-history"),
+        c("co-chat", "チャット", "co-chat"),
+        c("co-history", "バージョン履歴", "co-history"),
     ]},
     Tab { name: "保護", cmds: &[
         x("暗号化する", "prot-encrypt"),

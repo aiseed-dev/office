@@ -75,6 +75,7 @@ READY = {
         "co-addcomment": "co-addcomment", "co-delcomment": "co-delcomment",
         "co-showcomment": "co-showcomment",
         "coauth-mode": "coauth-mode", "prot-doc": "prot-doc",
+        "co-chat": "co-chat", "co-history": "co-history",
     },
     "calc": {
         "open": "open", "save": "save", "undo": "undo", "redo": "redo",
