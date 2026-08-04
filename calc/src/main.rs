@@ -2085,6 +2085,21 @@ impl Calc {
                     self.insert_py_image(TEXTART_PY, "textart", text, cx);
                 }
             }
+            // ブックの情報(保存で docProps/core.xml へ)
+            "prop-creator" | "prop-title" | "prop-keywords" | "prop-subject"
+            | "prop-desc" => {
+                let f = match kind {
+                    "prop-creator" => &mut self.book.props.creator,
+                    "prop-title" => &mut self.book.props.title,
+                    "prop-keywords" => &mut self.book.props.keywords,
+                    "prop-subject" => &mut self.book.props.subject,
+                    _ => &mut self.book.props.description,
+                };
+                *f = text;
+                self.dirty = true;
+                self.status =
+                    "ブックの情報を控えました(保存で xlsx に入ります)".into();
+            }
             "chat" => {
                 if text.is_empty() {
                     self.status = "何も書き残しませんでした".into();
@@ -8164,6 +8179,11 @@ impl Render for Calc {
                 ),
                 "chat" => "チャット — 言伝を書き残す(ブックの隣の .chat.txt)".to_string(),
                 "equation" => "方程式 — 式を打つ(TeX の書き方。清書して画像で置く)".to_string(),
+                "prop-creator" => "ブックの情報 — 作成者".to_string(),
+                "prop-title" => "ブックの情報 — タイトル".to_string(),
+                "prop-keywords" => "ブックの情報 — タグ".to_string(),
+                "prop-subject" => "ブックの情報 — 件名".to_string(),
+                "prop-desc" => "ブックの情報 — コメント".to_string(),
                 "textart" => "テキストアート — 飾り文字にする文字を打つ".to_string(),
                 "pw-open" => "暗号化されたブック — パスワード".to_string(),
                 "pw-set" => "暗号化 — パスワード(空にして Enter で暗号化をやめる)".to_string(),
@@ -8609,26 +8629,37 @@ impl Render for Calc {
                         .font_weight(gpui::FontWeight::BOLD)
                         .child("プロパティ"));
                 let pr = &self.book.props;
-                for (k, v) in [
-                    ("作成者", pr.creator.clone()),
-                    ("タイトル", pr.title.clone()),
-                    ("タグ", pr.keywords.clone()),
-                    ("件名", pr.subject.clone()),
-                    ("コメント", pr.description.clone()),
+                for (k, v, kind) in [
+                    ("作成者", pr.creator.clone(), "prop-creator"),
+                    ("タイトル", pr.title.clone(), "prop-title"),
+                    ("タグ", pr.keywords.clone(), "prop-keywords"),
+                    ("件名", pr.subject.clone(), "prop-subject"),
+                    ("コメント", pr.description.clone(), "prop-desc"),
                 ] {
                     let empty = v.is_empty();
-                    pane = pane.child(div().flex().flex_row()
+                    let init = v.clone();
+                    pane = pane.child(div().flex().flex_row().items_center()
                         .child(div().w(px(220.0)).text_color(dim).child(k))
                         .child(div()
+                            .id(SharedString::from(kind))
+                            .w(px(320.0)).px_2().py_1().rounded_sm()
+                            .border_1().border_color(rgb(0xE1E6EA))
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(item_bg))
+                            .whitespace_nowrap().overflow_hidden()
                             .text_color(if empty { gray } else { fg })
                             .child(SharedString::from(if empty {
-                                "—".to_string()
+                                "テキストの追加".to_string()
                             } else {
                                 v
+                            }))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.prompt = Some((kind, Editor::new(&init)));
+                                cx.notify()
                             }))));
                 }
                 pane = pane.child(div().text_size(px(11.5)).text_color(dim)
-                    .child("開いた xlsx の情報(保存でもそのまま残ります)"));
+                    .child("欄を押して打ち、Enter で控える(保存で xlsx の情報に入ります)"));
             }
             div().absolute().inset_0().bg(gpui::white())
                 .flex().flex_row()
@@ -9046,11 +9077,11 @@ impl Render for Calc {
                    .children(tip)
                    .children(fmt_panel)
                    .children(menu)
+                   .children(filepage)
                    .children(pick_panel)
                    .children(prompt_panel)
                    .children(solver_panel)
-                   .children(slicer_panel)
-                   .children(filepage))
+                   .children(slicer_panel))
             .child(sheets_bar)
             .children(notes)
     }

@@ -763,12 +763,17 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
         };
         let grab = |tag: &str| -> String {
             let open = format!("<{tag}");
+            let close = format!("</{tag}>");
             s.find(&open)
                 .and_then(|i| {
                     let rest = &s[i..];
                     let a = rest.find('>')? + 1;
-                    let b = rest.find("</")?;
-                    (b > a).then(|| unesc(&rest[a..b]))
+                    // <tag/> の自己完結は空欄
+                    if rest.as_bytes().get(a - 2) == Some(&b'/') {
+                        return None;
+                    }
+                    let b = rest.find(&close)?;
+                    (b >= a).then(|| unesc(&rest[a..b]))
                 })
                 .unwrap_or_default()
         };
@@ -1449,6 +1454,53 @@ fn print_extra_xml(orig: &str, sh: &Sheet) -> String {
     out
 }
 
+const CORE_REL: &str = r#"<Relationship Id="rIdCore" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>"#;
+
+const CORE_XML_EMPTY: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"></cp:coreProperties>";
+
+/// core.xml の1つのタグを差し替える(無ければ足す)。原文の他の欄は残す。
+fn set_core_tag(s: &str, tag: &str, val: &str) -> String {
+    let esc = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let open = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let repl = if val.is_empty() {
+        format!("<{tag}/>")
+    } else {
+        format!("<{tag}>{}</{tag}>", esc(val))
+    };
+    if let Some(i) = s.find(&open) {
+        let rest = &s[i..];
+        let gt = rest.find('>').unwrap_or(0);
+        if gt > 0 && rest.as_bytes().get(gt - 1) == Some(&b'/') {
+            // <tag/> 自己完結
+            return format!("{}{}{}", &s[..i], repl, &rest[gt + 1..]);
+        }
+        if let Some(c) = rest.find(&close) {
+            return format!("{}{}{}", &s[..i], repl, &rest[c + close.len()..]);
+        }
+        s.to_string()
+    } else if let Some(i) = s.rfind("</cp:coreProperties>") {
+        format!("{}{}{}", &s[..i], repl, &s[i..])
+    } else {
+        s.to_string()
+    }
+}
+
+/// docProps/core.xml をブックの情報で差し替える。
+fn patch_core_props(orig: &str, p: &crate::model::BookProps) -> String {
+    let mut s = orig.to_string();
+    for (tag, v) in [
+        ("dc:creator", &p.creator),
+        ("dc:title", &p.title),
+        ("dc:subject", &p.subject),
+        ("cp:keywords", &p.keywords),
+        ("dc:description", &p.description),
+    ] {
+        s = set_core_tag(&s, tag, v);
+    }
+    s
+}
+
 pub fn write<W: Write + Seek>(book: &Book, dst: W) -> Result<(), String> {
     write_with(book, None::<std::io::Cursor<Vec<u8>>>, dst)
 }
@@ -1515,6 +1567,12 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     let s = String::from_utf8_lossy(&buf).to_string();
                     let patched = patch_defined_names(&s, &defined_names_xml(book));
                     carried.push((name, patched.into_bytes()));
+                    continue;
+                }
+                if name == "docProps/core.xml" {
+                    // ブックの情報はこちらのモデルが正。原文の他の欄は残す
+                    let s = String::from_utf8_lossy(&buf).to_string();
+                    carried.push((name, patch_core_props(&s, &book.props).into_bytes()));
                     continue;
                 }
                 if name == "[Content_Types].xml" {
@@ -1702,6 +1760,32 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     // ブックに載せた Python とピボットの指図はモデルが正(古い部品は写さない)
     carried.retain(|(name, _)| name != "xl/joPython.xml" && name != "xl/joPivot.xml");
     let carry = !carried.is_empty();
+    // ブックの情報。原本に core.xml が無い・新規ブックでも、書いた情報は残す
+    let pr = &book.props;
+    let props_any = !(pr.creator.is_empty()
+        && pr.title.is_empty()
+        && pr.subject.is_empty()
+        && pr.keywords.is_empty()
+        && pr.description.is_empty());
+    let had_core = carried.iter().any(|(n, _)| n == "docProps/core.xml");
+    let core_fresh = !had_core && props_any;
+    if core_fresh {
+        carried.push((
+            "docProps/core.xml".to_string(),
+            patch_core_props(CORE_XML_EMPTY, pr).into_bytes(),
+        ));
+        // 持ち越した .rels に core の関係が無ければ足す
+        if let Some((_, buf)) = carried.iter_mut().find(|(n, _)| n == "_rels/.rels") {
+            let s = String::from_utf8_lossy(buf).to_string();
+            if !s.contains("core-properties") {
+                if let Some(i) = s.rfind("</Relationships>") {
+                    let mut s2 = s.clone();
+                    s2.insert_str(i, CORE_REL);
+                    *buf = s2.into_bytes();
+                }
+            }
+        }
+    }
     for (name, buf) in &carried {
         zip.start_file(name.as_str(), o).map_err(|e| e.to_string())?;
         zip.write_all(buf).map_err(|e| e.to_string())?;
@@ -1744,6 +1828,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     r#"<Override PartName="/{name}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>"#
                 ));
             }
+        }
+        if core_fresh && !ct.contains("core-properties") {
+            add.push_str(r#"<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>"#);
         }
         if !add.is_empty() {
             if let Some(p) = ct.rfind("</Types>") {
@@ -1797,7 +1884,14 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         put("xl/joPivot.xml", &px)?;
     }
     if !carry {
-        put("_rels/.rels", RELS)?;
+        if core_fresh {
+            put(
+                "_rels/.rels",
+                &RELS.replace("</Relationships>", &format!("{CORE_REL}</Relationships>")),
+            )?;
+        } else {
+            put("_rels/.rels", RELS)?;
+        }
     }
 
     let sheets_xml: String = book.sheets.iter().enumerate()
@@ -2951,6 +3045,21 @@ mod script_roundtrip_tests {
         buf2.set_position(0);
         let (b3, _) = read(buf2).expect("読めない");
         assert_eq!(b3.scripts.len(), 1, "二往復で二重になった");
+    }
+
+    #[test]
+    fn ブックの情報が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.props.creator = "日本フネン".into();
+        b.props.title = "見積 <2026>".into();
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert_eq!(back.props.creator, "日本フネン", "作成者が往復しない");
+        assert_eq!(back.props.title, "見積 <2026>", "逃がしが往復しない");
+        assert_eq!(back.props.subject, "", "空欄は空欄のまま");
     }
 
     #[test]

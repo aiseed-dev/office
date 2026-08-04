@@ -265,8 +265,10 @@ pysheet(Python 束縛、polars 連携)。
 (汎用の描き方: タブの並びから自動で組み、BIG 表の釦だけ名札つき大釦。
 ホームは2段に割る。乗ると名前が下のステータスバーへ = hover_hint)、
 ファイルタブは全面ページ(品書き+ブックの情報。統計は生きた値、
-プロパティは docProps/core.xml を**読んで見せる** — Book.props。編集は
-まだ = writer は編集できるので残件)。最近開いたは recent-calc.txt 12件。
+プロパティは docProps/core.xml と**往復** — Book.props。読みは grab、
+書きは patch_core_props(持ち越しの core.xml へ差し替え。無い・新規なら
+部品と Content_Types と .rels の宣言ごと足す)。編集は板(prop-*)で、
+writer と同等になった)。最近開いたは recent-calc.txt 12件。
 新規作成 = new_book(未保存があれば断る)。ついでの実バグ修正:
 罫線の辺が border_color(全辺1色)で他の辺を巻き込むのを、辺ごとの
 重ね描き(1px の帯)に直した(0b94b97 — writer も同じ穴が無いか一見の価値)。
