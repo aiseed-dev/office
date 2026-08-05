@@ -626,6 +626,10 @@ struct Calc {
     shape_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
+    /// 窓の大きさ(px)。描画のたびに実測 — **見える範囲**の計算に使う。
+    /// セルの大きさは設定どおり固定で、窓に合わせて伸縮させない
+    view_w_px: f32,
+    view_h_px: f32,
     /// 右クリックのメニュー(出ている場所。格子領域の px)
     menu_at: Option<(f32, f32)>,
     /// 開いている子メニュー(挿入▸ など)
@@ -761,6 +765,8 @@ impl Calc {
             shape_sel: None,
             shape_drag: None,
             wheel: (0.0, 0.0),
+            view_w_px: 0.0,
+            view_h_px: 0.0,
             menu_at: None,
             menu_sub: None,
             pick: None,
@@ -944,30 +950,79 @@ impl Calc {
         sel.contains(&v)
     }
 
+    /// 窓に入る行数。**セルの大きさは固定**で、窓が大きいほど多くの行が
+    /// 見える(発注者 2026-08-06)。まだ窓の大きさを知らない(描画前・試験)
+    /// なら従来の既定。少し多めに数えても、はみ出しは器が刈る
+    fn rows_fit(&self) -> u32 {
+        self.rows_fit_in(self.view_h_px)
+    }
+
+    fn rows_fit_in(&self, budget: f32) -> u32 {
+        if self.view_h_px <= 0.0 {
+            return ROWS; // 描画前・試験は従来の既定
+        }
+        let (mut h, mut n, mut r) = (0.0f32, 0u32, self.view.row);
+        while h < budget && n < 300 {
+            h += self.row_px(r);
+            r += 1;
+            n += 1;
+        }
+        n.max(3)
+    }
+
+    /// 端の追従・ページ移動用: 額縁(リボン・数式バー・耳・状態行)を
+    /// 差し引いた「確実に丸ごと見える」行数
+    fn rows_snug(&self) -> u32 {
+        self.rows_fit_in(self.view_h_px - 270.0)
+    }
+
+    /// 窓に入る列数(rows_fit と同じ役割)
+    fn cols_fit(&self) -> u32 {
+        self.cols_fit_in(self.view_w_px)
+    }
+
+    fn cols_fit_in(&self, budget: f32) -> u32 {
+        if self.view_w_px <= 0.0 {
+            return COLS;
+        }
+        let (mut w, mut n, mut c) = (0.0f32, 0u32, self.view.col);
+        while w < budget && n < 120 {
+            w += self.col_px(c);
+            c += 1;
+            n += 1;
+        }
+        n.max(2)
+    }
+
+    fn cols_snug(&self) -> u32 {
+        self.cols_fit_in(self.view_w_px - HEAD_W - 24.0)
+    }
+
     fn visible_rows(&self) -> Vec<u32> {
         let hidden = &self.sheet().row_hidden;
+        let fit = self.rows_fit();
         match &self.filter {
             Some((col, v)) => self
                 .matching_rows(*col, v)
                 .into_iter()
                 .filter(|r| !hidden.contains(r) && self.slicer_keeps(*r))
-                .take(ROWS as usize)
+                .take(fit as usize)
                 .collect(),
             None if self.slicer.as_ref().is_some_and(|(_, sel, _)| !sel.is_empty()) => {
                 // スライサーで絞る: 見出し+選んだ値の行(絞り込みと同じ流儀)
                 let (rows, _) = self.sheet().extent();
                 (0..rows)
                     .filter(|r| !hidden.contains(r) && self.slicer_keeps(*r))
-                    .take(ROWS as usize)
+                    .take(fit as usize)
                     .collect()
             }
             None => {
                 // 畳んだ行のぶん多めに見て、画面の行数まで詰める
                 let extra = hidden.len() as u32;
-                grid_rows(self.frozen, self.view, ROWS + extra)
+                grid_rows(self.frozen, self.view, fit + extra)
                     .into_iter()
                     .filter(|r| !hidden.contains(r))
-                    .take(ROWS as usize)
+                    .take(fit as usize)
                     .collect()
             }
         }
@@ -977,10 +1032,11 @@ impl Calc {
     fn visible_cols(&self) -> Vec<u32> {
         let hidden = &self.sheet().col_hidden;
         let extra = hidden.len() as u32;
-        let mut v: Vec<u32> = grid_cols(self.frozen, self.view, COLS + extra)
+        let fit = self.cols_fit();
+        let mut v: Vec<u32> = grid_cols(self.frozen, self.view, fit + extra)
             .into_iter()
             .filter(|c| !hidden.contains(c))
-            .take(COLS as usize)
+            .take(fit as usize)
             .collect();
         if self.sheet().rtl {
             // 右から左のシートは列を逆順に並べる。**描画も当たり判定も
@@ -3110,17 +3166,18 @@ impl Calc {
 
     /// カーソルが見える位置まで窓を動かす。
     fn follow(&mut self) {
+        let (nr, nc) = (self.rows_snug(), self.cols_snug());
         if self.cursor.row < self.view.row {
             self.view.row = self.cursor.row;
         }
-        if self.cursor.row >= self.view.row + ROWS {
-            self.view.row = self.cursor.row + 1 - ROWS;
+        if self.cursor.row >= self.view.row + nr {
+            self.view.row = self.cursor.row + 1 - nr;
         }
         if self.cursor.col < self.view.col {
             self.view.col = self.cursor.col;
         }
-        if self.cursor.col >= self.view.col + COLS {
-            self.view.col = self.cursor.col + 1 - COLS;
+        if self.cursor.col >= self.view.col + nc {
+            self.view.col = self.cursor.col + 1 - nc;
         }
     }
 
@@ -3695,11 +3752,11 @@ impl Calc {
         cx.notify();
     }
     fn a_page_up(&mut self, _: &ui::PageUp, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_cursor(-(ROWS as i32 - 1), 0);
+        self.move_cursor(-(self.rows_snug() as i32 - 1).max(1), 0);
         cx.notify();
     }
     fn a_page_down(&mut self, _: &ui::PageDown, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_cursor(ROWS as i32 - 1, 0);
+        self.move_cursor((self.rows_snug() as i32 - 1).max(1), 0);
         cx.notify();
     }
     fn a_up(&mut self, _: &ui::Up, _: &mut Window, cx: &mut Context<Self>) {
@@ -8347,6 +8404,9 @@ fn paper_mm(code: u32) -> Option<(f32, f32, &'static str)> {
 
 impl Render for Calc {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 窓の大きさを控える(見える行数・列数がこれに追従する)
+        self.view_w_px = f32::from(window.viewport_size().width);
+        self.view_h_px = f32::from(window.viewport_size().height);
         if std::env::var_os("JO_SELFTEST").is_some() {
             // 実際に描画が走った証拠を残す(notify だけでは画面は変わらない —
             // これが止まってティックが続くなら、提示(present)の停止)
@@ -8725,15 +8785,17 @@ impl Render for Calc {
         // ---- 格子 ----
         let mut grid = div().flex().flex_col();
         // 列見出し
-        let mut head = div().flex().flex_row()
-            .child(div().w(px(HEAD_W)).h(px(ROW_H)).bg(th_head)
+        // 見出しもセルも flex_none — **窓の大きさで伸縮させない**
+        // (窓に合わせるのは見える範囲。セルの大きさは設定どおり固定)
+        let mut head = div().flex().flex_row().flex_none()
+            .child(div().flex_none().w(px(HEAD_W)).h(px(ROW_H)).bg(th_head)
                    .border_r_1().border_b_1().border_color(rgb(0xD5DBE0)));
         let (sel_a, sel_b) = self.sel_rect();
         let has_sel = self.anchor.is_some();
         for c in self.visible_cols() {
             // 選択に入っている列の見出しは色を変える(いまどこを選んでいるかの道標)
             let on = has_sel && (sel_a.col..=sel_b.col).contains(&c) || c == self.cursor.col;
-            head = head.child(div().w(px(self.col_px(c))).h(px(ROW_H))
+            head = head.child(div().flex_none().w(px(self.col_px(c))).h(px(ROW_H))
                 .bg(if on { rgb(0xCFE6D8) } else { th_head })
                 .border_r_1().border_b_1()
                 .border_color(rgb(0xD5DBE0))
@@ -8756,8 +8818,8 @@ impl Render for Calc {
         for r in visible {
             let rh = self.row_px(r);
             let row_on = has_sel && (sel_a.row..=sel_b.row).contains(&r) || r == self.cursor.row;
-            let mut row = div().flex().flex_row()
-                .child(div().w(px(HEAD_W)).h(px(rh))
+            let mut row = div().flex().flex_row().flex_none()
+                .child(div().flex_none().w(px(HEAD_W)).h(px(rh))
                     .bg(if row_on { rgb(0xCFE6D8) } else { th_head })
                     .border_r_1().border_b_1()
                     .border_color(rgb(0xD5DBE0))
@@ -8859,6 +8921,7 @@ impl Render for Calc {
                     && (ra.row..=rb.row).contains(&r) && (ra.col..=rb.col).contains(&c);
                 let mut d = div()
                     .id(SharedString::from(p.a1()))
+                    .flex_none()
                     .w(px(self.col_px(c))).h(px(rh))
                     .border_r_1().border_b_1()
                     .border_color(if self.gridlines { rgb(0xE1E6EA) } else { rgb(0xFFFFFF) })
@@ -9224,7 +9287,11 @@ impl Render for Calc {
                     .iter()
                     .map(|c| self.col_px(*c))
                     .sum::<f32>();
-            let grid_h = ROW_H + ROWS as f32 * ROW_H;
+            let grid_h = if self.view_h_px > 0.0 {
+                self.view_h_px - 120.0
+            } else {
+                ROW_H + ROWS as f32 * ROW_H
+            };
             let mx = mx.min((grid_w - 250.0).max(0.0));
             let my = my.min((grid_h - h_est).max(0.0));
 
