@@ -14,7 +14,7 @@ pub use lang::ja::{furigana, proof};
 pub use lang::{check, spell, Language, Target};
 pub use lang::model::Endpoint;
 pub use lang::ai;
-pub use lang::i18n::{tr, trf};
+pub use lang::i18n::{languages, tr, trf};
 
 /// 画面の文言(そのままの文)。ja の文が鍵 — ja では何も変わらない
 #[macro_export]
@@ -34,7 +34,10 @@ macro_rules! tf {
 
 pub mod icons;
 pub mod ribbon;
+// gen_lang:begin(この間は ui/gen_lang.py が生成する — 手で書かない)
 pub mod ribbon_en;
+// gen_lang:end
+pub mod ribbon_tables;
 pub mod settings;
 pub mod winstate;
 

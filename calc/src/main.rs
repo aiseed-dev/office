@@ -9706,12 +9706,16 @@ impl Render for Calc {
                         .child(div().id("set-lang")
                             .px_3().py_1().rounded_sm().cursor_pointer()
                             .bg(item_bg)
-                            .child(SharedString::from(
-                                if lang_now == "en" { "English" } else { "日本語" }))
+                            .child(SharedString::from(match lang_now.as_str() {
+                                "ja" => "日本語".to_string(),
+                                other => other.to_string(),
+                            }))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let cur = ui::settings::get("language")
                                     .unwrap_or_else(|| "ja".into());
-                                let next = if cur == "en" { "ja" } else { "en" };
+                                let all = ui::languages();
+                                let i = all.iter().position(|l| **l == cur).unwrap_or(0);
+                                let next = all[(i + 1) % all.len()];
                                 ui::settings::set("language", next);
                                 this.status = ui::t!("言語を控えました(次の起動から効きます。環境変数 OFFICE_LANG があればそちらが優先)").into();
                                 cx.notify()

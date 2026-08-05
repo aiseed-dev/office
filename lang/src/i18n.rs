@@ -39,7 +39,7 @@ fn from_file(key: &str) -> Option<String> {
     None
 }
 
-/// 画面の言語。**文言が揃った言語だけ**を受ける(いまは ja と en)。
+/// 画面の言語。**文言が揃った言語だけ**を受ける(登録簿 i18n_tables が正)。
 /// 優先順: 環境変数 OFFICE_LANG > settings.toml > 既定 ja
 pub fn language() -> &'static str {
     static LANG: OnceLock<String> = OnceLock::new();
@@ -49,24 +49,35 @@ pub fn language() -> &'static str {
             .filter(|s| !s.is_empty())
             .or_else(|| from_file("language"))
             .unwrap_or_default();
-        match raw.as_str() {
-            "en" => "en".into(),
-            _ => "ja".into(),
+        if crate::i18n_tables::LANGS.contains(&raw.as_str()) {
+            raw
+        } else {
+            "ja".into()
         }
     })
 }
 
-fn en_map() -> &'static HashMap<&'static str, &'static str> {
-    static MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    MAP.get_or_init(|| crate::i18n_en::EN.iter().copied().collect())
+/// 選べる言語(ja + 表の揃った言語)。設定ページの巡回もこれを見る
+pub fn languages() -> Vec<&'static str> {
+    let mut v = vec!["ja"];
+    v.extend_from_slice(crate::i18n_tables::LANGS);
+    v
 }
 
-/// 文をいまの言語で。表に無い文は ja のまま(嘘の英語を作らない)
+fn lang_map() -> Option<&'static HashMap<&'static str, &'static str>> {
+    static MAP: OnceLock<Option<HashMap<&'static str, &'static str>>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        crate::i18n_tables::table(language()).map(|t| t.iter().copied().collect())
+    })
+    .as_ref()
+}
+
+/// 文をいまの言語で。表に無い文は ja のまま(嘘の翻訳を作らない)
 pub fn tr(ja: &'static str) -> &'static str {
-    if language() != "en" {
-        return ja;
+    match lang_map() {
+        Some(m) => m.get(ja).copied().unwrap_or(ja),
+        None => ja,
     }
-    en_map().get(ja).copied().unwrap_or(ja)
 }
 
 /// 穴埋めつきの文。雛形を tr で引いてから、実行時に埋める

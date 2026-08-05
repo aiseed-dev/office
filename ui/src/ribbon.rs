@@ -42,17 +42,15 @@ pub(crate) const fn x(label: &'static str, icon: &'static str) -> Cmd {
 /// 内部の論理(タブ名の照合など)は ja の表で書いてよい —
 /// 添字がそのまま対応する
 pub fn writer_tabs() -> &'static [Tab] {
-    match crate::settings::language() {
-        "en" => crate::ribbon_en::WRITER,
-        _ => WRITER,
-    }
+    crate::ribbon_tables::tabs(crate::settings::language())
+        .map(|(w, _)| w)
+        .unwrap_or(WRITER)
 }
 
 pub fn calc_tabs() -> &'static [Tab] {
-    match crate::settings::language() {
-        "en" => crate::ribbon_en::CALC,
-        _ => CALC,
-    }
+    crate::ribbon_tables::tabs(crate::settings::language())
+        .map(|(_, c)| c)
+        .unwrap_or(CALC)
 }
 
 pub struct Tab {
@@ -414,10 +412,17 @@ mod tests {
     fn 各言語の表は語だけが違う() {
         // id・並び・ready・icon が ja と一致しない表は配線が壊れる —
         // ここで固定する(語は違ってよい。空の語は出さない)
-        for (ja, other) in [
-            (WRITER, crate::ribbon_en::WRITER),
-            (CALC, crate::ribbon_en::CALC),
-        ] {
+        let mut pairs: Vec<(&[Tab], &[Tab])> = Vec::new();
+        for l in lang::i18n::languages() {
+            if l == "ja" {
+                continue;
+            }
+            let (w, c) = crate::ribbon_tables::tabs(l)
+                .unwrap_or_else(|| panic!("言語 {l} のリボンの表が無い(登録簿のずれ)"));
+            pairs.push((WRITER, w));
+            pairs.push((CALC, c));
+        }
+        for (ja, other) in pairs {
             assert_eq!(ja.len(), other.len(), "タブの数が違う");
             for (a, b) in ja.iter().zip(other) {
                 assert!(!b.name.is_empty(), "タブ名が空");
