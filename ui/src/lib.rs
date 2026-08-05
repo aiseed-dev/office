@@ -53,6 +53,66 @@ pub mod ribbon_tables;
 pub mod settings;
 pub mod winstate;
 
+/// 窓の縁のつかみ(8箇所)。**GNOME の Wayland はサーバー側の飾り(外枠)を
+/// 付けない**(SSD 非対応)ので、縁を自前で掴めるようにしないと窓の大きさを
+/// 変えられない(発注者 2026-08-06)。枠のある環境(Server 装飾)では空。
+/// 使い方: 根の要素の**最後**に `.children(ui::resize_edges(window))` —
+/// 後に描く = 先にマウスを受ける、で格子や本文より縁が勝つ
+pub fn resize_edges(window: &gpui::Window) -> Vec<gpui::Div> {
+    use gpui::{
+        div, px, CursorStyle, Decorations, InteractiveElement, MouseButton, ResizeEdge,
+        Styled,
+    };
+    let Decorations::Client { tiling } = window.window_decorations() else {
+        return Vec::new();
+    };
+    const G: f32 = 6.0; // 縁のつかみの太さ
+    const C: f32 = 14.0; // 角のつかみの大きさ
+    let grab = |edge: ResizeEdge, cur: CursorStyle| {
+        div().absolute().cursor(cur).on_mouse_down(
+            MouseButton::Left,
+            move |_, window, cx| {
+                window.start_window_resize(edge);
+                cx.stop_propagation();
+            },
+        )
+    };
+    let mut v = Vec::new();
+    if !tiling.left {
+        v.push(grab(ResizeEdge::Left, CursorStyle::ResizeLeftRight)
+            .left(px(0.0)).top(px(C)).bottom(px(C)).w(px(G)));
+    }
+    if !tiling.right {
+        v.push(grab(ResizeEdge::Right, CursorStyle::ResizeLeftRight)
+            .right(px(0.0)).top(px(C)).bottom(px(C)).w(px(G)));
+    }
+    if !tiling.top {
+        v.push(grab(ResizeEdge::Top, CursorStyle::ResizeUpDown)
+            .top(px(0.0)).left(px(C)).right(px(C)).h(px(G)));
+    }
+    if !tiling.bottom {
+        v.push(grab(ResizeEdge::Bottom, CursorStyle::ResizeUpDown)
+            .bottom(px(0.0)).left(px(C)).right(px(C)).h(px(G)));
+    }
+    if !tiling.top && !tiling.left {
+        v.push(grab(ResizeEdge::TopLeft, CursorStyle::ResizeUpRightDownLeft)
+            .left(px(0.0)).top(px(0.0)).w(px(C)).h(px(C)));
+    }
+    if !tiling.top && !tiling.right {
+        v.push(grab(ResizeEdge::TopRight, CursorStyle::ResizeUpLeftDownRight)
+            .right(px(0.0)).top(px(0.0)).w(px(C)).h(px(C)));
+    }
+    if !tiling.bottom && !tiling.left {
+        v.push(grab(ResizeEdge::BottomLeft, CursorStyle::ResizeUpLeftDownRight)
+            .left(px(0.0)).bottom(px(0.0)).w(px(C)).h(px(C)));
+    }
+    if !tiling.bottom && !tiling.right {
+        v.push(grab(ResizeEdge::BottomRight, CursorStyle::ResizeUpRightDownLeft)
+            .right(px(0.0)).bottom(px(0.0)).w(px(C)).h(px(C)));
+    }
+    v
+}
+
 use std::ops::Range;
 
 use gpui::{actions, AssetSource, KeyBinding, SharedString};

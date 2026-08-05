@@ -202,6 +202,8 @@ pub struct CellFormat {
     pub valign: VAlign,
     /// 折り返して全体を表示
     pub wrap: bool,
+    /// 縮小して全体を表示(xlsx の alignment shrinkToFit)
+    pub shrink: bool,
     /// 表示形式(`#,##0` `0.00%` など)。xlsx の numFmt
     pub number_format: Option<String>,
 }
@@ -284,6 +286,11 @@ pub struct Sheet {
     pub col_hidden: std::collections::BTreeSet<u32>,
     /// この表にある表オブジェクト(xlsx の table)
     pub tables: Vec<TableDef>,
+    /// 読み込んだ xlsx でのセルの書式索引(`<c s="…">`)。
+    /// **保存で原本の styles.xml を据え置く**ための控え — 書式を触って
+    /// いないセルは同じ索引で書き戻す(勝手な書式設定をしないの家訓)。
+    /// 行や列を動かして古くなっても、保存時に中身を照合するので誤用はない
+    pub style_of: BTreeMap<Pos, u32>,
     /// 右から左へ並べる(xlsx の sheetView rightToLeft)。
     /// **日本語も右から書くことがある**(右横書き)— 発注者 2026-08-04
     pub rtl: bool,

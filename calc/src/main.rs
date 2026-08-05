@@ -801,26 +801,8 @@ impl Calc {
         if let Some(p) = path {
             c.open(p);
         } else {
-            let s = &mut c.book.sheets[0];
-            s.set(Pos::new(0, 0), Cell::input("品名"));
-            s.set(Pos::new(0, 1), Cell::input("数量"));
-            s.set(Pos::new(0, 2), Cell::input("単価"));
-            s.set(Pos::new(0, 3), Cell::input("金額"));
-            s.set(Pos::new(1, 0), Cell::input("ザボガードF F-02"));
-            s.set(Pos::new(1, 1), Cell::input("4"));
-            s.set(Pos::new(1, 2), Cell::input("125000"));
-            s.set(Pos::new(1, 3), Cell::input("=B2*C2"));
-            s.set(Pos::new(2, 0), Cell::input("エンブM"));
-            s.set(Pos::new(2, 1), Cell::input("2"));
-            s.set(Pos::new(2, 2), Cell::input("98000"));
-            s.set(Pos::new(2, 3), Cell::input("=B3*C3"));
-            s.set(Pos::new(3, 2), Cell::input("小計"));
-            s.set(Pos::new(3, 3), Cell::input("=SUM(D2:D3)"));
-            s.set(Pos::new(4, 2), Cell::input("消費税"));
-            s.set(Pos::new(4, 3), Cell::input("=ROUND(D4*0.1,0)"));
-            s.set(Pos::new(5, 2), Cell::input("合計"));
-            s.set(Pos::new(5, 3), Cell::input("=D4+D5"));
-            recalc(s);
+            // 新規は空白のブック(発注者 2026-08-06。見本を入れない —
+            // 試験は自前で表を作り、触れる見本は sample/*.xlsx にある)
             c.status = ui::t!("セルを選んで打つ。Enter で確定して下へ、Ctrl+S で保存").into();
         }
         c.sync_input();
@@ -8364,7 +8346,7 @@ fn paper_mm(code: u32) -> Option<(f32, f32, &'static str)> {
 }
 
 impl Render for Calc {
-    fn render(&mut self, _w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::env::var_os("JO_SELFTEST").is_some() {
             // 実際に描画が走った証拠を残す(notify だけでは画面は変わらない —
             // これが止まってティックが続くなら、提示(present)の停止)
@@ -8613,6 +8595,132 @@ impl Render for Calc {
                    .text_size(px(13.0)).font_family("Noto Sans JP")
                    .child(SharedString::from(if self.input.text().is_empty() {
                        " ".to_string() } else { self.input.text().to_string() })));
+
+        // ---- 折り返しの無い文字の、隣の空セルへのはみ出し(Excel の流儀) ----
+        // 折り返し・縮小・回転・右横書きでない文字のセルで、伸びる方向の
+        // 隣が空(値も式も無い)なら、そのセルの上にも描く(発注者 2026-08-06)。
+        // 描くのは格子の後の重ね描き(spill_texts)で、セル側は文字を出さない
+        let vis_cols: Vec<u32> = self.visible_cols();
+        let mut spill_from: std::collections::HashSet<Pos> = Default::default();
+        let mut spill_texts: Vec<gpui::Div> = Vec::new();
+        if !self.show_formulas {
+            let mut y = ROW_H;
+            for r in self.visible_rows() {
+                let rh = self.row_px(r);
+                let mut x = HEAD_W;
+                for (ci, &c) in vis_cols.iter().enumerate() {
+                    let w = self.col_px(c);
+                    let p = Pos::new(r, c);
+                    let x0 = x;
+                    x += w;
+                    if p == self.cursor {
+                        continue; // 編集中の見た目は従来どおり
+                    }
+                    let Some(cl) = self.sheet().get(p) else { continue };
+                    let Value::Text(t) = &cl.value else { continue };
+                    if t.is_empty() {
+                        continue;
+                    }
+                    let f = &cl.fmt;
+                    if f.wrap || f.shrink || f.rtl_text
+                        || f.rotation.is_some_and(|r| r != 0)
+                    {
+                        continue;
+                    }
+                    if self.sheet().covered_by_merge(p)
+                        || self.sheet().merges.iter().any(|(a, _)| *a == p)
+                    {
+                        continue;
+                    }
+                    let to_left = match f.align {
+                        HAlign::Right => true,
+                        HAlign::Left | HAlign::General => false,
+                        _ => continue, // 中央・両端揃えは流さない
+                    };
+                    let t1 = t.replace('\n', " ");
+                    let size = self.zoom
+                        * f.size_c
+                            .map(|c| c as f32 / 100.0 * 24.0 / 15.0 * 0.8)
+                            .unwrap_or(12.5);
+                    let units: f32 = t1
+                        .chars()
+                        .map(|ch| if (ch as u32) < 0x2E80 { 1.0 } else { 2.0 })
+                        .sum();
+                    let need = units * size * 0.52 + 14.0;
+                    if need <= w {
+                        continue; // 収まっている
+                    }
+                    // 伸びる方向の空きセルぶんだけ許す
+                    let (mut avail, mut left_ext, mut k) = (w, 0.0f32, ci);
+                    loop {
+                        if need <= avail {
+                            break;
+                        }
+                        let nk = if to_left {
+                            k.checked_sub(1)
+                        } else {
+                            (k + 1 < vis_cols.len()).then_some(k + 1)
+                        };
+                        let Some(nk) = nk else { break };
+                        let nc = vis_cols[nk];
+                        let np = Pos::new(r, nc);
+                        let occupied = self
+                            .sheet()
+                            .get(np)
+                            .is_some_and(|q| !q.value.is_empty() || q.formula.is_some())
+                            || self.sheet().covered_by_merge(np)
+                            || np == self.cursor;
+                        if occupied {
+                            break;
+                        }
+                        let nw = self.col_px(nc);
+                        avail += nw;
+                        if to_left {
+                            left_ext += nw;
+                        }
+                        k = nk;
+                    }
+                    if avail <= w {
+                        continue; // 隣が塞がっている — 今までどおり切る
+                    }
+                    spill_from.insert(p);
+                    let wd = avail.min(need);
+                    let lx = if to_left { x0 + w - wd } else { x0 };
+                    let _ = left_ext;
+                    let mut d = div().absolute()
+                        .left(px(lx)).top(px(y))
+                        .w(px(wd)).h(px(rh))
+                        .px_1p5().flex()
+                        .text_size(px(size))
+                        .font_family("Noto Sans JP")
+                        .whitespace_nowrap().overflow_hidden();
+                    match f.valign {
+                        sheet::model::VAlign::Top => d = d.items_start(),
+                        sheet::model::VAlign::Middle => d = d.items_center(),
+                        sheet::model::VAlign::Bottom => d = d.items_end(),
+                    }
+                    d = if to_left { d.justify_end() } else { d.justify_start() };
+                    if f.bold {
+                        d = d.font_weight(gpui::FontWeight::BOLD);
+                    }
+                    if f.italic {
+                        d = d.italic();
+                    }
+                    d = if let Some(cv) = &f.color {
+                        d.text_color(hex(cv))
+                    } else {
+                        d.text_color(rgb(0x1B1B1B))
+                    };
+                    if let Some(name) = &f.font {
+                        if let Ok((fam, _)) = kumihan::font::for_document(Some(name)) {
+                            d = d.font_family(SharedString::from(fam.name.clone()));
+                        }
+                    }
+                    spill_texts.push(d.child(SharedString::from(t1)));
+                }
+                y += rh;
+            }
+        }
 
         // ---- 格子 ----
         let mut grid = div().flex().flex_col();
@@ -8872,6 +8980,23 @@ impl Render for Calc {
                 if f.wrap {
                     d = d.whitespace_normal().overflow_hidden();
                 }
+                // 縮小して全体を表示(折り返しと併せない)— 幅に収まるまで
+                // 文字を小さくする。見積りは全角=1em・半角=0.5em
+                if f.shrink && !f.wrap {
+                    let size = self.zoom
+                        * f.size_c
+                            .map(|c| c as f32 / 100.0 * 24.0 / 15.0 * 0.8)
+                            .unwrap_or(12.5);
+                    let units: f32 = shown
+                        .chars()
+                        .map(|ch| if (ch as u32) < 0x2E80 { 1.0 } else { 2.0 })
+                        .sum();
+                    let need = units * size * 0.52 + 14.0;
+                    let cw = self.col_px(c);
+                    if need > cw && units > 0.0 {
+                        d = d.text_size(px((size * cw / need).max(6.0)));
+                    }
+                }
                 // 揃えの指定があればそちらが勝つ(既定は数=右・文字=左)
                 match f.align {
                     HAlign::Left => d = d.justify_start(),
@@ -8911,6 +9036,15 @@ impl Render for Calc {
                 }
                 // 選択中のセルは、確定前の入力をその場に見せる
                 let shown = if sel { self.input.text().to_string() } else { shown };
+                // はみ出しで描くセルは、ここでは文字を出さない(二重描き防止)。
+                // 折り返しの無いセルは改行を畳んで1行にする(発注者 2026-08-06)
+                let shown = if spill_from.contains(&p) {
+                    String::new()
+                } else if !f.wrap && shown.contains('\n') {
+                    shown.replace('\n', " ")
+                } else {
+                    shown
+                };
                 if f.rotation.is_some_and(|r| r != 0) {
                     let mut stack = d;
                     for ch in shown.chars() {
@@ -8927,6 +9061,13 @@ impl Render for Calc {
                 }
             }
             grid = grid.child(row);
+        }
+        // はみ出しの文字は格子の後に重ねる = 隣のセルの白地に負けない
+        if !spill_texts.is_empty() {
+            grid = grid.relative();
+            for sp in spill_texts {
+                grid = grid.child(sp);
+            }
         }
 
         // ---- シートの耳(Excel と同じく下に置く) ----
@@ -9319,7 +9460,10 @@ impl Render for Calc {
             };
             let cur = ed.cursor().min(text.len());
             text.insert(cur, '|');
-            div().absolute().left(px(HEAD_W + 40.0)).top(px(ROW_H + 24.0)).w(px(380.0))
+            // 板は表の中央に出す(発注者 2026-08-06「表示位置を見直す」)。
+            // 外側の受け皿は聞き手を持たない = 後ろのセルの操作を遮らない
+            div().absolute().inset_0().flex().items_center().justify_center()
+                .child(div().w(px(380.0))
                 .p_3().rounded_md().bg(rgb(0xF7F9FA))
                 .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -9351,7 +9495,7 @@ impl Render for Calc {
                         "pivot-rows" | "pivot-cols" => "使える見出しは下の状態行に出ています。Enter で次へ / Esc で取消",
                         "pivot-val" => "例: 金額 合計。集計は 合計/平均/個数/最大/最小(省けば合計)",
                         _ => "Enter で決定 / Esc で取消",
-                    }))
+                    })))
         });
 
         // ---- ソルバーの小窓(ONLYOFFICE の「ソルバーのパラメータ」の形) ----
@@ -9439,7 +9583,9 @@ impl Render for Calc {
                         })));
                 }
             }
-            div().absolute().left(px(HEAD_W + 60.0)).top(px(8.0)).w(px(470.0))
+            // ソルバーも表の中央(prompt の板と同じ作法)
+            div().absolute().inset_0().flex().items_center().justify_center()
+                .child(div().w(px(470.0))
                 .p_3().rounded_md().bg(rgb(0xF7F9FA))
                 .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -9573,7 +9719,7 @@ impl Render for Calc {
                             cx.stop_propagation();
                             this.solver = None;
                             cx.notify();
-                        }))))
+                        })))))
         });
 
         // ---- ファイルの全面ページ(本家の File メニュー。タブ0で全面) ----
@@ -10256,6 +10402,8 @@ impl Render for Calc {
             .children(watch_bar)
             .child(sheets_bar)
             .children(notes)
+            // 窓の縁のつかみ(最後に描く = 最初にマウスを受ける)
+            .children(ui::resize_edges(window))
     }
 }
 

@@ -8214,6 +8214,10 @@ impl Render for Writer {
                     .children(menu)
             })
             .children(self.show_statusbar.then_some(statusbar))
+            // 窓の縁のつかみ(最後に描く = 最初にマウスを受ける)。
+            // GNOME の Wayland は外枠を付けないので、これが無いと
+            // 大きさを変えられない(calc と共通 — ui::resize_edges)
+            .children(ui::resize_edges(window))
     }
 }
 

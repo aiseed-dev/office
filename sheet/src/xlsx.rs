@@ -639,7 +639,19 @@ fn parse_sheet(xml: &str, shared: &[String], rubies: &[Option<String>],
             Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
                 b"col" => col_width(&e, &mut sh),
                 b"c" => {
-                    // 値の無いセル(書式だけ)。持たない
+                    // 値の無い自己完結のセル。書式だけなら、それは帳票の枠 —
+                    // 落とすと保存で罫線が消える(Excel 以外の道具が書く形)
+                    if let (Some(p), Some(si)) = (
+                        attr(&e, "r").and_then(|s| Pos::parse(&s)),
+                        attr(&e, "s").and_then(|s| s.parse::<usize>().ok()),
+                    ) {
+                        let fmt = styles.get(si).cloned().unwrap_or_default();
+                        if !fmt.is_plain() {
+                            rep.cells += 1;
+                            sh.set(p, Cell { formula: None, value: Value::Empty, fmt });
+                            sh.style_of.insert(p, si as u32);
+                        }
+                    }
                     pos = None;
                 }
                 b"mergeCell" => merge(&e, &mut sh),
@@ -726,6 +738,10 @@ fn parse_sheet(xml: &str, shared: &[String], rubies: &[Option<String>],
                             || !cell.fmt.is_plain() {
                             rep.cells += 1;
                             sh.set(p, cell);
+                            // 原本の書式索引を控える(保存で据え置くため)
+                            if let Some(si) = style {
+                                sh.style_of.insert(p, si as u32);
+                            }
                         }
                     }
                 }
@@ -1691,6 +1707,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     // リンク・コメントのぶんを織り込んで作り直す
     let mut orig_ct: Option<String> = None;
     let mut orig_sheet_rels: Vec<Option<String>> = Vec::new();
+    let mut orig_styles: Option<String> = None;
     if let Some(src) = original {
         if let Ok(mut z) = zip::ZipArchive::new(src) {
             for i in 0..z.len() {
@@ -1741,6 +1758,12 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 }
                 if name == "xl/theme/theme1.xml" {
                     continue; // テーマの色はモデルが正(配色の変更が効く)
+                }
+                if name == "xl/styles.xml" {
+                    // 原本の書式表は**据え置き合成の土台**として持つ
+                    // (作り直すと、読みで拾えない書式が消える — 発注者 2026-08-06)
+                    orig_styles = Some(String::from_utf8_lossy(&buf).to_string());
+                    continue;
                 }
                 if name.starts_with("xl/tables/") {
                     continue; // 表オブジェクトはモデルから作り直す
@@ -1802,11 +1825,26 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
     }
 
-    // 使われている書式を集めて表にする。索引を <c s="…"> に配る
+    // 原本の書式表を読み戻す(据え置き合成の照合用)。
+    // 読みと同じ関数で解くので、読みで拾えない書式も**同じように**落ち、
+    // 「触っていないセル」は必ず一致して原本の索引のまま書き戻る
+    let orig_fmts: Option<Vec<crate::model::CellFormat>> =
+        orig_styles.as_ref().map(|xml| crate::styles::parse(xml, &book.theme));
+    // このセルは原本の書式のままか(なら索引ごと据え置く)
+    let kept_style = |sh: &Sheet, p: &Pos, fmt: &crate::model::CellFormat| -> Option<u32> {
+        let fmts = orig_fmts.as_ref()?;
+        let i = *sh.style_of.get(p)?;
+        (fmts.get(i as usize)? == fmt).then_some(i)
+    };
+    // 使われている書式を集めて表にする(据え置きのセルは除く)。
+    // 索引を <c s="…"> に配る
     let used: Vec<crate::model::CellFormat> = {
         let mut v = Vec::new();
         for sh in &book.sheets {
-            for c in sh.cells.values() {
+            for (p, c) in &sh.cells {
+                if kept_style(sh, p, &c.fmt).is_some() {
+                    continue;
+                }
                 if !c.fmt.is_plain() && !v.contains(&c.fmt) {
                     v.push(c.fmt.clone());
                 }
@@ -1814,7 +1852,14 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         v
     };
-    let (styles_xml, style_idx) = crate::styles::build(&used);
+    let (styles_xml, style_idx) = match orig_styles
+        .as_ref()
+        .and_then(|xml| crate::styles::append_to(xml, &used))
+    {
+        Some(r) => r,
+        // 原本が無い(新規)か、節の見つからない styles.xml なら作り直し
+        None => crate::styles::build(&used),
+    };
     // 条件付き書式の見た目(dxfs)。全シートの規則から集めて番号を振る
     let dxf_list: Vec<(Option<String>, Option<String>)> = {
         let mut v = Vec::new();
@@ -1846,7 +1891,17 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         dx.push_str("</dxfs>");
         let mut s = styles_xml;
-        if let Some(p) = s.rfind("</styleSheet>") {
+        // 原本に dxfs の節があれば置き換える(二重の節は不正)。無ければ挿す
+        if let Some(i) = s.find("<dxfs") {
+            let end = match s[i..].find("</dxfs>") {
+                Some(j) => i + j + "</dxfs>".len(),
+                // <dxfs count="0"/> の自己完結形
+                None => i + s[i..].find("/>").map(|j| j + 2).unwrap_or(0),
+            };
+            if end > i {
+                s.replace_range(i..end, &dx);
+            }
+        } else if let Some(p) = s.rfind("</styleSheet>") {
             s.insert_str(p, &dx);
         }
         s
@@ -2287,8 +2342,13 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     Value::Empty => ("", String::new()),
                 };
                 if !ty.is_empty() { ce.push_attribute(("t", ty)); }
-                // 書式は styles.xml 側にあり、ここは索引だけ
-                if let Some(s) = style_idx.get(&c.fmt).filter(|i| **i > 0) {
+                // 書式は styles.xml 側にあり、ここは索引だけ。
+                // 触っていないセルは**原本の索引のまま**(書式の据え置き)
+                if let Some(i) = kept_style(sh, p, &c.fmt) {
+                    if i > 0 {
+                        ce.push_attribute(("s", i.to_string().as_str()));
+                    }
+                } else if let Some(s) = style_idx.get(&c.fmt).filter(|i| **i > 0) {
                     ce.push_attribute(("s", s.to_string().as_str()));
                 }
                 w.write_event(Event::Start(ce)).unwrap();
@@ -3347,6 +3407,105 @@ mod textbox_spark_roundtrip_tests {
         let sk = sp.iter().find(|s| s.kind == "spark").expect("折れ線が無い");
         assert_eq!(sk.points.len(), 3);
         assert!((sk.points[1].0 - 0.5).abs() < 0.01 && sk.points[1].1.abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod style_keep_tests {
+    use super::*;
+
+    /// `<c r=… s=…>` の対応表(セル → 書式索引)を抜く
+    fn smap(xml: &str) -> std::collections::BTreeMap<String, String> {
+        let mut m = std::collections::BTreeMap::new();
+        for part in xml.split("<c ").skip(1) {
+            // 頭に空白を足して、最初の属性も「 名前="」で引けるようにする
+            let tag = format!(" {}", &part[..part.find('>').unwrap_or(0)]);
+            let g = |k: &str| {
+                tag.split(&format!(" {k}=\""))
+                    .nth(1)
+                    .and_then(|r| r.split('"').next())
+                    .map(str::to_string)
+            };
+            if let (Some(r), Some(s)) = (g("r"), g("s")) {
+                m.insert(r, s);
+            }
+        }
+        m
+    }
+
+    fn part(zip_bytes: &[u8], name: &str) -> String {
+        let mut z = zip::ZipArchive::new(Cursor::new(zip_bytes.to_vec())).unwrap();
+        let mut s = String::new();
+        use std::io::Read as _;
+        z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    }
+
+    /// **実物の様式を開いて保存しただけなら、書式は1字も変わらない。**
+    /// styles.xml は据え置き、セルの書式索引も原本のまま
+    /// (勝手な書式設定をするな — 発注者 2026-08-06)。
+    /// 様式が無い環境では黙って飛ばす
+    #[test]
+    fn 実物の様式は保存で書式表が変わらない() {
+        let src = std::path::Path::new(
+            "/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/実施要領様式7_提案見積書.xlsx",
+        );
+        let Ok(bytes) = std::fs::read(src) else { return };
+        let (book, _) = read(Cursor::new(bytes.clone())).unwrap();
+        let mut out = Cursor::new(Vec::new());
+        write_with(&book, Some(Cursor::new(bytes.clone())), &mut out).unwrap();
+        let out = out.into_inner();
+        assert_eq!(
+            part(&bytes, "xl/styles.xml"),
+            part(&out, "xl/styles.xml"),
+            "開いて保存しただけで styles.xml が変わった"
+        );
+        // セルの書式索引も原本のまま(消えたセルも無い)
+        let orig = smap(&part(&bytes, "xl/worksheets/sheet1.xml"));
+        let now = smap(&part(&out, "xl/worksheets/sheet1.xml"));
+        for (r, s) in &orig {
+            assert_eq!(now.get(r), Some(s), "セル {r} の書式索引が変わった");
+        }
+    }
+
+    /// 書式を1つ触ったら、原本の表はそのままで**末尾に追記**される
+    #[test]
+    fn 触った書式は追記で受ける() {
+        let src = std::path::Path::new(
+            "/mnt/sdb/home/dev/ドキュメント/機構/yoryou-yoshiki/実施要領様式7_提案見積書.xlsx",
+        );
+        let Ok(bytes) = std::fs::read(src) else { return };
+        let (mut book, _) = read(Cursor::new(bytes.clone())).unwrap();
+        // A1 を太字にする(書式を1つだけ触る)
+        let p = Pos::parse("A1").unwrap();
+        let mut c = book.sheets[0].get(p).cloned().unwrap_or_default();
+        c.fmt.bold = true;
+        book.sheets[0].set(p, c);
+        let mut out = Cursor::new(Vec::new());
+        write_with(&book, Some(Cursor::new(bytes.clone())), &mut out).unwrap();
+        let out = out.into_inner();
+        let orig_styles = part(&bytes, "xl/styles.xml");
+        let now_styles = part(&out, "xl/styles.xml");
+        // 原本の cellXfs の中身がそっくり残っている(据え置き+追記)
+        let orig_xfs = {
+            let a = orig_styles.find("<cellXfs").unwrap();
+            let a = a + orig_styles[a..].find('>').unwrap() + 1;
+            let b = orig_styles.find("</cellXfs>").unwrap();
+            orig_styles[a..b].to_string()
+        };
+        assert!(
+            now_styles.contains(&orig_xfs),
+            "原本の xf が書き換わった(追記でなく作り直しになっている)"
+        );
+        // 触っていないセルの索引は変わらない
+        let orig_map = smap(&part(&bytes, "xl/worksheets/sheet1.xml"));
+        let now_map = smap(&part(&out, "xl/worksheets/sheet1.xml"));
+        for (r, s) in &orig_map {
+            if r == "A1" {
+                continue;
+            }
+            assert_eq!(now_map.get(r), Some(s), "触っていないセル {r} の索引が動いた");
+        }
     }
 }
 

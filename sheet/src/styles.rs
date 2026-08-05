@@ -52,6 +52,7 @@ pub fn parse(xml: &str, theme: &[String]) -> Vec<CellFormat> {
     let (mut in_fonts, mut in_fills, mut in_borders, mut in_cellxfs) = (false, false, false, false);
     let mut font = Fnt::default();
     let mut fill: Option<String> = None;
+    let mut pattern_none = false;
     let mut fill_theme: Option<(u8, i32)> = None;
     let mut fill_themes: Vec<Option<(u8, i32)>> = Vec::new();
     let mut bd = Borders::default();
@@ -126,7 +127,7 @@ pub fn parse(xml: &str, theme: &[String]) -> Vec<CellFormat> {
                     .map(|pt| (pt * 100.0) as u32);
             }
             b"color" if in_fonts => {
-                font.color = rgb(&e);
+                font.color = rgb(&e).or_else(|| indexed(&e));
                 font.color_theme = theme_ref(&e);
                 if font.color.is_none() {
                     // テーマ由来はここで実際の色に解く(画面と紙が使う)
@@ -139,15 +140,20 @@ pub fn parse(xml: &str, theme: &[String]) -> Vec<CellFormat> {
             b"name" if in_fonts => font.name = attr(&e, "val"),
             b"fill" if in_fills => {
                 fill = None;
+                pattern_none = false;
                 if empty {
                     fills.push(fill.take());
                     fill_themes.push(fill_theme.take());
                 }
             }
+            // patternType="none" は塗り無し(fgColor が書かれていても)
+            b"patternFill" if in_fills => {
+                pattern_none = attr(&e, "patternType").as_deref() == Some("none");
+            }
             // 塗りは patternFill > fgColor に入る
-            b"fgColor" if in_fills => {
+            b"fgColor" if in_fills && !pattern_none => {
                 fill_theme = theme_ref(&e);
-                fill = rgb(&e).or_else(|| {
+                fill = rgb(&e).or_else(|| indexed(&e)).or_else(|| {
                     fill_theme.map(|(i, t)| crate::theme::resolve(theme, i, t as f32 / 1000.0))
                 });
             }
@@ -188,6 +194,7 @@ pub fn parse(xml: &str, theme: &[String]) -> Vec<CellFormat> {
                     f.rtl_text = rtl_text;
                     f.valign = va.unwrap_or_default();
                     f.wrap = wrap;
+                    f.shrink = attr(&e, "shrinkToFit").as_deref() == Some("1");
                     xfs.push(f);
                 }
             }
@@ -217,6 +224,23 @@ fn theme_ref(e: &quick_xml::events::BytesStart) -> Option<(u8, i32)> {
     Some((idx, (tint * 1000.0).round() as i32))
 }
 
+/// 昔ながらの indexed 色(`indexed="22"`)。標準パレット 64 色。
+/// 64(自動=前景)と 65(背景)は色ではないので None
+fn indexed(e: &quick_xml::events::BytesStart) -> Option<String> {
+    const PALETTE: [&str; 64] = [
+        "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
+        "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
+        "800000", "008000", "000080", "808000", "800080", "008080", "C0C0C0", "808080",
+        "9999FF", "993366", "FFFFCC", "CCFFFF", "660066", "FF8080", "0066CC", "CCCCFF",
+        "000080", "FF00FF", "FFFF00", "00FFFF", "800080", "800000", "008080", "0000FF",
+        "00CCFF", "CCFFFF", "CCFFCC", "FFFF99", "99CCFF", "FF99CC", "CC99FF", "FFCC99",
+        "3366FF", "33CCCC", "99CC00", "FFCC00", "FF9900", "FF6600", "666699", "969696",
+        "003366", "339966", "003300", "333300", "993300", "993366", "333399", "333333",
+    ];
+    let i: usize = attr(e, "indexed")?.parse().ok()?;
+    PALETTE.get(i).map(|s| s.to_string())
+}
+
 fn resolve(
     (fid, fillid, bid, nfid): (usize, usize, usize, u32),
     fonts: &[Fnt],
@@ -239,6 +263,7 @@ fn resolve(
         size_c: f.size_c,
         valign: VAlign::default(),
         wrap: false,
+        shrink: false,
         color: f.color,
         color_theme: f.color_theme,
         fill_theme: fill_themes.get(fillid).copied().flatten(),
@@ -360,9 +385,7 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
     let mut fills: Vec<Option<String>> = vec![None, None]; // 0=none 1=gray125 は予約席
     let mut borders: Vec<Borders> = vec![Borders::NONE];
     let mut numfmts: Vec<String> = Vec::new();
-    #[allow(clippy::type_complexity)]
-    let mut xfs: Vec<(usize, usize, usize, usize, HAlign, VAlign, bool, Option<i32>, bool)> =
-        Vec::new();
+    let mut xfs: Vec<(usize, usize, usize, usize, CellFormat)> = Vec::new();
 
     for f in &order {
         let font = Fnt {
@@ -384,7 +407,7 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
             }
             None => 0,
         };
-        xfs.push((fi, fl, bi, ni, f.align, f.valign, f.wrap, f.rotation, f.rtl_text));
+        xfs.push((fi, fl, bi, ni, f.clone()));
     }
 
     let mut s = String::from(
@@ -404,88 +427,23 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
     }
     s.push_str(&format!("<fonts count=\"{}\">", fonts.len()));
     for f in &fonts {
-        // 大きさは指定があるときだけ書く。無いのに 11 と書くと、
-        // 読み戻しで「11pt の指定がある」ことになってしまう
-        s.push_str("<font>");
-        if let Some(c) = f.size_c {
-            s.push_str(&format!("<sz val=\"{}\"/>", c as f32 / 100.0));
-        }
-        if f.bold { s.push_str("<b/>") }
-        if f.italic { s.push_str("<i/>") }
-        if f.underline { s.push_str("<u/>") }
-        if f.strike { s.push_str("<strike/>") }
-        if f.subscript { s.push_str("<vertAlign val=\"subscript\"/>") }
-        // テーマ由来の色は由来のまま返す(配色を変えたら色も追う)
-        if let Some((i, t)) = f.color_theme {
-            if t == 0 {
-                s.push_str(&format!("<color theme=\"{i}\"/>"));
-            } else {
-                s.push_str(&format!(
-                    "<color theme=\"{i}\" tint=\"{}\"/>",
-                    t as f32 / 1000.0
-                ));
-            }
-        } else if let Some(c) = &f.color {
-            s.push_str(&format!("<color rgb=\"FF{c}\"/>"))
-        }
-        if let Some(n) = &f.name { s.push_str(&format!("<name val=\"{}\"/>", esc(n))) }
-        s.push_str("</font>");
+        s.push_str(&font_xml(f));
     }
     s.push_str("</fonts>");
     s.push_str(&format!("<fills count=\"{}\">", fills.len()));
     for (i, f) in fills.iter().enumerate() {
-        match f {
-            Some(c) => s.push_str(&format!(
-                "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF{c}\"/>\
-                 <bgColor indexed=\"64\"/></patternFill></fill>"
-            )),
-            None if i == 1 => s.push_str("<fill><patternFill patternType=\"gray125\"/></fill>"),
-            None => s.push_str("<fill><patternFill patternType=\"none\"/></fill>"),
-        }
+        s.push_str(&fill_xml(f, i == 1));
     }
     s.push_str("</fills>");
     s.push_str(&format!("<borders count=\"{}\">", borders.len()));
     for b in &borders {
-        s.push_str("<border>");
-        for (on, tag) in [(b.left, "left"), (b.right, "right"), (b.top, "top"), (b.bottom, "bottom")] {
-            if on {
-                s.push_str(&format!("<{tag} style=\"thin\"><color indexed=\"64\"/></{tag}>"));
-            } else {
-                s.push_str(&format!("<{tag}/>"));
-            }
-        }
-        s.push_str("<diagonal/></border>");
+        s.push_str(&border_xml(b));
     }
     s.push_str("</borders>");
     s.push_str("<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>");
     s.push_str(&format!("<cellXfs count=\"{}\">", xfs.len()));
-    for (fi, fl, bi, ni, al, va, wrap, rot, rtl) in &xfs {
-        // applyX を付けないと読み手が無視することがある
-        s.push_str(&format!(
-            "<xf numFmtId=\"{ni}\" fontId=\"{fi}\" fillId=\"{fl}\" borderId=\"{bi}\" xfId=\"0\"\
-             applyNumberFormat=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\""
-        ));
-        let mut attrs = String::new();
-        if let Some(a) = al.as_xlsx() {
-            attrs.push_str(&format!(" horizontal=\"{a}\""));
-        }
-        if let Some(v) = va.as_xlsx() {
-            attrs.push_str(&format!(" vertical=\"{v}\""));
-        }
-        if *wrap {
-            attrs.push_str(" wrapText=\"1\"");
-        }
-        if let Some(r) = rot {
-            attrs.push_str(&format!(" textRotation=\"{r}\""));
-        }
-        if *rtl {
-            attrs.push_str(" readingOrder=\"2\"");
-        }
-        if attrs.is_empty() {
-            s.push_str("/>");
-        } else {
-            s.push_str(&format!(" applyAlignment=\"1\"><alignment{attrs}/></xf>"));
-        }
+    for (fi, fl, bi, ni, f) in &xfs {
+        s.push_str(&xf_xml(*fi, *fl, *bi, *ni, f));
     }
     s.push_str("</cellXfs>");
     s.push_str("<cellStyles count=\"1\"><cellStyle name=\"標準\" xfId=\"0\" builtinId=\"0\"/></cellStyles>");
@@ -493,6 +451,242 @@ pub fn build(used: &[CellFormat]) -> (String, BTreeMap<CellFormat, usize>) {
 
     let map = order.into_iter().enumerate().map(|(i, f)| (f, i)).collect();
     (s, map)
+}
+
+/// 1書体ぶんの xml。
+/// 大きさは指定があるときだけ書く — 無いのに 11 と書くと、
+/// 読み戻しで「11pt の指定がある」ことになってしまう
+fn font_xml(f: &Fnt) -> String {
+    let mut s = String::from("<font>");
+    if let Some(c) = f.size_c {
+        s.push_str(&format!("<sz val=\"{}\"/>", c as f32 / 100.0));
+    }
+    if f.bold { s.push_str("<b/>") }
+    if f.italic { s.push_str("<i/>") }
+    if f.underline { s.push_str("<u/>") }
+    if f.strike { s.push_str("<strike/>") }
+    if f.subscript { s.push_str("<vertAlign val=\"subscript\"/>") }
+    // テーマ由来の色は由来のまま返す(配色を変えたら色も追う)
+    if let Some((i, t)) = f.color_theme {
+        if t == 0 {
+            s.push_str(&format!("<color theme=\"{i}\"/>"));
+        } else {
+            s.push_str(&format!("<color theme=\"{i}\" tint=\"{}\"/>", t as f32 / 1000.0));
+        }
+    } else if let Some(c) = &f.color {
+        s.push_str(&format!("<color rgb=\"FF{c}\"/>"))
+    }
+    if let Some(n) = &f.name { s.push_str(&format!("<name val=\"{}\"/>", esc(n))) }
+    s.push_str("</font>");
+    s
+}
+
+fn fill_xml(f: &Option<String>, gray125: bool) -> String {
+    match f {
+        Some(c) => format!(
+            "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF{c}\"/>\
+             <bgColor indexed=\"64\"/></patternFill></fill>"
+        ),
+        None if gray125 => "<fill><patternFill patternType=\"gray125\"/></fill>".into(),
+        None => "<fill><patternFill patternType=\"none\"/></fill>".into(),
+    }
+}
+
+fn border_xml(b: &Borders) -> String {
+    let mut s = String::from("<border>");
+    for (on, tag) in [(b.left, "left"), (b.right, "right"), (b.top, "top"), (b.bottom, "bottom")] {
+        if on {
+            s.push_str(&format!("<{tag} style=\"thin\"><color indexed=\"64\"/></{tag}>"));
+        } else {
+            s.push_str(&format!("<{tag}/>"));
+        }
+    }
+    s.push_str("<diagonal/></border>");
+    s
+}
+
+/// 1つの xf。applyX を付けないと読み手が無視することがある
+fn xf_xml(fi: usize, fl: usize, bi: usize, ni: usize, f: &CellFormat) -> String {
+    let mut s = format!(
+        "<xf numFmtId=\"{ni}\" fontId=\"{fi}\" fillId=\"{fl}\" borderId=\"{bi}\" xfId=\"0\"\
+         applyNumberFormat=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\""
+    );
+    let mut attrs = String::new();
+    if let Some(a) = f.align.as_xlsx() {
+        attrs.push_str(&format!(" horizontal=\"{a}\""));
+    }
+    if let Some(v) = f.valign.as_xlsx() {
+        attrs.push_str(&format!(" vertical=\"{v}\""));
+    }
+    if f.wrap {
+        attrs.push_str(" wrapText=\"1\"");
+    }
+    if f.shrink {
+        attrs.push_str(" shrinkToFit=\"1\"");
+    }
+    if let Some(r) = f.rotation {
+        attrs.push_str(&format!(" textRotation=\"{r}\""));
+    }
+    if f.rtl_text {
+        attrs.push_str(" readingOrder=\"2\"");
+    }
+    if attrs.is_empty() {
+        s.push_str("/>");
+    } else {
+        s.push_str(&format!(" applyAlignment=\"1\"><alignment{attrs}/></xf>"));
+    }
+    s
+}
+
+/// 節の中身の範囲(開きタグの直後〜閉じタグの位置)。
+fn section(s: &str, name: &str) -> Option<(usize, usize)> {
+    let open = s.find(&format!("<{name}"))?;
+    let body = open + s[open..].find('>')? + 1;
+    let end = s[body..].find(&format!("</{name}>")).map(|i| body + i)?;
+    Some((body, end))
+}
+
+/// 節の count 属性を増やす(無ければ何もしない — count は無くてもよい)
+fn bump_count(s: &mut String, name: &str, add: usize) {
+    let Some(open) = s.find(&format!("<{name}")) else { return };
+    let Some(tag_len) = s[open..].find('>') else { return };
+    let Some(rel) = s[open..open + tag_len].find("count=\"") else { return };
+    let cpos = open + rel + 7;
+    let Some(e) = s[cpos..].find('"') else { return };
+    if let Ok(n) = s[cpos..cpos + e].parse::<usize>() {
+        s.replace_range(cpos..cpos + e, &(n + add).to_string());
+    }
+}
+
+/// **原本の styles.xml に、こちらで使う書式を追記する**(据え置き合成)。
+/// 原本の xf・font・fill・border は1字も動かさない — 末尾に足すだけ。
+/// 返す索引は追記後の全体での番号(原本の xf 数 + 何番目か)。
+/// 原本に必要な節が無い壊れた styles.xml なら None(呼び手が build に落とす)
+pub fn append_to(
+    orig: &str,
+    used: &[CellFormat],
+) -> Option<(String, BTreeMap<CellFormat, usize>)> {
+    let mut order: Vec<CellFormat> = Vec::new();
+    for f in used {
+        if !order.contains(f) {
+            order.push(f.clone());
+        }
+    }
+    // 原本の節ごとの数 = 追記の索引の始まり
+    let count_in = |name: &str, child: &str| -> Option<usize> {
+        section(orig, name).map(|(a, b)| orig[a..b].matches(child).count())
+    };
+    let font_base = count_in("fonts", "<font")?;
+    let fill_base = count_in("fills", "<fill")?;
+    let border_base = count_in("borders", "<border")?;
+    let xf_base = count_in("cellXfs", "<xf")?;
+    // 表示形式の番号は原本と衝突させない
+    let mut numfmt_base = 164usize;
+    if let Some((a, b)) = section(orig, "numFmts") {
+        for cap in orig[a..b].split("numFmtId=\"").skip(1) {
+            if let Some(e) = cap.find('"') {
+                if let Ok(n) = cap[..e].parse::<usize>() {
+                    numfmt_base = numfmt_base.max(n + 1);
+                }
+            }
+        }
+    }
+
+    let mut fonts: Vec<Fnt> = Vec::new();
+    let mut fills: Vec<Option<String>> = Vec::new();
+    let mut borders: Vec<Borders> = Vec::new();
+    let mut numfmts: Vec<String> = Vec::new();
+    let mut xfs: Vec<String> = Vec::new();
+    for f in &order {
+        let font = Fnt {
+            bold: f.bold, italic: f.italic, underline: f.underline,
+            strike: f.strike, subscript: f.subscript, size_c: f.size_c,
+            color_theme: f.color_theme,
+            color: f.color.clone(), name: f.font.clone(),
+        };
+        let fi = font_base + idx(&mut fonts, font);
+        let fl = match &f.fill {
+            Some(c) => fill_base + idx(&mut fills, Some(c.clone())),
+            None => 0, // 0 番は必ず「塗り無し」(xlsx の予約)
+        };
+        let bi = if f.borders == Borders::NONE {
+            0 // 0 番は必ず「罫線無し」
+        } else {
+            border_base + idx(&mut borders, f.borders)
+        };
+        let ni = match &f.number_format {
+            Some(c) => numfmt_base + idx(&mut numfmts, c.clone()),
+            None => 0,
+        };
+        xfs.push(xf_xml(fi, fl, bi, ni, f));
+    }
+
+    let mut s = orig.to_string();
+    // 後ろの節から順に挿す(前を触ると位置がずれるため)
+    let insert_end = |s: &mut String, name: &str, frag: &str| -> bool {
+        match section(s, name) {
+            Some((_, end)) => {
+                s.insert_str(end, frag);
+                true
+            }
+            None => false,
+        }
+    };
+    if !insert_end(&mut s, "cellXfs", &xfs.concat()) {
+        return None;
+    }
+    bump_count(&mut s, "cellXfs", xfs.len());
+    if !borders.is_empty() {
+        let frag: String = borders.iter().map(border_xml).collect();
+        if !insert_end(&mut s, "borders", &frag) {
+            return None;
+        }
+        bump_count(&mut s, "borders", borders.len());
+    }
+    if !fills.is_empty() {
+        let frag: String = fills.iter().map(|f| fill_xml(f, false)).collect();
+        if !insert_end(&mut s, "fills", &frag) {
+            return None;
+        }
+        bump_count(&mut s, "fills", fills.len());
+    }
+    if !fonts.is_empty() {
+        let frag: String = fonts.iter().map(font_xml).collect();
+        if !insert_end(&mut s, "fonts", &frag) {
+            return None;
+        }
+        bump_count(&mut s, "fonts", fonts.len());
+    }
+    if !numfmts.is_empty() {
+        let frag: String = numfmts
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                format!(
+                    "<numFmt numFmtId=\"{}\" formatCode=\"{}\"/>",
+                    numfmt_base + i,
+                    esc(c)
+                )
+            })
+            .collect();
+        if !insert_end(&mut s, "numFmts", &frag) {
+            // numFmts の節が無ければ fonts の前に節ごと挿す(並び順の決まり)
+            let open = s.find("<fonts")?;
+            s.insert_str(
+                open,
+                &format!("<numFmts count=\"{}\">{}</numFmts>", numfmts.len(), frag),
+            );
+        } else {
+            bump_count(&mut s, "numFmts", numfmts.len());
+        }
+    }
+
+    let map = order
+        .into_iter()
+        .enumerate()
+        .map(|(i, f)| (f, xf_base + i))
+        .collect();
+    Some((s, map))
 }
 
 fn idx<T: PartialEq>(v: &mut Vec<T>, x: T) -> usize {
@@ -507,6 +701,41 @@ fn idx<T: PartialEq>(v: &mut Vec<T>, x: T) -> usize {
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod append_tests {
+    use super::*;
+
+    const ORIG: &str = r#"<?xml version="1.0"?><styleSheet xmlns="x"><fonts count="1"><font><sz val="11"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center"/></xf></cellXfs></styleSheet>"#;
+
+    #[test]
+    fn 原本の書式表に追記できる() {
+        let f = CellFormat {
+            bold: true,
+            number_format: Some("0.00".into()),
+            ..Default::default()
+        };
+        let (s, map) = append_to(ORIG, std::slice::from_ref(&f)).unwrap();
+        // 索引は原本の 2 つの続き
+        assert_eq!(map[&f], 2);
+        // 原本の xf は1字も変わらず残る
+        assert!(s.contains(r#"<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>"#));
+        assert!(s.contains(r#"<alignment vertical="center"/>"#));
+        // 節の count が増える
+        assert!(s.contains(r#"<cellXfs count="3">"#), "{s}");
+        assert!(s.contains(r#"<fonts count="2">"#), "{s}");
+        // numFmts の節が無い原本には fonts の前に挿さる(並び順の決まり)
+        assert!(s.find("<numFmts").unwrap() < s.find("<fonts").unwrap());
+        assert!(s.contains(r#"formatCode="0.00""#));
+    }
+
+    #[test]
+    fn 追記なしなら原本のまま() {
+        let (s, map) = append_to(ORIG, &[]).unwrap();
+        assert_eq!(s, ORIG, "何も足していないのに変わった");
+        assert!(map.is_empty());
+    }
 }
 
 #[cfg(test)]
