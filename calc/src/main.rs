@@ -8688,6 +8688,17 @@ impl Render for Calc {
         };
 
         // ---- 数式バー ----
+        // クリックで**編集モード**(発注者 2026-08-06)— 置き換えでなく、
+        // 押した位置に文字カーソルを立てて続きを直せる。編集中はキャレットを見せる
+        let in_edit = self.editing() || self.edit_armed;
+        let bar_text = {
+            let mut t = self.input.text().to_string();
+            if in_edit {
+                let cur = self.input.cursor().min(t.len());
+                t.insert(cur, '|');
+            }
+            if t.is_empty() { " ".to_string() } else { t }
+        };
         let formula_bar = div()
             .flex().flex_row().items_center().gap_2()
             .px_4().py_1p5().bg(rgb(0xFAFBFC))
@@ -8696,10 +8707,33 @@ impl Render for Calc {
                    .font_weight(gpui::FontWeight::BOLD).text_color(rgb(0x1B6E3C))
                    .child(SharedString::from(self.cursor.a1())))
             .child(div().flex_1().px_2().py_1().bg(gpui::white())
-                   .border_1().border_color(rgb(0xC6CDD3)).rounded_sm()
+                   .border_1().border_color(if in_edit { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                   .rounded_sm()
                    .text_size(px(13.0)).font_family("Noto Sans JP")
-                   .child(SharedString::from(if self.input.text().is_empty() {
-                       " ".to_string() } else { self.input.text().to_string() })));
+                   .cursor_text()
+                   .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                       |this, e: &gpui::MouseDownEvent, _, cx| {
+                           cx.stop_propagation();
+                           // 押した位置へ文字カーソル(幅は 全角=1em・半角=0.5em の見積り)
+                           let x = f32::from(e.position.x) - (16.0 + 56.0 + 8.0 + 8.0);
+                           let text = this.input.text().to_string();
+                           let mut acc = 0.0;
+                           let mut at = text.len();
+                           for (i, ch) in text.char_indices() {
+                               let w = if (ch as u32) < 0x2E80 { 6.8 } else { 13.0 };
+                               if acc + w / 2.0 > x {
+                                   at = i;
+                                   break;
+                               }
+                               acc += w;
+                           }
+                           this.input.move_to(at, false);
+                           this.edit_armed = true;
+                           this.status =
+                               ui::t!("数式バーで編集: Enter で確定 / Esc で取消").into();
+                           cx.notify();
+                       }))
+                   .child(SharedString::from(bar_text)));
 
         // ---- 折り返しの無い文字の、隣の空セルへのはみ出し(Excel の流儀) ----
         // 折り返し・縮小・回転・右横書きでない文字のセルで、伸びる方向の
@@ -8978,7 +9012,8 @@ impl Render for Calc {
                         .unwrap_or(12.5)))
                     .font_family("Noto Sans JP")
                     .overflow_hidden().whitespace_nowrap()
-                    .cursor_pointer();
+                    // セルの上は Excel と同じ十字(手のひらだと「押す物」に見える)
+                    .cursor(gpui::CursorStyle::Crosshair);
                 // マウスの結線はセルではなく InputSink(窓レベル)にある。
                 // セルの id は当たり判定ではなく描画の区別のためだけに残す
                 // 罫線・塗り・文字書式。**帳票の見た目はここで決まる**
