@@ -109,12 +109,16 @@ def 集計(r, 上限, 種別):        # r = [[行1列1, 行1列2], [行2列1, �
 
 ## writer のマクロ(d = python-docx)
 
+**専用の手引き: [writer-macro-manual.ja.md](writer-macro-manual.ja.md)** —
+名前つき記入欄(`fill` / `extract` / `fields`)、雛形(`render` /
+`tpl_fields`、docxtpl)、檻の中身、AI に台本を書かせる話まで。
+
 ```python
 # d が python-docx の Document。API は python-docx の公式文書のまま
 d.paragraphs[12].runs[0].text = "商号 例示工務店"
 for r in d.paragraphs[12].runs[1:]:
     r.text = ""                  # 先頭ランに書き、残りを空に(書式が残る作法)
-d.tables[0].rows[1].cells[2].text = "640,200円"
+fill("代表・商号", "例示工務店")  # ラベル走査より名前つき記入欄 — 手引き参照
 ```
 
 保存は writer 側がやる(スクリプトの中で d.save は不要)。

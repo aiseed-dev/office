@@ -114,12 +114,16 @@ def aggregate(r, limit, kind):   # r = [[r1c1, r1c2], [r2c1, …], …]
 
 ## writer macros (d = python-docx)
 
+**Full manual: [writer-macro-manual.md](writer-macro-manual.md)** — named
+fields (`fill` / `extract` / `fields`), templates (`render` / `tpl_fields`,
+docxtpl), the sandbox, and letting the AI write the script.
+
 ```python
 # d is a python-docx Document. The API is exactly python-docx's
 d.paragraphs[12].runs[0].text = "商号 例示工務店"
 for r in d.paragraphs[12].runs[1:]:
     r.text = ""                  # write to the first run, empty the rest (keeps formatting)
-d.tables[0].rows[1].cells[2].text = "640,200円"
+fill("代表・商号", "例示工務店")  # named fields beat label-hunting — see the manual
 ```
 
 Saving is writer's job (don't call d.save in the script).

@@ -253,6 +253,9 @@ Headless tools: `office-spell document.txt` (exit code 0=clean 1=findings
   already exists as public infrastructure)
 - **Manage plugins**: lists and runs .py files from `~/.config/office/plugins`
   (in the sandbox). Extensions like Aozora annotations or EPUB go here
+- **Writing macros** — named fields (`fill`/`extract`), templates (`render`),
+  speed rules, and the AI button: see the
+  [writer macro manual](writer-macro-manual.md)
 
 ## Printing (PDF) and saving
 
