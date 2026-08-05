@@ -630,6 +630,10 @@ struct Calc {
     /// セルの大きさは設定どおり固定で、窓に合わせて伸縮させない
     view_w_px: f32,
     view_h_px: f32,
+    /// このセルで**編集を始めた**(F2・ダブルクリック・打ち始め)。
+    /// 立っていない間の最初の打鍵は、既存の中身を消して置き換える
+    /// (Excel の作法)。セルを移ると降りる(sync_input)
+    edit_armed: bool,
     /// 右クリックのメニュー(出ている場所。格子領域の px)
     menu_at: Option<(f32, f32)>,
     /// 開いている子メニュー(挿入▸ など)
@@ -767,6 +771,7 @@ impl Calc {
             wheel: (0.0, 0.0),
             view_w_px: 0.0,
             view_h_px: 0.0,
+            edit_armed: false,
             menu_at: None,
             menu_sub: None,
             pick: None,
@@ -826,6 +831,7 @@ impl Calc {
     fn sync_input(&mut self) {
         let s = self.sheet().get(self.cursor).map(|c| c.editable()).unwrap_or_default();
         self.input = Editor::new(&s);
+        self.edit_armed = false; // セルを移った=編集は仕切り直し
     }
 
     /// 数式バーの内容をセルに入れて再計算する。
@@ -1296,6 +1302,12 @@ impl Calc {
         }
         self.cursor = p;
         self.sync_input();
+        // ダブルクリックはその場で編集(次の打鍵が追記になる — Excel の作法)
+        if clicks >= 2 {
+            self.edit_armed = true;
+            self.input.move_to(self.input.text().len(), false);
+            self.status = ui::t!("編集: そのまま打つと続きに入ります(Esc で取消)").into();
+        }
     }
 
     /// 押したまま動いた。通り過ぎたセルまで選択を広げる。
@@ -1950,6 +1962,17 @@ impl Calc {
         cx.notify();
     }
 
+    /// F2 = このセルを編集(次の打鍵が**追記**になる。Excel と同じ)
+    fn a_edit_cell(&mut self, _: &ui::EditCell, _: &mut Window, cx: &mut Context<Self>) {
+        if self.prompt.is_some() || self.solver.is_some() {
+            return;
+        }
+        self.edit_armed = true;
+        self.input.move_to(self.input.text().len(), false);
+        self.status = ui::t!("編集: そのまま打つと続きに入ります(Esc で取消)").into();
+        cx.notify();
+    }
+
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
         // 入力の板 → 一覧 → 子メニュー → 親メニュー → 書式の小窓 → コピーの破線、
         // の順で閉じる
@@ -1976,6 +1999,10 @@ impl Calc {
             // (入力規則で堰き止められたときの逃げ道でもある)
             self.sync_input();
             self.status = ui::t!("打ちかけを取り消しました").into();
+            cx.notify();
+        } else if self.edit_armed {
+            // F2 だけ押して何も打っていない — 編集をやめる
+            self.edit_armed = false;
             cx.notify();
         }
     }
@@ -3713,14 +3740,14 @@ impl Calc {
         // 小窓 → 板 → 打ちかけの文字 → セル、の順で見る
         if let Some(sv) = &mut self.solver { sv.focused().move_char(false, false) }
         else if let Some((_, ed)) = &mut self.prompt { ed.move_char(false, false) }
-        else if self.editing() { self.input.move_char(false, false) }
+        else if self.editing() || self.edit_armed { self.input.move_char(false, false) }
         else { self.move_cursor(0, -1) }
         cx.notify();
     }
     fn a_right(&mut self, _: &ui::Right, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(sv) = &mut self.solver { sv.focused().move_char(true, false) }
         else if let Some((_, ed)) = &mut self.prompt { ed.move_char(true, false) }
-        else if self.editing() { self.input.move_char(true, false) }
+        else if self.editing() || self.edit_armed { self.input.move_char(true, false) }
         else { self.move_cursor(0, 1) }
         cx.notify();
     }
@@ -7566,12 +7593,30 @@ impl EntityInputHandler for Calc {
                 return;
             }
         }
+        // セルを選んで**打ち始めたら置き換え**(Excel の作法)。追記になるのは
+        // 同じセルで編集を続けている間(edit_armed)だけ — F2・ダブルクリック・
+        // 2打目以降。IME の変換途中(marked)は消さない
+        if self.prompt.is_none() && self.solver.is_none()
+            && !self.edit_armed && !self.editing()
+            && handler::marked_range_utf16(self).is_none()
+        {
+            self.input = Editor::new("");
+            self.edit_armed = true;
+        }
         handler::replace(self, r, text);
         cx.notify();
     }
     fn replace_and_mark_text_in_range(&mut self, r: Option<Range<usize>>, text: &str,
                                       sel: Option<Range<usize>>, _w: &mut Window,
                                       cx: &mut Context<Self>) {
+        // IME の1打目も同じ(変換中の下線ごと、空にしてから始める)
+        if self.prompt.is_none() && self.solver.is_none()
+            && !self.edit_armed && !self.editing()
+            && handler::marked_range_utf16(self).is_none()
+        {
+            self.input = Editor::new("");
+            self.edit_armed = true;
+        }
         handler::replace_and_mark(self, r, text, sel);
         cx.notify();
     }
@@ -10336,6 +10381,7 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_quit))
             .on_action(cx.listener(Calc::a_context_menu))
             .on_action(cx.listener(Calc::a_cancel))
+            .on_action(cx.listener(Calc::a_edit_cell))
             .child(bar)
             .children((self.tab != 0 && self.show_formula_bar).then(|| formula_bar))
             .child(div().flex_1().overflow_hidden().relative()
