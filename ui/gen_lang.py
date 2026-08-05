@@ -54,7 +54,7 @@ def en_pairs():
     """i18n_en.rs から (鍵のソースリテラル, en のソースリテラル) を順に"""
     src = open(EN_TABLE, encoding="utf-8").read()
     out = []
-    i = src.find("pub const EN")
+    i = src.find("pub const")
     while True:
         i = src.find('("', i)
         if i < 0:
@@ -256,8 +256,11 @@ def generate(loc):
     (ROOT / f"lang/src/i18n_{m}.rs").write_text("\n".join(body), encoding="utf-8")
 
     # リボン(標準の釦は vendor、独自の釦は材料の訳)
+    # 材料の訳 + スクリプトに書いた穴埋め(vendor のロケールに無い語)を併用
+    extra = grl.OVERRIDES.get(loc, {})
     grl.OVERRIDES[loc] = {
-        r["ja"]: got[r["i"]] for r in mat if r["kind"] == "ribbon"
+        **extra,
+        **{r["ja"]: got[r["i"]] for r in mat if r["kind"] == "ribbon"},
     }
     old_argv = sys.argv
     import io

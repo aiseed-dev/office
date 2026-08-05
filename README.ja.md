@@ -138,7 +138,8 @@ pysheet/  sheet の Python 束縛(import office_sheet)
 
 ## 各国語版
 
-**リボンの言葉は実行時に切り替えられます**: ja(既定)と en を同梱。
+**画面の言語は実行時に切り替えられます。** 14言語を同梱:
+ja(既定)・en・de・es・fr・id・it・ko・pt・ru・tr・vi・zh・zh-tw。
 
 ```bash
 OFFICE_LANG=en ./target/release/writer      # 一時的な上書き
@@ -147,16 +148,24 @@ OFFICE_LANG=en ./target/release/writer      # 一時的な上書き
 ```
 
 **画面全体が切り替わります** — リボンも、ステータスバーの文言も、
-ダイアログも(585句を全訳。`ui/gen_i18n.py` が未訳のある言語を止めます)。
+ダイアログも(各言語585句を全訳。未訳のある言語は登録されません)。
 設定ページもあります: ファイル > 詳細設定 で、いまの言語・書体・校正の宛先・
-Python の経路が見え、言語を切り替えられます(次の起動から反映)。
-文言が揃った言語だけを選択肢に出します — いまは ja と en。
+Python の経路が見え、言語を順に切り替えられます(次の起動から反映)。
 
-新しい言語の表は、現行の日本語の表 + Euro-Office のロケール
-(材料は45言語)から起こします:
+標準のリボンの語は Euro-Office 本家のロケールから、残りの文言は
+Claude による機械翻訳(定額内)で、言語ごとに Microsoft Office の用語に
+合わせてあります。en と ja は目を通してあります —
+**ほかの言語は、母語話者の校閲を歓迎します。**
+
+言語を足すのは1コマンドです — `ui/gen_lang.py` が材料
+(`ui/i18n/keys.json`、番号つきの ja/en 対訳)を出し、訳を
+`ui/i18n/<locale>.json` で受け取り、表の生成と登録まで行います。
+訳に欠けや不備のある言語は登録を拒みます:
 
 ```bash
-python3 ui/gen_ribbon_locale.py en > ui/src/ribbon_en.rs
+python3 ui/gen_lang.py --todo     # 材料を出す
+python3 ui/gen_lang.py nl         # ui/i18n/nl.json から生成・登録
+python3 ui/gen_lang.py --check    # 登録済み全言語を検査
 ```
 
 言語ごとの組版・校正の差は `lang` の `Language` に閉じてあります。

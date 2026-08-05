@@ -143,7 +143,8 @@ which is why display and print never disagree.
 
 ## Localization
 
-**The ribbon language switches at runtime**: `ja` (default) and `en` are built in.
+**The UI language switches at runtime.** 14 languages are built in:
+ja (default), en, de, es, fr, id, it, ko, pt, ru, tr, vi, zh, zh-tw.
 
 ```bash
 OFFICE_LANG=en ./target/release/writer      # temporary override
@@ -152,17 +153,25 @@ OFFICE_LANG=en ./target/release/writer      # temporary override
 ```
 
 **The whole UI switches** — ribbon, status-bar messages, and dialogs
-(585 phrases, all translated; `ui/gen_i18n.py` refuses to build a language with
-missing phrases). There is also a settings page: File > Advanced settings shows
-the current language, font, proofreading endpoint, and Python path, and toggles
-the language (applies on next start). Only languages with complete words are
-offered — currently ja and en.
+(585 phrases per language, all translated; a language with missing phrases is
+never registered). There is also a settings page: File > Advanced settings
+shows the current language, font, proofreading endpoint, and Python path, and
+cycles through the languages (applies on next start).
 
-Ribbon tables for further languages are generated from the current Japanese
-table plus Euro-Office locale files (45 languages available as raw material):
+Standard ribbon labels come from Euro-Office's own locale files; the remaining
+phrases were machine-translated (by Claude, within the flat-rate subscription)
+following Microsoft Office terminology per language. en and ja are reviewed;
+**review by native speakers of the other languages is very welcome.**
+
+Adding a language is one command — `ui/gen_lang.py` emits the material
+(`ui/i18n/keys.json`, numbered ja/en pairs), takes the translations back as
+`ui/i18n/<locale>.json`, and generates + registers the tables. It refuses to
+register a language with missing or malformed phrases:
 
 ```bash
-python3 ui/gen_ribbon_locale.py en > ui/src/ribbon_en.rs
+python3 ui/gen_lang.py --todo     # write the material
+python3 ui/gen_lang.py nl         # generate + register from ui/i18n/nl.json
+python3 ui/gen_lang.py --check    # verify all registered languages
 ```
 
 Per-language logic (line breaking, proofing) is contained in `Language` in the

@@ -4,7 +4,7 @@
 //! 鍵を全部抽出し、**未訳・不要訳・重複があれば止まる**
 //! (文言の揃った言語だけを名乗る家訓)。訳を書くのは人間の仕事。
 
-pub const EN: &[(&str, &str)] = &[
+pub const TABLE: &[(&str, &str)] = &[
 ("乱数が取れません: {}", "Can't get random numbers: {}"),
 ("鍵が置けません: {}", "Can't store the key: {}"),
 ("http:// か https:// の URL にしてください", "Use an http:// or https:// URL"),

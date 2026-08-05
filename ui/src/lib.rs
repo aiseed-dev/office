@@ -35,7 +35,19 @@ macro_rules! tf {
 pub mod icons;
 pub mod ribbon;
 // gen_lang:begin(この間は ui/gen_lang.py が生成する — 手で書かない)
+pub mod ribbon_de;
 pub mod ribbon_en;
+pub mod ribbon_es;
+pub mod ribbon_fr;
+pub mod ribbon_id;
+pub mod ribbon_it;
+pub mod ribbon_ko;
+pub mod ribbon_pt;
+pub mod ribbon_ru;
+pub mod ribbon_tr;
+pub mod ribbon_vi;
+pub mod ribbon_zh;
+pub mod ribbon_zh_tw;
 // gen_lang:end
 pub mod ribbon_tables;
 pub mod settings;

@@ -49,7 +49,7 @@ def table_keys():
     """表の各行の鍵リテラルを、リテラル走査で取り出す(複数行の鍵も)"""
     src = open(TABLE, encoding="utf-8").read()
     out = []
-    i = src.find("pub const EN")
+    i = src.find("pub const")
     while True:
         i = src.find('("', i)
         if i < 0:
