@@ -1469,6 +1469,34 @@ gen_ribbon.py の id 正規表現(`slot-(btn|field|chk|cmb)-`)に掛からない
 材料の番号を振り直した。**材料の番号は表の並びと結ばれている** —
 句を外すときは i18n_en.rs だけ触らず、全言語の材料の振り直しまで1手で。
 
+## calc/src の部屋割り(2026-08-06 発注者「main.rs が肥大化し過ぎでは」)
+
+13,105行の main.rs を**純移動だけ**で7部屋に割った(1部屋=1コミット、
+毎回 cargo test 緑。挙動・文言は一切変えない):
+
+- `main.rs`(2,415) — use と mod、**struct Calc(欄は非公開のまま)**、
+  状態と編集の芯(new・undo/checkpoint・格子の幾何・マウス・キー・
+  クリップボード・fmt)、CalcAi、fn main
+- `util.rs`(843) — 自由関数・定数・小さな構造体(パレット・TSV・
+  ピボットの読み書き・FnDlg/FnArgs/Solver/PivotPend)
+- `py.rs`(1,650) — Python の裏方(グラフ/ピボット/SmartArt/ソルバー/
+  ゴールシーク・UDF の台本・PY 定数)
+- `io.rs`(725) — 開く/保存/PDF/版/最近/排他ロック/署名/終了確認
+- `picks.rs`(1,683) — 右クリックメニュー・一覧(apply_pick)・板
+  (finish_prompt)・関数の小窓・シートの耳のメニュー
+- `cmds.rs`(1,995) — HANDLED・PROTECTED_OK・run_cmd(リボンの配線)
+- `view.rs`(2,821) — impl Render と入力の受け皿(InputSink)
+- `tests.rs`(1,014) — 試験
+
+**仕組みの決め**: 子の部屋は親(crate の根)の非公開が見えるので、
+Calc の欄はそのまま。根の use を `pub(crate) use` にし、各部屋は
+`use crate::*` で同じ視界を持つ。**部屋に移した項目とメソッドは
+pub(crate)**(部屋どうしは兄弟で、私物は見えないため)。トレイト実装
+(Render 等)のメソッドには可視性を付けない(文法違反)。
+移動は台本(アンカー正規表現で切り出し)でやり、fn の上の説明コメントも
+一緒に運ぶ。**writer/src/main.rs(9,575行)にも同じ手術が要る**(未着手)。
+これで修正の並走(ワークフロー)がファイル衝突せずにできる。
+
 ## 里程標
 
 - **K0 済** 組版の核(`engine`/crate kumihan): 禁則・欧文語の不分割を実フォント字幅で。
