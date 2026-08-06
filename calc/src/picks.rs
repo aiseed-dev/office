@@ -352,13 +352,34 @@ impl Calc {
                 self.status = ui::t!("列を削除しました").into();
             }
             "sort-asc" | "sort-desc" => self.sort_active(id == "sort-asc"),
-            "filter-set" => self.run_cmd("setfilter", cx),
+            // 選んだ値で絞り込む = その列で「選んだ値以外」を隠す
+            // (オートフィルタの1操作。▼で選び直せる)
+            "filter-set" => {
+                let p = self.cursor;
+                let v = self.sheet().get(p).map(|c| c.value.display()).unwrap_or_default();
+                if self.auto_filter.is_none() {
+                    self.run_cmd("setfilter", cx);
+                }
+                if self.auto_filter.is_none() {
+                    return; // 張れなかった(空の表)。理由は setfilter が言っている
+                }
+                let (vals, _) = self.filter_values(p.col);
+                let hide: std::collections::BTreeSet<String> =
+                    vals.into_iter().map(|(s, _)| s).filter(|s| *s != v).collect();
+                let f = self.auto_filter.as_mut().unwrap();
+                if hide.is_empty() {
+                    f.hide.remove(&p.col);
+                } else {
+                    f.hide.insert(p.col, hide);
+                }
+                let label = if v.is_empty() { "(空白)".to_string() } else { v };
+                self.status = ui::tf!("「{}」だけを表示しています(見出しの ▼ で選び直せます)", label).into();
+            }
             "filter-clear" => self.run_cmd("clear-filter", cx),
             "reapply" => {
-                if let Some((c, v)) = self.filter.clone() {
-                    let n = self.matching_rows(c, &v).len();
-                    self.status = ui::tf!("{}列を「{}」で絞り込み直しました({}行が一致)", Pos::new(0, c).a1().trim_end_matches('1'), v, n)
-                    .into();
+                // 値は動的に見ているので掛け直しは常に済んでいる — 数を言い直す
+                if let Some((total, shown)) = self.filter_counts() {
+                    self.status = ui::tf!("絞り込みを掛け直しました — {} 行中 {} 行を表示", total, shown).into();
                 }
             }
             // セル単位のシフト(挿入・削除)。結合をまたぐときは断られる
@@ -481,8 +502,8 @@ impl Calc {
                 ("sort-desc", "降順", true),
             ],
             "filter" => vec![
-                ("filter-set", "選択した値で絞り込む", self.filter.is_none()),
-                ("filter-clear", "絞り込みを解く", self.filter.is_some()),
+                ("filter-set", "選択した値で絞り込む", true),
+                ("filter-clear", "絞り込みを解く", self.auto_filter.is_some()),
             ],
             "pastesp" => vec![
                 ("ps-values", "値だけ(Ctrl+Shift+V)", true),
@@ -757,6 +778,54 @@ impl Calc {
         cx.notify();
     }
 
+    /// ▼の板の開閉(見出しのボタンから。同じ列ならしまう)
+    pub(crate) fn toggle_filter_panel(&mut self, col: u32) {
+        match &self.filter_panel {
+            Some((c, _)) if *c == col => self.filter_panel = None,
+            _ => self.filter_panel = Some((col, Editor::new(""))),
+        }
+    }
+
+    /// ▼の板: 値ひとつの入切。空になったらその列は素通しに戻す
+    pub(crate) fn filter_toggle_value(&mut self, col: u32, v: &str) {
+        let Some(f) = &mut self.auto_filter else { return };
+        let set = f.hide.entry(col).or_default();
+        if !set.remove(v) {
+            set.insert(v.to_string());
+        }
+        if set.is_empty() {
+            f.hide.remove(&col);
+        }
+        self.filter_note();
+    }
+
+    /// ▼の板: (すべて選択)。全部見えていれば全部隠し、そうでなければ全部見せる
+    pub(crate) fn filter_toggle_all(&mut self, col: u32, all: Vec<String>) {
+        let Some(f) = &mut self.auto_filter else { return };
+        if f.hide.remove(&col).is_none() {
+            f.hide.insert(col, all.into_iter().collect());
+        }
+        self.filter_note();
+    }
+
+    /// ▼の板: この列の絞り込みを解く
+    pub(crate) fn filter_clear_col(&mut self, col: u32) {
+        if let Some(f) = &mut self.auto_filter {
+            f.hide.remove(&col);
+        }
+        self.filter_note();
+    }
+
+    /// 絞り込みの操作のたびに、いま何行見えているかを状態行で言う
+    fn filter_note(&mut self) {
+        self.status = match self.filter_counts() {
+            Some((total, shown)) => {
+                ui::tf!("絞り込み中 — {} 行中 {} 行を表示(表示だけ。保存はされません)", total, shown).into()
+            }
+            None => ui::t!("絞り込みなし(全部見えています)").into(),
+        };
+    }
+
     pub(crate) fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
         if self.quit_ask {
             self.quit_ask = false;
@@ -781,7 +850,8 @@ impl Calc {
             self.ink_cur = None;
             self.status = ui::t!("セルの操作に戻りました").into();
         }
-        if self.solver.take().is_some()
+        if self.filter_panel.take().is_some()
+            || self.solver.take().is_some()
             || self.slicer.take().is_some()
             || self.prompt.take().is_some()
             || self.pick.take().is_some()
@@ -1533,7 +1603,8 @@ impl Calc {
         self.active = i;
         self.restore_ui();
         self.anchor = None;
-        self.filter = None;
+        self.auto_filter = None;
+        self.filter_panel = None;
         self.sync_input();
         self.status = format!("シート「{}」", self.sheet().name).into();
     }

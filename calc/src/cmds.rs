@@ -155,25 +155,38 @@ impl Calc {
             "pdf" => self.save_pdf(cx),
             "show-gridlines" => self.gridlines = !self.gridlines,
             // ウィンドウ枠の固定。カーソルの上と左を留める。もう一度で解く
-            // 選んだセルの値で絞る。もう一度で解く。**中身は変えない**
+            // オートフィルタ。範囲に▼を張る/外す(トグル)。**中身は変えない**
             "setfilter" => {
-                let p = self.cursor;
-                let v = self.sheet().get(p)
-                    .map(|c| c.value.display())
-                    .unwrap_or_default();
-                if v.is_empty() {
-                    self.status = ui::t!("空のセルでは絞れません").into();
+                if self.auto_filter.is_some() {
+                    self.auto_filter = None;
+                    self.filter_panel = None;
+                    self.status = ui::t!("絞り込みの範囲を外しました").into();
                 } else {
-                    let n = self.matching_rows(p.col, &v).len();
-                    self.status = format!(
-                        "{}列を「{v}」で絞り込み中({n}行が一致)。表示だけで中身は変わりません",
-                        Pos::new(0, p.col).a1().trim_end_matches('1')
-                    ).into();
-                    self.filter = Some((p.col, v));
+                    let (a, b) = if self.anchor.is_some() {
+                        self.sel_rect()
+                    } else {
+                        let (rows, cols) = self.sheet().extent();
+                        if rows < 2 || cols == 0 {
+                            self.status = ui::t!("絞り込む表がありません(見出しの下にデータが要ります)").into();
+                            return;
+                        }
+                        (Pos::new(0, 0), Pos::new(rows - 1, cols - 1))
+                    };
+                    if a.row == b.row {
+                        self.status = ui::t!("絞り込む表がありません(見出しの下にデータが要ります)").into();
+                        return;
+                    }
+                    self.auto_filter = Some(AutoFilter { range: (a, b), hide: Default::default() });
+                    self.status = ui::tf!(
+                        "{}:{} に絞り込みの範囲を張りました — 見出しの ▼ から絞ります(表示だけ。保存はされず、閉じれば消えます)",
+                        a.a1(), b.a1()
+                    )
+                    .into();
                 }
             }
             "clear-filter" => {
-                self.filter = None;
+                self.auto_filter = None;
+                self.filter_panel = None;
                 self.status = ui::t!("絞り込みを解きました").into();
             }
             // 印刷の設定。モデルに置き、保存で原文へ織り込み、PDF が従う。

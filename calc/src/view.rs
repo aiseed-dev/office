@@ -822,6 +822,11 @@ impl Render for Calc {
         for r in visible {
             let rh = self.row_px(r);
             let row_on = has_sel && (sel_a.row..=sel_b.row).contains(&r) || r == self.cursor.row;
+            // 絞り込みで残った行の番号は青(Excel の作法 — 絞り込み中と一目で分かる)
+            let filtered_blue = self.filter_active()
+                && self.auto_filter.as_ref().is_some_and(|f| {
+                    r > f.range.0.row && r <= f.range.1.row
+                });
             let mut row = div().flex().flex_row().flex_none()
                 .child(div().flex_none().w(px(HEAD_W)).h(px(rh))
                     .bg(if row_on { rgb(0xCFE6D8) } else { th_head })
@@ -829,7 +834,7 @@ impl Render for Calc {
                     .border_color(rgb(0xD5DBE0))
                     .flex().items_center().justify_center()
                     .text_size(px(11.5))
-                    .text_color(if row_on { rgb(0x1B6E3C) } else if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) })
+                    .text_color(if row_on { rgb(0x1B6E3C) } else if filtered_blue { rgb(0x1B6EC2) } else if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) })
                     .child(SharedString::from((r + 1).to_string()))
                     // 下端の帯は高さを変える取っ手(列見出しの右端と同じ仕掛け)
                     .relative().children((std::env::var_os("JO_NO_STRIPS").is_none()).then(|| {
@@ -1138,6 +1143,180 @@ impl Render for Calc {
             }
         }
 
+        // ---- オートフィルタの▼と板(格子の上に重ねる) ----
+        if let Some(f) = &self.auto_filter {
+            grid = grid.relative();
+            let (a, b) = f.range;
+            let hrh = self.row_px(a.row);
+            for c in a.col..=b.col {
+                let Some((x, y)) = self.cell_origin_px(Pos::new(a.row, c)) else { continue };
+                let w = self.col_px(c);
+                if w < 24.0 {
+                    continue; // 細すぎる列には▼を出さない(文字に被る)
+                }
+                let active = f.hide.contains_key(&c);
+                let open = self.filter_panel.as_ref().is_some_and(|(pc, _)| *pc == c);
+                let on = active || open;
+                grid = grid.child(
+                    div().id(SharedString::from(format!("flt{c}")))
+                        .absolute()
+                        .left(px(x + w - 17.0))
+                        .top(px(y + (hrh - 14.0).max(0.0) / 2.0))
+                        .w(px(14.0)).h(px(14.0)).rounded_sm()
+                        .flex().items_center().justify_center()
+                        .text_size(px(8.0))
+                        .cursor_pointer()
+                        .bg(if on { rgb(0x1B6E3C) } else { rgb(0xEFF2F4) })
+                        .border_1()
+                        .border_color(if on { rgb(0x1B6E3C) } else { rgb(0xB6BDC4) })
+                        .text_color(if on { rgb(0xFFFFFF) } else { rgb(0x66707A) })
+                        .child("▼")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                            move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.toggle_filter_panel(c);
+                                cx.notify();
+                            })),
+                );
+            }
+            // ▼の板(値のチェックボックス)。開いている列の見出しの下に出す
+            if let Some((col, ed)) = &self.filter_panel {
+                let col = *col;
+                let (vals, cut) = self.filter_values(col);
+                let hide = f.hide.get(&col);
+                let search = ed.text().to_string();
+                let anchor = self
+                    .cell_origin_px(Pos::new(a.row, col))
+                    .map(|(x, y)| (x, y + hrh))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let px_x = anchor.0.min((self.view_w_px - 250.0).max(8.0));
+                let mut panel = div().id("filter-panel")
+                    .absolute().left(px(px_x)).top(px(anchor.1))
+                    .w(px(236.0))
+                    .p_1().rounded_md().bg(rgb(0xFFFFFF))
+                    .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
+                    .text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+                // 検索欄(開いている間は打鍵がここへ来る)
+                panel = panel.child(
+                    div().px_2().py_1().mb_1().rounded_sm()
+                        .border_1().border_color(rgb(0x1B6E3C))
+                        .text_size(px(12.0))
+                        .child(if search.is_empty() {
+                            div().text_color(rgb(0x9AA5AE))
+                                .child(SharedString::from(format!("|{}", ui::t!("(打つと絞り込み)"))))
+                        } else {
+                            div().child(SharedString::from(format!("{search}|")))
+                        }),
+                );
+                // (すべて選択)
+                let all_on = hide.is_none();
+                let all_vals: Vec<String> = vals.iter().map(|(v, _)| v.clone()).collect();
+                let checkbox = |on: bool| {
+                    div().flex_none().w(px(13.0)).h(px(13.0)).rounded_sm()
+                        .border_1()
+                        .border_color(if on { rgb(0x1B6E3C) } else { rgb(0xB6BDC4) })
+                        .bg(if on { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
+                        .flex().items_center().justify_center()
+                        .text_size(px(9.0)).text_color(rgb(0xFFFFFF))
+                        .children(on.then(|| "✓"))
+                };
+                panel = panel.child(
+                    div().id("flt-all").px_1p5().py_0p5().rounded_sm().cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .flex().flex_row().items_center().gap_2()
+                        .border_b_1().border_color(rgb(0xE1E6EA))
+                        .child(checkbox(all_on))
+                        .child(ui::t!("(すべて選択)"))
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                            move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                let all = this.filter_values(col).0
+                                    .into_iter().map(|(v, _)| v).collect();
+                                this.filter_toggle_all(col, all);
+                                cx.notify();
+                            })),
+                );
+                // 値の一覧(検索で絞る。長ければ板の中でスクロール)
+                let mut list = div().id("flt-list").max_h(px(240.0)).overflow_y_scroll();
+                let mut shown_any = false;
+                for (i, (v, n)) in vals.iter().enumerate() {
+                    let label = if v.is_empty() { ui::t!("(空白)").to_string() } else { v.clone() };
+                    if !search.is_empty() && !label.contains(&search) {
+                        continue;
+                    }
+                    shown_any = true;
+                    let on = hide.map(|h| !h.contains(v)).unwrap_or(true);
+                    let vv = v.clone();
+                    list = list.child(
+                        div().id(SharedString::from(format!("fv{i}")))
+                            .px_1p5().py_0p5().rounded_sm().cursor_pointer()
+                            .hover(|s| s.bg(rgb(0xEAF5EE)))
+                            .flex().flex_row().items_center().gap_2()
+                            .child(checkbox(on))
+                            .child(div().flex_1().whitespace_nowrap().overflow_hidden()
+                                .child(SharedString::from(label)))
+                            .child(div().text_size(px(11.0)).text_color(rgb(0x66707A))
+                                .child(SharedString::from(n.to_string())))
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.filter_toggle_value(col, &vv);
+                                    cx.notify();
+                                })),
+                    );
+                }
+                if !shown_any {
+                    list = list.child(div().px_1p5().py_0p5()
+                        .text_color(rgb(0x9AA5AE))
+                        .child(ui::t!("(該当なし)")));
+                }
+                panel = panel.child(list);
+                if cut {
+                    panel = panel.child(div().px_1p5().text_size(px(11.0))
+                        .text_color(rgb(0x8A4B00))
+                        .child(ui::t!("値が多いので上位 1,000 種で切っています")));
+                }
+                // 並べ替えとこの列の解除
+                let footer_btn = |id: &'static str, label: SharedString| {
+                    div().id(id).px_1p5().py_0p5().rounded_sm().cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .text_size(px(12.0)).text_color(rgb(0x1B6E3C))
+                        .child(label)
+                };
+                panel = panel.child(
+                    div().flex().flex_row().items_center().gap_1().mt_1()
+                        .border_t_1().border_color(rgb(0xE1E6EA)).pt_1()
+                        .child(footer_btn("flt-asc", ui::t!("昇順").into())
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.sort_col(col, true);
+                                    cx.notify();
+                                })))
+                        .child(footer_btn("flt-desc", ui::t!("降順").into())
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.sort_col(col, false);
+                                    cx.notify();
+                                })))
+                        .child(div().flex_1())
+                        .child(footer_btn("flt-reset", ui::t!("この列を解除").into())
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                                move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.filter_clear_col(col);
+                                    cx.notify();
+                                }))),
+                );
+                panel = panel.child(div().px_1p5().pt_0p5().text_size(px(10.5))
+                    .text_color(rgb(0x9AA5AE))
+                    .child(ui::t!("クリックで入切 — すぐ効きます。Esc で閉じる")));
+                grid = grid.child(panel);
+            }
+        }
+
         // ---- シートの耳(Excel と同じく下に置く) ----
         let mut sheets_bar = div().flex().flex_row().items_center().gap_1()
             .px_3().py_1().bg(th_head)
@@ -1278,6 +1457,12 @@ impl Render for Calc {
                     ),
                 })))
             .child(div().flex_1())
+            // 絞り込み中は残りの行数を常に見せる(本家のステータスバーと同じ)
+            .children(self.filter_counts().map(|(total, shown)| {
+                div().pr_3().text_size(px(11.0))
+                    .text_color(rgb(0x1B6EC2)).whitespace_nowrap()
+                    .child(SharedString::from(ui::tf!("{} 行中 {} 行を表示", total, shown).to_string()))
+            }))
             .children(self.sel_stats().map(|s| {
                 div().pr_2().text_size(px(11.0)).font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(0x1B6E3C)).whitespace_nowrap()
@@ -1306,7 +1491,7 @@ impl Render for Calc {
                 ("", "", "", false, false),
                 ("sort", "並べ替え", "", true, true),
                 ("filter", "フィルター", "", true, true),
-                ("reapply", "再適用", "", self.filter.is_some(), false),
+                ("reapply", "再適用", "", self.filter_active(), false),
                 ("", "", "", false, false),
                 ("addcomment", "コメントを追加", "", true, false),
                 ("", "", "", false, false),

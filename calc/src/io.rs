@@ -163,7 +163,8 @@ impl Calc {
                 self.view = Pos::new(0, 0);
                 self.anchor = None;
                 self.frozen = None;
-                self.filter = None;
+                self.auto_filter = None;
+                self.filter_panel = None;
                 self.sheet_ui.clear();
                 self.undo_stack.clear();
                 self.redo_stack.clear();
@@ -288,7 +289,8 @@ impl Calc {
                 self.view = Pos::new(0, 0);
                 self.anchor = None;
                 self.frozen = None;
-                self.filter = None;
+                self.auto_filter = None;
+                self.filter_panel = None;
                 self.sheet_ui.clear();
                 self.undo_stack.clear();
                 self.redo_stack.clear();
@@ -323,12 +325,17 @@ impl Calc {
         if cells < 2 || cells > 200_000 {
             return None;
         }
-        let sh = self.sheet();
         let mut n = 0u64;
         let mut sum = 0.0f64;
         for r in a.row..=b.row {
+            // 絞り込みで隠れた行は数えない(Excel と同じ — 見えている行の値)
+            if !self.filter_keeps(r) {
+                continue;
+            }
             for c in a.col..=b.col {
-                if let Some(Value::Number(v)) = sh.get(Pos::new(r, c)).map(|x| &x.value) {
+                if let Some(Value::Number(v)) =
+                    self.sheet().get(Pos::new(r, c)).map(|x| &x.value)
+                {
                     n += 1;
                     sum += *v;
                 }
@@ -401,7 +408,8 @@ impl Calc {
         self.view = Pos::new(0, 0);
         self.anchor = None;
         self.frozen = None;
-        self.filter = None;
+        self.auto_filter = None;
+                self.filter_panel = None;
         self.slicer = None;
         self.sheet_ui.clear();
         self.undo_stack.clear();

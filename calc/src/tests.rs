@@ -65,28 +65,82 @@ mod size_grip_tests {
 mod filter_tests {
     use crate::*;
 
-    #[test]
-    fn 一致した行と見出しだけが残る() {
-        let mut b = Book::default();
-        b.sheets.push(sheet::Sheet { name: "表".into(), ..Default::default() });
-        let s = &mut b.sheets[0];
-        for (r, v) in [(0, "区分"), (1, "甲"), (2, "乙"), (3, "甲")] {
-            s.set(Pos::new(r, 0), Cell::input(v));
+    fn seed(this: &mut Calc) {
+        for (a1, v) in [
+            ("A1", "区分"), ("B1", "数"),
+            ("A2", "甲"), ("B2", "1"),
+            ("A3", "乙"), ("B3", "2"),
+            ("A4", "甲"), ("B4", "3"),
+            ("A5", "丙"), ("B5", "4"),
+        ] {
+            this.cursor = Pos::parse(a1).unwrap();
+            this.sync_input();
+            this.input.select_all();
+            this.input.insert(v);
+            assert!(this.commit());
         }
-        // Calc を組み立てずに、絞り込みの規則だけ確かめる
-        let matching = |col: u32, v: &str| -> Vec<u32> {
-            let (rows, _) = s.extent();
-            let mut out = vec![0];
-            for r in 1..rows {
-                if s.get(Pos::new(r, col)).map(|c| c.value.display()).as_deref() == Some(v) {
-                    out.push(r);
-                }
-            }
-            out
-        };
-        assert_eq!(matching(0, "甲"), vec![0, 1, 3], "見出し+一致行でない");
-        assert_eq!(matching(0, "乙"), vec![0, 2]);
-        assert_eq!(matching(0, "丙"), vec![0], "無い値は見出しだけ");
+        this.anchor = None;
+        this.cursor = Pos::parse("A1").unwrap();
+        this.sync_input();
+    }
+
+    #[gpui::test]
+    fn 値の入切で行が隠れて数も件数も追随する(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            seed(this);
+            this.run_cmd("setfilter", cx); // 表全体 A1:B5 に範囲を張る
+            let f = this.auto_filter.as_ref().expect("範囲が張られない");
+            assert_eq!(f.range, (Pos::parse("A1").unwrap(), Pos::parse("B5").unwrap()));
+            // 板の一覧: A列の値と件数(BTreeMap の並び=文字順)
+            let (vals, cut) = this.filter_values(0);
+            assert!(!cut);
+            assert_eq!(
+                vals,
+                vec![("丙".into(), 1), ("乙".into(), 1), ("甲".into(), 2)],
+                "値の一覧が違う"
+            );
+            // 乙と丙を隠す → 見出し+甲の2行が残る
+            this.filter_toggle_value(0, "乙");
+            this.filter_toggle_value(0, "丙");
+            assert!(this.filter_active());
+            assert_eq!(this.filter_counts(), Some((4, 2)), "行の数が違う");
+            assert_eq!(this.visible_rows(), vec![0, 1, 3], "見える行が違う");
+            // 他の列の一覧は絞り込みを効かせたまま: B列は甲の行の値だけ
+            let (bv, _) = this.filter_values(1);
+            assert_eq!(bv, vec![("1".into(), 1), ("3".into(), 1)]);
+            // 入切で戻る(空になったら列ごと素通し)
+            this.filter_toggle_value(0, "乙");
+            this.filter_toggle_value(0, "丙");
+            assert!(!this.filter_active(), "全部見せたのに絞られている");
+            // (すべて選択)を切る → 全部隠れる → もう一度で全部戻る
+            let all: Vec<String> =
+                this.filter_values(0).0.into_iter().map(|(v, _)| v).collect();
+            this.filter_toggle_all(0, all.clone());
+            assert_eq!(this.filter_counts(), Some((4, 0)));
+            this.filter_toggle_all(0, all);
+            assert!(!this.filter_active());
+            // もう一度 setfilter で範囲ごと外れる
+            this.run_cmd("setfilter", cx);
+            assert!(this.auto_filter.is_none(), "トグルで外れない");
+        });
+    }
+
+    #[gpui::test]
+    fn 絞り込みは生きた値にも効く(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            seed(this);
+            this.run_cmd("setfilter", cx);
+            this.filter_toggle_value(0, "乙");
+            this.filter_toggle_value(0, "丙");
+            // B2:B5 を選ぶと、見えている甲の行(1と3)だけ数える
+            this.anchor = Some(Pos::parse("B2").unwrap());
+            this.cursor = Pos::parse("B5").unwrap();
+            let s = this.sel_stats().expect("生きた値が出ない");
+            assert!(s.contains("合計 4"), "隠れた行を数えている: {s}");
+            assert!(s.contains("個数 2"), "個数が違う: {s}");
+        });
     }
 }
 

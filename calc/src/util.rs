@@ -754,6 +754,16 @@ pub(crate) fn image_px(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// オートフィルタの控え。**隠す値**で持つ — 後から増えた値は隠れない
+/// (Excel の「新しい項目は表示」に寄せた割り切り)。値は表示文字列。
+/// 空セルは "" で持ち、画面では「(空白)」と見せる
+pub(crate) struct AutoFilter {
+    /// 張った範囲(左上=見出し行の左端, 右下)
+    pub(crate) range: (Pos, Pos),
+    /// 列(絶対の列番号)→ 隠す値。空の集合は持たない(=素通し)
+    pub(crate) hide: std::collections::BTreeMap<u32, std::collections::BTreeSet<String>>,
+}
+
 /// 大文字小文字の変え方(本家の5択)。pick の項目名がそのまま鍵
 pub(crate) const CASE_MODES: &[&str] = &[
     "文の先頭だけ大文字",

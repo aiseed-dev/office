@@ -131,8 +131,12 @@ struct Calc {
     view: Pos,
     /// 固定する行数・列数(見出しを置き去りにしないため)。カーソル位置で決める
     frozen: Option<Pos>,
-    /// 絞り込み(列, 値)。**見え方だけ** — 保存される中身は変わらない
-    filter: Option<(u32, String)>,
+    /// オートフィルタ(Excel の▼)。**見え方だけ** — 保存される中身は
+    /// 変わらず、閉じれば消える。範囲の1行目が見出しで、列ごとに
+    /// 「隠す値」を持つ(map に無い列は素通し)
+    auto_filter: Option<AutoFilter>,
+    /// 開いている▼の板(列, 値の検索)。Esc で閉じる
+    filter_panel: Option<(u32, Editor)>,
     /// 表の操作(書式・フィル・行列・結合・並べ替え)を戻すための控え。
     /// 入力欄の undo とは別 — **戻せない操作は事故のとき逃げ道が無い**。
     /// 1手 = シートの控えの束。普通の操作は1枚、Python の実行のように
@@ -208,6 +212,9 @@ impl HasEditor for Calc {
         if let Some(sv) = &mut self.solver {
             return sv.focused();
         }
+        if let Some((_, ed)) = &mut self.filter_panel {
+            return ed; // ▼の板の検索欄
+        }
         match &mut self.prompt {
             Some((_, ed)) => ed,
             None => &mut self.input,
@@ -229,6 +236,9 @@ impl HasEditor for Calc {
         if let Some(sv) = &self.solver {
             return sv.focused_ref();
         }
+        if let Some((_, ed)) = &self.filter_panel {
+            return ed;
+        }
         match &self.prompt {
             Some((_, ed)) => ed,
             None => &self.input,
@@ -246,6 +256,7 @@ impl HasEditor for Calc {
         // 板・小窓・名前ボックスへの打鍵は文書を変えない
         if self.prompt.is_none() && self.name_edit.is_none()
             && self.fn_dlg.is_none() && self.fn_args.is_none()
+            && self.filter_panel.is_none()
         {
             self.dirty = true;
             // 式の直入力の支援: 打ちかけの関数名の補完一覧と、引数のヒント
@@ -302,7 +313,8 @@ impl Calc {
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
-            filter: None,
+            auto_filter: None,
+            filter_panel: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             sheet_ui: Vec::new(),
@@ -394,7 +406,8 @@ impl Calc {
             self.active = idx;
             self.restore_ui();
             self.anchor = None;
-            self.filter = None;
+            self.auto_filter = None;
+            self.filter_panel = None;
         }
     }
 
@@ -531,30 +544,32 @@ impl Calc {
     fn visible_rows(&self) -> Vec<u32> {
         let hidden = &self.sheet().row_hidden;
         let fit = self.rows_fit();
-        match &self.filter {
-            Some((col, v)) => self
-                .matching_rows(*col, v)
-                .into_iter()
+        if self.filter_active() {
+            // 絞り込み中は頭から詰めて見せる(範囲の後ろの行も続けて出す)
+            let (rows, _) = self.sheet().extent();
+            let last = self.auto_filter.as_ref().map(|f| f.range.1.row + 1).unwrap_or(0);
+            return (0..rows.max(last))
+                .filter(|r| {
+                    !hidden.contains(r) && self.filter_keeps(*r) && self.slicer_keeps(*r)
+                })
+                .take(fit as usize)
+                .collect();
+        }
+        if self.slicer.as_ref().is_some_and(|(_, sel, _)| !sel.is_empty()) {
+            // スライサーで絞る: 見出し+選んだ値の行(絞り込みと同じ流儀)
+            let (rows, _) = self.sheet().extent();
+            (0..rows)
                 .filter(|r| !hidden.contains(r) && self.slicer_keeps(*r))
                 .take(fit as usize)
-                .collect(),
-            None if self.slicer.as_ref().is_some_and(|(_, sel, _)| !sel.is_empty()) => {
-                // スライサーで絞る: 見出し+選んだ値の行(絞り込みと同じ流儀)
-                let (rows, _) = self.sheet().extent();
-                (0..rows)
-                    .filter(|r| !hidden.contains(r) && self.slicer_keeps(*r))
-                    .take(fit as usize)
-                    .collect()
-            }
-            None => {
-                // 畳んだ行のぶん多めに見て、画面の行数まで詰める
-                let extra = hidden.len() as u32;
-                grid_rows(self.frozen, self.view, fit + extra)
-                    .into_iter()
-                    .filter(|r| !hidden.contains(r))
-                    .take(fit as usize)
-                    .collect()
-            }
+                .collect()
+        } else {
+            // 畳んだ行のぶん多めに見て、画面の行数まで詰める
+            let extra = hidden.len() as u32;
+            grid_rows(self.frozen, self.view, fit + extra)
+                .into_iter()
+                .filter(|r| !hidden.contains(r))
+                .take(fit as usize)
+                .collect()
         }
     }
 
@@ -1174,9 +1189,13 @@ impl Calc {
     /// メニューの項目を実行する。
     /// いまの列で並べ替え(右クリックとリボンの昇順/降順が同じ道)
     fn sort_active(&mut self, asc: bool) {
+        self.sort_col(self.cursor.col, asc);
+    }
+
+    /// 指定の列で並べ替え(▼の板の昇順/降順もここに来る)
+    fn sort_col(&mut self, c: u32, asc: bool) {
         self.commit();
         self.checkpoint();
-        let c = self.cursor.col;
         self.book.sheets[self.active].sort_by_column(c, asc, true);
         self.dirty = true;
         recalc_book(&mut self.book, self.active);
@@ -2265,15 +2284,79 @@ impl Calc {
     }
 
     /// 絞り込みに一致する行(見出し行 0 は常に入れる)。
-    fn matching_rows(&self, col: u32, v: &str) -> Vec<u32> {
-        let (rows, _) = self.sheet().extent();
-        let mut out = vec![0];
-        for r in 1..rows {
-            if self.sheet().get(Pos::new(r, col)).map(|c| c.value.display()).as_deref() == Some(v) {
-                out.push(r);
+    /// オートフィルタで残る行か。範囲の外と見出し行は常に残す
+    fn filter_keeps(&self, r: u32) -> bool {
+        let Some(f) = &self.auto_filter else { return true };
+        let (a, b) = f.range;
+        if r <= a.row || r > b.row {
+            return true;
+        }
+        for (col, hide) in &f.hide {
+            let v = self
+                .sheet()
+                .get(Pos::new(r, *col))
+                .map(|c| c.value.display())
+                .unwrap_or_default();
+            if hide.contains(&v) {
+                return false;
             }
         }
-        out
+        true
+    }
+
+    /// 絞り込みが実際に効いているか(どれかの列で値を隠している)
+    fn filter_active(&self) -> bool {
+        self.auto_filter.as_ref().is_some_and(|f| !f.hide.is_empty())
+    }
+
+    /// 絞り込みの「n 行中 m 行を表示」(範囲のデータ行で数える)
+    fn filter_counts(&self) -> Option<(u32, u32)> {
+        if !self.filter_active() {
+            return None;
+        }
+        let (a, b) = self.auto_filter.as_ref()?.range;
+        let total = b.row - a.row;
+        let shown = ((a.row + 1)..=b.row).filter(|r| self.filter_keeps(*r)).count() as u32;
+        Some((total, shown))
+    }
+
+    /// ▼の板に出す値の一覧(値, 件数)。**他の列の絞り込みは効かせたまま**
+    /// この列の値を数える(Excel の作法)。1,000 種で切り、切ったら true
+    fn filter_values(&self, col: u32) -> (Vec<(String, usize)>, bool) {
+        let Some(f) = &self.auto_filter else { return (Vec::new(), false) };
+        let (a, b) = f.range;
+        let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+        for r in (a.row + 1)..=b.row {
+            if self.sheet().row_hidden.contains(&r) {
+                continue;
+            }
+            let mut ok = true;
+            for (c2, hide) in &f.hide {
+                if *c2 == col {
+                    continue;
+                }
+                let v = self
+                    .sheet()
+                    .get(Pos::new(r, *c2))
+                    .map(|c| c.value.display())
+                    .unwrap_or_default();
+                if hide.contains(&v) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            let v = self
+                .sheet()
+                .get(Pos::new(r, col))
+                .map(|c| c.value.display())
+                .unwrap_or_default();
+            *counts.entry(v).or_default() += 1;
+        }
+        let cut = counts.len() > 1000;
+        (counts.into_iter().take(1000).collect(), cut)
     }
 
 }
