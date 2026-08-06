@@ -1126,13 +1126,20 @@ impl Render for Calc {
                         .top(px(1.0)).right(px(1.0))
                         .w(px(6.0)).h(px(6.0)).rounded_sm().bg(rgb(0xC00000)));
                 }
-                // 入力規則のあるセルを選ぶと右下に ▾
-                // (右クリック → ドロップダウンリストから選択、の目印)
+                // 入力規則のあるセルを選ぶと右下に ▾。押すと候補の一覧が
+                // 開く(本家と同じ。右クリック → ドロップダウンからでも可)
                 if sel && self.sheet().validation_at(p).is_some() {
-                    d = d.relative().child(div().absolute()
+                    d = d.relative().child(div().id("dv-arrow").absolute()
                         .bottom(px(-1.0)).right(px(1.0))
                         .text_size(px(us * 8.5)).text_color(rgb(0x1B6E3C))
-                        .child("▾"));
+                        .cursor_pointer()
+                        .child("▾")
+                        .on_mouse_down(gpui::MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.open_pick_list();
+                                cx.notify();
+                            })));
                 }
                 // 選択中のセルは、確定前の入力をその場に見せる
                 let shown = if sel { self.input.text().to_string() } else { shown };
