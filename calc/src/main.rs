@@ -695,6 +695,9 @@ struct Calc {
     fn_dlg: Option<FnDlg>,
     /// 「関数の引数」の画面(次へ、で進む第2段)
     fn_args: Option<FnArgs>,
+    /// 式の直入力中のセル掴み(起点, 入れた参照の文字の範囲)。
+    /// クリックで参照がカーソルに入り、ドラッグで範囲(A1:C9)に伸びる
+    ref_pick: Option<(Pos, std::ops::Range<usize>)>,
     /// 右クリックのメニュー(出ている場所。格子領域の px)
     menu_at: Option<(f32, f32)>,
     /// 開いている子メニュー(挿入▸ など)
@@ -830,6 +833,8 @@ impl HasEditor for Calc {
             && self.fn_dlg.is_none() && self.fn_args.is_none()
         {
             self.dirty = true;
+            // 式の直入力の支援: 打ちかけの関数名の補完一覧と、引数のヒント
+            self.formula_assist();
         }
     }
 }
@@ -870,6 +875,7 @@ impl Calc {
             name_edit: None,
             fn_dlg: None,
             fn_args: None,
+            ref_pick: None,
             menu_at: None,
             menu_sub: None,
             pick: None,
@@ -930,6 +936,9 @@ impl Calc {
         let s = self.sheet().get(self.cursor).map(|c| c.editable()).unwrap_or_default();
         self.input = Editor::new(&s);
         self.edit_armed = false; // セルを移った=編集は仕切り直し
+        if self.pick_kind == "fn-complete" {
+            self.pick = None; // 補完の一覧も畳む
+        }
     }
 
     /// 数式バーの内容をセルに入れて再計算する。
@@ -1393,6 +1402,24 @@ impl Calc {
             self.fn_args_recalc();
             return;
         }
+        // 式の直入力中は、セルのクリックで**参照がカーソルに入る**(Excel の
+        // 作法)。入るのは参照を待つ場所(= ( , 演算子の直後)のときだけ —
+        // それ以外の場所でのクリックは、従来どおり確定して移動
+        if (self.editing() || self.edit_armed) && self.input.text().starts_with('=') {
+            let t = self.input.text().to_string();
+            let cur = self.input.cursor().min(t.len());
+            let prev = t[..cur].trim_end().chars().last();
+            if matches!(
+                prev,
+                Some('=' | '(' | ',' | '+' | '-' | '*' | '/' | ':' | '^' | '&' | '<' | '>' | '%')
+            ) {
+                let a1 = p.a1();
+                self.input.insert(&a1);
+                let end = self.input.cursor();
+                self.ref_pick = Some((p, end - a1.len()..end));
+                return;
+            }
+        }
         // Ctrl+クリックはリンクを開く(基幹網の外は既定のブラウザに任せる)
         if ctrl && !shift {
             if let Some(url) = self.sheet().links.get(&p).cloned() {
@@ -1426,6 +1453,25 @@ impl Calc {
 
     /// 押したまま動いた。通り過ぎたセルまで選択を広げる。
     fn mouse_drag_at(&mut self, x: f32, y: f32) {
+        // 式の直入力のセル掴み: 入れた参照を「起点:いま」の範囲に置き換える
+        if let Some((from, range)) = self.ref_pick.clone() {
+            let Some(p) = self.cell_at(x, y) else { return };
+            let (ra, rb) = (from.row.min(p.row), from.row.max(p.row));
+            let (ca, cb) = (from.col.min(p.col), from.col.max(p.col));
+            let text = if from == p {
+                p.a1()
+            } else {
+                format!("{}:{}", Pos::new(ra, ca).a1(), Pos::new(rb, cb).a1())
+            };
+            let mut t = self.input.text().to_string();
+            if range.end <= t.len() {
+                t.replace_range(range.clone(), &text);
+                self.input = Editor::new(&t);
+                self.input.move_to(range.start + text.len(), false);
+                self.ref_pick = Some((from, range.start..range.start + text.len()));
+            }
+            return;
+        }
         // 関数の引数のセル掴み: なぞった範囲「起点:いま」を欄に入れる
         if self.fn_args.as_ref().is_some_and(|a| a.pick_from.is_some()) {
             let Some(p) = self.cell_at(x, y) else { return };
@@ -1496,10 +1542,11 @@ impl Calc {
 
     /// 離した。ドラッグ選択はここで確定する。
     fn mouse_up(&mut self) {
-        // 関数の引数のセル掴みは、離した所で終わり
+        // 関数の引数・式の直入力のセル掴みは、離した所で終わり
         if let Some(a) = &mut self.fn_args {
             a.pick_from = None;
         }
+        self.ref_pick = None;
         if let Some(pts) = self.ink_cur.take() {
             self.finish_ink(pts);
             return;
@@ -1798,6 +1845,24 @@ impl Calc {
                     self.status = ui::tf!("配色を「{}」にしました({} 箇所の色が追従。テーマ色を使っていないセルは変わりません)", v, n)
                     .into();
                 }
+            }
+            // 直入力の補完: 打ちかけの名前を選んだ関数に置き換えて ( まで入れる
+            "fn-complete" => {
+                let t = self.input.text().to_string();
+                let cur = self.input.cursor().min(t.len());
+                let tok_len: usize = t[..cur]
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+                    .map(|c| c.len_utf8())
+                    .sum();
+                let start = cur - tok_len;
+                let mut t2 = t.clone();
+                t2.replace_range(start..cur, &format!("{v}("));
+                self.input = Editor::new(&t2);
+                self.input.move_to(start + v.len() + 1, false);
+                self.edit_armed = true;
+                self.formula_assist();
             }
             "func-cat" => {
                 let id = match v {
@@ -2160,6 +2225,94 @@ impl Calc {
         self.sheet_mut().names.push((t.clone(), range.clone()));
         self.dirty = true;
         self.status = ui::tf!("名前「{}」を {} に付けました(名前ボックスで呼べます)", t, range).into();
+    }
+
+    /// 式の直入力の支援。=を打っている間だけ:
+    /// - 打ちかけの関数名(2字以上)には**補完の一覧**(セルの下。押すと入る)
+    /// - 開いた括弧の中では、**いま打っている引数のヒント**を状態帯に
+    fn formula_assist(&mut self) {
+        let t = self.input.text().to_string();
+        if !t.starts_with('=') {
+            if self.pick_kind == "fn-complete" {
+                self.pick = None;
+            }
+            return;
+        }
+        let cur = self.input.cursor().min(t.len());
+        // --- 補完: カーソルの直前の識別子(英字はじまり・2字以上) ---
+        let token: String = {
+            let rev: String = t[..cur]
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+                .collect();
+            rev.chars().rev().collect()
+        };
+        let mut showed = false;
+        if token.len() >= 2 && token.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            let up = token.to_uppercase();
+            let cands: Vec<String> = funcs::FUNCS
+                .iter()
+                .filter(|f| f.name.starts_with(&up) && f.name != up)
+                .map(|f| f.name.to_string())
+                .take(12)
+                .collect();
+            if !cands.is_empty() {
+                if let Some((x, y)) = self.cell_origin_px(self.cursor) {
+                    let h = self.row_px(self.cursor.row);
+                    self.pick_kind = "fn-complete";
+                    self.pick = Some((cands, (x, y + h)));
+                    showed = true;
+                }
+            }
+        }
+        if !showed && self.pick_kind == "fn-complete" {
+            self.pick = None;
+        }
+        // --- 引数のヒント: いちばん内側の閉じていない関数と、何番目の引数か ---
+        let mut stack: Vec<(String, usize)> = Vec::new();
+        let mut in_str = false;
+        let mut ident = String::new();
+        for ch in t[..cur].chars() {
+            match ch {
+                '"' => in_str = !in_str,
+                _ if in_str => {}
+                '(' => {
+                    stack.push((ident.to_uppercase(), 0));
+                    ident.clear();
+                }
+                ')' => {
+                    stack.pop();
+                    ident.clear();
+                }
+                ',' => {
+                    if let Some((_, n)) = stack.last_mut() {
+                        *n += 1;
+                    }
+                    ident.clear();
+                }
+                c if c.is_ascii_alphanumeric() || c == '.' => ident.push(c),
+                _ => ident.clear(),
+            }
+        }
+        if let Some((name, argi)) = stack.last() {
+            if let Some(f) = funcs::FUNCS.iter().find(|f| f.name == name) {
+                let hint = f
+                    .arg_desc
+                    .get(*argi)
+                    .or(f.arg_desc.last())
+                    .copied()
+                    .unwrap_or("");
+                let names = parse_fn_args(f.args);
+                let arg_name = names
+                    .get(*argi)
+                    .or(names.last())
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_default();
+                self.status =
+                    format!("{}{} — {}{}", f.name, f.args, arg_name, hint).into();
+            }
+        }
     }
 
     /// 「関数を挿入」の次へ = 選んだ関数の**引数の画面**へ進む(本家の第2段)
@@ -8054,9 +8207,11 @@ impl gpui::Element for InputSink {
                     || c.head_drag.is_some()
                     || c.ink_cur.is_some()
                     || c.tool == Some(2)
-                    // 関数の引数のセル掴み(範囲をなぞる)もここを通す —
-                    // この表に入れ忘れると「押せるのに伸びない」(writer で踏んだ罠)
+                    // 関数の引数・式の直入力のセル掴み(範囲をなぞる)も
+                    // ここを通す — この表に入れ忘れると「押せるのに伸びない」
+                    // (writer で踏んだ罠)
                     || c.fn_args.as_ref().is_some_and(|a| a.pick_from.is_some())
+                    || c.ref_pick.is_some()
                 {
                     // 筆と消しゴムもここを通る(描きかけ・なぞり)
                     c.mouse_drag_at(f32::from(rel.x), f32::from(rel.y));
