@@ -277,10 +277,21 @@ fn resolve(
 
 /// xlsx が番号だけで持っている既定の表示形式(よく使うものだけ)。
 fn builtin(id: u32) -> Option<String> {
+    // 本家(vendor/sdkjs Workbook.js の aStandartNumFormats)と同じ表。
+    // 5-8・23-36・41-44 は本家も未定義(ロケール依存・予約)。
+    // 14/20/22 の日付時刻だけ日本の見た目(yyyy/mm/dd)に寄せてある。
+    // 描けないコードでも**持ち越しが本体** — 読みで落とすと保存で書式が消える
     Some(match id {
         1 => "0", 2 => "0.00", 3 => "#,##0", 4 => "#,##0.00",
         9 => "0%", 10 => "0.00%",
-        14 => "yyyy/mm/dd", 20 => "h:mm", 22 => "yyyy/mm/dd h:mm",
+        11 => "0.00E+00", 12 => "# ?/?", 13 => "# ??/??",
+        14 => "yyyy/mm/dd", 15 => "d-mmm-yy", 16 => "d-mmm", 17 => "mmm-yy",
+        18 => "h:mm AM/PM", 19 => "h:mm:ss AM/PM",
+        20 => "h:mm", 21 => "h:mm:ss", 22 => "yyyy/mm/dd h:mm",
+        37 => "#,##0_);(#,##0)", 38 => "#,##0_);[Red](#,##0)",
+        39 => "#,##0.00_);(#,##0.00)", 40 => "#,##0.00_);[Red](#,##0.00)",
+        45 => "mm:ss", 46 => "[h]:mm:ss", 47 => "mm:ss.0", 48 => "##0.0E+0",
+        49 => "@",
         _ => return None,
     }.into())
 }
@@ -310,6 +321,21 @@ mod tests {
         <xf fontId="0" fillId="0" borderId="0" numFmtId="0"><alignment horizontal="center"/></xf>
       </cellXfs>
     </styleSheet>"##;
+
+    #[test]
+    fn 組み込みの書式idは本家の表どおり引ける() {
+        // 本家 sdkjs の aStandartNumFormats と同じ範囲。ここに穴があると
+        // 実物 xlsx の書式が「一般」に落ち、保存し直しで消える(点検 2026-08-07)
+        assert_eq!(builtin(49).as_deref(), Some("@"), "文字列(49)が引けない");
+        assert_eq!(builtin(11).as_deref(), Some("0.00E+00"));
+        assert_eq!(builtin(12).as_deref(), Some("# ?/?"), "分数が引けない");
+        assert_eq!(builtin(38).as_deref(), Some("#,##0_);[Red](#,##0)"));
+        assert_eq!(builtin(46).as_deref(), Some("[h]:mm:ss"), "経過時間が引けない");
+        // 本家も未定義の予約領域は None のまま(勝手に発明しない)
+        assert_eq!(builtin(0), None);
+        assert_eq!(builtin(30), None);
+        assert_eq!(builtin(44), None);
+    }
 
     #[test]
     fn 既定の書体も書式として持つ() {
