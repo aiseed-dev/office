@@ -754,6 +754,71 @@ pub(crate) fn image_px(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// 大文字小文字の変え方(本家の5択)。pick の項目名がそのまま鍵
+pub(crate) const CASE_MODES: &[&str] = &[
+    "文の先頭だけ大文字",
+    "すべて小文字",
+    "すべて大文字",
+    "単語の先頭を大文字",
+    "大文字と小文字を入れ替え",
+];
+
+/// 選んだ変え方で文字列を変換する(Unicode の upper/lower に従う)
+pub(crate) fn change_case(t: &str, mode: &str) -> String {
+    match mode {
+        "すべて小文字" => t.to_lowercase(),
+        "すべて大文字" => t.to_uppercase(),
+        "文の先頭だけ大文字" => {
+            let mut out = String::with_capacity(t.len());
+            let mut done = false;
+            for ch in t.to_lowercase().chars() {
+                if !done && ch.is_alphabetic() {
+                    out.extend(ch.to_uppercase());
+                    done = true;
+                } else {
+                    out.push(ch);
+                }
+            }
+            out
+        }
+        "単語の先頭を大文字" => {
+            let mut out = String::with_capacity(t.len());
+            let mut head = true;
+            for ch in t.chars() {
+                if ch.is_whitespace() {
+                    head = true;
+                    out.push(ch);
+                } else if ch.is_alphabetic() {
+                    if head {
+                        out.extend(ch.to_uppercase());
+                    } else {
+                        out.extend(ch.to_lowercase());
+                    }
+                    head = false;
+                } else {
+                    // 数字や記号も語の中身(「3rd」の r は頭ではない)
+                    out.push(ch);
+                    head = false;
+                }
+            }
+            out
+        }
+        "大文字と小文字を入れ替え" => t
+            .chars()
+            .flat_map(|ch| {
+                if ch.is_uppercase() {
+                    ch.to_lowercase().collect::<Vec<_>>()
+                } else if ch.is_lowercase() {
+                    ch.to_uppercase().collect()
+                } else {
+                    vec![ch]
+                }
+            })
+            .collect(),
+        _ => t.to_string(),
+    }
+}
+
 /// セルのスタイル(本家の「セルのスタイル」。よく使う組だけ)。
 /// 表オブジェクトは持たない方針どおり、掛けるのは普通の書式 —
 /// どれも Ctrl+Z の1手で戻る

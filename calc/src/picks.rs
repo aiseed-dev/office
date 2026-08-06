@@ -146,6 +146,36 @@ impl Calc {
                 }
                 self.pick_paths.clear();
             }
+            "changecase" => {
+                self.checkpoint();
+                let (a, b) = self.sel_rect();
+                let mut n = 0usize;
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        let p = Pos::new(r, c);
+                        let Some(cell) = self.sheet().get(p).cloned() else { continue };
+                        if cell.formula.is_some() {
+                            continue; // 式の結果は触らない(次の計算で戻ってしまう)
+                        }
+                        let sheet::Value::Text(t) = &cell.value else { continue };
+                        let new_t = change_case(t, v);
+                        if new_t != *t {
+                            let mut cell = cell;
+                            cell.value = sheet::Value::Text(new_t);
+                            self.sheet_mut().set(p, cell);
+                            n += 1;
+                        }
+                    }
+                }
+                if n == 0 {
+                    self.undo_stack.pop();
+                    self.status = ui::t!("選択の中に変わる文字がありません").into();
+                } else {
+                    self.dirty = true;
+                    self.sync_input();
+                    self.status = ui::tf!("{} セルの大文字小文字を変えました", n).into();
+                }
+            }
             "font-color" => {
                 if let Some((_, hx)) = FONT_COLORS.iter().find(|(n, _)| *n == v) {
                     let c = hx.map(|h| h.to_string());

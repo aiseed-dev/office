@@ -245,52 +245,19 @@ impl Calc {
                 }
             }
             // 大文字小文字。選択の英字に小文字があれば大文字へ、無ければ小文字へ
+            // 大文字小文字の変更。本家は5択のサブメニュー —
+            // 大小のトグルだけの仮実装をやめ、一覧から選ぶ
             "changecase" => {
                 self.commit();
-                self.checkpoint();
-                let (a, b) = self.sel_rect();
-                let mut has_lower = false;
-                for r in a.row..=b.row {
-                    for c in a.col..=b.col {
-                        if let Some(cell) = self.sheet().get(Pos::new(r, c)) {
-                            if let sheet::Value::Text(t) = &cell.value {
-                                if t.chars().any(|ch| ch.is_ascii_lowercase()) {
-                                    has_lower = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                let mut n = 0usize;
-                for r in a.row..=b.row {
-                    for c in a.col..=b.col {
-                        let p = Pos::new(r, c);
-                        let Some(cell) = self.sheet().get(p).cloned() else { continue };
-                        let sheet::Value::Text(t) = &cell.value else { continue };
-                        if !t.chars().any(|ch| ch.is_ascii_alphabetic()) {
-                            continue;
-                        }
-                        let new_t = if has_lower { t.to_uppercase() } else { t.to_lowercase() };
-                        if new_t != *t {
-                            let mut cell = cell;
-                            cell.value = sheet::Value::Text(new_t);
-                            self.sheet_mut().set(p, cell);
-                            n += 1;
-                        }
-                    }
-                }
-                if n == 0 {
-                    self.undo_stack.pop();
-                    self.status = ui::t!("選択の中に英字がありません").into();
-                } else {
-                    self.dirty = true;
-                    self.sync_input();
-                    self.status = format!(
-                        "{n} セルを{}にしました(もう一度で逆)",
-                        if has_lower { "大文字" } else { "小文字" }
-                    )
-                    .into();
-                }
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                self.pick_kind = "changecase";
+                self.pick = Some((
+                    CASE_MODES.iter().map(|v| v.to_string()).collect(),
+                    at,
+                ));
             }
             // 数値の書式・セルのスタイル: 書式の小窓(道具箱)を開く
             "format" | "cell-format" => {

@@ -642,6 +642,19 @@ mod recalc_tests {
         });
     }
 
+    #[test]
+    fn 大文字小文字の5つの変え方() {
+        let t = "hello WORLD こんにちは 3rd";
+        assert_eq!(change_case(t, "すべて大文字"), "HELLO WORLD こんにちは 3RD");
+        assert_eq!(change_case(t, "すべて小文字"), "hello world こんにちは 3rd");
+        assert_eq!(change_case(t, "文の先頭だけ大文字"), "Hello world こんにちは 3rd");
+        assert_eq!(change_case(t, "単語の先頭を大文字"), "Hello World こんにちは 3rd");
+        assert_eq!(
+            change_case(t, "大文字と小文字を入れ替え"),
+            "HELLO world こんにちは 3RD"
+        );
+    }
+
     #[gpui::test]
     fn 結合すると中央に揃う(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
