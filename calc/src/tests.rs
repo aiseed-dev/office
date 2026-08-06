@@ -642,6 +642,27 @@ mod recalc_tests {
         });
     }
 
+    #[gpui::test]
+    fn 固定はプリセットの一覧から選ぶ(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.cursor = Pos::parse("B2").unwrap();
+            this.run_cmd("freeze", cx);
+            assert_eq!(this.pick_kind, "freeze", "固定の一覧が開かない");
+            this.apply_pick("最上行の固定", cx);
+            assert_eq!(this.frozen, Some(Pos::new(1, 0)), "最上行が固定されない");
+            this.run_cmd("freeze", cx);
+            this.apply_pick("最初の列の固定", cx);
+            assert_eq!(this.frozen, Some(Pos::new(0, 1)), "最初の列が固定されない");
+            this.run_cmd("freeze", cx);
+            this.apply_pick("いまの位置で固定(上と左が留まる)", cx);
+            assert_eq!(this.frozen, Some(Pos::parse("B2").unwrap()), "いまの位置で固定されない");
+            this.run_cmd("freeze", cx);
+            this.apply_pick("固定の解除", cx);
+            assert_eq!(this.frozen, None, "固定が解けない");
+        });
+    }
+
     #[test]
     fn 大文字小文字の5つの変え方() {
         let t = "hello WORLD こんにちは 3rd";
@@ -785,14 +806,13 @@ mod menu_run_tests {
                 "formula-bar" => this.show_formula_bar,
                 "show-headings" => this.show_headers,
                 "show-zeros" => this.show_zeros,
-                "freeze" => this.frozen.is_some(),
                 "rtl-sheet" => this.sheet().rtl,
                 _ => unreachable!(),
             }
         };
         for id in [
             "show-formulas", "show-gridlines", "co-showcomment", "formula-bar",
-            "show-headings", "show-zeros", "freeze", "rtl-sheet",
+            "show-headings", "show-zeros", "rtl-sheet",
         ] {
             c.update(cx, |this, cx| {
                 seed(this);

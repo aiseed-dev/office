@@ -146,6 +146,31 @@ impl Calc {
                 }
                 self.pick_paths.clear();
             }
+            "freeze" => {
+                match v {
+                    "固定の解除" => {
+                        self.frozen = None;
+                        self.status = ui::t!("固定を解きました").into();
+                    }
+                    "最上行の固定" => {
+                        self.frozen = Some(Pos::new(1, 0));
+                        self.status = ui::t!("最上行を固定しました").into();
+                    }
+                    "最初の列の固定" => {
+                        self.frozen = Some(Pos::new(0, 1));
+                        self.status = ui::t!("最初の列を固定しました").into();
+                    }
+                    _ => {
+                        // いまの位置で固定(その上と左が留まる)
+                        if self.cursor.row == 0 && self.cursor.col == 0 {
+                            self.status = ui::t!("固定する位置にカーソルを置いてください(その上と左が留まります)").into();
+                        } else {
+                            self.frozen = Some(self.cursor);
+                            self.status = ui::tf!("{}行 {}列を固定しました", self.cursor.row, self.cursor.col).into();
+                        }
+                    }
+                }
+            }
             "changecase" => {
                 self.checkpoint();
                 let (a, b) = self.sel_rect();

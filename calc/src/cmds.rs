@@ -1840,18 +1840,22 @@ impl Calc {
                 self.commit();
                 self.prompt = Some(("name", Editor::new("")));
             }
+            // ウィンドウ枠の固定。本家はドロップダウンで「最上行」「最初の列」を
+            // 個別に選べる — トグルだけの形をやめ、一覧から選ぶ
             "freeze" => {
-                self.frozen = match self.frozen {
-                    Some(_) => None,
-                    None if self.cursor.row == 0 && self.cursor.col == 0 => {
-                        self.status = ui::t!("固定する位置にカーソルを置いてください(その上と左が留まります)").into();
-                        None
-                    }
-                    None => {
-                        self.status = ui::tf!("{}行 {}列を固定しました", self.cursor.row, self.cursor.col).into();
-                        Some(self.cursor)
-                    }
-                };
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let mut items: Vec<String> = Vec::new();
+                if self.frozen.is_some() {
+                    items.push("固定の解除".into());
+                }
+                items.push("いまの位置で固定(上と左が留まる)".into());
+                items.push("最上行の固定".into());
+                items.push("最初の列の固定".into());
+                self.pick_kind = "freeze";
+                self.pick = Some((items, at));
             }
             // 塗りつぶしの色。本家はパレット — 一覧から選ぶ
             // (順繰りの2色は仮実装だった。発注者指摘 2026-08-06)
