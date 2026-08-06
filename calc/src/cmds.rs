@@ -440,11 +440,20 @@ impl Calc {
             // (元が変わったら選び直してもう一度 — 開く=再計算の仕掛けは持たない)
             "pivot-insert" => {
                 self.commit();
-                if self.anchor.is_none() {
-                    self.status =
-                        ui::t!("元の表を範囲で選んでください(1行目が見出し)").into();
+                // 範囲を選んでいなければ表全体を自動検出(オートフィルタと同じ)。
+                // カーソルを表に置くだけで挿入できる — 範囲選択は絞りたいときだけ
+                let picked = if self.anchor.is_some() {
+                    Some(self.sel_rect())
                 } else {
-                    let (a, b) = self.sel_rect();
+                    let (rows, cols) = self.sheet().extent();
+                    (rows >= 2 && cols > 0)
+                        .then(|| (Pos::new(0, 0), Pos::new(rows - 1, cols - 1)))
+                };
+                if picked.is_none() {
+                    self.status =
+                        ui::t!("元の表がありません(1行目が見出し、下にデータの行)").into();
+                } else {
+                    let (a, b) = picked.unwrap();
                     if b.row <= a.row {
                         self.status = ui::t!("見出しの下にデータの行が要ります").into();
                     } else {

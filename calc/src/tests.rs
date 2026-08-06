@@ -808,11 +808,12 @@ mod pivot_tests {
                 this.input.insert(v);
                 assert!(this.commit());
             }
-            this.anchor = Some(Pos::parse("A1").unwrap());
-            this.cursor = Pos::parse("C3").unwrap();
+            // 範囲選択なし・表の中にカーソルだけで開く(発注者指摘 2026-08-07)
+            this.anchor = None;
+            this.cursor = Pos::parse("B2").unwrap();
             this.sync_input();
             this.run_cmd("pivot-insert", cx);
-            assert_eq!(this.pick_kind, "pivot-rows-pick", "行の一覧が開かない");
+            assert_eq!(this.pick_kind, "pivot-rows-pick", "カーソルだけで行の一覧が開かない");
             // 見出しを選ばず決定 → 言い返されて一覧のまま
             this.apply_pick("決定(列の選択へ)", cx);
             assert_eq!(this.pick_kind, "pivot-rows-pick", "空のまま先へ進んだ");
