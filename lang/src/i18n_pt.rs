@@ -731,5 +731,4 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile com cargo
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivô 3/4 — um cabeçalho para os valores"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivô 4/4 — como agregar «{}»"),
     ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Sobre uma tabela dinâmica — use a guia «Tabela dinâmica» (atualizar, totais, subtotais, layout; operações que quebram a tabela ficam travadas)"),
-    ("ピボット", "Pivô"),
 ];

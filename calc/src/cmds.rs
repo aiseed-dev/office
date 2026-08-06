@@ -1400,7 +1400,10 @@ impl Calc {
                         self.status = ui::t!("ピボットの上にカーソルを置いてください").into();
                     }
                     Some(i) => {
-                        let need_two = matches!(id, "pivot-subtotals" | "pivot-blank");
+                        // レイアウト(コンパクト⇔表形式)も行の見出しが1つだと
+                        // 見た目が変わらない — 黙って置き直さず、正直に言う
+                        let need_two =
+                            matches!(id, "pivot-subtotals" | "pivot-blank" | "pivot-layout");
                         if need_two && self.book.pivots[i].rows_sel.len() < 2 {
                             self.status =
                                 ui::t!("行の見出しが2つ以上のピボットで効きます(挿入で複数選ぶ)").into();

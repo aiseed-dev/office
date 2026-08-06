@@ -1109,6 +1109,9 @@ mod recalc_tests {
             this.anchor = None;
             this.sync_input();
             assert!(this.status.contains("ピボットテーブル"), "{}", this.status);
+            // レイアウトは行の見出しが1つだと効かない — 正直に言う
+            this.run_cmd("pivot-layout", cx);
+            assert!(this.status.contains("2つ以上"), "{}", this.status);
             // ピボットの上(D2)では結合も入力規則も断られる
             this.anchor = Some(Pos::parse("E3").unwrap());
             this.run_cmd("merge", cx);

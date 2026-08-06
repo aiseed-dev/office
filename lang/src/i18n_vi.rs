@@ -731,5 +731,4 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — một tiêu đề cho giá trị"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — cách tổng hợp «{}»"),
     ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Đang ở trên pivot table — thao tác tại thẻ «Pivot Table» (cập nhật, tổng, tổng phụ, bố cục; các thao tác phá bảng bị khóa)"),
-    ("ピボット", "Pivot"),
 ];

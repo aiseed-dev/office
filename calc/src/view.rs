@@ -2035,15 +2035,9 @@ impl Render for Calc {
                     .left(px(x0)).top(px(y0))
                     .w(px((x1 - x0).max(2.0))).h(px((y1 - y0).max(2.0)))
                     .border_color(rgb(0x8A63C9)).rounded_sm();
+                // 札は出さない(セルの中身に被って邪魔 — 発注者 2026-08-07)。
+                // 濃い枠+紫のタブ+状態行の案内で足りる
                 f = if inside { f.border_2() } else { f.border_1() };
-                if inside {
-                    // 右上の札。何者か・どこで操作するかを一言
-                    f = f.child(div().absolute().top(px(-1.0)).right(px(-1.0))
-                        .px_1p5().rounded_bl_md().rounded_tr_sm()
-                        .bg(rgb(0x8A63C9)).text_color(rgb(0xFFFFFF))
-                        .text_size(px(us * 9.5))
-                        .child(ui::t!("ピボット")));
-                }
                 out.push(f.into_any_element());
             }
             out
