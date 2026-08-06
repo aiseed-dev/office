@@ -1603,3 +1603,71 @@ mod udf_tests {
         assert_eq!(copy_sheet_name(&b, &base), format!("{base} (3)"));
     }
 }
+
+#[cfg(test)]
+mod pivot_e2e_tests {
+    use crate::*;
+
+    /// 実物の python+polars で端から端まで(挿入 → 置かれる → pivot_at →
+    /// ピボット上のロック)。.venv が見つからない環境では飛ばす
+    #[gpui::test]
+    async fn ピボットは挿入から締めまで通しで効く(cx: &mut gpui::TestAppContext) {
+        if !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.venv/bin/python")
+            .exists()
+        {
+            eprintln!("skip: .venv が無い(polars の端到端は飛ばす)");
+            return;
+        }
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            for (a1, v) in [
+                ("A1", "区分"), ("B1", "月"), ("C1", "金額"),
+                ("A2", "筆記具"), ("B2", "4月"), ("C2", "100"),
+                ("A3", "紙製品"), ("B3", "5月"), ("C3", "200"),
+                ("A4", "筆記具"), ("B4", "5月"), ("C4", "50"),
+            ] {
+                this.cursor = Pos::parse(a1).unwrap();
+                this.sync_input();
+                this.input.insert(v);
+                assert!(this.commit());
+            }
+            this.anchor = None;
+            this.cursor = Pos::parse("B2").unwrap();
+            this.sync_input();
+            this.run_cmd("pivot-insert", cx);
+            this.apply_pick("☐ 区分", cx);
+            this.apply_pick("→ 決定(列の選択へ)", cx);
+            this.apply_pick("→ 決定(列は無しでもよい)", cx);
+            this.apply_pick("金額", cx);
+            this.apply_pick("合計", cx);
+        });
+        // polars の子プロセスが返るまで(background executor を回す)
+        cx.executor().advance_clock(std::time::Duration::from_secs(30));
+        cx.run_until_parked();
+        c.update(cx, |this, cx| {
+            assert_eq!(this.book.pivots.len(), 1, "ピボットが置かれない: {}", this.status);
+            let d = this.book.pivots[0].clone();
+            assert!(d.size.0 > 0, "大きさが入らない");
+            // 出力の頭(見出しの下)に合計が入っている
+            let val = |p: Pos| {
+                this.book.sheets[0].get(p).map(|c| c.value.display()).unwrap_or_default()
+            };
+            let body: Vec<String> = (0..d.size.0)
+                .map(|r| val(Pos::new(d.dest.row + r, d.dest.col + d.size.1 - 1)))
+                .collect();
+            assert!(
+                body.iter().any(|v| v == "150"),
+                "筆記具の合計 150 が出ない: {body:?}"
+            );
+            // ピボットの上では締まる(文脈タブと同じ判定 pivot_at)
+            this.anchor = None;
+            this.cursor = d.dest;
+            this.sync_input();
+            assert!(this.pivot_at(this.cursor).is_some(), "pivot_at が効かない");
+            this.run_cmd("data-validation", cx);
+            assert!(this.dv_dlg.is_none(), "ピボットの上で入力規則が開いた");
+            assert!(this.status.contains("ピボット"), "{}", this.status);
+        });
+    }
+}

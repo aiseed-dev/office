@@ -173,9 +173,22 @@ pub(crate) fn find_python() -> std::path::PathBuf {
     if let Some(p) = std::env::var_os("JO_PYTHON") {
         return p.into();
     }
+    // 今いるフォルダの .venv(リポジトリ直下で起動した形)
     let venv = std::path::Path::new(".venv/bin/python");
     if venv.exists() {
         return venv.into();
+    }
+    // 実行ファイルの場所から遡って .venv を探す(target/release/calc →
+    // リポジトリ直下)。**どこから起動しても同じ python に当たる** —
+    // CWD 頼みだと「polars がありません」になり、ピボットが置けない
+    // (発注者の実機で踏んだ 2026-08-07)
+    if let Ok(exe) = std::env::current_exe() {
+        for dir in exe.ancestors().skip(1) {
+            let p = dir.join(".venv/bin/python");
+            if p.exists() {
+                return p;
+            }
+        }
     }
     "python3".into()
 }
