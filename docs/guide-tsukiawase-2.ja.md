@@ -19,7 +19,7 @@ calc と突き合わせた結果の**全量**。要約と消し込みの順番�
 
 ### 文字の書式(6件)
 
-- **[中] 大文字小文字変更のオプション種類**(FontTypeSizeStyle.aspx)
+- ✔ **[中] 大文字小文字変更のオプション種類**(FontTypeSizeStyle.aspx)
   - 本家: Sentence case / lowercase / UPPERCASE / Capitalize Each Word / tOGGLE cASE の5択サブメニュー
   - calc: calc/src/cmds.rs:248-287 の "changecase" はワンクリックでUPPER⇄lowerをトグルするのみ(has_lower 判定で全て大文字化 or 全て小文字化の二択)。picks.rs にサブメニュー項目も無い(grepで該当なし)。Capitalize Each Word 等は無い
 - **[中] フォントカラー・塗りつぶし色の詳細指定(スポイト・RGB/16進入力・その他の色)**(FontTypeSizeStyle.aspx)
@@ -28,7 +28,7 @@ calc と突き合わせた結果の**全量**。要約と消し込みの順番�
 - **[中] リンク設定ダイアログの構成(外部リンク/内部データ範囲の切替、表示テキスト欄、スクリーンチップテキスト欄)**(AddHyperlinks.aspx)
   - 本家: URL入力欄に加え「表示」(クリック可能テキスト)欄と「スクリーンチップテキスト」欄がある。内部データ範囲を選ぶとシート・セル範囲・名前付き範囲から選択するUIに切り替わる
   - calc: calc/src/cmds.rs:1837-1841 の "inshyperlink" は self.prompt = ("link", Editor::new(&cur)) という単一のテキスト入力欄(URL文字列のみ)を出すだけ。calc/src/picks.rs:1309-1322 の finish_prompt "link" も同様に文字列1つを links マップへ格納するのみで、表示テキスト・スクリーンチップ・内部シート参照選択・名前付き範囲選択のUIは無い
-- **[小] クリアの選択肢**(ClearFormatting.aspx)
+- ✔ **[小] クリアの選択肢**(ClearFormatting.aspx)
   - 本家: 「すべて」「テキスト」「書式」「コメント」「リンク」の5択
   - calc: calc/src/picks.rs:381-385 の "clr" サブメニューは「すべて」「テキスト(書式は残す)」「書式(中身は残す)」の3択のみ。コメント単独削除・リンク単独削除の選択肢が無い(cmds.rs の clear_range / clear は全体一括に対応する形跡のみ)
 - **[小] 書式のコピー(刷毛)**(ClearFormatting.aspx)
@@ -61,7 +61,7 @@ calc と突き合わせた結果の**全量**。要約と消し込みの順番�
 - **[中] カスタム数値形式ダイアログ(小数点桁数・1000区切り・通貨記号・負の値表示・日付/時刻/分数形式の選択)**(ChangeNumberFormat.aspx)
   - 本家: 「数値形式」ウィンドウでコード直接入力や各種プリセットから書式をカスタマイズできる。
   - calc: grep で「カスタム」・書式コード入力用の編集板が picks.rs / view.rs に見当たらず、fmt_panel(picks.rs:1348 以降)の中身も borders/fill 中心で numfmt のカスタム入力欄は確認できない。number_format は Option<String> で xlsx コードをそのまま保持できる型だが、calc の UI から任意コードを打ち込む経路が無い。
-- **[小] 「結合して中央揃え」実行時にテキストが自動で中央揃えになる挙動**(MergeCells.aspx)
+- ✔ **[小] 「結合して中央揃え」実行時にテキストが自動で中央揃えになる挙動**(MergeCells.aspx)
   - 本家: 結合して中央揃えを行うと、結合セルの内容が自動的に中央揃え(横・縦とも)になる。
   - calc: main.rs:2100-2121 の merge_selection() は sh.merges に範囲を積むだけで、align/valign を書き換える処理が無い(grep でも fmt.align への代入は見当たらない)。結合しても既存の左揃え等がそのまま残る。
 
@@ -70,7 +70,7 @@ calc と突き合わせた結果の**全量**。要約と消し込みの順番�
 - **[中] ホームタブの「セルを挿入」「セルを削除」アイコン**(add-cells.aspx / InsertDeleteCells.aspx)
   - 本家: ホームタブのアイコンからも右クリックと同じ「セルを右/下にシフト」等の選択が行えるはず(ガイドは「ツールバーのセル挿入アイコン→『セルを右にシフト』を選択」と明記)
   - calc: ui/src/ribbon.rs:262-263 で cell-ins/cell-del は c()=実装済みだが、calc/src/cmds.rs:113-114 では `"cell-ins" => self.rowcol(|s, p| s.insert_row(p.row))` `"cell-del" => ... remove_row` と、常に行の挿入・削除に固定されている。シフト方向の選択肢を出さず、列全体挿入や『セルを右にシフト』を選ぶ手段がツールバー側には無い(右クリックメニューでのみ選択可能)
-- **[中] 「最上行の固定」「最初の列の固定」の個別プリセット選択(ドロップダウンメニュー)**(Freeze-rows-and-columns.aspx)
+- ✔ **[中] 「最上行の固定」「最初の列の固定」の個別プリセット選択(ドロップダウンメニュー)**(Freeze-rows-and-columns.aspx)
   - 本家: 表示タブの「ウィンドウ枠の固定」はドロップダウンで『最上行の固定』『最初の列の固定』を個別に選べる。行だけ・列だけの固定も可能
   - calc: calc/src/cmds.rs:1876-1888 の freeze はカーソル位置(行・列を同時に)固定するトグルのみで、行のみ/列のみを分けて固定するプリセット選択肢は無い。ドロップダウンメニューでもない(単純トグル)
 - **[小] 列幅0〜255、行高さ0〜408.75の数値指定ダイアログでの範囲**(InsertDeleteCells.aspx)
@@ -194,7 +194,7 @@ calc と突き合わせた結果の**全量**。要約と消し込みの順番�
 
 ### 描画と記号(4件)
 
-- **[大] Alt+Enter によるセル内手動改行**(Wrap-text-in-a-cell.aspx)
+- ✔ **[大] Alt+Enter によるセル内手動改行**(Wrap-text-in-a-cell.aspx)
   - 本家: セル編集中に Alt+Enter で任意の位置に改行を挿入できる
   - calc: ui/src/lib.rs の KeyBinding 一覧(179-208行付近)に alt 修飾のバインディングが無く、calc/src/main.rs 全体を grep しても "alt" という語自体が出現しない。Alt+Enter による手動改行のキー割り当ては見当たらない
 - **[中] 記号ダイアログ(範囲=カテゴリ別分類、Unicode 16進値入力、特殊文字タブ、最近使用した記号、フォント選択)**(InsertSymbols.aspx)
@@ -260,7 +260,7 @@ calc と突き合わせた結果の**全量**。要約と消し込みの順番�
 
 ### 関数A(6件)
 
-- **[大] F9(再計算)・Shift+F9(現在のシートのみ再計算)キー**(InsertFunction.aspx / GoalSeek.aspx)
+- ✔ **[大] F9(再計算)・Shift+F9(現在のシートのみ再計算)キー**(InsertFunction.aspx / GoalSeek.aspx)
   - 本家: 数式タブの「計算」から F9 で全体、Shift+F9 でアクティブシートのみ再計算。手動計算モード時はこれで明示的に計算を走らせる
   - calc: calc/src/cmds.rs:882 の "calc-mode" はモードの自動/手動トグルのみで、手動時に計算を実行する手段(F9キーもリボン釦も)が実装に存在しない。calc/src/main.rs:1560 の recalc_if_auto は auto_calc=false の間は常に何もしない。ステータス文言は「F9 で計算します」と案内する(cmds.rs:886)が、そのキーはどこにもバインドされていない(main.rs の a_* 一覧、repo全体を "f9"/"shift-f9" で grep して該当なし)
 - **[大] 名前マネージャー(一覧・フィルタ・編集・削除・新規)**(UseNamedRanges.aspx)
