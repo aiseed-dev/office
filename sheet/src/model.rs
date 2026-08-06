@@ -513,6 +513,8 @@ pub struct Validation {
     /// エラーの文言(様式 "stop"/"warning"/"information", 題, 本文)。
     /// stop は堰き止める、warning/information は通すが言う
     pub error_msg: Option<(String, String, String)>,
+    /// 空白を無視(xlsx の allowBlank)。false なら空にするのも堰き止める
+    pub allow_blank: bool,
 }
 
 impl Validation {
@@ -526,6 +528,7 @@ impl Validation {
             formula2: String::new(),
             input_msg: None,
             error_msg: None,
+            allow_blank: true,
         }
     }
 
@@ -543,6 +546,11 @@ impl Validation {
                 opts.is_empty() || opts.iter().any(|o| o == text)
             }
             "whole" | "decimal" => {
+                // 規則の式が数として読めない(セル参照など)なら判定できない —
+                // 文字を打っても堰き止めない(読めない規則で入力を止めない家訓)
+                if !self.judgeable() {
+                    return true;
+                }
                 let Ok(x) = text.replace(',', "").parse::<f64>() else {
                     return false; // 数の規則に数でないものは合わない
                 };
@@ -556,6 +564,19 @@ impl Validation {
                 self.op_passes(n).unwrap_or(true)
             }
             _ => true,
+        }
+    }
+
+    /// この規則は判定できるか(比較が分かり、式が数として読めるか)
+    fn judgeable(&self) -> bool {
+        let f1 = self.formula.trim().parse::<f64>().is_ok();
+        match self.op.as_str() {
+            "between" | "" | "notBetween" => {
+                f1 && self.formula2.trim().parse::<f64>().is_ok()
+            }
+            "equal" | "notEqual" | "greaterThan" | "lessThan"
+            | "greaterThanOrEqual" | "lessThanOrEqual" => f1,
+            _ => false,
         }
     }
 
@@ -2256,6 +2277,23 @@ mod validation_tests {
         ));
         assert!(s.validation_at(Pos::new(2, 1)).is_some());
         assert!(s.validation_at(Pos::new(2, 2)).is_none());
+    }
+
+    #[test]
+    fn 読めない数値規則は文字も堰き止めない() {
+        // 式がセル参照の整数規則 — 判定できないので、文字を打っても止めない
+        // (読めない規則で入力を止めない家訓。実物の xlsx にはよくある形)
+        let s = Sheet::default();
+        let mut v = Validation::list((Pos::new(0, 0), Pos::new(0, 0)), "$D$1".into());
+        v.kind = "whole".into();
+        v.op = "greaterThan".into();
+        assert!(v.passes(&s, "abc"), "判定できない規則が文字を堰き止めた");
+        assert!(v.passes(&s, "5"));
+        // 式が数なら判定できる — 文字はちゃんと止める
+        v.formula = "0".into();
+        assert!(!v.passes(&s, "abc"));
+        assert!(v.passes(&s, "5"));
+        assert!(!v.passes(&s, "-1"));
     }
 }
 

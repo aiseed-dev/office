@@ -137,8 +137,8 @@ struct Calc {
     auto_filter: Option<AutoFilter>,
     /// 開いている▼の板(列, 値の検索)。Esc で閉じる
     filter_panel: Option<(u32, Editor)>,
-    /// 入力規則の聞き取り中の種類("whole" / "decimal" / "textLength")
-    dv_pend: Option<&'static str>,
+    /// 「データの入力規則」の板(本家の3タブのダイアログの形)
+    dv_dlg: Option<DvDlg>,
     /// 画面の文字の大きさ(リボン・メニュー・状態行まで全部に掛かる倍率。
     /// 格子のズームとは別。設定に覚える — 次回も同じ大きさで開く)
     ui_scale: f32,
@@ -220,6 +220,9 @@ impl HasEditor for Calc {
         if let Some((_, ed)) = &mut self.filter_panel {
             return ed; // ▼の板の検索欄
         }
+        if let Some(d) = &mut self.dv_dlg {
+            return d.focused();
+        }
         match &mut self.prompt {
             Some((_, ed)) => ed,
             None => &mut self.input,
@@ -244,6 +247,9 @@ impl HasEditor for Calc {
         if let Some((_, ed)) = &self.filter_panel {
             return ed;
         }
+        if let Some(d) = &self.dv_dlg {
+            return d.focused_ref();
+        }
         match &self.prompt {
             Some((_, ed)) => ed,
             None => &self.input,
@@ -261,7 +267,7 @@ impl HasEditor for Calc {
         // 板・小窓・名前ボックスへの打鍵は文書を変えない
         if self.prompt.is_none() && self.name_edit.is_none()
             && self.fn_dlg.is_none() && self.fn_args.is_none()
-            && self.filter_panel.is_none()
+            && self.filter_panel.is_none() && self.dv_dlg.is_none()
         {
             self.dirty = true;
             // 式の直入力の支援: 打ちかけの関数名の補完一覧と、引数のヒント
@@ -320,7 +326,7 @@ impl Calc {
             frozen: None,
             auto_filter: None,
             filter_panel: None,
-            dv_pend: None,
+            dv_dlg: None,
             ui_scale: ui::settings::get("ui_scale")
                 .and_then(|v| v.parse::<f32>().ok())
                 .map(|v| v.clamp(0.8, 2.0))
@@ -1621,12 +1627,18 @@ impl Calc {
                 ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
             return false;
         }
-        // 空にするのは常に許す(allowBlank の既定)。式は結果が変わり得るので通す
-        if !text.trim().is_empty() && !text.starts_with('=') {
+        // 空白は「空白を無視」(allowBlank)が付いていれば許す(既定)。
+        // 式は結果が変わり得るので通す
+        if !text.starts_with('=') {
             // 判定は Validation::passes(判定できない規則は堰き止めない)。
             // 文言は規則に付いたエラーの文言が正、無ければ規則の言い直し
             let verdict = self.sheet().validation_at(cur).and_then(|v| {
-                if v.passes(self.sheet(), text.trim()) {
+                let ok = if text.trim().is_empty() {
+                    v.allow_blank
+                } else {
+                    v.passes(self.sheet(), text.trim())
+                };
+                if ok {
                     None
                 } else {
                     let fallback = if v.kind == "list" {
@@ -2074,6 +2086,11 @@ impl Calc {
         if self.solver.is_some() {
             // 小窓の Enter では何も走らせない(解くのは「解を求める」の釦)
             cx.notify();
+            return;
+        }
+        if self.dv_dlg.is_some() {
+            // 入力規則の板の Enter = OK(本家と同じ)
+            self.dv_ok(cx);
             return;
         }
         if self.prompt.is_some() {

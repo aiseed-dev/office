@@ -1999,7 +1999,6 @@ impl Render for Calc {
                 "link" => ui::tf!("ハイパーリンク — {}(空にして Enter で外す)", self.cursor.a1()),
                 "cond-gt" => ui::tf!("条件付き書式 — {} で、いくつより大きい値を塗る?", range),
                 "cond-lt" => ui::tf!("条件付き書式 — {} で、いくつより小さい値を塗る?", range),
-                "validation" => ui::tf!("入力規則 — {} は候補から選ぶ(空にして Enter で解除)", range),
                 "find" => ui::t!("検索と置換 — 探す言葉").to_string(),
                 "split-delim" => ui::tf!("区切り位置 — {} を何で割る?(空 Enter = カンマ)", range),
                 "shape-text" => ui::t!("図形の文字(空にして Enter で消す)").to_string(),
@@ -2023,9 +2022,6 @@ impl Render for Calc {
                 "sheet-rename" => ui::t!("シートの名前の変更").to_string(),
                 "sort-by" => ui::t!("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)").to_string(),
                 "numfmt-custom" => ui::t!("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)").to_string(),
-                "dv-cond" => ui::t!("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)").to_string(),
-                "dv-msg" => ui::t!("入力メッセージ(題: 本文 の形。空 Enter = 消す)").to_string(),
-                "dv-err" => ui::t!("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)").to_string(),
                 "subtotal-by" => ui::t!("小計 1/2 — 何の区切りで集めるか(見出しを1つ)").to_string(),
                 "subtotal-vals" => ui::t!("小計 2/2 — 合計する見出し").to_string(),
                 "pivot-rows" => ui::t!("ピボット 1/3 — 行に並べる見出し(カンマ区切り可)").to_string(),
@@ -2058,7 +2054,6 @@ impl Render for Calc {
                 .child(div().mt_1().text_size(px(us * 10.5)).text_color(rgb(0x66707A))
                     .child(match *kind {
                         "name" => "Enter で決定 / Esc で取消。定義した名前は式の中で使えます(=単価*2)",
-                        "validation" => "候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)。Enter で決定 / Esc で取消",
                         "find" => "Enter で次へ / Esc で取消。式の中の文字も探します",
                         "split-delim" => "選択した列の文字を割って、右の列へ並べます(右は上書き)",
                         "shape-text" => "図形を選んで Enter でいつでも書き直せます",
@@ -2078,6 +2073,281 @@ impl Render for Calc {
                         "pivot-val" => "例: 金額 合計。集計は 合計/平均/個数/最大/最小(省けば合計)",
                         _ => "Enter で決定 / Esc で取消",
                     })))
+        });
+
+        // ---- データの入力規則の板(本家の3タブのダイアログの形 —
+        //      設定 / メッセージを入力 / エラー警告、OK・キャンセル) ----
+        let dv_panel = self.dv_dlg.as_ref().map(|d| {
+            let (tab, kindi, opi, styl, menu, focus) =
+                (d.tab, d.kind, d.op, d.err_style, d.menu, d.focus);
+            let (allow_blank, apply_same) = (d.allow_blank, d.apply_same);
+            let show = |i: usize| -> String {
+                let mut t = d.eds[i].text().to_string();
+                if focus == i {
+                    let cur = d.eds[i].cursor().min(t.len());
+                    t.insert(cur, '|');
+                }
+                if t.is_empty() { t = " ".into() }
+                t
+            };
+            // 欄(クリックで打鍵の宛先に。キャレットは | で見せる)
+            let field = |i: usize, cx: &mut Context<Self>| {
+                div().id(SharedString::from(format!("dv-f{i}")))
+                    .w_full().px_2().py_1().bg(rgb(0xFFFFFF))
+                    .border_1().rounded_sm()
+                    .border_color(if focus == i { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                    .text_size(px(us * 12.5)).font_family("Noto Sans JP")
+                    .whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(show(i)))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(d) = &mut this.dv_dlg {
+                            d.focus = i;
+                            d.menu = 0;
+                        }
+                        cx.notify();
+                    }))
+            };
+            let label = |t: String| {
+                div().text_size(px(us * 11.0)).text_color(rgb(0x66707A))
+                    .child(SharedString::from(t))
+            };
+            // ドロップダウンの頭(押すと下に選択肢が伸びる)
+            let drop = |mid: u8, text: String, cx: &mut Context<Self>| {
+                div().id(SharedString::from(format!("dv-m{mid}")))
+                    .w_full().px_2().py_1().bg(rgb(0xFFFFFF))
+                    .border_1().rounded_sm()
+                    .border_color(if menu == mid { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                    .text_size(px(us * 12.5)).cursor_pointer()
+                    .flex().flex_row().items_center().justify_between()
+                    .child(SharedString::from(text))
+                    .child(div().text_color(rgb(0x66707A)).child("▾"))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(d) = &mut this.dv_dlg {
+                            d.menu = if d.menu == mid { 0 } else { mid };
+                        }
+                        cx.notify();
+                    }))
+            };
+            // 開いた選択肢。mid=1 許可 / 2 データ / 3 スタイル
+            let options = |mid: u8, items: Vec<String>, cx: &mut Context<Self>| {
+                let mut list = div().flex().flex_col()
+                    .border_1().border_color(rgb(0x1B6E3C)).rounded_sm().bg(rgb(0xFFFFFF));
+                for (i, name) in items.into_iter().enumerate() {
+                    let picked = match mid { 1 => kindi, 2 => opi, _ => styl } == i;
+                    list = list.child(
+                        div().id(SharedString::from(format!("dv-o{mid}-{i}")))
+                            .px_2().py_1().text_size(px(us * 12.0)).cursor_pointer()
+                            .bg(if picked { rgb(0xEAF5EE) } else { rgb(0xFFFFFF) })
+                            .hover(|s| s.bg(rgb(0xDDEEE4)))
+                            .child(SharedString::from(name))
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                if let Some(d) = &mut this.dv_dlg {
+                                    match mid {
+                                        1 => d.kind = i,
+                                        2 => d.op = i,
+                                        _ => d.err_style = i,
+                                    }
+                                    d.menu = 0;
+                                }
+                                cx.notify();
+                            })),
+                    );
+                }
+                list
+            };
+            // ☑ の行。which: 1=空白を無視 2=同じ設定の他のセルにも
+            let check = |which: u8, on: bool, text: String, cx: &mut Context<Self>| {
+                div().id(SharedString::from(format!("dv-c{which}")))
+                    .flex().flex_row().items_center().gap_1p5().cursor_pointer()
+                    .text_size(px(us * 12.0))
+                    .child(div().text_color(rgb(0x1B6E3C))
+                        .child(if on { "☑" } else { "☐" }))
+                    .child(SharedString::from(text))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(d) = &mut this.dv_dlg {
+                            match which {
+                                1 => d.allow_blank = !d.allow_blank,
+                                _ => d.apply_same = !d.apply_same,
+                            }
+                        }
+                        cx.notify();
+                    }))
+            };
+            // 許可の見出し(読めない種類は「このまま保持」と正直に言う)
+            let kind_label: String = if kindi == 5 {
+                let k = d.keep.as_ref().map(|v| v.kind.clone()).unwrap_or_default();
+                let name = match k.as_str() {
+                    "date" => ui::t!("日付").to_string(),
+                    "time" => ui::t!("時刻").to_string(),
+                    _ => ui::t!("カスタム").to_string(),
+                };
+                ui::tf!("{}(このまま保持)", name).to_string()
+            } else {
+                DV_KINDS[kindi].to_string()
+            };
+            // 中身(右側)。タブごとに組む
+            let mut pane = div().flex_1().flex().flex_col().gap_2().p_3()
+                .text_color(rgb(0x1B1B1B));
+            match tab {
+                0 => {
+                    let mut row = div().flex().flex_row().gap_3()
+                        .child(div().flex_1().flex().flex_col().gap_1()
+                            .child(label(ui::t!("許可").to_string()))
+                            .child(drop(1, kind_label, cx)));
+                    if matches!(kindi, 1 | 2 | 4) {
+                        row = row.child(div().flex_1().flex().flex_col().gap_1()
+                            .child(label(ui::t!("データ").to_string()))
+                            .child(drop(2, DV_OPS[opi].1.to_string(), cx)));
+                    }
+                    pane = pane.child(row);
+                    if menu == 1 {
+                        pane = pane.child(options(1,
+                            DV_KINDS.iter().map(|s| s.to_string()).collect(), cx));
+                    }
+                    if menu == 2 {
+                        pane = pane.child(options(2,
+                            DV_OPS.iter().map(|(_, n)| n.to_string()).collect(), cx));
+                    }
+                    pane = pane.child(check(1, allow_blank, ui::t!("空白を無視").to_string(), cx));
+                    match kindi {
+                        3 => {
+                            pane = pane
+                                .child(label(ui::t!("元の値").to_string()))
+                                .child(field(0, cx))
+                                .child(label(ui::t!("候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)").to_string()));
+                        }
+                        1 | 2 | 4 => {
+                            // 間・間以外 = 最小と最大。等しい系 = 値。大小 = 片方
+                            let (lo, hi) = match opi {
+                                0 | 1 => (true, true),
+                                2 | 3 => (true, false),
+                                4 | 6 => (true, false),
+                                _ => (false, true),
+                            };
+                            if lo {
+                                let name = if matches!(opi, 2 | 3) { ui::t!("値") } else { ui::t!("最小") };
+                                pane = pane.child(label(name.to_string())).child(field(0, cx));
+                            }
+                            if hi {
+                                pane = pane.child(label(ui::t!("最大").to_string())).child(field(1, cx));
+                            }
+                            pane = pane.child(label(
+                                ui::t!("半角の数で。数として読めない式は判定できず、堰き止めません").to_string()));
+                        }
+                        5 => {
+                            pane = pane.child(label(
+                                ui::t!("この種類(日付・時刻・カスタム)は判定できません — 規則は壊さず保ち、文言だけ直せます").to_string()));
+                        }
+                        _ => {}
+                    }
+                    pane = pane.child(div().flex_1())
+                        .child(check(2, apply_same,
+                            ui::t!("これらの変更を同じ設定の他のすべてのセルに適用する").to_string(), cx));
+                }
+                1 => {
+                    pane = pane
+                        .child(label(ui::t!("タイトル").to_string()))
+                        .child(field(2, cx))
+                        .child(label(ui::t!("メッセージ").to_string()))
+                        .child(field(3, cx))
+                        .child(label(ui::t!("セルを選ぶと、下の状態行にこの説明が出ます").to_string()));
+                }
+                _ => {
+                    pane = pane
+                        .child(label(ui::t!("スタイル").to_string()))
+                        .child(drop(3, DV_STYLES[styl].1.to_string(), cx));
+                    if menu == 3 {
+                        pane = pane.child(options(3,
+                            DV_STYLES.iter().map(|(_, n)| n.to_string()).collect(), cx));
+                    }
+                    pane = pane
+                        .child(label(ui::t!("タイトル").to_string()))
+                        .child(field(4, cx))
+                        .child(label(ui::t!("エラーメッセージ").to_string()))
+                        .child(field(5, cx))
+                        .child(label(ui::t!("停止は堰き止め、警告・情報は通して言うだけ(Excel と同じ)").to_string()));
+                }
+            }
+            // 左のタブ(設定 / メッセージを入力 / エラー警告)
+            let mut tabs = div().w(px(us * 150.0)).flex().flex_col().p_1().gap_0p5()
+                .bg(rgb(0xF0F3F5)).rounded_sm();
+            for (i, name) in [ui::t!("設定"), ui::t!("メッセージを入力"), ui::t!("エラー警告")]
+                .into_iter().enumerate()
+            {
+                let on = tab == i as u8;
+                tabs = tabs.child(
+                    div().id(SharedString::from(format!("dv-t{i}")))
+                        .px_2().py_1p5().rounded_sm().cursor_pointer()
+                        .text_size(px(us * 12.0))
+                        .bg(if on { rgb(0xFFFFFF) } else { rgb(0xF0F3F5) })
+                        .when(on, |s| s.font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(0x1B6E3C)))
+                        .hover(|s| s.bg(rgb(0xFFFFFF)))
+                        .child(SharedString::from(name))
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(d) = &mut this.dv_dlg {
+                                d.tab = i as u8;
+                                d.menu = 0;
+                                d.focus = [0, 2, 4][i]; // タブの最初の欄へ
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+            let btn = |id: &'static str, text: String, primary: bool| {
+                div().id(id).px_4().py_1().rounded_sm().text_size(px(us * 12.5))
+                    .border_1()
+                    .border_color(if primary { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                    .bg(if primary { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
+                    .text_color(if primary { rgb(0xFFFFFF) } else { rgb(0x1B1B1B) })
+                    .cursor_pointer()
+                    .child(SharedString::from(text))
+            };
+            div().absolute().inset_0().flex().items_center().justify_center()
+                .child(div().w(px(us * 540.0)).rounded_md().bg(rgb(0xF7F9FA))
+                    .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .flex().flex_col()
+                    // 題の行と ×
+                    .child(div().flex().flex_row().items_center().px_3().py_2()
+                        .border_b_1().border_color(rgb(0xE1E6EA))
+                        .child(div().flex_1().text_size(px(us * 13.0))
+                            .font_weight(gpui::FontWeight::BOLD).text_color(rgb(0x1B6E3C))
+                            .child(ui::t!("データの入力規則")))
+                        .child(div().id("dv-x").px_1p5().rounded_sm().cursor_pointer()
+                            .text_size(px(us * 13.0)).text_color(rgb(0x66707A))
+                            .hover(|s| s.bg(rgb(0xE1E6EA)))
+                            .child("×")
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.dv_dlg = None;
+                                this.status = ui::t!("入力規則をやめました").into();
+                                cx.notify();
+                            }))))
+                    // 本体: 左のタブ + 右の中身
+                    .child(div().flex().flex_row().items_stretch().p_2().gap_2()
+                        .min_h(px(us * 260.0))
+                        .child(tabs)
+                        .child(pane))
+                    // OK / キャンセル
+                    .child(div().flex().flex_row().gap_2().justify_center().pb_3()
+                        .child(btn("dv-ok", ui::t!("OK").to_string(), true)
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.dv_ok(cx);
+                            })))
+                        .child(btn("dv-cancel", ui::t!("キャンセル").to_string(), false)
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.dv_dlg = None;
+                                this.status = ui::t!("入力規則をやめました").into();
+                                cx.notify();
+                            })))))
         });
 
         // ---- ソルバーの小窓(ONLYOFFICE の「ソルバーのパラメータ」の形) ----
@@ -3016,6 +3286,7 @@ impl Render for Calc {
                    .children(filepage)
                    .children(pick_panel)
                    .children(prompt_panel)
+                   .children(dv_panel)
                    .children(solver_panel)
                    .children(fn_panel)
                    .children(fn_args_panel)

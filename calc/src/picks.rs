@@ -171,80 +171,6 @@ impl Calc {
                     }
                 }
             }
-            "dv-kind" => {
-                match v {
-                    "リスト(候補から選ぶ)" => {
-                        // 既にある規則は編集の初期値に(直書きは中身、参照は = 付き)
-                        let cur = self
-                            .sheet()
-                            .validation_at(self.cursor)
-                            .filter(|x| x.kind == "list")
-                            .map(|x| x.formula.clone())
-                            .unwrap_or_default();
-                        let init = if cur.is_empty() {
-                            String::new()
-                        } else if let Some(inner) =
-                            cur.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
-                        {
-                            inner.to_string()
-                        } else {
-                            format!("={cur}")
-                        };
-                        self.prompt = Some(("validation", Editor::new(&init)));
-                    }
-                    "整数" | "小数" | "文字数" => {
-                        self.dv_pend = Some(match v {
-                            "整数" => "whole",
-                            "小数" => "decimal",
-                            _ => "textLength",
-                        });
-                        self.prompt = Some(("dv-cond", Editor::new("")));
-                        self.status = ui::t!("条件の書き方: 1〜100 / 1〜100 以外 / >=0 / <50 / <>0 / =8(半角の数で)").into();
-                    }
-                    "入力メッセージ…" => {
-                        let cur = self
-                            .sheet()
-                            .validation_at(self.cursor)
-                            .and_then(|x| x.input_msg.clone())
-                            .map(|(t, m)| if t.is_empty() { m } else { format!("{t}: {m}") })
-                            .unwrap_or_default();
-                        self.prompt = Some(("dv-msg", Editor::new(&cur)));
-                    }
-                    "エラーの文言…" => {
-                        let cur = self
-                            .sheet()
-                            .validation_at(self.cursor)
-                            .and_then(|x| x.error_msg.clone())
-                            .map(|(s, _, m)| match s.as_str() {
-                                "warning" => format!("警告: {m}"),
-                                "information" => format!("情報: {m}"),
-                                _ => m,
-                            })
-                            .unwrap_or_default();
-                        self.prompt = Some(("dv-err", Editor::new(&cur)));
-                    }
-                    _ => {
-                        // この範囲の規則を外す
-                        let (a, b) = self.sel_rect();
-                        let overlap = |x: &sheet::model::Validation| {
-                            let (ra, rb) = x.range;
-                            ra.row <= b.row && rb.row >= a.row && ra.col <= b.col && rb.col >= a.col
-                        };
-                        let n = self.sheet().validations.iter().filter(|x| overlap(x)).count();
-                        if n == 0 {
-                            self.status = ui::t!("この範囲に入力規則はありません").into();
-                        } else {
-                            self.checkpoint();
-                            self.book.sheets[self.active].validations.retain(|x| !overlap(x));
-                            self.dirty = true;
-                            self.status = ui::tf!("{} 本の入力規則を外しました", n).into();
-                        }
-                    }
-                }
-                if self.prompt.is_some() {
-                    return; // 板の確定まで(pick_kind を戻さない)
-                }
-            }
             "numfmt-pick" => {
                 if v.starts_with("その他") {
                     // 書式コードの直打ち(カスタム書式)。今のコードを下敷きに
@@ -874,37 +800,211 @@ impl Calc {
         cx.notify();
     }
 
-    /// 入力規則の文言を、選択に掛かる規則へ書き込む。規則が無ければ
-    /// 文言だけの規則(type なし)を作る。消すだけのとき(clear_only)は作らない。
-    /// 何かに書けたら true
-    fn dv_upsert(
-        &mut self,
-        clear_only: bool,
-        f: impl Fn(&mut sheet::model::Validation),
-    ) -> bool {
+    /// 「データの入力規則」の板を開く(いまの規則を下敷きに)
+    pub(crate) fn dv_open(&mut self) {
+        let v = self.sheet().validation_at(self.cursor).cloned();
+        let mut d = DvDlg {
+            tab: 0,
+            kind: 0,
+            op: 0,
+            allow_blank: true,
+            apply_same: false,
+            err_style: 0,
+            eds: std::array::from_fn(|_| Editor::new("")),
+            focus: 0,
+            menu: 0,
+            keep: None,
+            was: v.clone(),
+        };
+        if let Some(v) = &v {
+            d.allow_blank = v.allow_blank;
+            if let Some((t, m)) = &v.input_msg {
+                d.eds[2] = Editor::new(t);
+                d.eds[3] = Editor::new(m);
+            }
+            if let Some((s, t, m)) = &v.error_msg {
+                d.err_style = DV_STYLES.iter().position(|(k, _)| k == s).unwrap_or(0);
+                d.eds[4] = Editor::new(t);
+                d.eds[5] = Editor::new(m);
+            }
+            match v.kind.as_str() {
+                "" => d.kind = 0,
+                "whole" => d.kind = 1,
+                "decimal" => d.kind = 2,
+                "list" => d.kind = 3,
+                "textLength" => d.kind = 4,
+                // 日付・時刻・カスタムは判定できない — 開いても壊さない(保持)
+                _ => {
+                    d.kind = 5;
+                    d.keep = Some(v.clone());
+                }
+            }
+            if d.kind == 3 {
+                // 直書きは中身、参照は = 付き(従来の書き方)
+                let f = v.formula.trim();
+                let init = match f.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                    Some(inner) => inner.to_string(),
+                    None if f.is_empty() => String::new(),
+                    None => format!("={f}"),
+                };
+                d.eds[0] = Editor::new(&init);
+            } else if matches!(d.kind, 1 | 2 | 4) {
+                d.op = DV_OPS.iter().position(|(k, _)| *k == v.op).unwrap_or(0);
+                d.eds[0] = Editor::new(&v.formula);
+                d.eds[1] = Editor::new(&v.formula2);
+            }
+        }
+        self.dv_dlg = Some(d);
+    }
+
+    /// 「データの入力規則」の OK。選択の範囲に規則を掛ける(重なる規則は
+    /// 入れ替え)。読めない条件は板を開いたまま言い返す
+    pub(crate) fn dv_ok(&mut self, cx: &mut Context<Self>) {
+        let Some(mut d) = self.dv_dlg.take() else { return };
+        let f = |i: usize| -> String { d.eds[i].text().trim().to_string() };
         let (a, b) = self.sel_rect();
+        let input_msg = {
+            let (t, m) = (f(2), f(3));
+            (!t.is_empty() || !m.is_empty()).then_some((t, m))
+        };
+        let error_msg = {
+            let (t, m) = (f(4), f(5));
+            (!t.is_empty() || !m.is_empty())
+                .then_some((DV_STYLES[d.err_style].0.to_string(), t, m))
+        };
+        let new_v: Option<sheet::model::Validation> = match d.kind {
+            // 読めない種類(日付など)はそのまま保つ — 文言と空白の扱いだけ更新
+            5 => d.keep.take().map(|mut v| {
+                v.range = (a, b);
+                v.input_msg = input_msg.clone();
+                v.error_msg = error_msg.clone();
+                v.allow_blank = d.allow_blank;
+                v
+            }),
+            // すべての値: 条件なし。文言も何も無ければ「規則なし」= 外す
+            0 => (input_msg.is_some() || error_msg.is_some() || !d.allow_blank).then(|| {
+                let mut v = sheet::model::Validation::list((a, b), String::new());
+                v.kind = String::new();
+                v.input_msg = input_msg.clone();
+                v.error_msg = error_msg.clone();
+                v.allow_blank = d.allow_blank;
+                v
+            }),
+            // リスト: 直書き(甲,乙,丙)か範囲の参照(=D2:D5)
+            3 => {
+                let text = f(0);
+                if text.is_empty() {
+                    self.status =
+                        ui::t!("元の値を書いてください(例: 甲,乙,丙 または =D2:D5)").into();
+                    self.dv_dlg = Some(d);
+                    cx.notify();
+                    return;
+                }
+                let formula = match text.strip_prefix('=') {
+                    Some(r) => r.trim().to_string(),
+                    None => format!("\"{}\"", text.replace('"', "")),
+                };
+                let mut v = sheet::model::Validation::list((a, b), formula);
+                if v.options(self.sheet()).is_empty() {
+                    // 読めない規則を作らない(できないものを、できるように見せない)
+                    self.status =
+                        ui::t!("候補が読めません(例: 甲,乙,丙 または =D2:D5)").into();
+                    self.dv_dlg = Some(d);
+                    cx.notify();
+                    return;
+                }
+                v.input_msg = input_msg.clone();
+                v.error_msg = error_msg.clone();
+                v.allow_blank = d.allow_blank;
+                Some(v)
+            }
+            // 整数 / 小数 / 文字数
+            k => {
+                let (opk, _) = DV_OPS[d.op.min(DV_OPS.len() - 1)];
+                let need2 = matches!(opk, "between" | "notBetween");
+                // IME の全角の数・記号は半角にならす(打ち直させない)
+                let norm = |t: String| -> String {
+                    t.chars()
+                        .map(|c| match c {
+                            '\u{FF10}'..='\u{FF19}' => {
+                                char::from(b'0' + (c as u32 - 0xFF10) as u8)
+                            }
+                            '\u{FF0E}' => '.',
+                            '\u{FF0D}' | '\u{2212}' => '-',
+                            _ => c,
+                        })
+                        .collect()
+                };
+                let (f1, f2) = (norm(f(0)), norm(f(1)));
+                if f1.is_empty() || (need2 && f2.is_empty()) {
+                    self.status = ui::t!("条件の値を書いてください(半角の数で)").into();
+                    self.dv_dlg = Some(d);
+                    cx.notify();
+                    return;
+                }
+                Some(sheet::model::Validation {
+                    range: (a, b),
+                    formula: f1,
+                    kind: DV_KIND_XLSX[k].into(),
+                    op: opk.into(),
+                    formula2: if need2 { f2 } else { String::new() },
+                    input_msg: input_msg.clone(),
+                    error_msg: error_msg.clone(),
+                    allow_blank: d.allow_blank,
+                })
+            }
+        };
+        self.checkpoint();
+        // 「同じ設定の他のすべてのセル」: 開いたときの規則と同じ条件の規則を
+        // 先に差し替える(範囲は据え置き)
+        if d.apply_same {
+            if let (Some(was), Some(nv)) = (&d.was, &new_v) {
+                for x in self.book.sheets[self.active].validations.iter_mut() {
+                    if x.kind == was.kind
+                        && x.op == was.op
+                        && x.formula == was.formula
+                        && x.formula2 == was.formula2
+                    {
+                        let range = x.range;
+                        *x = nv.clone();
+                        x.range = range;
+                    }
+                }
+            }
+        }
+        // 選択に重なる規則は入れ替える(重ね掛けは分かりにくい)
         let overlap = |x: &sheet::model::Validation| {
             let (ra, rb) = x.range;
             ra.row <= b.row && rb.row >= a.row && ra.col <= b.col && rb.col >= a.col
         };
-        let mut hit = false;
-        for x in self.book.sheets[self.active].validations.iter_mut() {
-            if overlap(x) {
-                f(x);
-                hit = true;
+        let had = self.sheet().validations.iter().any(|x| overlap(x));
+        self.book.sheets[self.active].validations.retain(|x| !overlap(x));
+        match new_v {
+            Some(v) => {
+                let said = if v.kind == "list" {
+                    ui::tf!("候補: {}", v.options(self.sheet()).join(" / ")).to_string()
+                } else if v.kind.is_empty() {
+                    ui::t!("文言だけ(値は制限しない)").to_string()
+                } else {
+                    v.describe()
+                };
+                self.book.sheets[self.active].validations.push(v);
+                self.status = ui::tf!(
+                    "入力規則を {}:{} に掛けました({}。保存で xlsx にも残ります)",
+                    a.a1(), b.a1(), said
+                )
+                .into();
+            }
+            None if had => {
+                self.status = ui::t!("この範囲の入力規則を外しました").into();
+            }
+            None => {
+                self.undo_stack.pop();
+                self.status = ui::t!("入力規則はありません(何も変えていません)").into();
             }
         }
-        if !hit && !clear_only {
-            let mut v = sheet::model::Validation::list((a, b), String::new());
-            v.kind = String::new(); // 文言だけの規則(何でも通る)
-            f(&mut v);
-            self.book.sheets[self.active].validations.push(v);
-            hit = true;
-        }
-        if hit {
-            self.dirty = true;
-        }
-        hit
+        self.dirty = true;
+        cx.notify();
     }
 
     /// ▼の板の開閉(見出しのボタンから。同じ列ならしまう)
@@ -974,9 +1074,19 @@ impl Calc {
         // の順で閉じる
         self.pivot_pend = None; // 聞き取り途中のピボット・小計は Esc でやめる
         self.sub_pend = None;
-        self.dv_pend = None; // 入力規則の聞き取りも
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
+        // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる
+        if let Some(d) = &mut self.dv_dlg {
+            if d.menu != 0 {
+                d.menu = 0;
+            } else {
+                self.dv_dlg = None;
+                self.status = ui::t!("入力規則をやめました").into();
+            }
+            cx.notify();
+            return;
+        }
         if self.tool.take().is_some() {
             self.ink_cur = None;
             self.status = ui::t!("セルの操作に戻りました").into();
@@ -1014,134 +1124,6 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
-            // 入力規則の条件(整数/小数/文字数)。1〜100 / >=0 の形で受ける
-            "dv-cond" => {
-                let Some(kind) = self.dv_pend.take() else { return };
-                if text.is_empty() {
-                    self.status = ui::t!("入力規則をやめました").into();
-                    return;
-                }
-                let core = text.replace(['~', '~'], "〜");
-                let core = core.trim();
-                let (op, f1, f2): (&str, String, String) =
-                    if let Some(rest) = core.strip_suffix("以外") {
-                        match rest.trim().split_once('〜') {
-                            Some((x, y)) => ("notBetween", x.trim().into(), y.trim().into()),
-                            None => ("", String::new(), String::new()),
-                        }
-                    } else if let Some((x, y)) = core.split_once('〜') {
-                        ("between", x.trim().into(), y.trim().into())
-                    } else if let Some(r) = core.strip_prefix(">=") {
-                        ("greaterThanOrEqual", r.trim().into(), String::new())
-                    } else if let Some(r) = core.strip_prefix("<=") {
-                        ("lessThanOrEqual", r.trim().into(), String::new())
-                    } else if let Some(r) = core.strip_prefix("<>") {
-                        ("notEqual", r.trim().into(), String::new())
-                    } else if let Some(r) = core.strip_prefix('>') {
-                        ("greaterThan", r.trim().into(), String::new())
-                    } else if let Some(r) = core.strip_prefix('<') {
-                        ("lessThan", r.trim().into(), String::new())
-                    } else if let Some(r) = core.strip_prefix('=') {
-                        ("equal", r.trim().into(), String::new())
-                    } else {
-                        ("equal", core.into(), String::new())
-                    };
-                let ok = !op.is_empty()
-                    && f1.parse::<f64>().is_ok()
-                    && (f2.is_empty() || f2.parse::<f64>().is_ok());
-                if !ok {
-                    // 打ち直せるように板を開いたまま返す
-                    self.dv_pend = Some(kind);
-                    self.prompt = Some(("dv-cond", ed));
-                    self.status = ui::t!("条件が読めません。半角の数で 1〜100 / 1〜100 以外 / >=0 / <50 / <>0 / =8 の形に").into();
-                    return;
-                }
-                let (a, b) = self.sel_rect();
-                self.checkpoint();
-                // 同じ場所の規則は置き換え(付いていた文言は引き継ぐ)
-                let overlap = |x: &sheet::model::Validation| {
-                    let (ra, rb) = x.range;
-                    ra.row <= b.row && rb.row >= a.row && ra.col <= b.col && rb.col >= a.col
-                };
-                let mut input_msg = None;
-                let mut error_msg = None;
-                self.book.sheets[self.active].validations.retain(|x| {
-                    if overlap(x) {
-                        input_msg = input_msg.take().or_else(|| x.input_msg.clone());
-                        error_msg = error_msg.take().or_else(|| x.error_msg.clone());
-                        false
-                    } else {
-                        true
-                    }
-                });
-                let v = sheet::model::Validation {
-                    range: (a, b),
-                    formula: f1,
-                    kind: kind.into(),
-                    op: op.into(),
-                    formula2: f2,
-                    input_msg,
-                    error_msg,
-                };
-                let said = v.describe();
-                self.book.sheets[self.active].validations.push(v);
-                self.dirty = true;
-                self.status = ui::tf!(
-                    "入力規則「{}」を {}:{} に掛けました(空欄と式は通ります。保存で xlsx にも残ります)",
-                    said, a.a1(), b.a1()
-                )
-                .into();
-            }
-            // 入力メッセージ(題: 本文)。空 Enter = 消す
-            "dv-msg" => {
-                let msg = if text.is_empty() {
-                    None
-                } else {
-                    Some(match text.split_once([':', ':']) {
-                        Some((t, m)) => (t.trim().to_string(), m.trim().to_string()),
-                        None => (String::new(), text.clone()),
-                    })
-                };
-                self.checkpoint();
-                let set = msg.clone();
-                let changed = self.dv_upsert(text.is_empty(), move |x| x.input_msg = set.clone());
-                self.status = match (changed, msg.is_some()) {
-                    (true, true) => ui::t!("入力メッセージを付けました(セルに乗ると下の状態行に出ます)").into(),
-                    (true, false) => ui::t!("入力メッセージを消しました").into(),
-                    (false, _) => {
-                        self.undo_stack.pop();
-                        ui::t!("この範囲に入力規則はありません").into()
-                    }
-                };
-            }
-            // エラーの文言。頭に「警告:」「情報:」を付けると通して言うだけになる
-            "dv-err" => {
-                let msg = if text.is_empty() {
-                    None
-                } else if let Some(m) = text.strip_prefix("警告:").or_else(|| text.strip_prefix("警告:")) {
-                    Some(("warning".to_string(), String::new(), m.trim().to_string()))
-                } else if let Some(m) = text.strip_prefix("情報:").or_else(|| text.strip_prefix("情報:")) {
-                    Some(("information".to_string(), String::new(), m.trim().to_string()))
-                } else {
-                    Some(("stop".to_string(), String::new(), text.clone()))
-                };
-                self.checkpoint();
-                let set = msg.clone();
-                let changed = self.dv_upsert(text.is_empty(), move |x| x.error_msg = set.clone());
-                self.status = match (changed, msg.as_ref()) {
-                    (true, Some((s, _, _))) if s == "stop" => {
-                        ui::t!("エラーの文言を付けました(合わない入力は堰き止めます)").into()
-                    }
-                    (true, Some(_)) => {
-                        ui::t!("エラーの文言を付けました(合わない入力も通して、言うだけにします)").into()
-                    }
-                    (true, None) => ui::t!("エラーの文言を消しました").into(),
-                    (false, _) => {
-                        self.undo_stack.pop();
-                        ui::t!("この範囲に入力規則はありません").into()
-                    }
-                };
-            }
             // カスタムの数値書式(xlsx のコードをそのまま)。空 Enter = 一般に戻す
             "numfmt-custom" => {
                 if text.is_empty() {
@@ -1784,51 +1766,6 @@ impl Calc {
                 self.status =
                     ui::tf!("「{}」→「{}」: {} カ所を置き換えました(Ctrl+Z で戻せます)", find, text, n)
                         .into();
-            }
-            "validation" => {
-                let (a, b) = self.sel_rect();
-                let overlap = |v: &sheet::model::Validation| {
-                    let (ra, rb) = v.range;
-                    ra.row <= b.row && rb.row >= a.row && ra.col <= b.col && rb.col >= a.col
-                };
-                if text.is_empty() {
-                    // 空で Enter = この範囲の規則を外す
-                    let n = self.sheet().validations.iter().filter(|v| overlap(v)).count();
-                    if n == 0 {
-                        self.status = ui::t!("この範囲に入力規則はありません").into();
-                        return;
-                    }
-                    self.checkpoint();
-                    self.book.sheets[self.active].validations.retain(|v| !overlap(v));
-                    self.dirty = true;
-                    self.status = ui::tf!("{} 本の入力規則を外しました", n).into();
-                    return;
-                }
-                // = 始まりは範囲の参照、それ以外は候補の直書き(, 区切り)
-                let formula = match text.strip_prefix('=') {
-                    Some(r) => r.trim().to_string(),
-                    None => format!("\"{}\"", text.replace('"', "")),
-                };
-                let v = sheet::model::Validation::list((a, b), formula);
-                let opts = v.options(self.sheet());
-                if opts.is_empty() {
-                    // 読めない規則を作らない(できないものを、できるように見せない)
-                    self.status =
-                        ui::t!("候補が読めません(例: 甲,乙,丙 または =D2:D5)").into();
-                    return;
-                }
-                self.checkpoint();
-                // 選択に重なる古い規則は入れ替える(重ね掛けは分かりにくい)
-                self.book.sheets[self.active].validations.retain(|v| !overlap(v));
-                self.book.sheets[self.active].validations.push(v);
-                self.dirty = true;
-                self.status = format!(
-                    "{}:{} に入力規則を付けました(候補: {})",
-                    a.a1(),
-                    b.a1(),
-                    opts.join(" / ")
-                )
-                .into();
             }
             "link" => {
                 let p = self.cursor;

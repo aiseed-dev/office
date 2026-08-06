@@ -413,6 +413,64 @@ impl Solver {
 
 pub(crate) const SOLVER_OPS: [&str; 3] = ["<=", "=", ">="];
 
+/// 「データの入力規則」の板(本家の3タブのダイアログと同じ形 —
+/// 設定 / メッセージを入力 / エラー警告、OK・キャンセル)。
+pub(crate) struct DvDlg {
+    /// 0=設定 1=メッセージを入力 2=エラー警告
+    pub(crate) tab: u8,
+    /// 許可: DV_KINDS の添字(0 すべての値 / 1 整数 / 2 小数 /
+    /// 3 リスト / 4 文字列の長さ)。読めない種類(日付など)を開いたら 5=そのまま
+    pub(crate) kind: usize,
+    /// データ: DV_OPS の添字(整数/小数/文字数のときだけ)
+    pub(crate) op: usize,
+    /// 空白を無視(xlsx の allowBlank)
+    pub(crate) allow_blank: bool,
+    /// これらの変更を同じ設定の他のすべてのセルに適用する
+    pub(crate) apply_same: bool,
+    /// エラー警告のスタイル: 0 停止 / 1 警告 / 2 情報
+    pub(crate) err_style: usize,
+    /// 欄: 0=最小(値・元の値) 1=最大 2=メッセージ題 3=メッセージ本文
+    /// 4=エラー題 5=エラー本文
+    pub(crate) eds: [Editor; 6],
+    /// 打鍵の宛先(eds の添字)
+    pub(crate) focus: usize,
+    /// 開いているドロップダウン: 0 なし / 1 許可 / 2 データ / 3 スタイル
+    pub(crate) menu: u8,
+    /// 種類が読めない既存の規則(日付・時刻・カスタム)。OK でもそのまま保つ
+    pub(crate) keep: Option<sheet::model::Validation>,
+    /// 開いたときの既存の規則(「同じ設定の他のセル」の比較の相手)
+    pub(crate) was: Option<sheet::model::Validation>,
+}
+
+impl DvDlg {
+    pub(crate) fn focused(&mut self) -> &mut Editor {
+        &mut self.eds[self.focus.min(5)]
+    }
+    pub(crate) fn focused_ref(&self) -> &Editor {
+        &self.eds[self.focus.min(5)]
+    }
+}
+
+/// 許可の一覧(判定できる種類だけ。日付・時刻・カスタムは保持のみ)
+pub(crate) const DV_KINDS: [&str; 5] =
+    ["すべての値", "整数", "小数", "リスト", "文字列の長さ"];
+/// kind の添字 → xlsx の type
+pub(crate) const DV_KIND_XLSX: [&str; 5] = ["", "whole", "decimal", "list", "textLength"];
+/// データ(比較)の一覧。並びは xlsx の operator と対
+pub(crate) const DV_OPS: [(&str, &str); 8] = [
+    ("between", "次の値の間"),
+    ("notBetween", "次の値の間以外"),
+    ("equal", "次の値に等しい"),
+    ("notEqual", "次の値に等しくない"),
+    ("greaterThan", "次の値より大きい"),
+    ("lessThan", "次の値より小さい"),
+    ("greaterThanOrEqual", "次の値より大きいか等しい"),
+    ("lessThanOrEqual", "次の値より小さいか等しい"),
+];
+/// エラー警告のスタイル(xlsx の errorStyle と対)
+pub(crate) const DV_STYLES: [(&str, &str); 3] =
+    [("stop", "停止"), ("warning", "警告"), ("information", "情報")];
+
 /// SmartArt の一覧。**分類・並び・名前は Euro-Office の現物**
 /// (web-apps の define.js の並びと ja.json の訳)から取った。
 /// 載せるのは**うちの図形(SVG 方式)で組めるものだけ** —

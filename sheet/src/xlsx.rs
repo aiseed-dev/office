@@ -1011,6 +1011,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                         formula2: String::new(),
                         input_msg: input,
                         error_msg: error,
+                        allow_blank: attr(e, "allowBlank").as_deref() != Some("0"),
                     },
                     a("sqref"),
                 )
@@ -2496,7 +2497,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     fs.push_str(&format!("<formula2>{}</formula2>", et(&v.formula2)));
                 }
                 dv.push_str(&format!(
-                    r#"<dataValidation{attrs} allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="{sq}">{fs}</dataValidation>"#,
+                    r#"<dataValidation{attrs} allowBlank="{}" showInputMessage="1" showErrorMessage="1" sqref="{sq}">{fs}</dataValidation>"#,
+                    if v.allow_blank { "1" } else { "0" },
                 ));
             }
             dv.push_str("</dataValidations>");
@@ -3214,6 +3216,7 @@ mod validation_roundtrip_tests {
         v.formula2 = "100".into();
         v.input_msg = Some(("数量".into(), "1 から 100 の整数で".into()));
         v.error_msg = Some(("stop".into(), "".into(), "その数は使えません".into()));
+        v.allow_blank = false; // 「空白を無視」を外した形も往復する
         b.sheets[0].validations.push(v);
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
@@ -3231,6 +3234,7 @@ mod validation_roundtrip_tests {
             v.error_msg,
             Some(("stop".to_string(), String::new(), "その数は使えません".to_string()))
         );
+        assert!(!v.allow_blank, "allowBlank が往復しない");
         // 判定も一緒に確かめる
         let s = &back.sheets[0];
         assert!(v.passes(s, "50"));

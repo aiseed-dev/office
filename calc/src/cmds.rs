@@ -1853,26 +1853,8 @@ impl Calc {
             // 3タブのダイアログ — calc は種類の一覧 → 聞き取りの板の2段
             "data-validation" => {
                 self.commit();
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
-                self.pick_kind = "dv-kind";
-                self.pick = Some((
-                    [
-                        "リスト(候補から選ぶ)",
-                        "整数",
-                        "小数",
-                        "文字数",
-                        "入力メッセージ…",
-                        "エラーの文言…",
-                        "この範囲の規則を外す",
-                    ]
-                    .iter()
-                    .map(|v| v.to_string())
-                    .collect(),
-                    at,
-                ));
+                // 本家の3タブのダイアログと同じ形の板(発注者 2026-08-07)
+                self.dv_open();
             }
             // 条件付き書式。右クリックメニューと同じ一覧を開く(道は1本)
             "condformat" => {
