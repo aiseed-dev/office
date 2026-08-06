@@ -579,6 +579,7 @@ impl Calc {
             dest: keep.as_ref().map(|d| d.dest).unwrap_or(pend.a), // 仮 — 置くときに決める
             size: keep.as_ref().map(|d| d.size).unwrap_or((0, 0)),
             hide: keep.as_ref().map(|d| d.hide.clone()).unwrap_or_default(),
+            style: keep.as_ref().map(|d| d.style.clone()).unwrap_or_default(),
         };
         self.spawn_pivot(def, pend.replace, cx);
     }
@@ -607,7 +608,15 @@ impl Calc {
         grid: &[Vec<String>],
         kinds: &[char],
         tot_col: bool,
+        style: &str,
     ) {
+        // 見た目の組(スタイルギャラリー)。(見出しの地, 見出しの字, 小計の地)
+        let (head_bg, head_fg, sub_bg) = match style {
+            "緑" => ("548235", "FFFFFF", "E2EFDA"),
+            "橙" => ("C55A11", "FFFFFF", "FBE5D6"),
+            "灰" => ("595959", "FFFFFF", "EDEDED"),
+            _ => ("4472C4", "FFFFFF", "D9E1F2"), // 既定 = 青
+        };
         paste_values_text(&mut self.book.sheets[si], at, grid);
         let w = grid.iter().map(|r| r.len()).max().unwrap_or(1) as u32;
         for (i, k) in kinds.iter().enumerate() {
@@ -617,14 +626,14 @@ impl Calc {
                 let mut cell = self.book.sheets[si].get(p).cloned().unwrap_or_default();
                 match k {
                     'h' => {
-                        // 見出しの帯(本家の既定の青)
+                        // 見出しの帯(スタイルの色)
                         cell.fmt.bold = true;
-                        cell.fmt.fill = Some("4472C4".into());
-                        cell.fmt.color = Some("FFFFFF".into());
+                        cell.fmt.fill = Some(head_bg.into());
+                        cell.fmt.color = Some(head_fg.into());
                     }
                     's' => {
                         cell.fmt.bold = true;
-                        cell.fmt.fill = Some("D9E1F2".into());
+                        cell.fmt.fill = Some(sub_bg.into());
                     }
                     't' => {
                         cell.fmt.bold = true;
@@ -742,7 +751,8 @@ impl Calc {
                                     def.size = (h, w);
                                     let at = def.dest;
                                     let tot_col = def.totals && !def.cols_sel.is_empty();
-                                    this.place_pivot_grid(si, at, &grid, &kinds, tot_col);
+                                    let style = def.style.clone();
+                                    this.place_pivot_grid(si, at, &grid, &kinds, tot_col, &style);
                                     recalc_book(&mut this.book, si);
                                     let (value, agg) = (def.value.clone(), def.agg.clone());
                                     this.book.pivots.push(def);
@@ -803,7 +813,8 @@ impl Calc {
                                     // 装いは**新しい指図**(def)に合わせる — old だと
                                     // 総計を入切した直後の更新で右端の太字がずれる
                                     let tot_col = def.totals && !def.cols_sel.is_empty();
-                                    this.place_pivot_grid(si, dest, &grid, &kinds, tot_col);
+                                    let style = def.style.clone();
+                                    this.place_pivot_grid(si, dest, &grid, &kinds, tot_col, &style);
                                     recalc_book(&mut this.book, si);
                                     this.book.pivots[pi] = def;
                                     this.dirty = true;

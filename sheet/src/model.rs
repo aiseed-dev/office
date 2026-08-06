@@ -773,6 +773,8 @@ pub struct PivotDef {
     /// 絞り込み: (見出し, 隠す値の列)。空 = 素通し。
     /// 見出しの ▼ から入切し、更新のたびに polars へ渡す
     pub hide: Vec<(String, Vec<String>)>,
+    /// 見た目の組(""=青(既定) / "緑" / "橙" / "灰")。置くときの帯の色
+    pub style: String,
 }
 
 /// ブックの情報(docProps/core.xml の主な欄)。読んで見せる。

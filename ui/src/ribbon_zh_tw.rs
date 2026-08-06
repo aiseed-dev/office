@@ -316,6 +316,7 @@ pub const CALC: &[Tab] = &[
         c("pivot-subtotals", "小計", "pivot-subtotals"),
         c("pivot-blank", "空白行", "pivot-blank"),
         c("pivot-layout", "報表版面配置", "pivot-layout"),
+        c("pivot-style", "樣式", "pivot-style"),
     ]},
     Tab { name: "表格設計", cmds: &[
         c("td-header", "頁首列", "td-header"),

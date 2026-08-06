@@ -732,4 +732,5 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — comment agréger « {} »"),
     ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Sur un tableau croisé — utilisez l'onglet « Tableau croisé » (actualiser, totaux, sous-totaux, disposition ; les opérations qui cassent le tableau sont verrouillées)"),
     ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtre du pivot — « {} » (☑ affiché / ☐ masqué)"),
+    ("ピボットのスタイル(選ぶと掛け直します)", "Style du pivot (le choix le réapplique)"),
 ];

@@ -362,6 +362,7 @@ pub const CALC: &[Tab] = &[
         c("pivot-subtotals", "小計", "pivot-subtotals"),
         c("pivot-blank", "空行", "pivot-blank"),
         c("pivot-layout", "レポートのレイアウト", "pivot-layout"),
+        c("pivot-style", "スタイル", "pivot-style"),
     ]},
     Tab { name: "表のデザイン", cmds: &[
         c("td-header", "ヘッダー行", "td-header"),

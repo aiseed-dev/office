@@ -316,6 +316,7 @@ pub const CALC: &[Tab] = &[
         c("pivot-subtotals", "Subtotal", "pivot-subtotals"),
         c("pivot-blank", "Baris Kosong", "pivot-blank"),
         c("pivot-layout", "Layout Laporan", "pivot-layout"),
+        c("pivot-style", "Gaya", "pivot-style"),
     ]},
     Tab { name: "Desain tabel", cmds: &[
         c("td-header", "Baris header", "td-header"),

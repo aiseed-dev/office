@@ -185,6 +185,19 @@ impl Calc {
             }
             // ピボットの聞き取り(クリックで入切 → 決定で次へ)。
             // 行 → 列 → 値 → 集計の4段。Esc でいつでもやめられる
+            "pivot-style-pick" => {
+                if let Some(i) = self.pivot_at(self.cursor) {
+                    let style = match v {
+                        "緑" | "橙" | "灰" => v.to_string(),
+                        _ => String::new(), // 青(既定)
+                    };
+                    if let Some(d) = self.book.pivots.get_mut(i) {
+                        d.style = style;
+                        let nd = d.clone();
+                        self.spawn_pivot(nd, Some(i), cx);
+                    }
+                }
+            }
             "pivot-filter-pick" => {
                 if v == "→ すべて表示に戻す" {
                     if let Some((pi, field, _)) = self.pivot_flt.take() {

@@ -735,4 +735,5 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — how to aggregate \"{}\""),
 ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "On a pivot table — use the Pivot Table tab (refresh, grand totals, subtotals, layout; table-breaking operations are locked)"),
 ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Pivot filter — \"{}\" (☑ shown / ☐ hidden)"),
+("ピボットのスタイル(選ぶと掛け直します)", "Pivot style (choosing reapplies it)"),
 ];

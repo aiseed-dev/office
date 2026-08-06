@@ -30,7 +30,7 @@ impl Calc {
         "trace-prec", "trace-dep", "remove-arrows", "insrecommend",
         "instable", "table-tpl", "inssymbol", "pivot-insert", "pivot-fields",
         "pivot-refresh", "pivot-refresh-all", "pivot-select",
-        "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout",
+        "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout", "pivot-style",
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
@@ -1409,6 +1409,37 @@ impl Calc {
                             replace: Some(i),
                         });
                         self.pivot_pick("pivot-rows-pick");
+                    }
+                }
+            }
+            // スタイルギャラリー(帯の色の組)。一覧から選んで掛け直す
+            "pivot-style" => {
+                self.commit();
+                match self.pivot_at(self.cursor) {
+                    None => {
+                        self.status = ui::t!("ピボットの上にカーソルを置いてください").into();
+                    }
+                    Some(i) => {
+                        let cur = self.book.pivots[i].style.clone();
+                        let at = self
+                            .cell_origin_px(self.cursor)
+                            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                        let items: Vec<String> = ["青(既定)", "緑", "橙", "灰"]
+                            .iter()
+                            .map(|n| {
+                                let key = if *n == "青(既定)" { "" } else { *n };
+                                if key == cur {
+                                    format!("✓ {n}")
+                                } else {
+                                    n.to_string()
+                                }
+                            })
+                            .collect();
+                        self.pick_note =
+                            Some(ui::t!("ピボットのスタイル(選ぶと掛け直します)").into());
+                        self.pick_kind = "pivot-style-pick";
+                        self.pick = Some((items, at));
                     }
                 }
             }

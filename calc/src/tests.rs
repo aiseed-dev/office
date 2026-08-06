@@ -865,6 +865,7 @@ mod pivot_tests {
             dest: Pos::new(0, 0),
             size: (0, 0),
             hide: Vec::new(),
+            style: String::new(),
         }
     }
 
@@ -1105,6 +1106,7 @@ mod recalc_tests {
                 dest: Pos::parse("D1").unwrap(),
                 size: (3, 2), // D1:E3 に置いてある体
                 hide: Vec::new(),
+                style: String::new(),
             });
             // ピボットに乗ると状態行が「タブで操作」と案内する
             this.cursor = Pos::parse("D2").unwrap();
@@ -1737,6 +1739,24 @@ mod pivot_e2e_tests {
                 .collect();
             assert!(!all.iter().any(|v| v == "紙製品"), "隠したのに出ている: {all:?}");
             assert!(all.iter().any(|v| v == "筆記具"), "残るはずの値が消えた: {all:?}");
+        });
+        // スタイルギャラリー: 緑を選ぶと帯が掛け替わる
+        c.update(cx, |this, cx| {
+            let d = this.book.pivots[0].clone();
+            this.anchor = None;
+            this.cursor = d.dest;
+            this.sync_input();
+            this.run_cmd("pivot-style", cx);
+            assert_eq!(this.pick_kind, "pivot-style-pick", "スタイルの一覧が開かない");
+            this.apply_pick("緑", cx);
+        });
+        cx.executor().advance_clock(std::time::Duration::from_secs(30));
+        cx.run_until_parked();
+        c.update(cx, |this, _| {
+            let d = &this.book.pivots[0];
+            assert_eq!(d.style, "緑");
+            let head = this.book.sheets[0].get(d.dest).unwrap().fmt.clone();
+            assert_eq!(head.fill.as_deref(), Some("548235"), "緑の帯にならない");
         });
     }
 }
