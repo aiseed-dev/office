@@ -258,6 +258,8 @@ struct FnArgs {
     focus: usize,
     /// 関数の結果(引数を打つたびに、表の複製で計算した下見)
     result: String,
+    /// セルの掴みの起点。ドラッグすると「起点:いま」の範囲が欄に入る
+    pick_from: Option<Pos>,
 }
 
 /// 引数の書き方「(数値1, [数値2], ...)」を(名前, 省略可)の列に解く
@@ -1376,7 +1378,7 @@ impl Calc {
         }
         let Some(p) = self.cell_at(x, y) else { return };
         // 関数の引数の画面が開いている間は、セルのクリックで
-        // **いまの欄に参照が入る**(Excel の引数ダイアログと同じ)
+        // **いまの欄に参照が入る**。そのままドラッグすると範囲(A1:C9)になる
         if self.fn_args.is_some() {
             let a1 = p.a1();
             if let Some(a) = &mut self.fn_args {
@@ -1386,6 +1388,7 @@ impl Calc {
                 let i = a.focus.min(a.eds.len() - 1);
                 a.eds[i] = Editor::new(&a1);
                 a.eds[i].move_to(a1.len(), false);
+                a.pick_from = Some(p);
             }
             self.fn_args_recalc();
             return;
@@ -1423,6 +1426,25 @@ impl Calc {
 
     /// 押したまま動いた。通り過ぎたセルまで選択を広げる。
     fn mouse_drag_at(&mut self, x: f32, y: f32) {
+        // 関数の引数のセル掴み: なぞった範囲「起点:いま」を欄に入れる
+        if self.fn_args.as_ref().is_some_and(|a| a.pick_from.is_some()) {
+            let Some(p) = self.cell_at(x, y) else { return };
+            if let Some(a) = &mut self.fn_args {
+                let Some(from) = a.pick_from else { return };
+                let i = a.focus.min(a.eds.len().saturating_sub(1));
+                let (ra, rb) = (from.row.min(p.row), from.row.max(p.row));
+                let (ca, cb) = (from.col.min(p.col), from.col.max(p.col));
+                let text = if from == p {
+                    p.a1()
+                } else {
+                    format!("{}:{}", Pos::new(ra, ca).a1(), Pos::new(rb, cb).a1())
+                };
+                a.eds[i] = Editor::new(&text);
+                a.eds[i].move_to(text.len(), false);
+            }
+            self.fn_args_recalc();
+            return;
+        }
         if self.tool == Some(2) {
             // 消しゴムはなぞっている間ずっと効く
             if let Some(i) = self.ink_at(x, y) {
@@ -1474,6 +1496,10 @@ impl Calc {
 
     /// 離した。ドラッグ選択はここで確定する。
     fn mouse_up(&mut self) {
+        // 関数の引数のセル掴みは、離した所で終わり
+        if let Some(a) = &mut self.fn_args {
+            a.pick_from = None;
+        }
         if let Some(pts) = self.ink_cur.take() {
             self.finish_ink(pts);
             return;
@@ -2146,7 +2172,14 @@ impl Calc {
         };
         let names = parse_fn_args(f.args);
         let eds = (0..names.len()).map(|_| Editor::new("")).collect();
-        self.fn_args = Some(FnArgs { f, names, eds, focus: 0, result: String::new() });
+        self.fn_args = Some(FnArgs {
+            f,
+            names,
+            eds,
+            focus: 0,
+            result: String::new(),
+            pick_from: None,
+        });
         self.fn_args_recalc();
         self.status = ui::t!(
             "関数の引数: Tab で次の欄。セルをクリックすると参照が入ります。Enter で式に")
