@@ -539,6 +539,8 @@ pub(crate) struct PivotPend {
     pub(crate) cols_sel: Vec<String>,
     /// 値にする見出し(集計の選択へ渡す控え)
     pub(crate) val_sel: String,
+    /// 組み替えの相手(book.pivots の番号)。None = 新しく挿入
+    pub(crate) replace: Option<usize>,
 }
 
 /// 見出しの列挙を割る(カンマ・読点・セミコロン・空白のどれでも。

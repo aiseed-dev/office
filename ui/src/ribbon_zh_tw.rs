@@ -308,6 +308,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "樞紐分析表", cmds: &[
         c("pivot-insert", "插入樞紐分析表", "pivot-insert"),
+        c("pivot-fields", "欄位清單", "pivot-fields"),
         c("pivot-refresh", "更新", "pivot-refresh"),
         c("pivot-refresh-all", "全部更新", "pivot-refresh-all"),
         c("pivot-select", "選擇", "pivot-select"),

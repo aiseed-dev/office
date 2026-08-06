@@ -24,6 +24,7 @@ RIBBON = Path(__file__).resolve().parent / "src/ribbon.rs"
 # このスクリプトは止まる — その語をここに足してから出し直す
 OVERRIDES = {
     "en": {
+        "フィールドリスト": "Field list",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Bigger UI text",
         "画面の文字を小さく": "Smaller UI text",
@@ -112,6 +113,7 @@ OVERRIDES = {
     },
     # vendor のロケールに無い語の穴埋め(gen_lang.py が材料の訳と併用する)
     "zh-tw": {
+        "フィールドリスト": "欄位清單",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "放大介面文字",
         "画面の文字を小さく": "縮小介面文字",
@@ -119,6 +121,7 @@ OVERRIDES = {
         "表のデザイン": "表格設計",
     },
     "it": {
+        "フィールドリスト": "Elenco campi",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Ingrandisci testo dello schermo",
         "画面の文字を小さく": "Riduci testo dello schermo",
@@ -131,6 +134,7 @@ OVERRIDES = {
         "テーブルのサイズ変更": "Ridimensiona tabella",
     },
     "tr": {
+        "フィールドリスト": "Alan listesi",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Ekran yazısını büyüt",
         "画面の文字を小さく": "Ekran yazısını küçült",
@@ -159,6 +163,7 @@ OVERRIDES = {
         "すべて更新": "Tümünü yenile",
     },
     "id": {
+        "フィールドリスト": "Daftar bidang",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Perbesar teks layar",
         "画面の文字を小さく": "Perkecil teks layar",
@@ -175,6 +180,7 @@ OVERRIDES = {
         "表のデザイン": "Desain tabel",
     },
     "vi": {
+        "フィールドリスト": "Danh sách trường",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Phóng to chữ màn hình",
         "画面の文字を小さく": "Thu nhỏ chữ màn hình",
@@ -258,36 +264,43 @@ OVERRIDES = {
         "電話番号": "Số điện thoại",
     },
     "de": {
+        "フィールドリスト": "Feldliste",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Oberflächentext größer",
         "画面の文字を小さく": "Oberflächentext kleiner",
     },
     "es": {
+        "フィールドリスト": "Lista de campos",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Agrandar texto de la pantalla",
         "画面の文字を小さく": "Reducir texto de la pantalla",
     },
     "fr": {
+        "フィールドリスト": "Liste des champs",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Agrandir le texte de l'écran",
         "画面の文字を小さく": "Réduire le texte de l'écran",
     },
     "pt": {
+        "フィールドリスト": "Lista de campos",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Aumentar texto da tela",
         "画面の文字を小さく": "Diminuir texto da tela",
     },
     "ru": {
+        "フィールドリスト": "Список полей",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "Крупнее текст интерфейса",
         "画面の文字を小さく": "Мельче текст интерфейса",
     },
     "ko": {
+        "フィールドリスト": "필드 목록",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "화면 글자 크게",
         "画面の文字を小さく": "화면 글자 작게",
     },
     "zh": {
+        "フィールドリスト": "字段列表",
         # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
         "画面の文字を大きく": "放大界面文字",
         "画面の文字を小さく": "缩小界面文字",

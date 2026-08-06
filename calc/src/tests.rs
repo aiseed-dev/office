@@ -1689,6 +1689,27 @@ mod pivot_e2e_tests {
             this.run_cmd("data-validation", cx);
             assert!(this.dv_dlg.is_none(), "ピボットの上で入力規則が開いた");
             assert!(this.status.contains("ピボット"), "{}", this.status);
+            // フィールドリスト: いまの指図が ✓ 入りで読み込まれる
+            this.run_cmd("pivot-fields", cx);
+            assert_eq!(this.pick_kind, "pivot-rows-pick", "フィールドリストが開かない");
+            {
+                let (items, _) = this.pick.as_ref().unwrap();
+                assert!(items.iter().any(|i| i == "☑ 区分"), "既存の行が ✓ にならない: {items:?}");
+            }
+            // 月を行に足して置き直す
+            this.apply_pick("☐ 月", cx);
+            this.apply_pick("→ 決定(列の選択へ)", cx);
+            this.apply_pick("→ 決定(列は無しでもよい)", cx);
+            this.apply_pick("金額", cx);
+            this.apply_pick("合計", cx);
+        });
+        cx.executor().advance_clock(std::time::Duration::from_secs(30));
+        cx.run_until_parked();
+        c.update(cx, |this, _| {
+            assert_eq!(this.book.pivots.len(), 1, "組み替えで増殖した: {}", this.status);
+            let d = &this.book.pivots[0];
+            assert_eq!(d.rows_sel, vec!["区分".to_string(), "月".to_string()], "組み替えが効かない");
+            assert!(d.totals, "総計の性質が引き継がれない");
         });
     }
 }

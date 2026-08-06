@@ -559,6 +559,8 @@ impl Calc {
         agg: &'static str,
         cx: &mut Context<Self>,
     ) {
+        // 組み替え(フィールドリスト)なら、総計などの性質と場所は据え置く
+        let keep = pend.replace.and_then(|i| self.book.pivots.get(i).cloned());
         let def = sheet::model::PivotDef {
             sheet: self.book.sheets[self.active].name.clone(),
             src: (pend.a, pend.b),
@@ -566,14 +568,14 @@ impl Calc {
             cols_sel: pend.cols_sel,
             value,
             agg: agg.to_string(),
-            totals: true, // 本家と同じく総計は既定で入れる(釦で外せる)
-            subtotals: false,
-            blank_rows: false,
-            compact: false,
-            dest: pend.a, // 仮 — 置くときに右の空きを探して決める
-            size: (0, 0),
+            totals: keep.as_ref().map(|d| d.totals).unwrap_or(true), // 既定で総計(本家と同じ)
+            subtotals: keep.as_ref().map(|d| d.subtotals).unwrap_or(false),
+            blank_rows: keep.as_ref().map(|d| d.blank_rows).unwrap_or(false),
+            compact: keep.as_ref().map(|d| d.compact).unwrap_or(false),
+            dest: keep.as_ref().map(|d| d.dest).unwrap_or(pend.a), // 仮 — 置くときに決める
+            size: keep.as_ref().map(|d| d.size).unwrap_or((0, 0)),
         };
-        self.spawn_pivot(def, None, cx);
+        self.spawn_pivot(def, pend.replace, cx);
     }
 
     /// いまのシートで、この位置に置いてあるピボットの指図の番号。

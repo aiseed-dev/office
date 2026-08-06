@@ -308,6 +308,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "Pivot Tablo", cmds: &[
         c("pivot-insert", "Pivot Tablo Ekle", "pivot-insert"),
+        c("pivot-fields", "Alan listesi", "pivot-fields"),
         c("pivot-refresh", "Yenile", "pivot-refresh"),
         c("pivot-refresh-all", "Tümünü yenile", "pivot-refresh-all"),
         c("pivot-select", "Seç", "pivot-select"),

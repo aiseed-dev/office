@@ -308,6 +308,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "피벗 테이블", cmds: &[
         c("pivot-insert", "피벗 테이블 삽입", "pivot-insert"),
+        c("pivot-fields", "필드 목록", "pivot-fields"),
         c("pivot-refresh", "업데이트", "pivot-refresh"),
         c("pivot-refresh-all", "모두 업데이트", "pivot-refresh-all"),
         c("pivot-select", "선택", "pivot-select"),

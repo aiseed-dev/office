@@ -308,6 +308,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "Tabla dinámica", cmds: &[
         c("pivot-insert", "Insertar tabla dinámica", "pivot-insert"),
+        c("pivot-fields", "Lista de campos", "pivot-fields"),
         c("pivot-refresh", "Actualizar", "pivot-refresh"),
         c("pivot-refresh-all", "Actualizar todo", "pivot-refresh-all"),
         c("pivot-select", "Seleccionar", "pivot-select"),

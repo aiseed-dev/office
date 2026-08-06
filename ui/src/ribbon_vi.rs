@@ -308,6 +308,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "PivotTable", cmds: &[
         c("pivot-insert", "Chèn PivotTable", "pivot-insert"),
+        c("pivot-fields", "Danh sách trường", "pivot-fields"),
         c("pivot-refresh", "Làm mới", "pivot-refresh"),
         c("pivot-refresh-all", "Làm mới tất cả", "pivot-refresh-all"),
         c("pivot-select", "Chọn", "pivot-select"),

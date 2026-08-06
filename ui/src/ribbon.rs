@@ -354,6 +354,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "ピボットテーブル", cmds: &[
         c("pivot-insert", "ピボットテーブルを挿入", "pivot-insert"),
+        c("pivot-fields", "フィールドリスト", "pivot-fields"),
         c("pivot-refresh", "更新", "pivot-refresh"),
         c("pivot-refresh-all", "すべて更新", "pivot-refresh-all"),
         c("pivot-select", "選択する", "pivot-select"),

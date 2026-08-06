@@ -308,6 +308,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "数据透视表", cmds: &[
         c("pivot-insert", "插入数据透视表", "pivot-insert"),
+        c("pivot-fields", "字段列表", "pivot-fields"),
         c("pivot-refresh", "更新", "pivot-refresh"),
         c("pivot-refresh-all", "全部更新", "pivot-refresh-all"),
         c("pivot-select", "选择", "pivot-select"),

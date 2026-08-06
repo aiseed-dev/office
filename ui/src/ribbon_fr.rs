@@ -308,6 +308,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "Tableau croisé dynamique", cmds: &[
         c("pivot-insert", "Insérer un tableau croisé dynamique", "pivot-insert"),
+        c("pivot-fields", "Liste des champs", "pivot-fields"),
         c("pivot-refresh", "Mettre à jour", "pivot-refresh"),
         c("pivot-refresh-all", "Tout mettre à jour", "pivot-refresh-all"),
         c("pivot-select", "Sélectionner", "pivot-select"),

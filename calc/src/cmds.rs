@@ -28,7 +28,7 @@ impl Calc {
         "data-from-text", "text-column", "goal-seek", "data-external-links",
         "insshape", "instext", "inssparkline", "python", "addcomment",
         "trace-prec", "trace-dep", "remove-arrows", "insrecommend",
-        "instable", "table-tpl", "inssymbol", "pivot-insert",
+        "instable", "table-tpl", "inssymbol", "pivot-insert", "pivot-fields",
         "pivot-refresh", "pivot-refresh-all", "pivot-select",
         "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout",
         "td-header", "td-total", "td-band-row", "td-band-col",
@@ -475,6 +475,7 @@ impl Calc {
                             rows_sel: Vec::new(),
                             cols_sel: Vec::new(),
                             val_sel: String::new(),
+                            replace: None,
                         });
                         self.pivot_pick("pivot-rows-pick");
                     }
@@ -1199,6 +1200,7 @@ impl Calc {
                         .into();
                         self.sub_pend = Some(PivotPend {
                             val_sel: String::new(),
+                            replace: None,
                             a,
                             b,
                             headers,
@@ -1374,6 +1376,40 @@ impl Calc {
                         self.spawn_pivot(d, Some(i), cx);
                     }
                     self.status = format!("{n} 件のピボットを更新しています…").into();
+                }
+            }
+            // フィールドリスト: いまの指図を ✓ 入りで4段に読み込み、
+            // 集計まで選んだら同じ場所に置き直す(作り直しではなく組み替え)
+            "pivot-fields" => {
+                self.commit();
+                match self.pivot_at(self.cursor) {
+                    None => {
+                        self.status = ui::t!("ピボットの上にカーソルを置いてください").into();
+                    }
+                    Some(i) => {
+                        let d = self.book.pivots[i].clone();
+                        let (a, b) = d.src;
+                        let headers: Vec<String> = (a.col..=b.col)
+                            .map(|c| {
+                                let v = self
+                                    .sheet()
+                                    .get(Pos::new(a.row, c))
+                                    .map(|x| x.value.display())
+                                    .unwrap_or_default();
+                                if v.is_empty() { col_name(c) } else { v }
+                            })
+                            .collect();
+                        self.pivot_pend = Some(PivotPend {
+                            a,
+                            b,
+                            headers,
+                            rows_sel: d.rows_sel.clone(),
+                            cols_sel: d.cols_sel.clone(),
+                            val_sel: d.value.clone(),
+                            replace: Some(i),
+                        });
+                        self.pivot_pick("pivot-rows-pick");
+                    }
                 }
             }
             "pivot-select" => {
