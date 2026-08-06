@@ -338,8 +338,10 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "Защита", cmds: &[
         c("prot-encrypt", "Зашифровать", "prot-encrypt"),
+        x("Защитить книгу", "protect-workbook"),
+        c("prot-doc", "Защитить лист", "protect-sheet"),
+        x("Защитить диапазон", "protect-range"),
         c("prot-sign", "Добавить цифровую подпись", "prot-sign"),
-        c("prot-doc", "Защита", "prot-doc"),
     ]},
     Tab { name: "Показать", cmds: &[
         c("sheet-view", "Представление листа", "sheet-view"),

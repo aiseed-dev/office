@@ -338,8 +338,10 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "보호", cmds: &[
         c("prot-encrypt", "암호화", "prot-encrypt"),
+        x("통합 문서 보호", "protect-workbook"),
+        c("prot-doc", "시트 보호", "protect-sheet"),
+        x("보호 범위", "protect-range"),
         c("prot-sign", "디지털 서명 추가", "prot-sign"),
-        c("prot-doc", "보호", "prot-doc"),
     ]},
     Tab { name: "보기", cmds: &[
         c("sheet-view", "시트보기", "sheet-view"),

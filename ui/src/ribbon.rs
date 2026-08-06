@@ -383,9 +383,13 @@ pub const CALC: &[Tab] = &[
         c("co-history", "バージョン履歴", "co-history"),
     ]},
     Tab { name: "保護", cmds: &[
+        // 本家 SSE の並び: 暗号化 / ブック / シート / 範囲。
+        // ブックと範囲は未実装(灰)。署名は本家に無いこちらの釦 — 末尾
         c("prot-encrypt", "暗号化する", "prot-encrypt"),
+        x("ブックを保護する", "protect-workbook"),
+        c("prot-doc", "シートを保護する", "protect-sheet"),
+        x("範囲を保護する", "protect-range"),
         c("prot-sign", "デジタル署名を追加", "prot-sign"),
-        c("prot-doc", "保護", "prot-doc"),
     ]},
     Tab { name: "表示", cmds: &[
         c("sheet-view", "シートの表示", "sheet-view"),

@@ -122,6 +122,7 @@ OVERRIDES = {
         "テーブルのサイズ変更": "Ridimensiona tabella",
     },
     "tr": {
+        "範囲を保護する": "Aralığı koru",
         "図形を結合": "Şekilleri birleştir",
         "改ページ プレビュー": "Sayfa Sonu Önizlemesi",
         "フィルタのボタン": "Filtre düğmesi",
@@ -159,6 +160,9 @@ OVERRIDES = {
         "表のデザイン": "Desain tabel",
     },
     "vi": {
+        "シートを保護する": "Bảo vệ trang tính",
+        "ブックを保護する": "Bảo vệ sổ làm việc",
+        "範囲を保護する": "Bảo vệ phạm vi",
         "図形を結合": "Hợp nhất hình dạng",
         "改ページ プレビュー": "Xem trước ngắt trang",
         "SmartArtの挿入": "Chèn SmartArt",

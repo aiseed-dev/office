@@ -3242,7 +3242,7 @@ impl Calc {
     fn ai_go(&mut self, job: CalcAi, cx: &mut Context<Self>) {
         if self.sheet().protected {
             self.status =
-                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
+                ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
             return;
         }
         if self.ai_busy {
@@ -3545,7 +3545,7 @@ impl Calc {
         if self.sheet().protected {
             self.sync_input();
             self.status =
-                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
+                ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
             return false;
         }
         // 空にするのは常に許す(allowBlank の既定)。式は結果が変わり得るので通す
@@ -4051,7 +4051,7 @@ impl Calc {
     fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
         if self.sheet().protected {
             self.status =
-                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
+                ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
             cx.notify();
             return;
         }
@@ -4149,7 +4149,7 @@ impl Calc {
     fn paste_now(&mut self, cx: &mut Context<Self>) {
         if self.sheet().protected {
             self.status =
-                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
+                ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
             cx.notify();
             return;
         }
@@ -4440,7 +4440,7 @@ impl Calc {
     fn fmt(&mut self, f: impl Fn(&mut CellFormat)) {
         if self.sheet().protected {
             self.status =
-                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
+                ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
             return;
         }
         self.commit();
@@ -6036,7 +6036,7 @@ calc の隣に置いてください)").to_string()
     fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.sheet().protected && !Self::PROTECTED_OK.contains(&id) {
             self.status =
-                ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
+                ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
             cx.notify();
             return;
         }
@@ -8081,7 +8081,7 @@ impl EntityInputHandler for Calc {
             {
                 if self.sheet().protected {
                     self.status =
-                        ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
+                        ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
                 } else {
                     self.checkpoint();
                     let p = self.cursor;

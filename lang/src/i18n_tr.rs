@@ -335,7 +335,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("この列にはまだ値がありません", "Bu sütunda henüz değer yok"),
     ("蛍光ペンで引きました(Ctrl+Z で戻せます)", "Fosforlu kalemle işaretlendi (Ctrl+Z geri alır)"),
     ("ペンで描きました(Ctrl+Z で戻せます)", "Kalemle çizildi (Ctrl+Z geri alır)"),
-    ("シートが保護されています(保護タブの「保護」で解除)", "Sayfa korumalı (Koruma sekmesindeki \"Koru\" ile kaldırılır)"),
+    ("シートが保護されています(保護タブの「シートを保護する」で解除)", "Sayfa korumalı (Koruma sekmesindeki \"Sayfayı Koruyun\" ile kaldırılır)"),
     ("表がありません", "Tablo yok"),
     ("範囲を選んでから押してください", "Önce bir aralık seçin"),
     ("ふりがなは1列だけ選んでください(読みは右隣の列に入ります)", "Furigana için yalnızca bir sütun seçin (okunuşlar sağdaki sütuna girer)"),

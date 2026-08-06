@@ -335,7 +335,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("この列にはまだ値がありません", "Esta columna aún no tiene valores"),
     ("蛍光ペンで引きました(Ctrl+Z で戻せます)", "Resaltado (Ctrl+Z deshace)"),
     ("ペンで描きました(Ctrl+Z で戻せます)", "Trazo de lápiz dibujado (Ctrl+Z deshace)"),
-    ("シートが保護されています(保護タブの「保護」で解除)", "La hoja está protegida (pestaña Protección > Proteger para quitarlo)"),
+    ("シートが保護されています(保護タブの「シートを保護する」で解除)", "La hoja está protegida (pestaña Protección > Proteger hoja para quitarlo)"),
     ("表がありません", "No hay tabla"),
     ("範囲を選んでから押してください", "Seleccione primero un rango"),
     ("ふりがなは1列だけ選んでください(読みは右隣の列に入ります)", "Seleccione una sola columna para la furigana (las lecturas van en la columna de la derecha)"),

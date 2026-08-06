@@ -338,7 +338,7 @@ pub const TABLE: &[(&str, &str)] = &[
 ("この列にはまだ値がありません", "This column has no values yet"),
 ("蛍光ペンで引きました(Ctrl+Z で戻せます)", "Highlighted (Ctrl+Z undoes)"),
 ("ペンで描きました(Ctrl+Z で戻せます)", "Pen stroke drawn (Ctrl+Z undoes)"),
-("シートが保護されています(保護タブの「保護」で解除)", "The sheet is protected (Protection tab > Protect to release)"),
+("シートが保護されています(保護タブの「シートを保護する」で解除)", "The sheet is protected (Protection tab > Protect Sheet to release)"),
 ("表がありません", "No table"),
 ("範囲を選んでから押してください", "Select a range first"),
 ("ふりがなは1列だけ選んでください(読みは右隣の列に入ります)", "Select a single column for furigana (readings go into the column to the right)"),

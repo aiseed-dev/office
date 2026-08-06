@@ -335,7 +335,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("この列にはまだ値がありません", "Cột này chưa có giá trị"),
     ("蛍光ペンで引きました(Ctrl+Z で戻せます)", "Đã tô bút dạ quang (Ctrl+Z để hoàn tác)"),
     ("ペンで描きました(Ctrl+Z で戻せます)", "Đã vẽ bằng bút (Ctrl+Z để hoàn tác)"),
-    ("シートが保護されています(保護タブの「保護」で解除)", "Trang tính đang được bảo vệ (bỏ bằng \"Bảo vệ\" trong tab Bảo vệ)"),
+    ("シートが保護されています(保護タブの「シートを保護する」で解除)", "Trang tính đang được bảo vệ (bỏ bằng \"Bảo vệ trang tính\" trong tab Bảo vệ)"),
     ("表がありません", "Không có bảng"),
     ("範囲を選んでから押してください", "Hãy chọn vùng trước"),
     ("ふりがなは1列だけ選んでください(読みは右隣の列に入ります)", "Furigana chỉ chọn được một cột (cách đọc sẽ vào cột kề bên phải)"),

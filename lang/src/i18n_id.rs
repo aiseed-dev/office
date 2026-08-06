@@ -335,7 +335,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("この列にはまだ値がありません", "Kolom ini belum punya nilai"),
     ("蛍光ペンで引きました(Ctrl+Z で戻せます)", "Disorot (Ctrl+Z membatalkan)"),
     ("ペンで描きました(Ctrl+Z で戻せます)", "Goresan pena digambar (Ctrl+Z membatalkan)"),
-    ("シートが保護されています(保護タブの「保護」で解除)", "Lembar kerja diproteksi (tab Proteksi > Proteksi untuk melepasnya)"),
+    ("シートが保護されています(保護タブの「シートを保護する」で解除)", "Lembar kerja diproteksi (tab Proteksi > Proteksi sheet untuk melepasnya)"),
     ("表がありません", "Tidak ada tabel"),
     ("範囲を選んでから押してください", "Pilih rentang dulu"),
     ("ふりがなは1列だけ選んでください(読みは右隣の列に入ります)", "Pilih satu kolom saja untuk furigana (cara bacanya masuk ke kolom di sebelah kanan)"),

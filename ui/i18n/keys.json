@@ -1576,8 +1576,8 @@
  },
  {
   "i": 315,
-  "ja": "シートが保護されています(保護タブの「保護」で解除)",
-  "en": "The sheet is protected (Protection tab > Protect to release)"
+  "ja": "シートが保護されています(保護タブの「シートを保護する」で解除)",
+  "en": "The sheet is protected (Protection tab > Protect Sheet to release)"
  },
  {
   "i": 316,
