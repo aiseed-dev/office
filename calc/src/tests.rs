@@ -921,15 +921,18 @@ mod pivot_tests {
         // 部署×月の合計(クロス表)
         let spec = pivot_spec_json(&headers, &rows, &def(&["部署"], &["月"], "金額", "合計"));
         let Some((g, k)) = run_py(spec) else { return };
-        assert_eq!(k[0], 'h');
-        assert_eq!(g[0], vec!["部署", "1月", "2月"], "見出しの形が違う: {g:?}");
-        assert_eq!(g[1], vec!["営業", "150", "70"]);
+        // 1行目は Excel と同じ札(合計 / 金額 と、列に広げた見出し)
+        assert_eq!(k[0], 'l');
+        assert_eq!(g[0], vec!["合計 / 金額", "月", ""], "札の形が違う: {g:?}");
+        assert_eq!(k[1], 'h');
+        assert_eq!(g[1], vec!["部署", "1月", "2月"], "見出しの形が違う: {g:?}");
+        assert_eq!(g[2], vec!["営業", "150", "70"]);
         // 無い組み合わせ: 合計は 0(空の合計)。平均などは null → 空欄になる
-        assert_eq!(g[2], vec!["総務", "30", "0"]);
-        // 部署ごとの個数(列に広げない)
+        assert_eq!(g[3], vec!["総務", "30", "0"]);
+        // 部署ごとの個数(列に広げない)— 値の列の見出しは「個数 / 金額」
         let spec = pivot_spec_json(&headers, &rows, &def(&["部署"], &[], "金額", "個数"));
         let Some((g, _)) = run_py(spec) else { return };
-        assert_eq!(g[0], vec!["部署", "金額"]);
+        assert_eq!(g[0], vec!["部署", "個数 / 金額"]);
         assert_eq!(g[1], vec!["営業", "3"]);
         assert_eq!(g[2], vec!["総務", "1"]);
     }
@@ -953,17 +956,18 @@ mod pivot_tests {
         d.blank_rows = true;
         let spec = pivot_spec_json(&headers, &rows, &d);
         let Some((g, k)) = run_py(spec) else { return };
-        assert_eq!(g[0], vec!["部署", "係", "1月", "2月", "総計"], "見出し: {g:?}");
-        assert_eq!(g[1], vec!["営業", "一", "100", "70", "170"]);
-        assert_eq!(g[2], vec!["営業", "二", "50", "0", "50"]);
+        assert_eq!(g[0], vec!["合計 / 金額", "", "月", "", ""], "札: {g:?}");
+        assert_eq!(g[1], vec!["部署", "係", "1月", "2月", "総計"], "見出し: {g:?}");
+        assert_eq!(g[2], vec!["営業", "一", "100", "70", "170"]);
+        assert_eq!(g[3], vec!["営業", "二", "50", "0", "50"]);
         assert_eq!(
-            g[3],
+            g[4],
             vec!["営業 小計", "", "150", "70", "220"],
             "小計が違う: {g:?}"
         );
-        assert_eq!(k[3], 's', "小計の種別が違う");
-        assert_eq!(k[4], 'b', "空行が無い");
-        assert_eq!(g[6], vec!["総務 小計", "", "30", "0", "30"]);
+        assert_eq!(k[4], 's', "小計の種別が違う");
+        assert_eq!(k[5], 'b', "空行が無い");
+        assert_eq!(g[7], vec!["総務 小計", "", "30", "0", "30"]);
         let last = g.last().unwrap();
         assert_eq!(last, &vec!["総計", "", "180", "70", "250"], "総計が違う: {g:?}");
         assert_eq!(*k.last().unwrap(), 't');
@@ -974,8 +978,8 @@ mod pivot_tests {
         d.compact = true;
         let spec = pivot_spec_json(&headers, &rows, &d);
         let Some((g, _)) = run_py(spec) else { return };
-        assert_eq!(g[2][0], "", "繰り返しの部署が空欄にならない: {g:?}");
-        assert_eq!(g[2][1], "二");
+        assert_eq!(g[3][0], "", "繰り返しの部署が空欄にならない: {g:?}");
+        assert_eq!(g[3][1], "二");
     }
 }
 
@@ -1700,9 +1704,9 @@ mod pivot_e2e_tests {
                 let (items, _) = this.pick.as_ref().unwrap();
                 assert!(items.iter().any(|i| i == "☑ 区分"), "既存の行が ✓ にならない: {items:?}");
             }
-            // 月を行に足して置き直す
-            this.apply_pick("☐ 月", cx);
+            // 月を「列」へ広げて置き直す(Excel の形 — 1行目に札が出る)
             this.apply_pick("→ 決定(列の選択へ)", cx);
+            this.apply_pick("☐ 月", cx);
             this.apply_pick("→ 決定(列は無しでもよい)", cx);
             this.apply_pick("金額", cx);
             this.apply_pick("合計", cx);
@@ -1712,8 +1716,21 @@ mod pivot_e2e_tests {
         c.update(cx, |this, cx| {
             assert_eq!(this.book.pivots.len(), 1, "組み替えで増殖した: {}", this.status);
             let d = &this.book.pivots[0];
-            assert_eq!(d.rows_sel, vec!["区分".to_string(), "月".to_string()], "組み替えが効かない");
+            assert_eq!(d.rows_sel, vec!["区分".to_string()], "組み替えが効かない");
+            assert_eq!(d.cols_sel, vec!["月".to_string()], "列への組み替えが効かない");
             assert!(d.totals, "総計の性質が引き継がれない");
+            // Excel と同じ1行目の札(合計 / 金額 と 月)
+            let d = this.book.pivots[0].clone();
+            let label = this.book.sheets[0]
+                .get(d.dest)
+                .map(|x| x.value.display())
+                .unwrap_or_default();
+            assert_eq!(label, "合計 / 金額", "1行目の札が無い");
+            let month_label = this.book.sheets[0]
+                .get(Pos::new(d.dest.row, d.dest.col + 1))
+                .map(|x| x.value.display())
+                .unwrap_or_default();
+            assert_eq!(month_label, "月", "列の見出しの札が無い");
             // 絞り込み(▼ 相当): 紙製品を隠して置き直す
             this.pivot_flt = Some((
                 0,

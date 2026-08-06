@@ -2039,19 +2039,24 @@ impl Render for Calc {
                     .border_color(rgb(0x8A63C9)).rounded_sm();
                 f = if inside { f.border_2() } else { f.border_1() };
                 out.push(f.into_any_element());
-                // 見出しの ▼(ピボット内の絞り込み)。行の見出しはその欄、
-                // 値の列は「列に広げた見出し」を絞る。総計の列には出さない
-                let tot_col = d.totals && !d.cols_sel.is_empty();
-                for c in 0..d.size.1 {
-                    let field = if (c as usize) < d.rows_sel.len() {
-                        Some(d.rows_sel[c as usize].clone())
-                    } else if !d.cols_sel.is_empty() && !(tot_col && c == d.size.1 - 1) {
-                        Some(d.cols_sel[0].clone())
-                    } else {
-                        None
-                    };
-                    let Some(field) = field else { continue };
-                    let hp = Pos::new(a.row, a.col + c);
+                // 見出しの ▼(ピボット内の絞り込み)。Excel と同じく、
+                // 1行目の札(合計 / 金額・月)がある形では、月の札に列の ▼、
+                // 見出し行の行の欄に行の ▼ を置く
+                let has_label = !d.cols_sel.is_empty();
+                let mut spots: Vec<(Pos, String)> = Vec::new();
+                let head_row = a.row + has_label as u32;
+                for (ci, f) in d.rows_sel.iter().enumerate() {
+                    if (ci as u32) < d.size.1 {
+                        spots.push((Pos::new(head_row, a.col + ci as u32), f.clone()));
+                    }
+                }
+                if has_label {
+                    let lc = a.col + d.rows_sel.len() as u32;
+                    if lc <= b.col {
+                        spots.push((Pos::new(a.row, lc), d.cols_sel[0].clone()));
+                    }
+                }
+                for (hp, field) in spots {
                     let Some((hx0, hy0, hx1, hy1)) = self.range_px(hp, hp) else { continue };
                     if hx1 - hx0 < 30.0 {
                         continue; // 細すぎる列には出さない(文字に被る)
@@ -2066,7 +2071,7 @@ impl Render for Calc {
                         .unwrap_or_default();
                     let active = !hidden.is_empty();
                     out.push(
-                        div().id(SharedString::from(format!("pflt{pi}-{c}")))
+                        div().id(SharedString::from(format!("pflt{pi}-{}-{}", hp.row, hp.col)))
                             .absolute()
                             .left(px(hx1 - 15.0))
                             .top(px(hy0 + ((hy1 - hy0) - 13.0).max(0.0) / 2.0))

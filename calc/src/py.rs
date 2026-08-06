@@ -423,7 +423,16 @@ def s(v):
     return str(v)
 
 head = list(main.columns) + (["総計"] if tot_col else [])
-lines = ["h\x1f" + "\x1f".join(head)]
+lines = []
+if cols:
+    # Excel と同じ1行目の札: 「合計 / 金額」と、列に広げた見出し(月)
+    label = [f"{agg} / {val}"] + [""] * (len(idx) - 1) + [" / ".join(cols)]
+    label += [""] * (len(head) - len(label))
+    lines.append("l\x1f" + "\x1f".join(label))
+else:
+    # 列が無いときは値の列の見出しを「合計 / 金額」に(Excel と同じ)
+    head[-2 if tot_col else -1] = f"{agg} / {val}"
+lines.append("h\x1f" + "\x1f".join(head))
 for kind, cells in out:
     lines.append(kind + "\x1f" + "\x1f".join(s(v) for v in cells))
 sys.stdout.buffer.write("\x1e".join(lines).encode("utf-8"))
@@ -625,7 +634,7 @@ impl Calc {
                 let p = Pos::new(at.row + i as u32, at.col + c);
                 let mut cell = self.book.sheets[si].get(p).cloned().unwrap_or_default();
                 match k {
-                    'h' => {
+                    'l' | 'h' => {
                         // 見出しの帯(スタイルの色)
                         cell.fmt.bold = true;
                         cell.fmt.fill = Some(head_bg.into());
