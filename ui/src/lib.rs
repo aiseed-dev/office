@@ -171,7 +171,7 @@ actions!(
         Home, End, Enter, Undo, Redo, Save, Open, Up, Down, Tab, ShiftTab,
         Copy, Cut, Paste, PasteValues, Quit, ContextMenu, Cancel,
         WordLeft, WordRight, SelectWordLeft, SelectWordRight, PageUp, PageDown,
-        Find, DocHome, DocEnd, EditCell,
+        Find, DocHome, DocEnd, EditCell, Recalc, RecalcSheet, NewLine,
     ]
 );
 
@@ -219,6 +219,11 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         // メニューキー(アプリケーションキー)と Shift+F10 は右クリックと同じ
         KeyBinding::new("menu", ContextMenu, Some(context)),
         KeyBinding::new("shift-f10", ContextMenu, Some(context)),
+        // 再計算(Excel と同じ。計算方法が手動のときの手回し)
+        KeyBinding::new("f9", Recalc, Some(context)),
+        KeyBinding::new("shift-f9", RecalcSheet, Some(context)),
+        // セルの中の改行(Excel と同じ)
+        KeyBinding::new("alt-enter", NewLine, Some(context)),
         KeyBinding::new("escape", Cancel, Some(context)),
     ]
 }

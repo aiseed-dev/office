@@ -1599,8 +1599,14 @@ impl Calc {
         let fmt = self.sheet().get(cur).map(|c| c.fmt.clone()).unwrap_or_default();
         let mut cell = Cell::input(&text);
         cell.fmt = fmt;
+        // Alt+Enter の改行が入っていたら折り返しも立てる(Excel と同じ)
+        if text.contains('\n') {
+            cell.fmt.wrap = true;
+        }
         self.sheet_mut().set(cur, cell);
-        recalc_book(&mut self.book, self.active);
+        // 計算方法が手動なら待たされない(F9 / Shift+F9 で手回し)。
+        // 今までは常に再計算していて「手動」が効いていなかった
+        self.recalc_if_auto();
         self.dirty = true;
         // 中身を変えたらコピーの破線は消す(Excel と同じ)
         self.clip_range = None;
@@ -2068,6 +2074,27 @@ impl Calc {
             self.redo_sheet();
         }
         cx.notify();
+    }
+    /// F9 = ブック全体の再計算(計算方法が手動のときの手回し。自動でも害はない)
+    fn a_recalc(&mut self, _: &ui::Recalc, _: &mut Window, cx: &mut Context<Self>) {
+        self.commit();
+        recalc_book(&mut self.book, self.active);
+        self.status = ui::t!("再計算しました(ブック全体)").into();
+        cx.notify();
+    }
+    /// Shift+F9 = いまのシートだけ再計算(大きなブックで待たされない)
+    fn a_recalc_sheet(&mut self, _: &ui::RecalcSheet, _: &mut Window, cx: &mut Context<Self>) {
+        self.commit();
+        recalc(&mut self.book.sheets[self.active]);
+        self.status = ui::t!("再計算しました(このシートだけ)").into();
+        cx.notify();
+    }
+    /// Alt+Enter = セルの中の改行(Excel と同じ)。確定時に折り返しも立てる
+    fn a_newline(&mut self, _: &ui::NewLine, _: &mut Window, cx: &mut Context<Self>) {
+        if self.editing() || self.edit_armed {
+            self.input.insert("\n");
+            cx.notify();
+        }
     }
     /// リボンのコマンド。数式タブは選択セルに関数を入れる。
     /// 選んでいるセルの見た目を変える。

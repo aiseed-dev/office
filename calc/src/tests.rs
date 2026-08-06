@@ -597,6 +597,70 @@ mod pivot_tests {
     }
 }
 
+/// 計算方法(自動/手動)とセル内改行の試験
+#[cfg(test)]
+mod recalc_tests {
+    use crate::*;
+
+    #[gpui::test]
+    fn 手動計算は確定で計算せずf9相当で計算する(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            // A1=5 → B1==A1*2。自動のうちは確定で計算される
+            this.cursor = Pos::parse("A1").unwrap();
+            this.sync_input();
+            this.input.insert("5");
+            assert!(this.commit());
+            this.cursor = Pos::parse("B1").unwrap();
+            this.sync_input();
+            this.input.insert("=A1*2");
+            assert!(this.commit());
+            assert_eq!(
+                this.sheet().value(Pos::parse("B1").unwrap()),
+                sheet::Value::Number(10.0),
+                "自動のうちは確定で計算されるはず"
+            );
+            // 手動にして A1 を書き換えると、B1 は古いまま
+            this.auto_calc = false;
+            this.cursor = Pos::parse("A1").unwrap();
+            this.sync_input();
+            this.input.select_all();
+            this.input.insert("7");
+            assert!(this.commit());
+            assert_eq!(
+                this.sheet().value(Pos::parse("B1").unwrap()),
+                sheet::Value::Number(10.0),
+                "手動なのに確定で計算された(手動が効いていない)"
+            );
+            // F9 の実体(recalc_book)で計算される
+            recalc_book(&mut this.book, this.active);
+            assert_eq!(
+                this.sheet().value(Pos::parse("B1").unwrap()),
+                sheet::Value::Number(14.0),
+                "F9 相当の再計算が効かない"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn セル内改行の確定で折り返しが立つ(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            this.cursor = Pos::parse("A1").unwrap();
+            this.sync_input();
+            this.input.insert("上の行\n下の行");
+            assert!(this.commit());
+            let cell = this.sheet().get(Pos::parse("A1").unwrap()).unwrap();
+            assert!(cell.fmt.wrap, "改行入りの確定で折り返しが立たない");
+            assert_eq!(
+                cell.value,
+                sheet::Value::Text("上の行\n下の行".into()),
+                "改行が中身に残らない"
+            );
+        });
+    }
+}
+
 /// **メニューの釦を全部おして、落ちないか・繋がっているかを見る。**
 /// writer の menu_run_tests と同じ作法 — リボンに ready で並ぶものは
 /// ここで実際に run_cmd を通す(ダイアログを開くものだけは外す)。
