@@ -1990,6 +1990,28 @@ impl Calc {
                 }
                 self.pick_paths.clear();
             }
+            "font-color" => {
+                if let Some((_, hx)) = FONT_COLORS.iter().find(|(n, _)| *n == v) {
+                    let c = hx.map(|h| h.to_string());
+                    self.fmt(move |f| f.color = c.clone());
+                    self.status = if hx.is_some() {
+                        ui::tf!("文字の色を{}にしました", v).into()
+                    } else {
+                        ui::t!("文字の色を自動に戻しました").into()
+                    };
+                }
+            }
+            "fill-color" => {
+                if let Some((_, hx)) = FILL_COLORS.iter().find(|(n, _)| *n == v) {
+                    let c = hx.map(|h| h.to_string());
+                    self.fmt(move |f| f.fill = c.clone());
+                    self.status = if hx.is_some() {
+                        ui::tf!("塗りを{}にしました", v).into()
+                    } else {
+                        ui::t!("塗りを消しました").into()
+                    };
+                }
+            }
             "sheet-menu" => {
                 self.sheet_menu_action(v);
                 if self.pick.is_some() || self.prompt.is_some() {
@@ -6651,8 +6673,10 @@ calc の隣に置いてください)").to_string()
                         .cell_origin_px(self.cursor)
                         .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
                         .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    // 全部出す(前は16個で黙って切り捨てていた — 一覧は
+                    // スクロールできるので削る理由が無い)
                     self.pick_kind = "font";
-                    self.pick = Some((vals.into_iter().take(16).collect(), at));
+                    self.pick = Some((vals, at));
                 }
             }
             "fontsize" => {
@@ -6662,7 +6686,9 @@ calc の隣に置いてください)").to_string()
                     .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
                 self.pick_kind = "size";
                 self.pick = Some((
-                    ["8", "9", "10", "11", "12", "14", "16", "18", "20", "24", "28", "36", "48"]
+                    // Excel の標準の並び(6〜72)
+                    ["6", "8", "9", "10", "11", "12", "14", "16", "18", "20",
+                     "22", "24", "26", "28", "36", "48", "72"]
                         .iter()
                         .map(|v| v.to_string())
                         .collect(),
@@ -8219,20 +8245,31 @@ calc の隣に置いてください)").to_string()
                     }
                 };
             }
-            "fillparag" => self.fmt(|f| {
-                f.fill = match f.fill.as_deref() {
-                    None => Some("FFF2CC".into()),
-                    Some("FFF2CC") => Some("DEEAF6".into()),
-                    _ => None,
-                }
-            }),
-            "fontcolor" => self.fmt(|f| {
-                f.color = match f.color.as_deref() {
-                    None => Some("C00000".into()),
-                    Some("C00000") => Some("1F4E79".into()),
-                    _ => None,
-                }
-            }),
+            // 塗りつぶしの色。本家はパレット — 一覧から選ぶ
+            // (順繰りの2色は仮実装だった。発注者指摘 2026-08-06)
+            "fillparag" => {
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                self.pick_kind = "fill-color";
+                self.pick = Some((
+                    FILL_COLORS.iter().map(|(n, _)| n.to_string()).collect(),
+                    at,
+                ));
+            }
+            // フォントの色。同じくパレット
+            "fontcolor" => {
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                self.pick_kind = "font-color";
+                self.pick = Some((
+                    FONT_COLORS.iter().map(|(n, _)| n.to_string()).collect(),
+                    at,
+                ));
+            }
             // 並べ替えは**見出しを据え置き、行はまるごと動かす**
             "custom-sort" => {
                 self.commit();
@@ -9270,6 +9307,36 @@ impl CalcAi {
 /// 表オブジェクトは持たない方針どおり、掛けるのは普通の書式 —
 /// どれも Ctrl+Z の1手で戻る
 #[allow(clippy::type_complexity)]
+/// フォントの色のパレット(本家の標準の色に寄せる。「自動」= 色なし)
+const FONT_COLORS: &[(&str, Option<&str>)] = &[
+    ("自動", None),
+    ("黒", Some("1B1B1B")),
+    ("赤", Some("C00000")),
+    ("橙", Some("ED7D31")),
+    ("黄", Some("FFC000")),
+    ("緑", Some("70AD47")),
+    ("青", Some("4472C4")),
+    ("紺", Some("1F4E79")),
+    ("紫", Some("7030A0")),
+    ("灰", Some("7F7F7F")),
+    ("白", Some("FFFFFF")),
+];
+
+/// 塗りつぶしのパレット(帳票で使う薄い色を先に)
+const FILL_COLORS: &[(&str, Option<&str>)] = &[
+    ("色なし", None),
+    ("薄い黄", Some("FFF2CC")),
+    ("薄い青", Some("DEEAF6")),
+    ("薄い緑", Some("E2EFDA")),
+    ("薄い橙", Some("FCE4D6")),
+    ("薄い灰", Some("D9D9D9")),
+    ("黄", Some("FFC000")),
+    ("橙", Some("ED7D31")),
+    ("緑", Some("70AD47")),
+    ("青", Some("4472C4")),
+    ("灰", Some("7F7F7F")),
+];
+
 const CELL_STYLES: &[(&str, fn(&mut CellFormat))] = &[
     ("標準", |f| *f = CellFormat::default()),
     ("見出し", |f| {
@@ -9481,11 +9548,56 @@ impl Render for Calc {
             .px_3().py_1().bg(th_band)
             .border_b_1().border_color(th_cmd_border);
         let items = ribbon::calc_tabs()[self.tab].cmds;
+        // 今のセルの書体と大きさ(ホームの欄に出す — 本家はコンボボックスで
+        // **今の値が見える**。slot-field-fontname/fontsize)
+        let cur_fmt = self.sheet().get(self.cursor).map(|c| c.fmt.clone()).unwrap_or_default();
+        let cur_font: SharedString = cur_fmt.font.clone()
+            .unwrap_or_else(|| "Noto Sans JP".into()).into();
+        let cur_size: SharedString = {
+            let pt = cur_fmt.size_c.map(|c| c as f32 / 100.0).unwrap_or(11.0);
+            if (pt - pt.round()).abs() < 0.05 {
+                format!("{}", pt.round() as u32).into()
+            } else {
+                format!("{pt:.1}").into()
+            }
+        };
         // 1つの釦を組み立てる(名札つきの大釦 / 絵だけ / 文字の小釦)。
         // ホームの対の並びと、他タブの一段の並びの両方から使う
         let mk_btn = |cmd: &ribbon::Cmd, cx: &mut Context<Self>| -> gpui::AnyElement {
             let label = cmd.label;
             let icon = cmd.icon;
+            // 書体と大きさは釦でなく**欄**(本家の形): 今の値を枠の中に見せ、
+            // 押すと一覧が開く
+            if cmd.id == "fontname" || cmd.id == "fontsize" {
+                let (w, val) = if cmd.id == "fontname" {
+                    (110.0, cur_font.clone())
+                } else {
+                    (38.0, cur_size.clone())
+                };
+                let cid = cmd.id;
+                let hoverable = cx.listener(move |this: &mut Calc, on: &bool, _, cx| {
+                    if *on {
+                        this.hover_hint = Some(label);
+                    } else if this.hover_hint == Some(label) {
+                        this.hover_hint = None;
+                    }
+                    cx.notify()
+                });
+                return div().id(SharedString::from(format!("h-{icon}")))
+                    .w(px(w)).h(px(22.0)).px_1p5().rounded_sm()
+                    .border_1().border_color(th_line)
+                    .flex().items_center()
+                    .text_size(px(10.5)).text_color(th_fg)
+                    .whitespace_nowrap().overflow_hidden()
+                    .on_hover(hoverable)
+                    .cursor_pointer().hover(move |st| st.bg(th_btn_hover))
+                    .child(val)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.run_cmd(cid, cx);
+                        cx.notify()
+                    }))
+                    .into_any_element();
+            }
             let has_icon = ui::icons::find(icon).is_some();
             let big = BIG.iter().find(|(k, _)| *k == icon).map(|(_, s)| *s);
             // 名札の短い形は ja 向け — 他の言語では表の語を使う
@@ -11652,18 +11764,39 @@ impl Render for Calc {
 
         // ---- ドロップダウンリスト(同じ列の値の一覧) ----
         let pick_panel = self.pick.clone().map(|(vals, (vx, vy))| {
-            let mut p = div().absolute().left(px(vx)).top(px(vy))
+            // 色の一覧(文字の色・塗り)は名前の左に色見本の四角を添える
+            let swatch_of = |name: &str| -> Option<Option<&'static str>> {
+                match self.pick_kind {
+                    "font-color" => FONT_COLORS.iter().find(|(n, _)| *n == name).map(|(_, h)| *h),
+                    "fill-color" => FILL_COLORS.iter().find(|(n, _)| *n == name).map(|(_, h)| *h),
+                    _ => None,
+                }
+            };
+            // 長い一覧(書体など)は板の中でスクロール — 数で切り捨てない
+            let mut p = div().id("pick-list").absolute().left(px(vx)).top(px(vy))
                 .w(px(self.col_px(self.cursor.col).max(120.0)))
+                .max_h(px((self.view_h_px - 160.0).max(160.0)))
+                .overflow_y_scroll()
                 .p_1().rounded_md().bg(rgb(0xFFFFFF))
                 .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
             for (i, v) in vals.into_iter().enumerate() {
+                let sw = swatch_of(&v);
                 p = p.child(div()
                     .id(SharedString::from(format!("pk{i}")))
                     .px_2().py_1().rounded_sm().cursor_pointer()
                     .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .flex().flex_row().items_center().gap_2()
                     .text_size(px(12.5)).text_color(rgb(0x1B1B1B))
                     .whitespace_nowrap().overflow_hidden()
+                    .children(sw.map(|hx| {
+                        let q = div().w(px(14.0)).h(px(14.0)).rounded_sm()
+                            .border_1().border_color(rgb(0xC6CDD3));
+                        match hx {
+                            Some(h) => q.bg(hex(h)),
+                            None => q.bg(rgb(0xFFFFFF)),
+                        }
+                    }))
                     .child(SharedString::from(v.clone()))
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                         move |this, _, _, cx| {

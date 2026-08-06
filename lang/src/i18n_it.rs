@@ -648,4 +648,8 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("戻る", "Indietro"),
     ("OK", "OK"),
     ("シートの名前の変更", "Rinomina foglio"),
+    ("文字の色を{}にしました", "Colore carattere impostato su {}"),
+    ("文字の色を自動に戻しました", "Colore carattere ripristinato su automatico"),
+    ("塗りを{}にしました", "Riempimento impostato su {}"),
+    ("塗りを消しました", "Riempimento rimosso"),
 ];

@@ -648,4 +648,8 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("戻る", "Kembali"),
     ("OK", "OK"),
     ("シートの名前の変更", "Ganti nama lembar"),
+    ("文字の色を{}にしました", "Warna huruf diubah menjadi {}"),
+    ("文字の色を自動に戻しました", "Warna huruf dikembalikan ke otomatis"),
+    ("塗りを{}にしました", "Isian diubah menjadi {}"),
+    ("塗りを消しました", "Isian dihapus"),
 ];

@@ -648,4 +648,8 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile com cargo
     ("戻る", "Voltar"),
     ("OK", "OK"),
     ("シートの名前の変更", "Renomear planilha"),
+    ("文字の色を{}にしました", "Cor da fonte definida como {}"),
+    ("文字の色を自動に戻しました", "Cor da fonte restaurada para automático"),
+    ("塗りを{}にしました", "Preenchimento definido como {}"),
+    ("塗りを消しました", "Preenchimento removido"),
 ];

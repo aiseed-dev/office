@@ -648,4 +648,8 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("戻る", "Précédent"),
     ("OK", "OK"),
     ("シートの名前の変更", "Renommer la feuille"),
+    ("文字の色を{}にしました", "Couleur de police définie sur {}"),
+    ("文字の色を自動に戻しました", "Couleur de police remise sur automatique"),
+    ("塗りを{}にしました", "Remplissage défini sur {}"),
+    ("塗りを消しました", "Remplissage supprimé"),
 ];

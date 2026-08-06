@@ -651,4 +651,8 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("戻る", "Back"),
 ("OK", "OK"),
 ("シートの名前の変更", "Rename sheet"),
+("文字の色を{}にしました", "Font color set to {}"),
+("文字の色を自動に戻しました", "Font color reset to automatic"),
+("塗りを{}にしました", "Fill set to {}"),
+("塗りを消しました", "Fill removed"),
 ];

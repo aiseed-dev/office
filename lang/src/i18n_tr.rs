@@ -648,4 +648,8 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("戻る", "Geri"),
     ("OK", "OK"),
     ("シートの名前の変更", "Sayfayı yeniden adlandır"),
+    ("文字の色を{}にしました", "Yazı tipi rengi {} yapıldı"),
+    ("文字の色を自動に戻しました", "Yazı tipi rengi otomatiğe döndürüldü"),
+    ("塗りを{}にしました", "Dolgu {} yapıldı"),
+    ("塗りを消しました", "Dolgu kaldırıldı"),
 ];

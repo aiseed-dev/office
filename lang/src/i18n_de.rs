@@ -648,4 +648,8 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("戻る", "Zurück"),
     ("OK", "OK"),
     ("シートの名前の変更", "Blatt umbenennen"),
+    ("文字の色を{}にしました", "Schriftfarbe auf {} gesetzt"),
+    ("文字の色を自動に戻しました", "Schriftfarbe auf Automatisch zurückgesetzt"),
+    ("塗りを{}にしました", "Füllung auf {} gesetzt"),
+    ("塗りを消しました", "Füllung entfernt"),
 ];

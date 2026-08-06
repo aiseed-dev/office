@@ -648,4 +648,8 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("戻る", "Quay lại"),
     ("OK", "OK"),
     ("シートの名前の変更", "Đổi tên trang tính"),
+    ("文字の色を{}にしました", "Đã đổi màu chữ thành {}"),
+    ("文字の色を自動に戻しました", "Đã trả màu chữ về tự động"),
+    ("塗りを{}にしました", "Đã đổi màu nền thành {}"),
+    ("塗りを消しました", "Đã xóa màu nền"),
 ];
