@@ -883,6 +883,93 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // 並べ替えの基準(複数可)。「見出し名か列の字 [昇順|降順]」を
+            // カンマ区切りで。向きを省けば昇順
+            "sort-by" => {
+                if text.is_empty() {
+                    self.status = ui::t!("並べ替えをやめました").into();
+                    return;
+                }
+                let (_, cols) = self.sheet().extent();
+                let heads: Vec<String> = (0..cols)
+                    .map(|c| {
+                        self.sheet()
+                            .get(Pos::new(0, c))
+                            .map(|x| x.value.display())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                let mut keys: Vec<(u32, bool)> = Vec::new();
+                let mut names: Vec<String> = Vec::new();
+                for raw in text.split([',', '、']) {
+                    let t = raw.trim();
+                    if t.is_empty() {
+                        continue;
+                    }
+                    let low = t.to_lowercase();
+                    let (name, asc) = if let Some(n) = t.strip_suffix("降順") {
+                        (n.trim(), false)
+                    } else if let Some(n) = t.strip_suffix("昇順") {
+                        (n.trim(), true)
+                    } else if low.ends_with("desc") {
+                        (t[..t.len() - 4].trim_end(), false)
+                    } else if low.ends_with("asc") {
+                        (t[..t.len() - 3].trim_end(), true)
+                    } else {
+                        (t, true)
+                    };
+                    let col = heads
+                        .iter()
+                        .position(|h| h == name)
+                        .map(|i| i as u32)
+                        .or_else(|| {
+                            // 列の字(A・B・AA…)でも指せる
+                            if !name.is_empty()
+                                && name.chars().all(|c| c.is_ascii_alphabetic())
+                            {
+                                Pos::parse(&format!("{}1", name.to_uppercase())).map(|p| p.col)
+                            } else {
+                                None
+                            }
+                        });
+                    let Some(col) = col else {
+                        // 打ち直せるように板を開いたまま返す
+                        self.prompt = Some(("sort-by", ed));
+                        self.status = ui::tf!(
+                            "「{}」という見出しが見つかりません。使える見出し: {}",
+                            name,
+                            heads.iter().filter(|h| !h.is_empty()).cloned()
+                                .collect::<Vec<_>>().join(" / ")
+                        )
+                        .into();
+                        return;
+                    };
+                    keys.push((col, asc));
+                    names.push(format!(
+                        "{} {}",
+                        if heads.get(col as usize).map(|h| !h.is_empty()).unwrap_or(false) {
+                            heads[col as usize].clone()
+                        } else {
+                            Pos::new(0, col).a1().trim_end_matches('1').to_string()
+                        },
+                        if asc { "昇順" } else { "降順" }
+                    ));
+                }
+                if keys.is_empty() {
+                    self.status = ui::t!("並べ替えをやめました").into();
+                    return;
+                }
+                self.checkpoint();
+                self.book.sheets[self.active].sort_by_columns(&keys, true);
+                recalc_book(&mut self.book, self.active);
+                self.dirty = true;
+                self.sync_input();
+                self.status = ui::tf!(
+                    "並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)",
+                    names.join(" → ")
+                )
+                .into();
+            }
             "sheet-rename" => {
                 let Some(t) = self.sheet_menu_at.take() else { return };
                 if t >= self.book.sheets.len() {

@@ -1896,15 +1896,30 @@ impl Calc {
                 ));
             }
             // 並べ替えは**見出しを据え置き、行はまるごと動かす**
+            // ユーザー設定の並べ替え。本家は複数基準のダイアログ —
+            // calc は小計・ピボットと同じ聞き取りの板で複数基準を受ける
             "custom-sort" => {
                 self.commit();
-                self.checkpoint();
-                let c = self.cursor.col;
-                self.book.sheets[self.active].sort_by_column(c, true, true);
-                self.dirty = true;
-                recalc_book(&mut self.book, self.active);
-                self.status = ui::tf!("{} 列で並べ替えました", Pos::new(0, c).a1()
-                    .trim_end_matches('1')).into();
+                let (rows, cols) = self.sheet().extent();
+                if rows < 2 {
+                    self.status = ui::t!("並べ替える表がありません(見出しの下にデータが要ります)").into();
+                    return;
+                }
+                let heads: Vec<String> = (0..cols)
+                    .map(|c| {
+                        self.sheet()
+                            .get(Pos::new(0, c))
+                            .map(|x| x.value.display())
+                            .unwrap_or_default()
+                    })
+                    .filter(|h| !h.is_empty())
+                    .collect();
+                self.prompt = Some(("sort-by", Editor::new("")));
+                self.status = ui::tf!(
+                    "基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}",
+                    heads.join(" / ")
+                )
+                .into();
             }
             "rem-duplicates" => {
                 self.commit();

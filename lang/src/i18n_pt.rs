@@ -450,7 +450,6 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile com cargo
     ("数が2つ以上要ります", "São necessários pelo menos dois números"),
     ("固定する位置にカーソルを置いてください(その上と左が留まります)", "Coloque o cursor onde os painéis devem congelar (as linhas acima e as colunas à esquerda ficam fixas)"),
     ("{}行 {}列を固定しました", "Congelado na linha {}, coluna {}"),
-    ("{} 列で並べ替えました", "Classificado pela coluna {}"),
     ("重複した {} 行を削除しました", "{} linhas duplicadas removidas"),
     ("使える関数: {}", "Funções disponíveis: {}"),
     ("{} が開いているため上書きしません。名前を付けて保存してください", "{} está com o arquivo aberto; sem sobrescrever — use Salvar como"),
@@ -675,4 +674,10 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile com cargo
     ("この列を解除", "Limpar esta coluna"),
     ("クリックで入切 — すぐ効きます。Esc で閉じる", "Clique para alternar — efeito imediato. Esc fecha"),
     ("{} 行中 {} 行を表示", "De {} linhas, {} exibidas"),
+    ("並べ替える表がありません(見出しの下にデータが要ります)", "Não há tabela para ordenar (precisa de dados abaixo do cabeçalho)"),
+    ("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Critérios, do mais forte (ex.: Valor desc, Item). Cabeçalhos disponíveis: {}"),
+    ("並べ替えをやめました", "Ordenação cancelada"),
+    ("「{}」という見出しが見つかりません。使える見出し: {}", "Não há cabeçalho \"{}\". Cabeçalhos disponíveis: {}"),
+    ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Ordenado por {} (o cabeçalho fica no lugar; Ctrl+Z desfaz)"),
+    ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Ordenar — critérios, do mais forte (ex.: Valor desc, Item)"),
 ];

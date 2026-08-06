@@ -2017,6 +2017,7 @@ impl Render for Calc {
                 "pw-open" => ui::t!("暗号化されたブック — パスワード").to_string(),
                 "pw-set" => ui::t!("暗号化 — パスワード(空にして Enter で暗号化をやめる)").to_string(),
                 "sheet-rename" => ui::t!("シートの名前の変更").to_string(),
+                "sort-by" => ui::t!("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)").to_string(),
                 "subtotal-by" => ui::t!("小計 1/2 — 何の区切りで集めるか(見出しを1つ)").to_string(),
                 "subtotal-vals" => ui::t!("小計 2/2 — 合計する見出し").to_string(),
                 "pivot-rows" => ui::t!("ピボット 1/3 — 行に並べる見出し(カンマ区切り可)").to_string(),

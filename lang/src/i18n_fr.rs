@@ -450,7 +450,6 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("数が2つ以上要ります", "Au moins deux nombres sont nécessaires"),
     ("固定する位置にカーソルを置いてください(その上と左が留まります)", "Placez le curseur là où figer les volets (les lignes au-dessus et les colonnes à gauche restent)"),
     ("{}行 {}列を固定しました", "Figé à la ligne {}, colonne {}"),
-    ("{} 列で並べ替えました", "Trié par la colonne {}"),
     ("重複した {} 行を削除しました", "{} lignes en double supprimées"),
     ("使える関数: {}", "Fonctions disponibles : {}"),
     ("{} が開いているため上書きしません。名前を付けて保存してください", "{} l'a ouvert, donc pas d'écrasement ; utilisez Enregistrer sous"),
@@ -675,4 +674,10 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("この列を解除", "Effacer cette colonne"),
     ("クリックで入切 — すぐ効きます。Esc で閉じる", "Clic pour basculer — effet immédiat. Esc pour fermer"),
     ("{} 行中 {} 行を表示", "Sur {} lignes, {} affichées"),
+    ("並べ替える表がありません(見出しの下にデータが要ります)", "Pas de tableau à trier (il faut des données sous l'en-tête)"),
+    ("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Critères, du plus fort au plus faible (ex. : Montant desc, Article). En-têtes disponibles : {}"),
+    ("並べ替えをやめました", "Tri annulé"),
+    ("「{}」という見出しが見つかりません。使える見出し: {}", "Aucun en-tête « {} ». En-têtes disponibles : {}"),
+    ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Trié par {} (l'en-tête reste en place ; Ctrl+Z annule)"),
+    ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Trier — critères, du plus fort au plus faible (ex. : Montant desc, Article)"),
 ];

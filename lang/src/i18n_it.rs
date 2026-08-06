@@ -450,7 +450,6 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("数が2つ以上要ります", "Servono almeno due numeri"),
     ("固定する位置にカーソルを置いてください(その上と左が留まります)", "Posizionare il cursore dove bloccare i riquadri (restano ferme le righe sopra e le colonne a sinistra)"),
     ("{}行 {}列を固定しました", "Bloccato alla riga {}, colonna {}"),
-    ("{} 列で並べ替えました", "Ordinato per la colonna {}"),
     ("重複した {} 行を削除しました", "{} righe duplicate rimosse"),
     ("使える関数: {}", "Funzioni disponibili: {}"),
     ("{} が開いているため上書きしません。名前を付けて保存してください", "{} lo ha aperto: niente sovrascrittura; usare Salva con nome"),
@@ -675,4 +674,10 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("この列を解除", "Azzera questa colonna"),
     ("クリックで入切 — すぐ効きます。Esc で閉じる", "Clic per attivare/disattivare — effetto immediato. Esc chiude"),
     ("{} 行中 {} 行を表示", "Di {} righe, {} mostrate"),
+    ("並べ替える表がありません(見出しの下にデータが要ります)", "Nessuna tabella da ordinare (servono dati sotto l'intestazione)"),
+    ("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Criteri, dal più forte (es. Importo desc, Articolo). Intestazioni disponibili: {}"),
+    ("並べ替えをやめました", "Ordinamento annullato"),
+    ("「{}」という見出しが見つかりません。使える見出し: {}", "Nessuna intestazione \"{}\". Intestazioni disponibili: {}"),
+    ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Ordinato per {} (l'intestazione resta ferma; Ctrl+Z annulla)"),
+    ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Ordina — criteri, dal più forte (es. Importo desc, Articolo)"),
 ];

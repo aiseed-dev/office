@@ -450,7 +450,6 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("数が2つ以上要ります", "Cần ít nhất hai số"),
     ("固定する位置にカーソルを置いてください(その上と左が留まります)", "Hãy đặt con trỏ tại vị trí cần cố định (các hàng phía trên và cột bên trái sẽ đứng yên)"),
     ("{}行 {}列を固定しました", "Đã cố định tại hàng {}, cột {}"),
-    ("{} 列で並べ替えました", "Đã sắp xếp theo cột {}"),
     ("重複した {} 行を削除しました", "Đã xóa {} hàng trùng lặp"),
     ("使える関数: {}", "Các hàm dùng được: {}"),
     ("{} が開いているため上書きしません。名前を付けて保存してください", "{} đang mở tệp nên không lưu đè; hãy lưu với tên khác"),
@@ -675,4 +674,10 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("この列を解除", "Bỏ lọc cột này"),
     ("クリックで入切 — すぐ効きます。Esc で閉じる", "Nhấp để bật/tắt — có hiệu lực ngay. Esc để đóng"),
     ("{} 行中 {} 行を表示", "Trong {} hàng, hiện {} hàng"),
+    ("並べ替える表がありません(見出しの下にデータが要ります)", "Không có bảng để sắp xếp (cần dữ liệu dưới hàng tiêu đề)"),
+    ("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Tiêu chí, mạnh nhất trước (vd: Số tiền desc, Mặt hàng). Tiêu đề dùng được: {}"),
+    ("並べ替えをやめました", "Đã hủy sắp xếp"),
+    ("「{}」という見出しが見つかりません。使える見出し: {}", "Không có tiêu đề \"{}\". Tiêu đề dùng được: {}"),
+    ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Đã sắp xếp theo {} (hàng tiêu đề giữ nguyên; Ctrl+Z hoàn tác)"),
+    ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Sắp xếp — tiêu chí, mạnh nhất trước (vd: Số tiền desc, Mặt hàng)"),
 ];

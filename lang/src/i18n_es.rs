@@ -450,7 +450,6 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("数が2つ以上要ります", "Se necesitan al menos dos números"),
     ("固定する位置にカーソルを置いてください(その上と左が留まります)", "Ponga el cursor donde inmovilizar los paneles (las filas de arriba y las columnas de la izquierda quedan fijas)"),
     ("{}行 {}列を固定しました", "Inmovilizado en la fila {}, columna {}"),
-    ("{} 列で並べ替えました", "Ordenado por la columna {}"),
     ("重複した {} 行を削除しました", "{} filas duplicadas eliminadas"),
     ("使える関数: {}", "Funciones disponibles: {}"),
     ("{} が開いているため上書きしません。名前を付けて保存してください", "{} lo tiene abierto, así que no se sobrescribe; use Guardar como"),
@@ -675,4 +674,10 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("この列を解除", "Quitar esta columna"),
     ("クリックで入切 — すぐ効きます。Esc で閉じる", "Clic para alternar — surte efecto al momento. Esc cierra"),
     ("{} 行中 {} 行を表示", "De {} filas se muestran {}"),
+    ("並べ替える表がありません(見出しの下にデータが要ります)", "No hay tabla que ordenar (hacen falta datos bajo el encabezado)"),
+    ("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Criterios, el más fuerte primero (ej.: Importe desc, Artículo). Encabezados disponibles: {}"),
+    ("並べ替えをやめました", "Orden cancelado"),
+    ("「{}」という見出しが見つかりません。使える見出し: {}", "No hay encabezado \"{}\". Encabezados disponibles: {}"),
+    ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Ordenado por {} (el encabezado no se mueve; Ctrl+Z lo deshace)"),
+    ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Ordenar — criterios, el más fuerte primero (ej.: Importe desc, Artículo)"),
 ];

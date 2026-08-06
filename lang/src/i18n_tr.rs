@@ -450,7 +450,6 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("数が2つ以上要ります", "En az iki sayı gerekli"),
     ("固定する位置にカーソルを置いてください(その上と左が留まります)", "İmleci bölmelerin dondurulacağı yere koyun (üstündeki satırlar ve solundaki sütunlar sabit kalır)"),
     ("{}行 {}列を固定しました", "{}. satır, {}. sütunda donduruldu"),
-    ("{} 列で並べ替えました", "{} sütununa göre sıralandı"),
     ("重複した {} 行を削除しました", "{} yinelenen satır silindi"),
     ("使える関数: {}", "Kullanılabilir işlevler: {}"),
     ("{} が開いているため上書きしません。名前を付けて保存してください", "{} dosyayı açık tuttuğu için üzerine yazılmıyor. Farklı Kaydet'i kullanın"),
@@ -675,4 +674,10 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("この列を解除", "Bu sütunu temizle"),
     ("クリックで入切 — すぐ効きます。Esc で閉じる", "Tıklayınca değişir — hemen etki eder. Esc kapatır"),
     ("{} 行中 {} 行を表示", "{} satırdan {} tanesi gösteriliyor"),
+    ("並べ替える表がありません(見出しの下にデータが要ります)", "Sıralanacak tablo yok (başlığın altında veri olmalı)"),
+    ("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Ölçütler, en güçlüsü önce (örn. Tutar desc, Ürün). Kullanılabilir başlıklar: {}"),
+    ("並べ替えをやめました", "Sıralama iptal edildi"),
+    ("「{}」という見出しが見つかりません。使える見出し: {}", "\"{}\" adlı başlık yok. Kullanılabilir başlıklar: {}"),
+    ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "{} ölçütüyle sıralandı (başlık satırı yerinde; Ctrl+Z geri alır)"),
+    ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Sırala — ölçütler, en güçlüsü önce (örn. Tutar desc, Ürün)"),
 ];

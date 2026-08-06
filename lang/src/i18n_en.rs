@@ -453,7 +453,6 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("数が2つ以上要ります", "At least two numbers are needed"),
 ("固定する位置にカーソルを置いてください(その上と左が留まります)", "Put the cursor where panes should freeze (rows above and columns left stay)"),
 ("{}行 {}列を固定しました", "Frozen at row {}, column {}"),
-("{} 列で並べ替えました", "Sorted by column {}"),
 ("重複した {} 行を削除しました", "{} duplicate rows removed"),
 ("使える関数: {}", "Available functions: {}"),
 ("{} が開いているため上書きしません。名前を付けて保存してください", "{} has it open, so no overwrite; use Save As"),
@@ -678,4 +677,10 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("この列を解除", "Clear this column"),
 ("クリックで入切 — すぐ効きます。Esc で閉じる", "Click to toggle — takes effect at once. Esc to close"),
 ("{} 行中 {} 行を表示", "Of {} rows, {} shown"),
+("並べ替える表がありません(見出しの下にデータが要ります)", "No table to sort (needs data below a header row)"),
+("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Criteria, strongest first (e.g. Amount desc, Item). Available headers: {}"),
+("並べ替えをやめました", "Sort cancelled"),
+("「{}」という見出しが見つかりません。使える見出し: {}", "No header named \"{}\". Available headers: {}"),
+("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Sorted by {} (header row kept in place; Ctrl+Z undoes it)"),
+("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Sort — criteria, strongest first (e.g. Amount desc, Item)"),
 ];

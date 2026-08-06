@@ -450,7 +450,6 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("数が2つ以上要ります", "Mindestens zwei Zahlen werden gebraucht"),
     ("固定する位置にカーソルを置いてください(その上と左が留まります)", "Cursor dorthin setzen, wo fixiert werden soll (Zeilen darüber und Spalten links bleiben stehen)"),
     ("{}行 {}列を固定しました", "Fixiert bei Zeile {}, Spalte {}"),
-    ("{} 列で並べ替えました", "Nach Spalte {} sortiert"),
     ("重複した {} 行を削除しました", "{} doppelte Zeilen entfernt"),
     ("使える関数: {}", "Verfügbare Funktionen: {}"),
     ("{} が開いているため上書きしません。名前を付けて保存してください", "{} hat es geöffnet, daher kein Überschreiben; bitte Speichern unter verwenden"),
@@ -675,4 +674,10 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("この列を解除", "Diese Spalte zurücksetzen"),
     ("クリックで入切 — すぐ効きます。Esc で閉じる", "Klick schaltet um — wirkt sofort. Esc schließt"),
     ("{} 行中 {} 行を表示", "Von {} Zeilen werden {} angezeigt"),
+    ("並べ替える表がありません(見出しの下にデータが要ります)", "Keine Tabelle zum Sortieren (unter der Überschrift müssen Daten stehen)"),
+    ("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Kriterien, stärkstes zuerst (z. B. Betrag desc, Artikel). Verfügbare Überschriften: {}"),
+    ("並べ替えをやめました", "Sortierung abgebrochen"),
+    ("「{}」という見出しが見つかりません。使える見出し: {}", "Keine Überschrift „{}“. Verfügbare Überschriften: {}"),
+    ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Sortiert nach {} (Kopfzeile bleibt stehen; Ctrl+Z macht es rückgängig)"),
+    ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Sortieren — Kriterien, stärkstes zuerst (z. B. Betrag desc, Artikel)"),
 ];

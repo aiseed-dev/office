@@ -1489,8 +1489,14 @@ impl Sheet {
     /// **行はまるごと動かす。** 選んだ列だけ並べ替えると、
     /// 隣の列との対応が壊れて、静かに嘘の表ができる。
     pub fn sort_by_column(&mut self, col: u32, ascending: bool, header: bool) {
+        self.sort_by_columns(&[(col, ascending)], header);
+    }
+
+    /// 複数の基準で並べ替える(基準は左から順に強い。sort_by は安定)。
+    /// (列, 昇順か)の並び。見出し(header)は据え置く
+    pub fn sort_by_columns(&mut self, keys: &[(u32, bool)], header: bool) {
         let (rows, cols) = self.extent();
-        if rows == 0 { return }
+        if rows == 0 || keys.is_empty() { return }
         let (last_row, last_col) = (rows - 1, cols.saturating_sub(1));
         let first = if header { 1 } else { 0 };
         if last_row < first {
@@ -1505,12 +1511,17 @@ impl Sheet {
             rows.push((r, cells));
         }
         rows.sort_by(|a, b| {
-            let key = |v: &Vec<(u32, Cell)>| {
+            let key = |v: &Vec<(u32, Cell)>, col: u32| {
                 v.iter().find(|(c, _)| *c == col).map(|(_, x)| x.value.clone())
             };
-            let (x, y) = (key(&a.1), key(&b.1));
-            let o = cmp_value(&x, &y);
-            if ascending { o } else { o.reverse() }
+            for (col, asc) in keys {
+                let o = cmp_value(&key(&a.1, *col), &key(&b.1, *col));
+                let o = if *asc { o } else { o.reverse() };
+                if o != std::cmp::Ordering::Equal {
+                    return o;
+                }
+            }
+            std::cmp::Ordering::Equal
         });
         // 置き直す
         for r in first..=last_row {

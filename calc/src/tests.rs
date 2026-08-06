@@ -62,6 +62,53 @@ mod size_grip_tests {
 }
 
 #[cfg(test)]
+mod sort_tests {
+    use crate::*;
+
+    #[gpui::test]
+    fn 複数の基準で並べ替える(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            for (a1, v) in [
+                ("A1", "区分"), ("B1", "数"),
+                ("A2", "甲"), ("B2", "1"),
+                ("A3", "乙"), ("B3", "2"),
+                ("A4", "甲"), ("B4", "3"),
+                ("A5", "丙"), ("B5", "4"),
+            ] {
+                this.cursor = Pos::parse(a1).unwrap();
+                this.sync_input();
+                this.input.select_all();
+                this.input.insert(v);
+                assert!(this.commit());
+            }
+            let col_a = |this: &Calc| -> Vec<String> {
+                (1..5)
+                    .map(|r| this.sheet().value(Pos::new(r, 0)).display())
+                    .collect()
+            };
+            // 見出し名で2基準: 区分 降順 → 同じ区分の中は 数 降順
+            this.prompt = Some(("sort-by", Editor::new("区分 降順, 数 降順")));
+            this.finish_prompt(cx);
+            assert_eq!(col_a(this), ["甲", "甲", "乙", "丙"], "1つ目の基準が効かない");
+            assert_eq!(
+                this.sheet().value(Pos::parse("B2").unwrap()),
+                sheet::Value::Number(3.0),
+                "2つ目の基準(数 降順)が効かない"
+            );
+            // 列の字でも指せる(B 昇順)
+            this.prompt = Some(("sort-by", Editor::new("B")));
+            this.finish_prompt(cx);
+            assert_eq!(col_a(this), ["甲", "乙", "甲", "丙"], "列の字の基準が効かない");
+            // 知らない見出しは板を開いたまま言い返す
+            this.prompt = Some(("sort-by", Editor::new("存在しない列")));
+            this.finish_prompt(cx);
+            assert!(this.prompt.is_some(), "打ち直せるように板が残るはず");
+            assert!(this.status.contains("見つかりません"), "{}", this.status);
+        });
+    }
+}
+
 mod filter_tests {
     use crate::*;
 

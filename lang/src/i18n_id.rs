@@ -450,7 +450,6 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("数が2つ以上要ります", "Perlu minimal dua angka"),
     ("固定する位置にカーソルを置いてください(その上と左が留まります)", "Letakkan kursor di posisi pembekuan (baris di atas dan kolom di kirinya tetap diam)"),
     ("{}行 {}列を固定しました", "Dibekukan di baris {}, kolom {}"),
-    ("{} 列で並べ替えました", "Diurutkan menurut kolom {}"),
     ("重複した {} 行を削除しました", "{} baris duplikat dihapus"),
     ("使える関数: {}", "Fungsi yang tersedia: {}"),
     ("{} が開いているため上書きしません。名前を付けて保存してください", "{} sedang membukanya, jadi tidak ditimpa. Gunakan Simpan Sebagai"),
@@ -675,4 +674,10 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("この列を解除", "Bersihkan kolom ini"),
     ("クリックで入切 — すぐ効きます。Esc で閉じる", "Klik untuk beralih — langsung berlaku. Esc menutup"),
     ("{} 行中 {} 行を表示", "Dari {} baris, {} ditampilkan"),
+    ("並べ替える表がありません(見出しの下にデータが要ります)", "Tidak ada tabel untuk diurutkan (perlu data di bawah baris judul)"),
+    ("基準を左から強い順に(例: 金額 降順, 品名)。使える見出し: {}", "Kriteria, terkuat lebih dulu (mis. Jumlah desc, Barang). Judul yang tersedia: {}"),
+    ("並べ替えをやめました", "Pengurutan dibatalkan"),
+    ("「{}」という見出しが見つかりません。使える見出し: {}", "Tidak ada judul \"{}\". Judul yang tersedia: {}"),
+    ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Diurutkan menurut {} (baris judul tetap; Ctrl+Z membatalkan)"),
+    ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Urutkan — kriteria, terkuat lebih dulu (mis. Jumlah desc, Barang)"),
 ];
