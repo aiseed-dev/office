@@ -407,6 +407,12 @@ impl Calc {
             } else {
                 format!("{t}: {m}").into()
             };
+        } else if self.pivot_at(self.cursor).is_some() {
+            // ピボットの上に乗ったら、どこで操作するかを言う(文脈タブの案内)
+            self.status = ui::t!(
+                "ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)"
+            )
+            .into();
         }
     }
 

@@ -730,4 +730,6 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — Überschriften für die Spalten (Klick schaltet um, optional)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — eine Überschrift für die Werte"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — wie „{}“ aggregieren?"),
+    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Auf einer Pivot-Tabelle — Bedienung über den Tab „Pivot-Tabelle“ (Aktualisieren, Gesamt-/Zwischensummen, Layout; tabellenbrechende Aktionen sind gesperrt)"),
+    ("ピボット", "Pivot"),
 ];

@@ -339,11 +339,16 @@ impl Render for Calc {
                 continue;
             }
             let on = i == self.tab;
+            // 文脈タブ(ピボット・表のデザイン)は色を付けて目に留める —
+            // 出たり消えたりするものは、出た瞬間に分からないと意味がない
+            let is_ctx = tb.cmds.iter()
+                .any(|c| c.id == "pivot-layout" || c.id == "td-header");
             tabs = tabs.child(div()
                 .id(SharedString::from(format!("tab{i}")))
                 .px_2p5().pt_1p5()
+                .when(is_ctx, |d| d.bg(rgb(0xF3EDFB)).rounded_t_md())
                 .text_size(px(us * 12.0))
-                .text_color(if on { rgb(0x2E8B57) } else { th_fg })
+                .text_color(if is_ctx { rgb(0x8A63C9) } else if on { rgb(0x2E8B57) } else { th_fg })
                 .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                 .cursor_pointer()
                 .hover(|s| s.text_color(rgb(0x1B6E3C)))
@@ -351,7 +356,10 @@ impl Render for Calc {
                 .child(tb.name)
                 // 現在地の緑の下線(デスクトップ版の形)
                 .child(div().h(px(2.5)).w_full().rounded_sm()
-                    .bg(if on { rgb(0x2E8B57) } else { th_band }))
+                    .bg(if on && is_ctx { rgb(0x8A63C9) }
+                        else if on { rgb(0x2E8B57) }
+                        else if is_ctx { rgb(0xF3EDFB) }
+                        else { th_band }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.tab != 0 {
                         this.prev_tab = this.tab;
@@ -2006,6 +2014,41 @@ impl Render for Calc {
             bands
         };
 
+        // ---- ピボットの塊の枠 ----
+        // 集計はただのセルに見えて紛らわしい(発注者 2026-08-07)。いつも薄い
+        // 枠で「特別な塊」だと見せ、カーソルが載ったら濃く+「ピボット」の札。
+        // マウスは受けない
+        let pivot_frames: Vec<gpui::AnyElement> = {
+            let name = &self.book.sheets[self.active].name;
+            let mut out = Vec::new();
+            for d in self.book.pivots.iter() {
+                if d.sheet != *name || d.size.0 == 0 {
+                    continue;
+                }
+                let a = d.dest;
+                let b = Pos::new(a.row + d.size.0 - 1, a.col + d.size.1 - 1);
+                let Some((x0, y0, x1, y1)) = self.range_px(a, b) else { continue };
+                let inside = on_pivot
+                    && self.cursor.row >= a.row && self.cursor.row <= b.row
+                    && self.cursor.col >= a.col && self.cursor.col <= b.col;
+                let mut f = div().absolute()
+                    .left(px(x0)).top(px(y0))
+                    .w(px((x1 - x0).max(2.0))).h(px((y1 - y0).max(2.0)))
+                    .border_color(rgb(0x8A63C9)).rounded_sm();
+                f = if inside { f.border_2() } else { f.border_1() };
+                if inside {
+                    // 右上の札。何者か・どこで操作するかを一言
+                    f = f.child(div().absolute().top(px(-1.0)).right(px(-1.0))
+                        .px_1p5().rounded_bl_md().rounded_tr_sm()
+                        .bg(rgb(0x8A63C9)).text_color(rgb(0xFFFFFF))
+                        .text_size(px(us * 9.5))
+                        .child(ui::t!("ピボット")));
+                }
+                out.push(f.into_any_element());
+            }
+            out
+        };
+
         // ---- コピーした範囲の破線(蟻の行進の静止版) ----
         // セルの罫線と混ざらないよう、重ね描きの1枚で囲む。マウスは受けない
         let ants = self.clip_range.and_then(|(si, a, b)| {
@@ -3257,6 +3300,7 @@ impl Render for Calc {
                        }
                    }))
                    .child(grid)
+                   .children(pivot_frames)
                    .children(freeze_shadow)
                    .children(ink_preview)
                    .children({

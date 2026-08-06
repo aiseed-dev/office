@@ -1104,8 +1104,12 @@ mod recalc_tests {
                 dest: Pos::parse("D1").unwrap(),
                 size: (3, 2), // D1:E3 に置いてある体
             });
-            // ピボットの上(D2)では結合も入力規則も断られる
+            // ピボットに乗ると状態行が「タブで操作」と案内する
             this.cursor = Pos::parse("D2").unwrap();
+            this.anchor = None;
+            this.sync_input();
+            assert!(this.status.contains("ピボットテーブル"), "{}", this.status);
+            // ピボットの上(D2)では結合も入力規則も断られる
             this.anchor = Some(Pos::parse("E3").unwrap());
             this.run_cmd("merge", cx);
             assert!(this.sheet().merges.is_empty(), "ピボットの上で結合できてしまう");

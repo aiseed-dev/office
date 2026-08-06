@@ -730,4 +730,6 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — sütunlar için başlıklar (tık ile aç/kapat, isteğe bağlı)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — değerler için bir başlık"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — «{}» nasıl toplansın"),
+    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Pivot tablo üzerindesiniz — işlemler «Pivot Tablo» sekmesinde (güncelle, genel toplam, ara toplam, düzen; tabloyu bozan işlemler kilitli)"),
+    ("ピボット", "Pivot"),
 ];

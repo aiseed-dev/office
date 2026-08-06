@@ -733,4 +733,6 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — headers for the columns (click to toggle, optional)"),
 ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — one header for the values"),
 ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — how to aggregate \"{}\""),
+("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "On a pivot table — use the Pivot Table tab (refresh, grand totals, subtotals, layout; table-breaking operations are locked)"),
+("ピボット", "Pivot"),
 ];
