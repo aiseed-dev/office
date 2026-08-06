@@ -503,6 +503,53 @@ else:
     b
 }
 
+/// 売上台帳 — ピボットの試し場。月×区分×品名の36行が詰まっていて、
+/// 挿入 > ピボットテーブルを挿入(行=区分、列=月、値=金額)がすぐ試せる。
+/// ピボットの上にカーソルを置くと「ピボットテーブル」タブが現れ、
+/// 結合・入力規則などの釦が灰色になる(文脈タブとロックの見本)
+fn uriage() -> Book {
+    let mut b = Book::new();
+    let s = &mut b.sheets[0];
+    s.name = "売上台帳".into();
+    head(s, &[
+        ("月", 7.0), ("区分", 12.0), ("品名", 22.0),
+        ("数量", 8.0), ("単価", 10.0), ("金額", 12.0),
+    ]);
+    // 月×区分×品名(数量は決め打ち — 生成物は毎回同じ中身にする)
+    const KUBUN: &[(&str, &[(&str, u32)])] = &[
+        ("筆記具", &[("ボールペン(黒)", 150), ("シャープペン", 220), ("蛍光マーカー(黄)", 130)]),
+        ("紙製品", &[("コピー用紙A4", 550), ("ノートA罫", 180), ("付箋 75×75mm", 210)]),
+        ("ファイル", &[("クリアファイルA4", 240), ("パイプ式ファイルA4", 780), ("個別フォルダA4", 620)]),
+        ("事務機器", &[("電卓", 1480), ("ホッチキス10号", 620), ("2穴パンチ", 830)]),
+    ];
+    const QTY: &[u32] = &[
+        12, 30, 8, 20, 5, 16, 24, 10, 6, 3, 9, 15,
+        18, 25, 12, 22, 8, 20, 30, 7, 10, 4, 11, 13,
+        15, 40, 10, 28, 6, 18, 26, 9, 12, 5, 8, 17,
+    ];
+    let mut r = 1u32;
+    for month in ["4月", "5月", "6月"] {
+        for (kubun, items) in KUBUN {
+            for (name, tanka) in *items {
+                s.set(Pos::new(r, 0), Cell::input(month));
+                s.set(Pos::new(r, 1), Cell::input(kubun));
+                s.set(Pos::new(r, 2), Cell::input(name));
+                s.set(Pos::new(r, 3), Cell::input(&QTY[(r - 1) as usize % QTY.len()].to_string()));
+                let mut c = Cell::input(&tanka.to_string());
+                c.fmt.number_format = Some("¥#,##0".into());
+                s.set(Pos::new(r, 4), c);
+                let mut c = Cell::input(&format!("=D{}*E{}", r + 1, r + 1));
+                c.fmt.number_format = Some("¥#,##0".into());
+                s.set(Pos::new(r, 5), c);
+                r += 1;
+            }
+        }
+    }
+    s.print_title_rows = Some((0, 0));
+    recalc(s);
+    b
+}
+
 fn main() {
     std::fs::create_dir_all("sample").expect("sample/ が作れない");
     save(&mitsumori(), "sample/見積書.xlsx");
@@ -510,4 +557,5 @@ fn main() {
     save(&seiseki(), "sample/成績表.xlsx");
     save(&chumon(), "sample/注文書.xlsx");
     save(&juchu(), "sample/受注台帳.xlsx");
+    save(&uriage(), "sample/売上台帳.xlsx");
 }
