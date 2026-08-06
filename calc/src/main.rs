@@ -4077,6 +4077,9 @@ impl Calc {
     /// コピー。選んだ範囲(無ければいまのセル)を TSV で系のクリップボードへ。
     /// 他のアプリにはそのまま貼れる形で、アプリ内には起点を控えて式をずらせる形で。
     fn a_copy(&mut self, _: &ui::Copy, _: &mut Window, cx: &mut Context<Self>) {
+        self.copy_now(cx)
+    }
+    fn copy_now(&mut self, cx: &mut Context<Self>) {
         if self.input.has_selection() {
             // 数式バーの文字を選んでいるなら、その文字のコピー
             let sel = self.input.selection();
@@ -4108,6 +4111,9 @@ impl Calc {
 
     /// 切り取り = コピー + 中身を消す(書式は残る。1手で戻せる)。
     fn a_cut(&mut self, _: &ui::Cut, _: &mut Window, cx: &mut Context<Self>) {
+        self.cut_now(cx)
+    }
+    fn cut_now(&mut self, cx: &mut Context<Self>) {
         if self.input.has_selection() {
             let sel = self.input.selection();
             if let Some(s) = self.input.text().get(sel) {
@@ -4135,6 +4141,9 @@ impl Calc {
 
     /// 貼り付け。編集中なら文字として、そうでなければセルの格子として。
     fn a_paste(&mut self, _: &ui::Paste, _: &mut Window, cx: &mut Context<Self>) {
+        self.paste_now(cx)
+    }
+    fn paste_now(&mut self, cx: &mut Context<Self>) {
         if self.sheet().protected {
             self.status =
                 ui::t!("シートが保護されています(保護タブの「保護」で解除)").into();
@@ -5971,6 +5980,7 @@ calc の隣に置いてください)").to_string()
     #[allow(dead_code)] // wiring_tests(cfg(test))が使う
     const HANDLED: &'static [&'static str] = &[
         "open", "save", "undo", "redo", "selectall", "pdf",
+        "copy", "cut", "paste",
         "bold", "italic", "underline", "borders", "fillparag", "fontcolor",
         "align-left", "align-center", "align-right",
         "comma", "currency", "percents", "digit-inc", "digit-dec", "clear",
@@ -6040,6 +6050,9 @@ calc の隣に置いてください)").to_string()
                 }
             }
             "selectall" => self.select_all_now(),
+            "copy" => self.copy_now(cx),
+            "cut" => self.cut_now(cx),
+            "paste" => self.paste_now(cx),
             // 罫線 — **日本の帳票の本体**
             "borders" => self.fmt(|f| {
                 f.borders = if f.borders.any() { Borders::NONE } else { Borders::ALL }
@@ -9094,70 +9107,40 @@ impl Render for Calc {
             .px_3().py_1().bg(th_band)
             .border_b_1().border_color(th_cmd_border);
         let items = ribbon::calc_tabs()[self.tab].cmds;
-        let split = if ribbon::CALC[self.tab].name == "ホーム" {
-            items.len().div_ceil(2)
-        } else {
-            items.len()
-        };
-        for chunk in items.chunks(split.max(1)) {
-            let mut row = div().flex().flex_row().items_center().gap_0p5();
-            for cmd in chunk {
-                let label = cmd.label;
-                let icon = cmd.icon;
-                let has_icon = ui::icons::find(icon).is_some();
-                let big = BIG.iter().find(|(k, _)| *k == icon).map(|(_, s)| *s);
-                // 名札の短い形は ja 向け — 他の言語では表の語を使う
-                let big = if ui::settings::language() == "ja" {
-                    big
-                } else {
-                    big.map(|_| cmd.label)
-                };
-                let hoverable = cx.listener(move |this: &mut Calc, on: &bool, _, cx| {
-                    if *on {
-                        this.hover_hint = Some(label);
-                    } else if this.hover_hint == Some(label) {
-                        this.hover_hint = None;
-                    }
-                    cx.notify()
-                });
-                let fg = if cmd.ready { th_fg } else { th_gray };
-                if let Some(short) = big {
-                    // 名札つきの大釦(絵の下に短い名前 — 本家の言い方)
-                    let mut b = div().id(SharedString::from(format!("h-{icon}")))
-                        .px_2().h(px(46.0)).rounded_sm()
-                        .flex().flex_col().items_center().justify_center().gap_1()
-                        .on_hover(hoverable)
-                        .children(has_icon.then(|| {
-                            gpui::svg()
-                                .path(SharedString::from(format!("icons/{icon}.svg")))
-                                .size(px(20.0)).text_color(fg)
-                        }))
-                        .child(div().text_size(px(10.5)).text_color(fg).child(short));
-                    if cmd.ready {
-                        let cid = cmd.id;
-                        b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.run_cmd(cid, cx);
-                                cx.notify()
-                            }));
-                    }
-                    row = row.child(b);
-                    continue;
+        // 1つの釦を組み立てる(名札つきの大釦 / 絵だけ / 文字の小釦)。
+        // ホームの対の並びと、他タブの一段の並びの両方から使う
+        let mk_btn = |cmd: &ribbon::Cmd, cx: &mut Context<Self>| -> gpui::AnyElement {
+            let label = cmd.label;
+            let icon = cmd.icon;
+            let has_icon = ui::icons::find(icon).is_some();
+            let big = BIG.iter().find(|(k, _)| *k == icon).map(|(_, s)| *s);
+            // 名札の短い形は ja 向け — 他の言語では表の語を使う
+            let big = if ui::settings::language() == "ja" {
+                big
+            } else {
+                big.map(|_| cmd.label)
+            };
+            let hoverable = cx.listener(move |this: &mut Calc, on: &bool, _, cx| {
+                if *on {
+                    this.hover_hint = Some(label);
+                } else if this.hover_hint == Some(label) {
+                    this.hover_hint = None;
                 }
+                cx.notify()
+            });
+            let fg = if cmd.ready { th_fg } else { th_gray };
+            if let Some(short) = big {
+                // 名札つきの大釦(絵の下に短い名前 — 本家の言い方)
                 let mut b = div().id(SharedString::from(format!("h-{icon}")))
-                    .h(px(26.0)).rounded_sm()
-                    .flex().items_center().justify_center()
-                    .on_hover(hoverable);
-                b = if has_icon { b.w(px(26.0)) } else { b.px_1p5() };
-                b = b
+                    .px_2().h(px(46.0)).rounded_sm()
+                    .flex().flex_col().items_center().justify_center().gap_1()
+                    .on_hover(hoverable)
                     .children(has_icon.then(|| {
                         gpui::svg()
                             .path(SharedString::from(format!("icons/{icon}.svg")))
-                            .size(px(18.0)).text_color(fg)
+                            .size(px(20.0)).text_color(fg)
                     }))
-                    .children((!has_icon).then(|| {
-                        div().text_size(px(10.5)).text_color(fg).child(label)
-                    }));
+                    .child(div().text_size(px(10.5)).text_color(fg).child(short));
                 if cmd.ready {
                     let cid = cmd.id;
                     b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
@@ -9166,7 +9149,103 @@ impl Render for Calc {
                             cx.notify()
                         }));
                 }
-                row = row.child(b);
+                return b.into_any_element();
+            }
+            let mut b = div().id(SharedString::from(format!("h-{icon}")))
+                .h(px(26.0)).rounded_sm()
+                .flex().items_center().justify_center()
+                .on_hover(hoverable);
+            b = if has_icon { b.w(px(26.0)) } else { b.px_1p5() };
+            b = b
+                .children(has_icon.then(|| {
+                    gpui::svg()
+                        .path(SharedString::from(format!("icons/{icon}.svg")))
+                        .size(px(18.0)).text_color(fg)
+                }))
+                .children((!has_icon).then(|| {
+                    div().text_size(px(10.5)).text_color(fg).child(label)
+                }));
+            if cmd.ready {
+                let cid = cmd.id;
+                b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.run_cmd(cid, cx);
+                        cx.notify()
+                    }));
+            }
+            b.into_any_element()
+        };
+        if ribbon::CALC[self.tab].name == "ホーム" {
+            // 本家のホームは**単純な2行割りではない**(発注者 2026-08-06
+            // スクショ)。組ごとに上の段と下の段が対になっている —
+            // コピーの下に貼り付け、書体の下に B I U…、縦揃えの下に横揃え。
+            // その対をそのまま書き、組の間に縦の区切り線を引く
+            const HOME_PAIRS: &[(&[&str], &[&str])] = &[
+                (&["copy", "cut"], &["paste"]),
+                (&["fontname", "fontsize", "incfont", "decfont", "changecase"],
+                 &["bold", "italic", "underline", "strikeout", "subscript",
+                   "fontcolor", "fillparag", "borders"]),
+                (&["top", "middle", "bottom", "wrap", "text-orient"],
+                 &["align-left", "align-center", "align-right", "align-just",
+                   "merge", "direction"]),
+                (&["insert-function", "fill-num"], &["defname", "clear"]),
+                (&["format", "currency", "percents"],
+                 &["comma", "digit-dec", "digit-inc"]),
+                (&["cell-ins", "cell-del", "cell-format"],
+                 &["condformat", "table-tpl", "cell-styles"]),
+                (&["replace", "selectall"], &["setfilter", "clear-filter"]),
+            ];
+            let mut used: std::collections::HashSet<&str> = Default::default();
+            let mut band = div().flex().flex_row().items_center().gap_1();
+            let mut first = true;
+            for (topr, botr) in HOME_PAIRS {
+                if topr.iter().chain(botr.iter())
+                    .all(|id| !items.iter().any(|c| c.id == *id))
+                {
+                    continue; // 表に無い組は出さない(将来の並び替えでも落ちない)
+                }
+                if !first {
+                    band = band.child(div().w(px(1.0)).h(px(46.0))
+                        .bg(th_cmd_border).mx_1());
+                }
+                first = false;
+                let mut col = div().flex().flex_col().gap_0p5();
+                for ids in [*topr, *botr] {
+                    let mut r = div().flex().flex_row().items_center()
+                        .gap_0p5().h(px(26.0));
+                    for id in ids {
+                        if let Some(cmd) = items.iter().find(|c| c.id == *id) {
+                            used.insert(cmd.id);
+                            r = r.child(mk_btn(cmd, cx));
+                        }
+                    }
+                    col = col.child(r);
+                }
+                band = band.child(col);
+            }
+            // 対の表に無い釦も**黙って落とさない** — 右端に半々で足す
+            let rest: Vec<&ribbon::Cmd> =
+                items.iter().filter(|c| !used.contains(c.id)).collect();
+            if !rest.is_empty() {
+                band = band.child(div().w(px(1.0)).h(px(46.0))
+                    .bg(th_cmd_border).mx_1());
+                let half = rest.len().div_ceil(2);
+                let mut col = div().flex().flex_col().gap_0p5();
+                for chunk in rest.chunks(half.max(1)) {
+                    let mut r = div().flex().flex_row().items_center()
+                        .gap_0p5().h(px(26.0));
+                    for cmd in chunk {
+                        r = r.child(mk_btn(cmd, cx));
+                    }
+                    col = col.child(r);
+                }
+                band = band.child(col);
+            }
+            cmds = cmds.child(band);
+        } else {
+            let mut row = div().flex().flex_row().items_center().gap_0p5();
+            for cmd in items {
+                row = row.child(mk_btn(cmd, cx));
             }
             cmds = cmds.child(row);
         }

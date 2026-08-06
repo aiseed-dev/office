@@ -105,6 +105,7 @@ READY = {
         "select-all": "selectall", "autosum": "sum",
         "borders": "borders", "bold": "bold", "italic": "italic",
         "underline": "underline",
+        "copy": "copy", "cut": "cut", "paste": "paste",
         "align-center": "align-center",
         "comma": "comma", "currency": "currency", "percents": "percents",
         "cell-ins": "cell-ins", "cell-del": "cell-del", "clear": "clear",
