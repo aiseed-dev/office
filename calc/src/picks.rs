@@ -300,6 +300,41 @@ impl Calc {
                 self.status = ui::tf!("{} セルの中身を消しました(書式は残る)", n).into();
             }
             "clear-fmt" => self.run_cmd("clear", cx),
+            // コメントとハイパーリンクだけを消す(本家の消去は5択)
+            "clear-comment" => {
+                self.checkpoint();
+                let (a, b) = self.sel_rect();
+                let sh = &mut self.book.sheets[self.active];
+                let before = sh.comments.len();
+                sh.comments.retain(|p, _| {
+                    p.row < a.row || p.row > b.row || p.col < a.col || p.col > b.col
+                });
+                let n = before - sh.comments.len();
+                if n == 0 {
+                    self.undo_stack.pop();
+                    self.status = ui::t!("その範囲にコメントはありません").into();
+                } else {
+                    self.dirty = true;
+                    self.status = ui::tf!("{} 個のコメントを消しました", n).into();
+                }
+            }
+            "clear-link" => {
+                self.checkpoint();
+                let (a, b) = self.sel_rect();
+                let sh = &mut self.book.sheets[self.active];
+                let before = sh.links.len();
+                sh.links.retain(|p, _| {
+                    p.row < a.row || p.row > b.row || p.col < a.col || p.col > b.col
+                });
+                let n = before - sh.links.len();
+                if n == 0 {
+                    self.undo_stack.pop();
+                    self.status = ui::t!("その範囲にハイパーリンクはありません").into();
+                } else {
+                    self.dirty = true;
+                    self.status = ui::tf!("{} 個のハイパーリンクを消しました", n).into();
+                }
+            }
             "insrow" => {
                 self.rowcol(|s, p| s.insert_row(p.row));
                 self.status = ui::t!("行を挿しました(下の式の参照も直っています)").into();
@@ -434,9 +469,12 @@ impl Calc {
                 ("delcol", "列全体", true),
             ],
             "clr" => vec![
+                // 本家の消去は5択(すべて/テキスト/書式/コメント/ハイパーリンク)
                 ("clear-all", "すべて", true),
                 ("clear-text", "テキスト(書式は残す)", true),
                 ("clear-fmt", "書式(中身は残す)", true),
+                ("clear-comment", "コメント", !self.sheet().comments.is_empty()),
+                ("clear-link", "ハイパーリンク", !self.sheet().links.is_empty()),
             ],
             "sort" => vec![
                 ("sort-asc", "昇順", true),
