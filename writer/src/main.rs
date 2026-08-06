@@ -5410,9 +5410,11 @@ impl Writer {
     /// 確認のダイアログで主の糸を塞がない — 塞ぐと画面ごと固まり、
     /// GNOME に「応答なし」と判定される(calc で踏んで直したのと同じ)。
     fn request_quit(&mut self, cx: &mut Context<Self>) {
-        // 確認は**実ファイルの未保存変更**にだけ出す(calc と同じ発注者指示)。
-        // 名前も付けていない試し打ちにまで確認を出すと、確認が煩さで押し流される
-        if !self.dirty || self.path.is_none() {
+        // 確認を出すのは**未保存の変更があるとき**。名前の無い新規でも、
+        // 何か書いてあれば出す — 書いた物を黙って捨てない(発注者 2026-08-06。
+        // calc と同じ改訂)。本当に空のままなら従来どおり黙って閉じる
+        let empty_new = self.path.is_none() && self.ed.text().trim().is_empty();
+        if !self.dirty || empty_new {
             self.release_lock();
             cx.quit();
             return;

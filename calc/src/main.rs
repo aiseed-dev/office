@@ -4230,10 +4230,14 @@ impl Calc {
     /// 書きかけを黙って捨てない。
     fn request_quit(&mut self, cx: &mut Context<Self>) {
         self.commit();
-        // 確認は**実ファイルの未保存変更**にだけ出す(発注者の指示 2026-08-03)。
-        // 名前も付けていない試し打ちにまで確認を出すと、確認が煩さで
-        // 押し流される — 本当に守るべき場面で効かなくなる
-        if !self.dirty || self.path.is_none() {
+        // 確認を出すのは**未保存の変更があるとき**。名前の無い新規でも、
+        // 何か打ってあれば出す — 打った物を黙って捨てない(発注者 2026-08-06。
+        // 2026-08-03 の「実ファイルに限る」を改訂: 新規が見本入りだった頃は
+        // 「試し打ち」扱いでよかったが、空白の新規は実の仕事が始まる場所)。
+        // 本当に空のままの新規は、従来どおり黙って閉じる(煩くしない)
+        let empty_new = self.path.is_none()
+            && self.book.sheets.iter().all(|s| s.cells.is_empty());
+        if !self.dirty || empty_new {
             self.release_lock();
             cx.quit();
             return;
