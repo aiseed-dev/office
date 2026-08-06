@@ -182,6 +182,15 @@ impl Calc {
                     }
                 }
             }
+            // 結合の確認(範囲に値が複数あるとき)。値は消さない設計のまま
+            "merge-confirm" => {
+                if v.starts_with("結合する") {
+                    let (a, b) = self.sel_rect();
+                    self.merge_do(a, b);
+                } else {
+                    self.status = ui::t!("結合をやめました").into();
+                }
+            }
             "numfmt-pick" => {
                 if v.starts_with("その他") {
                     // 書式コードの直打ち(カスタム書式)。今のコードを下敷きに

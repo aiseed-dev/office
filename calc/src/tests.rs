@@ -949,6 +949,41 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 値が複数ある範囲の結合は先に聞く(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            for (p, v) in [("A1", "甲"), ("B2", "乙")] {
+                this.cursor = Pos::parse(p).unwrap();
+                this.sync_input();
+                this.input.insert(v);
+                assert!(this.commit());
+            }
+            // 値が2つ → 確認の一覧が開き、まだ結合されない
+            this.anchor = Some(Pos::parse("A1").unwrap());
+            this.cursor = Pos::parse("B2").unwrap();
+            this.run_cmd("merge", cx);
+            assert_eq!(this.pick_kind, "merge-confirm", "確認が出ない");
+            assert!(this.sheet().merges.is_empty(), "聞く前に結合された");
+            this.apply_pick("やめる", cx);
+            assert!(this.sheet().merges.is_empty());
+            // 結合する、を選べば結合される(値は消えない)
+            this.run_cmd("merge", cx);
+            this.apply_pick("結合する(見えるのは左上の値だけになります)", cx);
+            assert_eq!(this.sheet().merges.len(), 1);
+            assert_eq!(
+                this.sheet().get(Pos::parse("B2").unwrap()).unwrap().editable(),
+                "乙",
+                "結合で値が消えた"
+            );
+            // 値が1つ以下なら聞かずに結合する
+            this.anchor = Some(Pos::parse("D1").unwrap());
+            this.cursor = Pos::parse("E2").unwrap();
+            this.run_cmd("merge", cx);
+            assert_eq!(this.sheet().merges.len(), 2, "空の範囲で余計に聞いた");
+        });
+    }
+
+    #[gpui::test]
     fn ピボットの上では表を壊す操作を締める(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

@@ -2219,33 +2219,64 @@ impl Calc {
     }
 
     /// 選んだ範囲を結合する。**値は消さない** — 左上以外の値は隠れるだけで、
-    /// 結合を解けば戻る(黙って捨てない)。
+    /// 結合を解けば戻る(黙って捨てない)。値が2つ以上見えているときは
+    /// 先に聞く(本家と同じ — 画面と Excel では左上しか見えなくなるから)
     fn merge_selection(&mut self) {
-        self.checkpoint();
         let (a, b) = self.sel_rect();
         if a == b {
             self.status = ui::t!("結合する範囲を Shift+矢印で選んでください").into();
             return;
         }
-        let sh = &mut self.book.sheets[self.active];
-        // 同じ範囲がもう結合されていたら解く(押すたびに入切)
-        if let Some(i) = sh.merges.iter().position(|m| *m == (a, b)) {
-            sh.merges.remove(i);
+        // 同じ範囲がもう結合されていたら解く(押すたびに入切。確認は要らない)
+        if let Some(i) = self.sheet().merges.iter().position(|m| *m == (a, b)) {
+            self.checkpoint();
+            self.book.sheets[self.active].merges.remove(i);
             self.status = format!("{}:{} の結合を解きました", a.a1(), b.a1()).into();
-        } else {
-            sh.merges.retain(|(x, y)| {
-                // 重なる結合は先に外す(入れ子の結合は帳票を壊す)
-                y.row < a.row || x.row > b.row || y.col < a.col || x.col > b.col
-            });
-            sh.merges.push((a, b));
-            // 釦は「結合して、中央に配置する」— 名のとおり中央揃えも掛ける
-            // (本家・Excel と同じ。解くときは揃えを触らない)
-            let mut anchor = sh.get(a).cloned().unwrap_or_default();
-            anchor.fmt.align = sheet::model::HAlign::Center;
-            anchor.fmt.valign = sheet::model::VAlign::Middle;
-            sh.set(a, anchor);
-            self.status = format!("{}:{} を結合し、中央に揃えました", a.a1(), b.a1()).into();
+            self.dirty = true;
+            return;
         }
+        let filled = (a.row..=b.row)
+            .flat_map(|r| (a.col..=b.col).map(move |c| Pos::new(r, c)))
+            .filter(|p| {
+                self.sheet().get(*p).map(|c| !c.editable().trim().is_empty()).unwrap_or(false)
+            })
+            .count();
+        if filled >= 2 {
+            let at = self
+                .cell_origin_px(self.cursor)
+                .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+            self.pick_kind = "merge-confirm";
+            self.pick = Some((
+                vec![
+                    "結合する(見えるのは左上の値だけになります)".into(),
+                    "やめる".into(),
+                ],
+                at,
+            ));
+            self.status =
+                ui::t!("範囲に値が複数あります(値は消しません — 解除で戻ります)").into();
+            return;
+        }
+        self.merge_do(a, b);
+    }
+
+    /// 結合の実体(確認の後もここに来る)
+    pub(crate) fn merge_do(&mut self, a: Pos, b: Pos) {
+        self.checkpoint();
+        let sh = &mut self.book.sheets[self.active];
+        sh.merges.retain(|(x, y)| {
+            // 重なる結合は先に外す(入れ子の結合は帳票を壊す)
+            y.row < a.row || x.row > b.row || y.col < a.col || x.col > b.col
+        });
+        sh.merges.push((a, b));
+        // 釦は「結合して、中央に配置する」— 名のとおり中央揃えも掛ける
+        // (本家・Excel と同じ。解くときは揃えを触らない)
+        let mut anchor = sh.get(a).cloned().unwrap_or_default();
+        anchor.fmt.align = sheet::model::HAlign::Center;
+        anchor.fmt.valign = sheet::model::VAlign::Middle;
+        sh.set(a, anchor);
+        self.status = format!("{}:{} を結合し、中央に揃えました", a.a1(), b.a1()).into();
         self.dirty = true;
     }
 
