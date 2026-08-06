@@ -2142,7 +2142,13 @@ impl Calc {
                 y.row < a.row || x.row > b.row || y.col < a.col || x.col > b.col
             });
             sh.merges.push((a, b));
-            self.status = format!("{}:{} を結合しました", a.a1(), b.a1()).into();
+            // 釦は「結合して、中央に配置する」— 名のとおり中央揃えも掛ける
+            // (本家・Excel と同じ。解くときは揃えを触らない)
+            let mut anchor = sh.get(a).cloned().unwrap_or_default();
+            anchor.fmt.align = sheet::model::HAlign::Center;
+            anchor.fmt.valign = sheet::model::VAlign::Middle;
+            sh.set(a, anchor);
+            self.status = format!("{}:{} を結合し、中央に揃えました", a.a1(), b.a1()).into();
         }
         self.dirty = true;
     }

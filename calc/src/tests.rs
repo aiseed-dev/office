@@ -643,6 +643,24 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 結合すると中央に揃う(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            this.cursor = Pos::parse("A1").unwrap();
+            this.sync_input();
+            this.input.insert("見出し");
+            assert!(this.commit());
+            this.anchor = Some(Pos::parse("A1").unwrap());
+            this.cursor = Pos::parse("C1").unwrap();
+            this.merge_selection();
+            let f = &this.sheet().get(Pos::parse("A1").unwrap()).unwrap().fmt;
+            assert_eq!(f.align, sheet::model::HAlign::Center, "横が中央にならない");
+            assert_eq!(f.valign, sheet::model::VAlign::Middle, "縦が中央にならない");
+            assert_eq!(this.sheet().merges.len(), 1, "結合が積まれていない");
+        });
+    }
+
+    #[gpui::test]
     fn セル内改行の確定で折り返しが立つ(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, _cx| {
