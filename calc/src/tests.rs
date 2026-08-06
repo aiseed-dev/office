@@ -1667,6 +1667,16 @@ mod pivot_e2e_tests {
                 body.iter().any(|v| v == "150"),
                 "筆記具の合計 150 が出ない: {body:?}"
             );
+            // 総計は既定で入り(本家と同じ)、見出しには本家風の帯が掛かる
+            let all: Vec<String> = (0..d.size.0)
+                .flat_map(|r| (0..d.size.1).map(move |c| (r, c)))
+                .map(|(r, c)| val(Pos::new(d.dest.row + r, d.dest.col + c)))
+                .collect();
+            assert!(all.iter().any(|v| v == "総計"), "総計が無い: {all:?}");
+            assert!(all.iter().any(|v| v == "350"), "総計の値が無い: {all:?}");
+            let head = this.book.sheets[0].get(d.dest).unwrap().fmt.clone();
+            assert_eq!(head.fill.as_deref(), Some("4472C4"), "見出しの帯が無い");
+            assert!(head.bold);
             // 置いた直後にカーソルが集計へ移り、ピボットのタブが開いている
             assert_eq!(this.cursor, d.dest, "カーソルが集計へ移らない");
             let ti = ribbon::calc_tabs()

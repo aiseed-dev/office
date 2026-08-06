@@ -566,7 +566,7 @@ impl Calc {
             cols_sel: pend.cols_sel,
             value,
             agg: agg.to_string(),
-            totals: false,
+            totals: true, // 本家と同じく総計は既定で入れる(釦で外せる)
             subtotals: false,
             blank_rows: false,
             compact: false,
@@ -591,23 +591,50 @@ impl Calc {
 
     /// 集計の面をセルに書く。種別で見た目を付ける(h=見出しの帯、
     /// s=小計 t=総計は太字、t は上罫線も)。
-    pub(crate) fn place_pivot_grid(&mut self, si: usize, at: Pos, grid: &[Vec<String>], kinds: &[char]) {
+    /// tot_col = 右端が総計の列(装いを効かせる)。本家のピボットの見た目
+    /// (濃い見出し帯・太字の総計)に寄せる — 出力そのものがピボットだと分かる
+    pub(crate) fn place_pivot_grid(
+        &mut self,
+        si: usize,
+        at: Pos,
+        grid: &[Vec<String>],
+        kinds: &[char],
+        tot_col: bool,
+    ) {
         paste_values_text(&mut self.book.sheets[si], at, grid);
         let w = grid.iter().map(|r| r.len()).max().unwrap_or(1) as u32;
         for (i, k) in kinds.iter().enumerate() {
-            if !matches!(k, 'h' | 's' | 't') {
-                continue;
-            }
+            let last = kinds.len() - 1;
             for c in 0..w {
                 let p = Pos::new(at.row + i as u32, at.col + c);
                 let mut cell = self.book.sheets[si].get(p).cloned().unwrap_or_default();
-                cell.fmt.bold = true;
-                if *k == 'h' {
-                    cell.fmt.fill = Some("D5E8DC".into());
+                match k {
+                    'h' => {
+                        // 見出しの帯(本家の既定の青)
+                        cell.fmt.bold = true;
+                        cell.fmt.fill = Some("4472C4".into());
+                        cell.fmt.color = Some("FFFFFF".into());
+                    }
+                    's' => {
+                        cell.fmt.bold = true;
+                        cell.fmt.fill = Some("D9E1F2".into());
+                    }
+                    't' => {
+                        cell.fmt.bold = true;
+                        cell.fmt.borders.top = true;
+                    }
+                    _ => {}
                 }
-                if *k == 't' {
-                    cell.fmt.borders.top = true;
+                // 総計の列(右端)も太字+仕切り線
+                if tot_col && c == w - 1 && *k != 'h' {
+                    cell.fmt.bold = true;
+                    cell.fmt.borders.left = true;
                 }
+                // 塊の外周に薄い線(印刷でも塊が分かる)
+                if i == 0 { cell.fmt.borders.top = true; }
+                if i == last { cell.fmt.borders.bottom = true; }
+                if c == 0 { cell.fmt.borders.left = true; }
+                if c == w - 1 { cell.fmt.borders.right = true; }
                 self.book.sheets[si].set(p, cell);
             }
         }
@@ -707,7 +734,8 @@ impl Calc {
                                     def.dest = Pos::new(a.row, dc);
                                     def.size = (h, w);
                                     let at = def.dest;
-                                    this.place_pivot_grid(si, at, &grid, &kinds);
+                                    let tot_col = def.totals && !def.cols_sel.is_empty();
+                                    this.place_pivot_grid(si, at, &grid, &kinds, tot_col);
                                     recalc_book(&mut this.book, si);
                                     let (value, agg) = (def.value.clone(), def.agg.clone());
                                     this.book.pivots.push(def);
@@ -765,7 +793,10 @@ impl Calc {
                                     }
                                     def.dest = dest;
                                     def.size = (h, w);
-                                    this.place_pivot_grid(si, dest, &grid, &kinds);
+                                    // 装いは**新しい指図**(def)に合わせる — old だと
+                                    // 総計を入切した直後の更新で右端の太字がずれる
+                                    let tot_col = def.totals && !def.cols_sel.is_empty();
+                                    this.place_pivot_grid(si, dest, &grid, &kinds, tot_col);
                                     recalc_book(&mut this.book, si);
                                     this.book.pivots[pi] = def;
                                     this.dirty = true;
