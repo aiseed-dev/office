@@ -903,6 +903,8 @@ struct Writer {
     sd_naming: bool,
     /// AI の板が「頼む」でなく「マクロ台本」を聞いている
     ai_macro: bool,
+    /// 終了確認の板(未保存の変更があるときに出る。窓の中の中央)
+    quit_ask: bool,
     /// ルビの板(選んだ字に読みを振る)
     rb_open: bool,
     rb_ed: Editor,
@@ -1181,6 +1183,7 @@ impl Writer {
             sd_kind: kumihan::SdtKind::Text,
             sd_naming: false,
             ai_macro: false,
+            quit_ask: false,
             rb_open: false,
             rb_ed: Editor::new(""),
             rb_range: 0..0,
@@ -5203,6 +5206,12 @@ impl Writer {
             cx.notify();
             return;
         }
+        if self.quit_ask {
+            self.quit_ask = false;
+            self.status = ui::t!("終了をやめました").into();
+            cx.notify();
+            return;
+        }
         if self.rb_open || self.sd_open || self.ai_open {
             self.rb_open = false;
             self.sd_open = false;
@@ -5312,6 +5321,10 @@ impl Writer {
             self.find_next();
         } else if self.bm_open {
             self.bm_add();
+        } else if self.quit_ask {
+            // Enter = 保存して終了(いちばん安全な既定)
+            self.quit_ask = false;
+            self.save(true, cx);
         } else if self.chat_open {
             self.chat_send();
         } else if self.url_open {
@@ -5419,30 +5432,10 @@ impl Writer {
             cx.quit();
             return;
         }
-        let ask = cx.background_executor().spawn(async move {
-            rfd::MessageDialog::new()
-                .set_level(rfd::MessageLevel::Warning)
-                .set_title("writer")
-                .set_description("保存していない変更があります。保存して終了しますか?")
-                .set_buttons(rfd::MessageButtons::YesNoCancel)
-                .show()
-        });
-        cx.spawn(async move |this, cx| {
-            let r = ask.await;
-            let _ = this.update(cx, |this, cx| {
-                match r {
-                    // 保存先が未定なら別の糸で選ばせ、済んだときだけ終了する
-                    rfd::MessageDialogResult::Yes => this.save(true, cx),
-                    rfd::MessageDialogResult::No => {
-                        this.release_lock();
-                        cx.quit();
-                    }
-                    _ => this.status = ui::t!("終了をやめました").into(),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+        // 確認は**窓の中の板**で出す。rfd の OS ダイアログは親窓を持てず
+        // **スクリーンの中央**に出て、窓から離れすぎる(発注者 2026-08-06)
+        self.quit_ask = true;
+        cx.notify();
     }
 
     fn do_quit(&mut self, _: &ui::Quit, _: &mut Window, cx: &mut Context<Self>) {
@@ -8212,6 +8205,56 @@ impl Render for Writer {
                     .children(style_panel)
                     .children(symbol_panel)
                     .children(proof_panel)
+                    // 終了確認の板(窓の中の中央。rfd はスクリーン中央に出て遠い)
+                    .children(self.quit_ask.then(|| {
+                        let btn = |id: &'static str, label: String, primary: bool| {
+                            div().id(id).px_3().py_1().rounded_sm().text_size(px(12.5))
+                                .border_1()
+                                .border_color(if primary { rgb(0x165E83) } else { rgb(0xC6CDD3) })
+                                .bg(if primary { rgb(0x165E83) } else { rgb(0xFFFFFF) })
+                                .text_color(if primary { rgb(0xFFFFFF) } else { rgb(0x1B1B1B) })
+                                .cursor_pointer()
+                                .child(SharedString::from(label))
+                        };
+                        div().absolute().inset_0().flex().items_center().justify_center()
+                            .child(div().w(px(420.0)).p_3().rounded_md().bg(rgb(0xF7F9FA))
+                                .border_1().border_color(rgb(0x165E83)).shadow_lg()
+                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .flex().flex_col().gap_2()
+                                .child(div().text_size(px(13.0))
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(rgb(0x165E83))
+                                    .child(ui::t!("保存していない変更があります")))
+                                .child(div().text_size(px(12.0))
+                                    .child(ui::t!(
+                                        "保存して終了しますか?(Enter = 保存して終了 / Esc = やめる)")))
+                                .child(div().flex().flex_row().gap_2().justify_center()
+                                    .child(btn("q-save", ui::t!("保存して終了").to_string(), true)
+                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                                            |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.quit_ask = false;
+                                                this.save(true, cx);
+                                                cx.notify();
+                                            })))
+                                    .child(btn("q-drop", ui::t!("保存せず終了").to_string(), false)
+                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                                            |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.release_lock();
+                                                cx.quit();
+                                            })))
+                                    .child(btn("q-cancel", ui::t!("キャンセル").to_string(), false)
+                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                                            |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.quit_ask = false;
+                                                this.status = ui::t!("終了をやめました").into();
+                                                cx.notify();
+                                            })))))
+                    }))
                     .child(InputSink { view: me })
                     .children(menu)
             })

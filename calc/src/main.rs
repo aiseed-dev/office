@@ -698,6 +698,8 @@ struct Calc {
     /// 式の直入力中のセル掴み(起点, 入れた参照の文字の範囲)。
     /// クリックで参照がカーソルに入り、ドラッグで範囲(A1:C9)に伸びる
     ref_pick: Option<(Pos, std::ops::Range<usize>)>,
+    /// 終了確認の板(未保存の変更があるときに出る。窓の中の中央)
+    quit_ask: bool,
     /// 右クリックのメニュー(出ている場所。格子領域の px)
     menu_at: Option<(f32, f32)>,
     /// 開いている子メニュー(挿入▸ など)
@@ -876,6 +878,7 @@ impl Calc {
             fn_dlg: None,
             fn_args: None,
             ref_pick: None,
+            quit_ask: false,
             menu_at: None,
             menu_sub: None,
             pick: None,
@@ -2397,6 +2400,12 @@ impl Calc {
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
+        if self.quit_ask {
+            self.quit_ask = false;
+            self.status = ui::t!("終了をやめました").into();
+            cx.notify();
+            return;
+        }
         // 名前ボックス・関数の小窓は最優先で閉じる
         if self.name_edit.take().is_some()
             || self.fn_args.take().is_some()
@@ -4263,6 +4272,13 @@ impl Calc {
         cx.notify();
     }
     fn a_enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
+        if self.quit_ask {
+            // Enter = 保存して終了(いちばん安全な既定)
+            self.quit_ask = false;
+            self.save(true, cx);
+            cx.notify();
+            return;
+        }
         if self.name_edit.is_some() {
             self.commit_name_box();
             cx.notify();
@@ -4395,30 +4411,10 @@ impl Calc {
             cx.quit();
             return;
         }
-        let ask = cx.background_executor().spawn(async move {
-            rfd::MessageDialog::new()
-                .set_level(rfd::MessageLevel::Warning)
-                .set_title("calc")
-                .set_description("保存していない変更があります。保存して終了しますか?")
-                .set_buttons(rfd::MessageButtons::YesNoCancel)
-                .show()
-        });
-        cx.spawn(async move |this, cx| {
-            let r = ask.await;
-            let _ = this.update(cx, |this, cx| {
-                match r {
-                    // 保存先が未定なら別の糸で選ばせ、済んだときだけ終了する
-                    rfd::MessageDialogResult::Yes => this.save(true, cx),
-                    rfd::MessageDialogResult::No => {
-                        this.release_lock();
-                        cx.quit();
-                    }
-                    _ => this.status = ui::t!("終了をやめました").into(),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+        // 確認は**窓の中の板**で出す。rfd の OS ダイアログは親窓を持てず
+        // **スクリーンの中央**に出て、窓から離れすぎる(発注者 2026-08-06)
+        self.quit_ask = true;
+        cx.notify();
     }
 
     fn a_quit(&mut self, _: &ui::Quit, _: &mut Window, cx: &mut Context<Self>) {
@@ -10280,6 +10276,50 @@ impl Render for Calc {
                             })))))
         });
 
+        // ---- 終了確認の板(窓の中の中央。rfd はスクリーン中央に出て遠い) ----
+        let quit_panel = self.quit_ask.then(|| {
+            let btn = |id: &'static str, label: String, primary: bool| {
+                div().id(id).px_3().py_1().rounded_sm().text_size(px(12.5))
+                    .border_1()
+                    .border_color(if primary { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                    .bg(if primary { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
+                    .text_color(if primary { rgb(0xFFFFFF) } else { rgb(0x1B1B1B) })
+                    .cursor_pointer()
+                    .child(SharedString::from(label))
+            };
+            div().absolute().inset_0().flex().items_center().justify_center()
+                .child(div().w(px(420.0)).p_3().rounded_md().bg(rgb(0xF7F9FA))
+                    .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .flex().flex_col().gap_2()
+                    .child(div().text_size(px(13.0)).font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(0x1B6E3C))
+                        .child(ui::t!("保存していない変更があります")))
+                    .child(div().text_size(px(12.0))
+                        .child(ui::t!("保存して終了しますか?(Enter = 保存して終了 / Esc = やめる)")))
+                    .child(div().flex().flex_row().gap_2().justify_center()
+                        .child(btn("q-save", ui::t!("保存して終了").to_string(), true)
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.quit_ask = false;
+                                this.save(true, cx);
+                                cx.notify();
+                            })))
+                        .child(btn("q-drop", ui::t!("保存せず終了").to_string(), false)
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.release_lock();
+                                cx.quit();
+                            })))
+                        .child(btn("q-cancel", ui::t!("キャンセル").to_string(), false)
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.quit_ask = false;
+                                this.status = ui::t!("終了をやめました").into();
+                                cx.notify();
+                            })))))
+        });
+
         // ---- コピーした範囲の破線(蟻の行進の静止版) ----
         // セルの罫線と混ざらないよう、重ね描きの1枚で囲む。マウスは受けない
         let ants = self.clip_range.and_then(|(si, a, b)| {
@@ -11313,6 +11353,7 @@ impl Render for Calc {
                    .children(solver_panel)
                    .children(fn_panel)
                    .children(fn_args_panel)
+                   .children(quit_panel)
                    .children(slicer_panel))
             .children(watch_bar)
             .child(sheets_bar)
