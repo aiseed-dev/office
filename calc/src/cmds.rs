@@ -58,10 +58,23 @@ impl Calc {
         "prot-doc", "prot-encrypt", "prot-sign", "ai-where",
     ];
 
+    /// ピボットの上では締める操作(本家 Toolbar.js の editPivot ロックと同じ顔ぶれ:
+    /// オートフィルタ・結合・ハイパーリンク・テーブル・入力規則・重複削除)。
+    /// ピボットは polars が置いた「その時の値」— この上で表を組み替えると壊れる
+    pub(crate) const PIVOT_LOCKED: &'static [&'static str] = &[
+        "setfilter", "merge", "inshyperlink", "instable", "data-validation", "rem-duplicates",
+    ];
+
     pub(crate) fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.sheet().protected && !Self::PROTECTED_OK.contains(&id) {
             self.status =
                 ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
+            cx.notify();
+            return;
+        }
+        if Self::PIVOT_LOCKED.contains(&id) && self.pivot_at(self.cursor).is_some() {
+            self.status =
+                ui::t!("ピボットの上ではできません(カーソルをピボットの外に置いてから)").into();
             cx.notify();
             return;
         }

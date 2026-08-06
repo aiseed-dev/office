@@ -926,6 +926,42 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn ピボットの上では表を壊す操作を締める(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            let name = this.sheet().name.clone();
+            this.book.pivots.push(sheet::model::PivotDef {
+                sheet: name,
+                src: (Pos::parse("A1").unwrap(), Pos::parse("B4").unwrap()),
+                rows_sel: vec!["品名".into()],
+                cols_sel: vec![],
+                value: "金額".into(),
+                agg: "合計".into(),
+                totals: true,
+                subtotals: false,
+                blank_rows: false,
+                compact: true,
+                dest: Pos::parse("D1").unwrap(),
+                size: (3, 2), // D1:E3 に置いてある体
+            });
+            // ピボットの上(D2)では結合も入力規則も断られる
+            this.cursor = Pos::parse("D2").unwrap();
+            this.anchor = Some(Pos::parse("E3").unwrap());
+            this.run_cmd("merge", cx);
+            assert!(this.sheet().merges.is_empty(), "ピボットの上で結合できてしまう");
+            assert!(this.status.contains("ピボット"), "{}", this.status);
+            this.run_cmd("data-validation", cx);
+            assert!(this.dv_dlg.is_none(), "ピボットの上で入力規則の板が開いた");
+            // 外(A1)なら普通に通る
+            this.anchor = None;
+            this.cursor = Pos::parse("A1").unwrap();
+            this.run_cmd("data-validation", cx);
+            assert!(this.dv_dlg.is_some(), "ピボットの外まで締めている");
+            this.dv_dlg = None;
+        });
+    }
+
+    #[gpui::test]
     fn 画面の文字の大きさは段階で動き両端で止まる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

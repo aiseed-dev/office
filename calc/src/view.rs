@@ -463,7 +463,10 @@ impl Render for Calc {
                 }
                 cx.notify()
             });
-            let fg = if cmd.ready { th_fg } else { th_gray };
+            // ピボットの上で締める釦は灰色に(本家の editPivot ロック。
+            // 押しても run_cmd 側で断るが、見た目でも先に伝える)
+            let locked = on_pivot && Calc::PIVOT_LOCKED.contains(&cmd.id);
+            let fg = if cmd.ready && !locked { th_fg } else { th_gray };
             if let Some(short) = big {
                 // 名札つきの大釦(絵の下に短い名前 — 本家の言い方)
                 let mut b = div().id(SharedString::from(format!("h-{icon}")))
