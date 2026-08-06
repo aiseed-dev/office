@@ -731,4 +731,5 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivote 3/4 — un encabezado para los valores"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivote 4/4 — cómo agregar «{}»"),
     ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Sobre una tabla dinámica — use la pestaña «Tabla dinámica» (actualizar, totales, subtotales, diseño; las operaciones que rompen la tabla quedan bloqueadas)"),
+    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtro del pivote — «{}» (☑ visible / ☐ oculto)"),
 ];

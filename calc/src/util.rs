@@ -562,8 +562,14 @@ pub(crate) fn pivot_spec_json(headers: &[String], rows: &[Vec<String>], d: &shee
     let strs = |xs: &[String]| {
         xs.iter().map(|x| format!("\"{}\"", esc(x))).collect::<Vec<_>>().join(",")
     };
+    let hides = d
+        .hide
+        .iter()
+        .map(|(f, vs)| format!("[\"{}\",[{}]]", esc(f), strs(vs)))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{\"headers\":[{}],\"rows\":[{}],\"index\":[{}],\"columns\":[{}],\"value\":\"{}\",\"agg\":\"{}\",\"totals\":{},\"subtotals\":{},\"blank_rows\":{},\"compact\":{}}}",
+        "{{\"headers\":[{}],\"rows\":[{}],\"index\":[{}],\"columns\":[{}],\"value\":\"{}\",\"agg\":\"{}\",\"totals\":{},\"subtotals\":{},\"blank_rows\":{},\"compact\":{},\"hide\":[{hides}]}}",
         strs(headers),
         rows.iter().map(|r| format!("[{}]", strs(r))).collect::<Vec<_>>().join(","),
         strs(&d.rows_sel),

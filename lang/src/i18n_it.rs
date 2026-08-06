@@ -731,4 +731,5 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — un'intestazione per i valori"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — come aggregare «{}»"),
     ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Su una tabella pivot — usa la scheda «Tabella pivot» (aggiorna, totali, subtotali, layout; le operazioni che rompono la tabella sono bloccate)"),
+    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtro pivot — «{}» (☑ visibile / ☐ nascosto)"),
 ];

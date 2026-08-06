@@ -2021,7 +2021,7 @@ impl Render for Calc {
         let pivot_frames: Vec<gpui::AnyElement> = {
             let name = &self.book.sheets[self.active].name;
             let mut out = Vec::new();
-            for d in self.book.pivots.iter() {
+            for (pi, d) in self.book.pivots.iter().enumerate() {
                 if d.sheet != *name || d.size.0 == 0 {
                     continue;
                 }
@@ -2031,14 +2031,69 @@ impl Render for Calc {
                 let inside = on_pivot
                     && self.cursor.row >= a.row && self.cursor.row <= b.row
                     && self.cursor.col >= a.col && self.cursor.col <= b.col;
+                // 札は出さない(セルの中身に被って邪魔 — 発注者 2026-08-07)。
+                // 濃い枠+紫のタブ+状態行の案内で足りる
                 let mut f = div().absolute()
                     .left(px(x0)).top(px(y0))
                     .w(px((x1 - x0).max(2.0))).h(px((y1 - y0).max(2.0)))
                     .border_color(rgb(0x8A63C9)).rounded_sm();
-                // 札は出さない(セルの中身に被って邪魔 — 発注者 2026-08-07)。
-                // 濃い枠+紫のタブ+状態行の案内で足りる
                 f = if inside { f.border_2() } else { f.border_1() };
                 out.push(f.into_any_element());
+                // 見出しの ▼(ピボット内の絞り込み)。行の見出しはその欄、
+                // 値の列は「列に広げた見出し」を絞る。総計の列には出さない
+                let tot_col = d.totals && !d.cols_sel.is_empty();
+                for c in 0..d.size.1 {
+                    let field = if (c as usize) < d.rows_sel.len() {
+                        Some(d.rows_sel[c as usize].clone())
+                    } else if !d.cols_sel.is_empty() && !(tot_col && c == d.size.1 - 1) {
+                        Some(d.cols_sel[0].clone())
+                    } else {
+                        None
+                    };
+                    let Some(field) = field else { continue };
+                    let hp = Pos::new(a.row, a.col + c);
+                    let Some((hx0, hy0, hx1, hy1)) = self.range_px(hp, hp) else { continue };
+                    if hx1 - hx0 < 30.0 {
+                        continue; // 細すぎる列には出さない(文字に被る)
+                    }
+                    let hidden: std::collections::BTreeSet<String> = self
+                        .book
+                        .pivots[pi]
+                        .hide
+                        .iter()
+                        .find(|(f, _)| *f == field)
+                        .map(|(_, vs)| vs.iter().cloned().collect())
+                        .unwrap_or_default();
+                    let active = !hidden.is_empty();
+                    out.push(
+                        div().id(SharedString::from(format!("pflt{pi}-{c}")))
+                            .absolute()
+                            .left(px(hx1 - 15.0))
+                            .top(px(hy0 + ((hy1 - hy0) - 13.0).max(0.0) / 2.0))
+                            .w(px(13.0)).h(px(13.0)).rounded_sm()
+                            .flex().items_center().justify_center()
+                            .bg(if active { rgb(0xFFFFFF) } else { rgb(0x5C86D6) })
+                            .text_color(if active { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
+                            .text_size(px(9.0))
+                            .cursor_pointer()
+                            .child("▼")
+                            .on_mouse_down(gpui::MouseButton::Left, {
+                                let field = field.clone();
+                                let hidden = hidden.clone();
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.anchor = None;
+                                    this.cursor = hp;
+                                    this.sync_input();
+                                    this.pivot_flt =
+                                        Some((pi, field.clone(), hidden.clone()));
+                                    this.pivot_filter_pick();
+                                    cx.notify();
+                                })
+                            })
+                            .into_any_element(),
+                    );
+                }
             }
             out
         };

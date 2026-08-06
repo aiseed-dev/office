@@ -864,6 +864,7 @@ mod pivot_tests {
             compact: false,
             dest: Pos::new(0, 0),
             size: (0, 0),
+            hide: Vec::new(),
         }
     }
 
@@ -1103,6 +1104,7 @@ mod recalc_tests {
                 compact: true,
                 dest: Pos::parse("D1").unwrap(),
                 size: (3, 2), // D1:E3 に置いてある体
+                hide: Vec::new(),
             });
             // ピボットに乗ると状態行が「タブで操作」と案内する
             this.cursor = Pos::parse("D2").unwrap();
@@ -1705,11 +1707,36 @@ mod pivot_e2e_tests {
         });
         cx.executor().advance_clock(std::time::Duration::from_secs(30));
         cx.run_until_parked();
-        c.update(cx, |this, _| {
+        c.update(cx, |this, cx| {
             assert_eq!(this.book.pivots.len(), 1, "組み替えで増殖した: {}", this.status);
             let d = &this.book.pivots[0];
             assert_eq!(d.rows_sel, vec!["区分".to_string(), "月".to_string()], "組み替えが効かない");
             assert!(d.totals, "総計の性質が引き継がれない");
+            // 絞り込み(▼ 相当): 紙製品を隠して置き直す
+            this.pivot_flt = Some((
+                0,
+                "区分".into(),
+                std::iter::once("紙製品".to_string()).collect(),
+            ));
+            this.pick_kind = "pivot-filter-pick";
+            this.apply_pick("→ 決定(絞り込む)", cx);
+        });
+        cx.executor().advance_clock(std::time::Duration::from_secs(30));
+        cx.run_until_parked();
+        c.update(cx, |this, _| {
+            let d = this.book.pivots[0].clone();
+            assert_eq!(d.hide, vec![("区分".to_string(), vec!["紙製品".to_string()])]);
+            let all: Vec<String> = (0..d.size.0)
+                .flat_map(|r| (0..d.size.1).map(move |c| (r, c)))
+                .map(|(r, c)| {
+                    this.book.sheets[0]
+                        .get(Pos::new(d.dest.row + r, d.dest.col + c))
+                        .map(|x| x.value.display())
+                        .unwrap_or_default()
+                })
+                .collect();
+            assert!(!all.iter().any(|v| v == "紙製品"), "隠したのに出ている: {all:?}");
+            assert!(all.iter().any(|v| v == "筆記具"), "残るはずの値が消えた: {all:?}");
         });
     }
 }

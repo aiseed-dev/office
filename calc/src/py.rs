@@ -335,6 +335,10 @@ spec = json.load(open(sys.argv[1], encoding="utf-8"))
 headers = spec["headers"]
 data = {h: [row[i] for row in spec["rows"]] for i, h in enumerate(headers)}
 df = pl.DataFrame(data)
+# 絞り込み(見出しの ▼)。隠す値を先に落としてから集計する
+for _f, _vs in spec.get("hide", []):
+    if _f in df.columns and _vs:
+        df = df.filter(~pl.col(_f).is_in(_vs))
 val, agg = spec["value"], spec["agg"]
 if agg != "個数":
     # 数にならないものは null(集計から外れる)
@@ -574,6 +578,7 @@ impl Calc {
             compact: keep.as_ref().map(|d| d.compact).unwrap_or(false),
             dest: keep.as_ref().map(|d| d.dest).unwrap_or(pend.a), // 仮 — 置くときに決める
             size: keep.as_ref().map(|d| d.size).unwrap_or((0, 0)),
+            hide: keep.as_ref().map(|d| d.hide.clone()).unwrap_or_default(),
         };
         self.spawn_pivot(def, pend.replace, cx);
     }

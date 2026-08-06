@@ -66,6 +66,8 @@ struct Calc {
     /// 一覧(pick)の題 — いま何を選んでいるか(ピボットの段など)。
     /// 一覧の上に太字で出す。閉じるときに消す
     pick_note: Option<SharedString>,
+    /// ピボットの絞り込みの聞き取り中: (指図の番号, 見出し, 隠す値の作業用)
+    pivot_flt: Option<(usize, String, std::collections::BTreeSet<String>)>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
@@ -300,6 +302,7 @@ impl Calc {
             sub_pend: None,
             sort_pend: None,
             pick_note: None,
+            pivot_flt: None,
             solver: None,
             sa_cat: 0,
             slicer: None,

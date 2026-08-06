@@ -1300,24 +1300,37 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                                     attr(&e, "h").and_then(|v| v.parse().ok()).unwrap_or(0),
                                     attr(&e, "w").and_then(|v| v.parse().ok()).unwrap_or(0),
                                 ),
+                                hide: Vec::new(),
                             });
                         }
                     }
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"r" => field = 1,
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"c" => field = 2,
+                    // 絞り込み(隠す値)。<f name="見出し"><v>値</v>…</f>
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"f" => {
+                        if let Some(d) = cur.as_mut() {
+                            d.hide.push((attr_un(&e, "name").unwrap_or_default(), Vec::new()));
+                        }
+                    }
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"v" => field = 3,
                     Ok(Event::Text(t)) if field > 0 => {
                         if let Some(d) = cur.as_mut() {
                             let v = t.unescape().unwrap_or_default().to_string();
-                            if field == 1 {
-                                d.rows_sel.push(v);
-                            } else {
-                                d.cols_sel.push(v);
+                            match field {
+                                1 => d.rows_sel.push(v),
+                                2 => d.cols_sel.push(v),
+                                _ => {
+                                    if let Some((_, vs)) = d.hide.last_mut() {
+                                        vs.push(v);
+                                    }
+                                }
                             }
                         }
                     }
                     Ok(Event::End(e))
                         if local(e.name().as_ref()) == b"r"
-                            || local(e.name().as_ref()) == b"c" =>
+                            || local(e.name().as_ref()) == b"c"
+                            || local(e.name().as_ref()) == b"v" =>
                     {
                         field = 0;
                     }
@@ -2225,6 +2238,13 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             }
             for c in &d.cols_sel {
                 px.push_str(&format!("<c>{}</c>", esc(c)));
+            }
+            for (f, vs) in &d.hide {
+                px.push_str(&format!("<f name=\"{}\">", esc(f)));
+                for v in vs {
+                    px.push_str(&format!("<v>{}</v>", esc(v)));
+                }
+                px.push_str("</f>");
             }
             px.push_str("</pivot>");
         }
@@ -3258,6 +3278,36 @@ mod validation_roundtrip_tests {
     }
 
     #[test]
+    fn ピボットの絞り込みが往復する() {
+        let mut b = Book::new();
+        b.pivots.push(crate::model::PivotDef {
+            sheet: "Sheet1".into(),
+            src: (Pos::parse("A1").unwrap(), Pos::parse("C4").unwrap()),
+            rows_sel: vec!["区分".into()],
+            cols_sel: vec!["月".into()],
+            value: "金額".into(),
+            agg: "合計".into(),
+            totals: true,
+            subtotals: false,
+            blank_rows: false,
+            compact: false,
+            dest: Pos::parse("E1").unwrap(),
+            size: (3, 3),
+            hide: vec![("区分".into(), vec!["紙製品".into(), "その他".into()])],
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert_eq!(back.pivots.len(), 1);
+        assert_eq!(
+            back.pivots[0].hide,
+            vec![("区分".to_string(), vec!["紙製品".to_string(), "その他".to_string()])],
+            "絞り込みが往復しない"
+        );
+    }
+
+    #[test]
     fn 手動計算が往復する() {
         // 手動(calcPr calcMode="manual")を落とすと、開き直しで勝手に自動へ戻る
         let mut b = Book::new();
@@ -3969,6 +4019,7 @@ mod script_roundtrip_tests {
             compact: false,
             dest: Pos::parse("E1").unwrap(),
             size: (4, 3),
+            hide: Vec::new(),
         });
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");

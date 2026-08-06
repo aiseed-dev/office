@@ -731,4 +731,5 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — satu tajuk untuk nilai"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — cara mengagregasi «{}»"),
     ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Di atas pivot table — gunakan tab «Pivot Table» (perbarui, total, subtotal, tata letak; operasi yang merusak tabel dikunci)"),
+    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filter pivot — «{}» (☑ tampil / ☐ sembunyi)"),
 ];

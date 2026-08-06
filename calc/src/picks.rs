@@ -185,6 +185,38 @@ impl Calc {
             }
             // ピボットの聞き取り(クリックで入切 → 決定で次へ)。
             // 行 → 列 → 値 → 集計の4段。Esc でいつでもやめられる
+            "pivot-filter-pick" => {
+                if v == "→ すべて表示に戻す" {
+                    if let Some((pi, field, _)) = self.pivot_flt.take() {
+                        if let Some(d) = self.book.pivots.get_mut(pi) {
+                            d.hide.retain(|(f, _)| *f != field);
+                            let nd = d.clone();
+                            self.spawn_pivot(nd, Some(pi), cx);
+                        }
+                    }
+                    return;
+                }
+                if v == "→ 決定(絞り込む)" {
+                    let Some((pi, field, hidden)) = self.pivot_flt.take() else { return };
+                    if let Some(d) = self.book.pivots.get_mut(pi) {
+                        d.hide.retain(|(f, _)| *f != field);
+                        if !hidden.is_empty() {
+                            d.hide.push((field, hidden.into_iter().collect()));
+                        }
+                        let nd = d.clone();
+                        self.spawn_pivot(nd, Some(pi), cx);
+                    }
+                    return;
+                }
+                if let Some((_, _, hidden)) = &mut self.pivot_flt {
+                    let v = v.to_string();
+                    if !hidden.remove(&v) {
+                        hidden.insert(v);
+                    }
+                }
+                self.pivot_filter_pick();
+                return;
+            }
             "pivot-rows-pick" => {
                 if v == "→ 決定(列の選択へ)" {
                     let ok = self
@@ -901,6 +933,56 @@ impl Calc {
         cx.notify();
     }
 
+    /// ピボットの絞り込みの一覧(見出しの ▼)。☑ = 表示、☐ = 隠す。
+    /// 組み直しては出し直す(クリックのたび)
+    pub(crate) fn pivot_filter_pick(&mut self) {
+        let Some((pi, field, hidden)) = self.pivot_flt.clone() else { return };
+        let Some(d) = self.book.pivots.get(pi) else { return };
+        // 値の候補は元の表から(見出しの列の値。重複は畳む。上限は自衛)
+        let (a, b) = d.src;
+        let Some(fc) = (a.col..=b.col).position(|c| {
+            self.sheet()
+                .get(Pos::new(a.row, c))
+                .map(|x| x.value.display() == field)
+                .unwrap_or(false)
+        }) else { return };
+        let fc = a.col + fc as u32;
+        let mut vals: Vec<String> = Vec::new();
+        for r in a.row + 1..=b.row {
+            let v = self
+                .sheet()
+                .get(Pos::new(r, fc))
+                .map(|x| x.value.display())
+                .unwrap_or_default();
+            if !v.is_empty() && !vals.contains(&v) {
+                vals.push(v);
+            }
+            if vals.len() >= 1000 {
+                break;
+            }
+        }
+        let mut items: Vec<String> = vals
+            .iter()
+            .map(|v| {
+                if hidden.contains(v) {
+                    format!("☐ {v}")
+                } else {
+                    format!("☑ {v}")
+                }
+            })
+            .collect();
+        items.push("→ 決定(絞り込む)".into());
+        items.push("→ すべて表示に戻す".into());
+        let at = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        self.pick_note =
+            Some(ui::tf!("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", field).into());
+        self.pick_kind = "pivot-filter-pick";
+        self.pick = Some((items, at));
+    }
+
     /// ピボットの聞き取りの一覧を(いまの控えから)組み直して開く。
     /// クリックのたびに呼ばれる — ✓ の付け外しはここで反映される
     pub(crate) fn pivot_pick(&mut self, kind: &'static str) {
@@ -1230,6 +1312,7 @@ impl Calc {
         self.pivot_pend = None; // 聞き取り途中のピボット・小計は Esc でやめる
         self.sub_pend = None;
         self.sort_pend = None; // 並べ替えの「拡張しますか」も
+        self.pivot_flt = None; // ピボットの絞り込みの聞き取りも
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる

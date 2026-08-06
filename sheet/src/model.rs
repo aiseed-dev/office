@@ -770,6 +770,9 @@ pub struct PivotDef {
     pub dest: Pos,
     /// 置いた広さ(行数, 列数)— 更新のとき前の面を消すため
     pub size: (u32, u32),
+    /// 絞り込み: (見出し, 隠す値の列)。空 = 素通し。
+    /// 見出しの ▼ から入切し、更新のたびに polars へ渡す
+    pub hide: Vec<(String, Vec<String>)>,
 }
 
 /// ブックの情報(docProps/core.xml の主な欄)。読んで見せる。
