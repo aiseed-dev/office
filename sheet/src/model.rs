@@ -297,6 +297,10 @@ pub struct Sheet {
     /// 隠しシート(xlsx の workbook.xml の sheet state="hidden")。
     /// 隠しても中身も式も生きている — 見えなくなるだけ
     pub hidden: bool,
+    /// 耳(タブ)の色(xlsx の sheetPr > tabColor の rgb="FFRRGGBB")。
+    /// 読んだ値をそのまま持ち、保存でそのまま返す。theme 指定の色は
+    /// 拾えない(そのときは色なし)
+    pub tab_color: Option<String>,
     /// シートの保護(xlsx の sheetProtection)。**パスワードは掛けない** —
     /// 掛けた振りもしない(writer の保護と同じ正直な作法)。
     /// 効き目はアプリが守る: 保護中は編集を堰き止める

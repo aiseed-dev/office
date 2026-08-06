@@ -672,6 +672,10 @@ fn parse_sheet(xml: &str, shared: &[String], rubies: &[Option<String>],
                 b"sheetView" => {
                     sh.rtl = matches!(attr(&e, "rightToLeft").as_deref(), Some("1") | Some("true"));
                 }
+                // 耳(タブ)の色。rgb 指定だけ拾う(theme 指定は色に解けない)
+                b"tabColor" => {
+                    sh.tab_color = attr(&e, "rgb");
+                }
                 // シートの保護。sheet="0" と書く道具は保護していない扱い
                 b"sheetProtection" => {
                     sh.protected =
@@ -2222,6 +2226,14 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         ws.push_attribute(("xmlns", NS));
         ws.push_attribute(("xmlns:r", RNS));
         w.write_event(Event::Start(ws)).unwrap();
+        // 耳(タブ)の色。schema では worksheet の先頭(sheetPr)
+        if let Some(c) = &sh.tab_color {
+            w.write_event(Event::Start(BytesStart::new("sheetPr"))).unwrap();
+            let mut tc = BytesStart::new("tabColor");
+            tc.push_attribute(("rgb", c.as_str()));
+            w.write_event(Event::Empty(tc)).unwrap();
+            w.write_event(Event::End(BytesEnd::new("sheetPr"))).unwrap();
+        }
         // 右から左へ並べるシート(日本語の右横書き)。schema では先頭
         if sh.rtl {
             w.write_event(Event::Start(BytesStart::new("sheetViews"))).unwrap();
@@ -3704,6 +3716,22 @@ mod script_roundtrip_tests {
         buf.set_position(0);
         let (back, _) = read(buf).expect("読めない");
         assert!(back.sheets[0].protected, "保護が往復しない");
+    }
+
+    #[test]
+    fn 耳の色が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].tab_color = Some("FFC00000".into());
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert_eq!(
+            back.sheets[0].tab_color.as_deref(),
+            Some("FFC00000"),
+            "耳の色が往復しない"
+        );
     }
 
     #[test]

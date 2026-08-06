@@ -156,6 +156,92 @@ fn unique_sheet_name(book: &Book) -> String {
     }
 }
 
+/// 複製のシート名(Excel の流儀: 「名前 (2)」から空きを探す)
+fn copy_sheet_name(book: &Book, base: &str) -> String {
+    let mut n = 2;
+    loop {
+        let name = format!("{base} ({n})");
+        if !book.sheets.iter().any(|s| s.name == name) {
+            return name;
+        }
+        n += 1;
+    }
+}
+
+/// 式の文字列の外側だけで、古いシート名の参照(`古!` と `'古'!`)を
+/// 新しい名前に書き換える。変えたら Some(新しい式)。
+/// 名前の頭が別の語の続きのとき(例: 「合計!」の中の「計!」)は書き換えない
+fn rename_refs_in(f: &str, old: &str, new: &str) -> Option<String> {
+    let needs_quote =
+        |n: &str| !n.chars().all(|c| c.is_alphanumeric() || c == '_') || n.is_empty();
+    let to = if needs_quote(new) { format!("'{new}'!") } else { format!("{new}!") };
+    let bare = format!("{old}!");
+    let quoted = format!("'{old}'!");
+    let cs: Vec<char> = f.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut changed = false;
+    let mut in_str = false;
+    while i < cs.len() {
+        let c = cs[i];
+        if c == '"' {
+            in_str = !in_str;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if !in_str {
+            let rest: String = cs[i..].iter().collect();
+            let prev_word = i > 0 && (cs[i - 1].is_alphanumeric() || cs[i - 1] == '_');
+            if rest.starts_with(&quoted) {
+                out.push_str(&to);
+                i += quoted.chars().count();
+                changed = true;
+                continue;
+            }
+            if !prev_word && rest.starts_with(&bare) {
+                out.push_str(&to);
+                i += bare.chars().count();
+                changed = true;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    changed.then_some(out)
+}
+
+/// 全シートの式と名前の定義の中のシート参照を、新しい名前へ書き換える。
+/// 書き換えた式の数を返す(黙って直さない — 状態行で件数を言う)
+fn rename_sheet_refs(book: &mut Book, old: &str, new: &str) -> usize {
+    let mut n = 0;
+    for s in book.sheets.iter_mut() {
+        let hits: Vec<(Pos, String)> = s
+            .cells
+            .iter()
+            .filter_map(|(p, c)| {
+                c.formula
+                    .as_ref()
+                    .and_then(|f| rename_refs_in(f, old, new))
+                    .map(|nf| (*p, nf))
+            })
+            .collect();
+        for (p, nf) in hits {
+            if let Some(c) = s.cells.get_mut(&p) {
+                c.formula = Some(nf);
+                n += 1;
+            }
+        }
+        for (_, r) in s.names.iter_mut() {
+            if let Some(nr) = rename_refs_in(r, old, new) {
+                *r = nr;
+            }
+        }
+    }
+    n
+}
+
 /// 選んだ範囲を TSV(タブ区切り・行は改行)にする。
 /// 式は `=` のまま持つ — 表計算どうしの受け渡しの通り相場。
 fn range_tsv(s: &sheet::Sheet, a: Pos, b: Pos) -> String {
@@ -708,6 +794,9 @@ struct Calc {
     pick: Option<(Vec<String>, (f32, f32))>,
     /// pick の中身の意味: "value"=セルに入れる / "font"=書体 / "size"=文字の大きさ
     pick_kind: &'static str,
+    /// 耳(シートのタブ)のメニューが指しているシート(右クリックで開く)。
+    /// 改名・色の2段目の板が閉じるまで持ち越す
+    sheet_menu_at: Option<usize>,
     /// 書式の小窓(セルをフォーマットする)。範囲を選び直しながら使える
     fmt_panel: Option<(f32, f32)>,
     /// 小さな入力の板(種類, 入力欄)。"name"=名前の定義。開いている間は打鍵がここへ
@@ -883,6 +972,7 @@ impl Calc {
             menu_sub: None,
             pick: None,
             pick_kind: "value",
+            sheet_menu_at: None,
             fmt_panel: None,
             prompt: None,
             show_formulas: false,
@@ -1900,6 +1990,13 @@ impl Calc {
                 }
                 self.pick_paths.clear();
             }
+            "sheet-menu" => {
+                self.sheet_menu_action(v);
+                if self.pick.is_some() || self.prompt.is_some() {
+                    return; // 2段目(色・改名・再表示)へ。pick_kind を戻さない
+                }
+            }
+            "tab-color" => self.set_tab_color(v),
             "history" | "plugin" => {
                 let plugin = self.pick_kind == "plugin";
                 let hit = self.pick_paths.iter().find(|(n, _)| n == v).cloned();
@@ -2436,6 +2533,9 @@ impl Calc {
             || self.clip_range.take().is_some()
             || self.shape_sel.take().is_some()
         {
+            // 一覧・板を閉じたら意味づけも戻す(耳のメニューの狙い先も)
+            self.pick_kind = "value";
+            self.sheet_menu_at = None;
             cx.notify();
         } else if self.editing() {
             // 打ちかけを捨てて、セルの保存内容に戻す
@@ -2455,6 +2555,40 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            "sheet-rename" => {
+                let Some(t) = self.sheet_menu_at.take() else { return };
+                if t >= self.book.sheets.len() {
+                    return;
+                }
+                let old = self.book.sheets[t].name.clone();
+                if text.is_empty() || text == old {
+                    self.status = ui::t!("名前は変えませんでした").into();
+                    return;
+                }
+                // xlsx のシート名の決まり: 31字まで・: \\ / ? * [ ] は使えない
+                if text.chars().count() > 31
+                    || text.contains([':', '\\', '/', '?', '*', '[', ']'])
+                {
+                    self.status = ui::tf!("「{}」はシート名にできません(31字まで。: \\ / ? * [ ] は不可)", text)
+                    .into();
+                    return;
+                }
+                if self.book.sheets.iter().enumerate().any(|(i, s)| i != t && s.name == text) {
+                    self.status = ui::tf!("「{}」は既にあります", text).into();
+                    return;
+                }
+                self.checkpoint_book(); // 名前と式の書き換えを1手で戻せる
+                let n = rename_sheet_refs(&mut self.book, &old, &text);
+                self.book.sheets[t].name = text.clone();
+                recalc_book(&mut self.book, t);
+                self.dirty = true;
+                self.status = if n > 0 {
+                    ui::tf!("「{}」を「{}」にしました(式の参照 {} 箇所も追随)", old, text, n)
+                        .into()
+                } else {
+                    ui::tf!("「{}」を「{}」にしました", old, text).into()
+                };
+            }
             "name" => {
                 if text.is_empty() {
                     self.status = ui::t!("名前を付けませんでした").into();
@@ -3152,6 +3286,234 @@ impl Calc {
         self.book.sheets.push(sheet::Sheet::new(&name));
         self.dirty = true;
         self.switch_sheet(self.book.sheets.len() - 1);
+    }
+
+    /// 耳の右クリックメニュー(本家「シートの管理」の並び)。
+    /// 出す場所は耳に近い左下 — 板を遠くに出さない(終了確認と同じ判断)
+    fn open_sheet_menu(&mut self, i: usize) {
+        self.sheet_menu_at = Some(i);
+        self.pick_kind = "sheet-menu";
+        let y = (self.view_h_px - 420.0).max(ROW_H + 16.0);
+        self.pick = Some((
+            ["挿入", "削除", "名前の変更", "コピーを作成", "左へ移動",
+             "右へ移動", "非表示", "再表示", "タブの色"]
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
+            (HEAD_W + 24.0, y),
+        ));
+    }
+
+    /// シートの構成が変わった(挿入・削除・移動・複製)。**表の控えの束は
+    /// シートの番号で結ばれている**ので、番号が振り直されると意味を失う —
+    /// 黙って別のシートへ書き戻すより「元に戻せない」と言う(Excel と同じ)
+    fn sheets_restructured(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.clip_range = None;
+        self.dirty = true;
+    }
+
+    /// 耳のメニューの実行。t = メニューが指しているシート
+    fn sheet_menu_action(&mut self, v: &str) {
+        let Some(t) = self.sheet_menu_at else { return };
+        if t >= self.book.sheets.len() {
+            self.sheet_menu_at = None;
+            return;
+        }
+        self.remember_ui(); // sheet_ui をシート数まで育てておく(挿し外しの前提)
+        match v {
+            "挿入" => {
+                let name = unique_sheet_name(&self.book);
+                self.book.sheets.insert(t + 1, sheet::Sheet::new(&name));
+                self.sheet_ui.insert(t + 1, (Pos::new(0, 0), Pos::new(0, 0), None));
+                for w in self.watch.iter_mut() {
+                    if w.0 > t {
+                        w.0 += 1;
+                    }
+                }
+                self.sheets_restructured();
+                self.active = t + 1;
+                self.restore_ui();
+                self.sync_input();
+                self.status = ui::tf!("シート「{}」を挿しました", name).into();
+            }
+            "削除" => {
+                if self.book.sheets.len() <= 1 {
+                    self.status = ui::t!("最後の1枚は消せません").into();
+                } else if self.book.sheets.iter().enumerate()
+                    .filter(|(i, s)| *i != t && !s.hidden).count() == 0
+                {
+                    self.status = ui::t!("見えるシートが無くなるので消せません(先に別のシートを表示してください)").into();
+                } else {
+                    let name = self.book.sheets[t].name.clone();
+                    self.book.sheets.remove(t);
+                    self.sheet_ui.remove(t);
+                    self.watch.retain(|w| w.0 != t);
+                    for w in self.watch.iter_mut() {
+                        if w.0 > t {
+                            w.0 -= 1;
+                        }
+                    }
+                    if self.active >= t && self.active > 0 {
+                        self.active -= 1;
+                    }
+                    if self.book.sheets[self.active].hidden {
+                        if let Some(i) = self.book.sheets.iter().position(|s| !s.hidden) {
+                            self.active = i;
+                        }
+                    }
+                    self.sheets_restructured();
+                    self.restore_ui();
+                    self.sync_input();
+                    recalc_book(&mut self.book, self.active);
+                    self.status =
+                        ui::tf!("シート「{}」を削除しました(元に戻せない操作です)", name)
+                            .into();
+                }
+            }
+            "名前の変更" => {
+                let cur = self.book.sheets[t].name.clone();
+                self.prompt = Some(("sheet-rename", Editor::new(&cur)));
+                return; // sheet_menu_at は板の確定まで持ち越す
+            }
+            "コピーを作成" => {
+                let mut copy = self.book.sheets[t].clone();
+                copy.name = copy_sheet_name(&self.book, &self.book.sheets[t].name);
+                copy.hidden = false;
+                let name = copy.name.clone();
+                self.book.sheets.insert(t + 1, copy);
+                self.sheet_ui.insert(t + 1, self.sheet_ui[t]);
+                for w in self.watch.iter_mut() {
+                    if w.0 > t {
+                        w.0 += 1;
+                    }
+                }
+                self.sheets_restructured();
+                self.active = t + 1;
+                self.restore_ui();
+                self.sync_input();
+                recalc_book(&mut self.book, self.active);
+                self.status = ui::tf!("「{}」を作りました", name).into();
+            }
+            "左へ移動" | "右へ移動" => {
+                let to = if v == "左へ移動" {
+                    t.checked_sub(1)
+                } else {
+                    (t + 1 < self.book.sheets.len()).then_some(t + 1)
+                };
+                let Some(to) = to else {
+                    self.status = ui::t!("その向きには動かせません(端です)").into();
+                    self.sheet_menu_at = None;
+                    return;
+                };
+                self.book.sheets.swap(t, to);
+                self.sheet_ui.swap(t, to);
+                for w in self.watch.iter_mut() {
+                    w.0 = if w.0 == t { to } else if w.0 == to { t } else { w.0 };
+                }
+                if self.active == t {
+                    self.active = to;
+                } else if self.active == to {
+                    self.active = t;
+                }
+                self.sheets_restructured();
+                self.status = ui::tf!("シート「{}」を動かしました", self.book.sheets[to].name)
+                    .into();
+            }
+            "非表示" => {
+                if self.book.sheets.iter().enumerate()
+                    .filter(|(i, s)| *i != t && !s.hidden).count() == 0
+                {
+                    self.status = ui::t!("最後の1枚は隠せません").into();
+                } else {
+                    self.book.sheets[t].hidden = true;
+                    let name = self.book.sheets[t].name.clone();
+                    if self.active == t {
+                        if let Some(i) = self.book.sheets.iter().position(|s| !s.hidden) {
+                            self.active = i;
+                            self.restore_ui();
+                            self.sync_input();
+                        }
+                    }
+                    self.dirty = true;
+                    self.status = ui::tf!(
+                        "シート「{}」を隠しました(「再表示」で戻せます。保存で xlsx にも残ります)",
+                        name
+                    )
+                    .into();
+                }
+            }
+            "再表示" => {
+                let hidden: Vec<(usize, String)> = self
+                    .book
+                    .sheets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.hidden)
+                    .map(|(i, s)| (i, s.name.clone()))
+                    .collect();
+                if hidden.is_empty() {
+                    self.status = ui::t!("隠したシートはありません").into();
+                } else {
+                    self.pick_kind = "unhide";
+                    self.pick_paths = hidden
+                        .iter()
+                        .map(|(i, n)| (n.clone(), PathBuf::from(i.to_string())))
+                        .collect();
+                    let y = (self.view_h_px - 420.0).max(ROW_H + 16.0);
+                    self.pick = Some((
+                        hidden.into_iter().map(|(_, n)| n).collect(),
+                        (HEAD_W + 24.0, y),
+                    ));
+                    self.status = ui::t!("隠したシート: 選ぶと表示に戻します").into();
+                    self.sheet_menu_at = None;
+                    return; // 2段目の一覧へ(pick_kind を戻さない)
+                }
+            }
+            "タブの色" => {
+                self.pick_kind = "tab-color";
+                let y = (self.view_h_px - 420.0).max(ROW_H + 16.0);
+                self.pick = Some((
+                    ["色なし", "赤", "橙", "黄", "緑", "青", "紫", "灰"]
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect(),
+                    (HEAD_W + 24.0, y),
+                ));
+                return; // sheet_menu_at は色の決定まで持ち越す
+            }
+            _ => {}
+        }
+        self.sheet_menu_at = None;
+    }
+
+    /// 耳の色の決定(タブの色の2段目)
+    fn set_tab_color(&mut self, v: &str) {
+        let Some(t) = self.sheet_menu_at.take() else { return };
+        if t >= self.book.sheets.len() {
+            return;
+        }
+        let hex = match v {
+            "赤" => Some("FFC00000"),
+            "橙" => Some("FFED7D31"),
+            "黄" => Some("FFFFC000"),
+            "緑" => Some("FF70AD47"),
+            "青" => Some("FF4472C4"),
+            "紫" => Some("FF7030A0"),
+            "灰" => Some("FF7F7F7F"),
+            _ => None,
+        };
+        // 1手で戻せる(耳の色もシートの中身 — checkpoint と同じ作法で番号つき)
+        self.undo_stack.push(vec![(t, self.book.sheets[t].clone())]);
+        self.redo_stack.clear();
+        self.book.sheets[t].tab_color = hex.map(|h| h.to_string());
+        self.dirty = true;
+        self.status = if hex.is_some() {
+            ui::tf!("耳の色を{}にしました(保存で xlsx にも残ります)", v).into()
+        } else {
+            ui::t!("耳の色を消しました").into()
+        };
     }
 
     /// 数式バーの内容をセルへ。**入力規則(list)に合わない値は入れない**
@@ -9848,13 +10210,35 @@ impl Render for Calc {
                 continue; // 隠したシートは耳に出さない(表示タブで戻す)
             }
             let on = i == self.active;
+            // 耳の色(xlsx の tabColor)。活きている耳は白のまま、色は縁に出す
+            let tabc = s.tab_color.as_deref().and_then(|h| {
+                let h6 = h.get(h.len().saturating_sub(6)..)?;
+                h6.chars().all(|c| c.is_ascii_hexdigit()).then(|| hex(h6))
+            });
+            let dark_bg = tabc
+                .map(|c| c.r * 0.299 + c.g * 0.587 + c.b * 0.114 < 0.55)
+                .unwrap_or(false);
             sheets_bar = sheets_bar.child(div()
                 .id(SharedString::from(format!("sheet{i}")))
                 .px_3().py_1().rounded_sm()
-                .bg(if on { rgb(0xFFFFFF) } else { rgb(0xEFF2F4) })
-                .border_1().border_color(if on { rgb(0x1B6E3C) } else { rgb(0xD5DBE0) })
+                .bg(match (on, tabc) {
+                    (true, _) => rgb(0xFFFFFF),
+                    (false, Some(c)) => c,
+                    (false, None) => rgb(0xEFF2F4),
+                })
+                .border_1().border_color(match (on, tabc) {
+                    (_, Some(c)) => c,
+                    (true, None) => rgb(0x1B6E3C),
+                    (false, None) => rgb(0xD5DBE0),
+                })
                 .text_size(px(11.5))
-                .text_color(if on { rgb(0x1B6E3C) } else { rgb(0x66707A) })
+                .text_color(if on {
+                    rgb(0x1B6E3C)
+                } else if dark_bg {
+                    rgb(0xFFFFFF)
+                } else {
+                    rgb(0x66707A)
+                })
                 .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                 .cursor_pointer().hover(|s| s.bg(gpui::white()))
                 .child(SharedString::from(format!(
@@ -9862,6 +10246,24 @@ impl Render for Calc {
                     if s.protected { "🔒" } else { "" },
                     s.name
                 )))
+                // ダブルクリックで名前の変更(本家と同じ)。1度目は普通の切り替え
+                .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                    move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        if e.click_count >= 2 {
+                            cx.stop_propagation();
+                            this.sheet_menu_at = Some(i);
+                            let cur = this.book.sheets[i].name.clone();
+                            this.prompt = Some(("sheet-rename", Editor::new(&cur)));
+                            cx.notify();
+                        }
+                    }))
+                // 右クリックで耳のメニュー(挿入・削除・名前の変更・…)
+                .on_mouse_down(gpui::MouseButton::Right, cx.listener(
+                    move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.open_sheet_menu(i);
+                        cx.notify()
+                    }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.switch_sheet(i);
                     cx.notify()
@@ -10492,6 +10894,7 @@ impl Render for Calc {
                 "textart" => ui::t!("テキストアート — 飾り文字にする文字を打つ").to_string(),
                 "pw-open" => ui::t!("暗号化されたブック — パスワード").to_string(),
                 "pw-set" => ui::t!("暗号化 — パスワード(空にして Enter で暗号化をやめる)").to_string(),
+                "sheet-rename" => ui::t!("シートの名前の変更").to_string(),
                 "subtotal-by" => ui::t!("小計 1/2 — 何の区切りで集めるか(見出しを1つ)").to_string(),
                 "subtotal-vals" => ui::t!("小計 2/2 — 合計する見出し").to_string(),
                 "pivot-rows" => ui::t!("ピボット 1/3 — 行に並べる見出し(カンマ区切り可)").to_string(),
@@ -12526,5 +12929,44 @@ mod udf_tests {
         assert_eq!(results[0].1[0][0], "42", "倍(21) が違う: {raw:?}");
         assert_eq!(results[1].1[1][1], "40", "表の2x2が違う");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn シート名の変更が式の参照に追随する() {
+        // 素の参照と '…' 付きの両方を書き換える
+        assert_eq!(
+            rename_refs_in("Sheet2!A1+SUM('Sheet2'!B1:B9)", "Sheet2", "集計").as_deref(),
+            Some("集計!A1+SUM(集計!B1:B9)")
+        );
+        // 別の語の続き(合計! の中の 計!)は書き換えない
+        assert_eq!(rename_refs_in("合計!A1", "計", "x"), None);
+        // 文字列の中は触らない
+        assert_eq!(rename_refs_in("IF(A1=\"Sheet2!\",1,2)", "Sheet2", "x"), None);
+        // 空白入りの新しい名前は '…' で包む
+        assert_eq!(
+            rename_refs_in("Sheet2!A1", "Sheet2", "売 上").as_deref(),
+            Some("'売 上'!A1")
+        );
+        // ブック全体: 式の数を数え、名前の定義も追随する
+        let mut b = Book::new();
+        b.sheets.push(sheet::Sheet::new("Sheet2"));
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("=Sheet2!B1*2"));
+        b.sheets[0].names.push(("単価".into(), "Sheet2!B2".into()));
+        let n = rename_sheet_refs(&mut b, "Sheet2", "集計");
+        assert_eq!(n, 1);
+        assert_eq!(
+            b.sheets[0].get(Pos::parse("A1").unwrap()).unwrap().formula.as_deref(),
+            Some("集計!B1*2") // 式は = 抜きで持つ
+        );
+        assert_eq!(b.sheets[0].names[0].1, "集計!B2");
+    }
+
+    #[test]
+    fn 複製の名前はexcelの流儀() {
+        let mut b = Book::new();
+        let base = b.sheets[0].name.clone();
+        assert_eq!(copy_sheet_name(&b, &base), format!("{base} (2)"));
+        b.sheets.push(sheet::Sheet::new(&format!("{base} (2)")));
+        assert_eq!(copy_sheet_name(&b, &base), format!("{base} (3)"));
     }
 }
