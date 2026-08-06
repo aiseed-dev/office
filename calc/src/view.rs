@@ -314,9 +314,30 @@ impl Render for Calc {
                 this.request_quit(cx);
             })));
 
+        // ピボットテーブル・表のデザインは**文脈タブ**(本家 Toolbar.js の
+        // _state.inpivot / intabledesign と同じ) — カーソルがピボット/
+        // テーブルの上にあるときだけタブ行に現れる。常設にしない
+        let on_pivot = self.pivot_at(self.cursor).is_some();
+        let in_table = self.sheet().tables.iter().any(|t| t.contains(self.cursor));
+        // タブは名前でなく中身の id で見分ける(名前は言語で変わる)
+        let ctx_hidden = |tb: &ribbon::Tab| {
+            (tb.cmds.iter().any(|c| c.id == "pivot-layout") && !on_pivot)
+                || (tb.cmds.iter().any(|c| c.id == "td-header") && !in_table)
+        };
+        // 開いていたタブの文脈が消えたら、前のタブへ戻る(本家と同じ挙動)
+        if ctx_hidden(&ribbon::calc_tabs()[self.tab]) {
+            self.tab = if ctx_hidden(&ribbon::calc_tabs()[self.prev_tab]) {
+                1 // ホーム
+            } else {
+                self.prev_tab
+            };
+        }
         let mut tabs = div().flex().flex_row().items_end().gap_1()
             .px_2().bg(th_band);
         for (i, tb) in ribbon::calc_tabs().iter().enumerate() {
+            if ctx_hidden(tb) {
+                continue;
+            }
             let on = i == self.tab;
             tabs = tabs.child(div()
                 .id(SharedString::from(format!("tab{i}")))
