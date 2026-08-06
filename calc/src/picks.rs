@@ -829,6 +829,7 @@ impl Calc {
             op: 0,
             allow_blank: true,
             apply_same: false,
+            hide_arrow: false,
             err_style: 0,
             eds: std::array::from_fn(|_| Editor::new("")),
             focus: 0,
@@ -838,6 +839,7 @@ impl Calc {
         };
         if let Some(v) = &v {
             d.allow_blank = v.allow_blank;
+            d.hide_arrow = v.hide_arrow;
             if let Some((t, m)) = &v.input_msg {
                 d.eds[2] = Editor::new(t);
                 d.eds[3] = Editor::new(m);
@@ -936,6 +938,7 @@ impl Calc {
                 v.input_msg = input_msg.clone();
                 v.error_msg = error_msg.clone();
                 v.allow_blank = d.allow_blank;
+                v.hide_arrow = d.hide_arrow;
                 Some(v)
             }
             // 整数 / 小数 / 文字数
@@ -971,6 +974,7 @@ impl Calc {
                     input_msg: input_msg.clone(),
                     error_msg: error_msg.clone(),
                     allow_blank: d.allow_blank,
+                    hide_arrow: d.hide_arrow,
                 })
             }
         };

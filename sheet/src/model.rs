@@ -515,6 +515,8 @@ pub struct Validation {
     pub error_msg: Option<(String, String, String)>,
     /// 空白を無視(xlsx の allowBlank)。false なら空にするのも堰き止める
     pub allow_blank: bool,
+    /// セルの ▾ を出さない(xlsx の showDropDown="1" — 名前と逆で「隠す」)
+    pub hide_arrow: bool,
 }
 
 impl Validation {
@@ -529,6 +531,7 @@ impl Validation {
             input_msg: None,
             error_msg: None,
             allow_blank: true,
+            hide_arrow: false,
         }
     }
 

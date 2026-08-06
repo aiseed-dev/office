@@ -1128,7 +1128,7 @@ impl Render for Calc {
                 }
                 // 入力規則のあるセルを選ぶと右下に ▾。押すと候補の一覧が
                 // 開く(本家と同じ。右クリック → ドロップダウンからでも可)
-                if sel && self.sheet().validation_at(p).is_some() {
+                if sel && self.sheet().validation_at(p).is_some_and(|v| !v.hide_arrow) {
                     d = d.relative().child(div().id("dv-arrow").absolute()
                         .bottom(px(-1.0)).right(px(1.0))
                         .text_size(px(us * 8.5)).text_color(rgb(0x1B6E3C))
@@ -2142,7 +2142,8 @@ impl Render for Calc {
         let dv_panel = self.dv_dlg.as_ref().map(|d| {
             let (tab, kindi, opi, styl, menu, focus) =
                 (d.tab, d.kind, d.op, d.err_style, d.menu, d.focus);
-            let (allow_blank, apply_same) = (d.allow_blank, d.apply_same);
+            let (allow_blank, apply_same, hide_arrow) =
+                (d.allow_blank, d.apply_same, d.hide_arrow);
             let show = |i: usize| -> String {
                 let mut t = d.eds[i].text().to_string();
                 if focus == i {
@@ -2233,6 +2234,7 @@ impl Render for Calc {
                         if let Some(d) = &mut this.dv_dlg {
                             match which {
                                 1 => d.allow_blank = !d.allow_blank,
+                                3 => d.hide_arrow = !d.hide_arrow,
                                 _ => d.apply_same = !d.apply_same,
                             }
                         }
@@ -2280,7 +2282,8 @@ impl Render for Calc {
                             pane = pane
                                 .child(label(ui::t!("元の値").to_string()))
                                 .child(field(0, cx))
-                                .child(label(ui::t!("候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)").to_string()));
+                                .child(label(ui::t!("候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)").to_string()))
+                                .child(check(3, hide_arrow, ui::t!("セルの ▾ を出さない").to_string(), cx));
                         }
                         1 | 2 | 4 => {
                             // 間・間以外 = 最小と最大。等しい系 = 値。大小 = 片方

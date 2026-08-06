@@ -1020,6 +1020,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                         input_msg: input,
                         error_msg: error,
                         allow_blank: attr(e, "allowBlank").as_deref() != Some("0"),
+                        hide_arrow: attr(e, "showDropDown").as_deref() == Some("1"),
                     },
                     a("sqref"),
                 )
@@ -2539,6 +2540,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                         ea(t), ea(m)
                     ));
                 }
+                if v.hide_arrow {
+                    attrs.push_str(r#" showDropDown="1""#);
+                }
                 let mut fs = String::new();
                 if !v.formula.is_empty() {
                     fs.push_str(&format!("<formula1>{}</formula1>", et(&v.formula)));
@@ -3302,6 +3306,7 @@ mod validation_roundtrip_tests {
         v.input_msg = Some(("数量".into(), "1 から 100 の整数で".into()));
         v.error_msg = Some(("stop".into(), "".into(), "その数は使えません".into()));
         v.allow_blank = false; // 「空白を無視」を外した形も往復する
+        v.hide_arrow = true; // ▾ を出さない指定(showDropDown)も往復する
         b.sheets[0].validations.push(v);
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
@@ -3320,6 +3325,7 @@ mod validation_roundtrip_tests {
             Some(("stop".to_string(), String::new(), "その数は使えません".to_string()))
         );
         assert!(!v.allow_blank, "allowBlank が往復しない");
+        assert!(v.hide_arrow, "showDropDown が往復しない");
         // 判定も一緒に確かめる
         let s = &back.sheets[0];
         assert!(v.passes(s, "50"));

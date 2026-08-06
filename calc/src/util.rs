@@ -427,6 +427,8 @@ pub(crate) struct DvDlg {
     pub(crate) allow_blank: bool,
     /// これらの変更を同じ設定の他のすべてのセルに適用する
     pub(crate) apply_same: bool,
+    /// セルの ▾ を出さない(xlsx の showDropDown="1")
+    pub(crate) hide_arrow: bool,
     /// エラー警告のスタイル: 0 停止 / 1 警告 / 2 情報
     pub(crate) err_style: usize,
     /// 欄: 0=最小(値・元の値) 1=最大 2=メッセージ題 3=メッセージ本文
