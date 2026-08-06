@@ -375,7 +375,6 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("日本語の書体が見つかりません", "No se encontró ninguna fuente japonesa"),
     ("このセルの式は他のセルを参照していません", "La fórmula de esta celda no hace referencia a otras celdas"),
     ("トレースを消しました", "Rastreo quitado"),
-    ("元の表を範囲で選んでください(1行目が見出し)", "Seleccione la tabla de origen como un rango (fila 1 = encabezados)"),
     ("見出しの下にデータの行が要ります", "Se necesitan filas de datos bajo los encabezados"),
     ("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)", "El cifrado está activado. Escriba una contraseña nueva y pulse Enter (Enter en vacío lo desactiva)"),
     ("暗号化: パスワードを打って Enter(次の保存から効きます)", "Cifrar: escriba una contraseña y pulse Enter (surte efecto desde el próximo guardado)"),
@@ -726,4 +725,9 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("列に広げる見出し(なくてもよい)。選んだら「決定」", "Encabezados para las columnas (opcional), luego「決定」(Listo)"),
     ("値にする見出しをクリック(次に集計を選びます)", "Haga clic en el encabezado de los valores (después se elige la agregación)"),
     ("「{}」をどう集計しますか", "¿Cómo agregar «{}»?"),
+    ("元の表がありません(1行目が見出し、下にデータの行)", "No hay tabla de origen (fila 1 = encabezados, datos debajo)"),
+    ("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)", "Pivote 1/4 — encabezados para las filas (clic alterna, varios OK)"),
+    ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivote 2/4 — encabezados para las columnas (clic alterna, opcional)"),
+    ("ピボット 3/4 — 値にする見出しを1つ", "Pivote 3/4 — un encabezado para los valores"),
+    ("ピボット 4/4 — 「{}」の集計のしかた", "Pivote 4/4 — cómo agregar «{}»"),
 ];

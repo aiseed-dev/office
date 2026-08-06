@@ -5,9 +5,10 @@ use crate::*;
 impl Calc {
     /// 一覧から選んだものを適用する(pick_kind で意味が変わる)。
     pub(crate) fn apply_pick(&mut self, v: &str, cx: &mut Context<Self>) {
-        // 「✓ 」は「今これが効いている」の印(数値の書式の一覧など)。
-        // 値そのものではないので、ここで剥がしてから照合する
+        // 「✓ 」は「今これが効いている」、「☑ /☐ 」は入切の印
+        // (値そのものではないので、ここで剥がしてから照合する)
         let v = v.strip_prefix("✓ ").unwrap_or(v);
+        let v = v.strip_prefix("☑ ").or_else(|| v.strip_prefix("☐ ")).unwrap_or(v);
         match self.pick_kind {
             "font" => {
                 let name = v.to_string();
@@ -185,7 +186,7 @@ impl Calc {
             // ピボットの聞き取り(クリックで入切 → 決定で次へ)。
             // 行 → 列 → 値 → 集計の4段。Esc でいつでもやめられる
             "pivot-rows-pick" => {
-                if v == "決定(列の選択へ)" {
+                if v == "→ 決定(列の選択へ)" {
                     let ok = self
                         .pivot_pend
                         .as_ref()
@@ -211,7 +212,7 @@ impl Calc {
                 return;
             }
             "pivot-cols-pick" => {
-                if v == "決定(値の選択へ)" {
+                if v == "→ 決定(列は無しでもよい)" {
                     self.status = ui::t!("値にする見出しをクリック(次に集計を選びます)").into();
                     self.pivot_pick("pivot-val-pick");
                     return;
@@ -367,6 +368,7 @@ impl Calc {
             _ => self.pick_value(v),
         }
         self.pick_kind = "value";
+        self.pick_note = None;
     }
 
     /// 一覧から選んだ値をセルに入れる(書式は据え置き)。
@@ -908,38 +910,43 @@ impl Calc {
             .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
             .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
         let mut items: Vec<String> = Vec::new();
-        match kind {
+        let note: SharedString = match kind {
             "pivot-rows-pick" => {
                 for h in &pend.headers {
                     items.push(if pend.rows_sel.contains(h) {
-                        format!("✓ {h}")
+                        format!("☑ {h}")
                     } else {
-                        h.clone()
+                        format!("☐ {h}")
                     });
                 }
-                items.push("決定(列の選択へ)".into());
+                items.push("→ 決定(列の選択へ)".into());
+                ui::t!("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)").into()
             }
             "pivot-cols-pick" => {
                 for h in pend.headers.iter().filter(|h| !pend.rows_sel.contains(h)) {
                     items.push(if pend.cols_sel.contains(h) {
-                        format!("✓ {h}")
+                        format!("☑ {h}")
                     } else {
-                        h.clone()
+                        format!("☐ {h}")
                     });
                 }
-                items.push("決定(値の選択へ)".into());
+                items.push("→ 決定(列は無しでもよい)".into());
+                ui::t!("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)").into()
             }
             "pivot-val-pick" => {
                 for h in &pend.headers {
                     items.push(h.clone());
                 }
+                ui::t!("ピボット 3/4 — 値にする見出しを1つ").into()
             }
             _ => {
                 for a in PIVOT_AGGS {
                     items.push(a.to_string());
                 }
+                ui::tf!("ピボット 4/4 — 「{}」の集計のしかた", pend.val_sel).into()
             }
-        }
+        };
+        self.pick_note = Some(note);
         self.pick_kind = kind;
         self.pick = Some((items, at));
     }
@@ -1253,6 +1260,7 @@ impl Calc {
         {
             // 一覧・板を閉じたら意味づけも戻す(耳のメニューの狙い先も)
             self.pick_kind = "value";
+            self.pick_note = None;
             self.sheet_menu_at = None;
             cx.notify();
         } else if self.editing() {

@@ -375,7 +375,6 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("日本語の書体が見つかりません", "Không tìm thấy phông tiếng Nhật"),
     ("このセルの式は他のセルを参照していません", "Công thức của ô này không tham chiếu ô nào khác"),
     ("トレースを消しました", "Đã xóa vết truy nguồn"),
-    ("元の表を範囲で選んでください(1行目が見出し)", "Hãy chọn bảng nguồn theo vùng (hàng 1 là tiêu đề)"),
     ("見出しの下にデータの行が要ります", "Cần có các hàng dữ liệu bên dưới tiêu đề"),
     ("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)", "Mã hóa đang bật. Gõ mật khẩu mới rồi Enter (để trống rồi Enter để tắt mã hóa)"),
     ("暗号化: パスワードを打って Enter(次の保存から効きます)", "Mã hóa: gõ mật khẩu rồi Enter (có hiệu lực từ lần lưu sau)"),
@@ -726,4 +725,9 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("列に広げる見出し(なくてもよい)。選んだら「決定」", "Tiêu đề cho cột (không bắt buộc), xong thì「決定」(Xong)"),
     ("値にする見出しをクリック(次に集計を選びます)", "Bấm tiêu đề dùng làm giá trị (tiếp theo chọn cách tổng hợp)"),
     ("「{}」をどう集計しますか", "Tổng hợp «{}» thế nào?"),
+    ("元の表がありません(1行目が見出し、下にデータの行)", "Không có bảng nguồn (hàng 1 = tiêu đề, dữ liệu bên dưới)"),
+    ("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)", "Pivot 1/4 — tiêu đề cho hàng (bấm để bật/tắt, được nhiều)"),
+    ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — tiêu đề cho cột (bấm để bật/tắt, không bắt buộc)"),
+    ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — một tiêu đề cho giá trị"),
+    ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — cách tổng hợp «{}»"),
 ];

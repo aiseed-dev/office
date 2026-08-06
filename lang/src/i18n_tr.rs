@@ -375,7 +375,6 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("日本語の書体が見つかりません", "Japonca yazı tipi bulunamadı"),
     ("このセルの式は他のセルを参照していません", "Bu hücrenin formülü başka hücreye başvurmuyor"),
     ("トレースを消しました", "İzleme okları temizlendi"),
-    ("元の表を範囲で選んでください(1行目が見出し)", "Kaynak tabloyu aralık olarak seçin (1. satır başlıklar)"),
     ("見出しの下にデータの行が要ります", "Başlıkların altında veri satırları gerekli"),
     ("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)", "Şifreleme açık. Yeni parolayı yazıp Enter'a basın (boş Enter şifrelemeyi kapatır)"),
     ("暗号化: パスワードを打って Enter(次の保存から効きます)", "Şifrele: parolayı yazıp Enter'a basın (bir sonraki kayıttan itibaren geçerli)"),
@@ -726,4 +725,9 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("列に広げる見出し(なくてもよい)。選んだら「決定」", "Sütunlar için başlıklar (isteğe bağlı), sonra「決定」(Tamam)"),
     ("値にする見出しをクリック(次に集計を選びます)", "Değerler için başlığa tıklayın (sonra toplama seçilir)"),
     ("「{}」をどう集計しますか", "«{}» nasıl toplansın?"),
+    ("元の表がありません(1行目が見出し、下にデータの行)", "Kaynak tablo yok (1. satır = başlıklar, altında veri satırları)"),
+    ("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)", "Pivot 1/4 — satırlar için başlıklar (tık ile aç/kapat, birden çok olabilir)"),
+    ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — sütunlar için başlıklar (tık ile aç/kapat, isteğe bağlı)"),
+    ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — değerler için bir başlık"),
+    ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — «{}» nasıl toplansın"),
 ];

@@ -375,7 +375,6 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("日本語の書体が見つかりません", "Aucune police japonaise trouvée"),
     ("このセルの式は他のセルを参照していません", "La formule de cette cellule ne référence aucune autre cellule"),
     ("トレースを消しました", "Traçage effacé"),
-    ("元の表を範囲で選んでください(1行目が見出し)", "Sélectionnez le tableau source comme plage (ligne 1 = en-têtes)"),
     ("見出しの下にデータの行が要ります", "Des lignes de données sont nécessaires sous les en-têtes"),
     ("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)", "Le chiffrement est activé. Tapez un nouveau mot de passe puis Enter (Enter à vide le désactive)"),
     ("暗号化: パスワードを打って Enter(次の保存から効きます)", "Chiffrer : tapez un mot de passe puis Enter (prend effet au prochain enregistrement)"),
@@ -726,4 +725,9 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("列に広げる見出し(なくてもよい)。選んだら「決定」", "En-têtes pour les colonnes (facultatif), puis「決定」(Valider)"),
     ("値にする見出しをクリック(次に集計を選びます)", "Cliquez sur l'en-tête des valeurs (l'agrégation vient ensuite)"),
     ("「{}」をどう集計しますか", "Comment agréger « {} » ?"),
+    ("元の表がありません(1行目が見出し、下にデータの行)", "Pas de table source (ligne 1 = en-têtes, données en dessous)"),
+    ("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)", "Pivot 1/4 — en-têtes pour les lignes (clic pour basculer, plusieurs possibles)"),
+    ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — en-têtes pour les colonnes (clic pour basculer, facultatif)"),
+    ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — un en-tête pour les valeurs"),
+    ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — comment agréger « {} »"),
 ];

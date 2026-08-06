@@ -3125,12 +3125,21 @@ impl Render for Calc {
             };
             // 長い一覧(書体など)は板の中でスクロール — 数で切り捨てない
             let mut p = div().id("pick-list").absolute().left(px(vx)).top(px(vy))
-                .w(px(self.col_px(self.cursor.col).max(120.0)))
+                .w(px(self.col_px(self.cursor.col).max(if self.pick_note.is_some() { 300.0 } else { 120.0 })))
                 .max_h(px((self.view_h_px - 160.0).max(160.0)))
                 .overflow_y_scroll()
                 .p_1().rounded_md().bg(rgb(0xFFFFFF))
                 .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            // 題(いま何を選んでいるか)。ピボットの段の案内など
+            if let Some(note) = &self.pick_note {
+                p = p.child(div().px_2().py_1().mb_0p5()
+                    .border_b_1().border_color(rgb(0xE1E6EA))
+                    .text_size(px(us * 11.0)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x1B6E3C))
+                    .whitespace_nowrap()
+                    .child(note.clone()));
+            }
             for (i, v) in vals.into_iter().enumerate() {
                 let sw = swatch_of(&v);
                 p = p.child(div()
@@ -3138,7 +3147,12 @@ impl Render for Calc {
                     .px_2().py_1().rounded_sm().cursor_pointer()
                     .hover(|s| s.bg(rgb(0xEAF5EE)))
                     .flex().flex_row().items_center().gap_2()
-                    .text_size(px(us * 12.5)).text_color(rgb(0x1B1B1B))
+                    .text_size(px(us * 12.5))
+                    // 「→ 」は次の段へ進む釦 — 並びの項目と見分ける
+                    .text_color(if v.starts_with("→ ") { rgb(0x1B6E3C) } else { rgb(0x1B1B1B) })
+                    .when(v.starts_with("→ "), |s| s
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .border_t_1().border_color(rgb(0xE1E6EA)).mt_0p5())
                     .whitespace_nowrap().overflow_hidden()
                     .children(sw.map(|hx| {
                         let q = div().w(px(14.0)).h(px(14.0)).rounded_sm()

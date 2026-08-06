@@ -815,26 +815,26 @@ mod pivot_tests {
             this.run_cmd("pivot-insert", cx);
             assert_eq!(this.pick_kind, "pivot-rows-pick", "カーソルだけで行の一覧が開かない");
             // 見出しを選ばず決定 → 言い返されて一覧のまま
-            this.apply_pick("決定(列の選択へ)", cx);
+            this.apply_pick("→ 決定(列の選択へ)", cx);
             assert_eq!(this.pick_kind, "pivot-rows-pick", "空のまま先へ進んだ");
             // クリックで入切(✓ 付きでもう一度押すと外れる)
-            this.apply_pick("区分", cx);
-            this.apply_pick("✓ 区分", cx);
+            this.apply_pick("☐ 区分", cx);
+            this.apply_pick("☑ 区分", cx);
             assert!(this.pivot_pend.as_ref().unwrap().rows_sel.is_empty(), "入切が効かない");
             this.apply_pick("区分", cx);
             {
                 let (items, _) = this.pick.as_ref().unwrap();
-                assert!(items.iter().any(|i| i == "✓ 区分"), "選んだ印が付かない: {items:?}");
+                assert!(items.iter().any(|i| i == "☑ 区分"), "選んだ印が付かない: {items:?}");
             }
-            this.apply_pick("決定(列の選択へ)", cx);
+            this.apply_pick("→ 決定(列の選択へ)", cx);
             assert_eq!(this.pick_kind, "pivot-cols-pick");
             {
                 // 行に使った見出しは列の候補に出ない
                 let (items, _) = this.pick.as_ref().unwrap();
                 assert!(!items.iter().any(|i| i.contains("区分")), "{items:?}");
             }
-            this.apply_pick("月", cx);
-            this.apply_pick("決定(値の選択へ)", cx);
+            this.apply_pick("☐ 月", cx);
+            this.apply_pick("→ 決定(列は無しでもよい)", cx);
             assert_eq!(this.pick_kind, "pivot-val-pick");
             this.apply_pick("金額", cx);
             assert_eq!(this.pick_kind, "pivot-agg-pick", "集計の一覧が開かない");

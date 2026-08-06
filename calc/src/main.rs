@@ -63,6 +63,9 @@ struct Calc {
     sub_pend: Option<PivotPend>,
     /// 並べ替えの「拡張しますか」の聞き取り中(昇順か)。Esc でやめる
     sort_pend: Option<bool>,
+    /// 一覧(pick)の題 — いま何を選んでいるか(ピボットの段など)。
+    /// 一覧の上に太字で出す。閉じるときに消す
+    pick_note: Option<SharedString>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
@@ -296,6 +299,7 @@ impl Calc {
             pivot_pend: None,
             sub_pend: None,
             sort_pend: None,
+            pick_note: None,
             solver: None,
             sa_cat: 0,
             slicer: None,

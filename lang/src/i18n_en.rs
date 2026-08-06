@@ -378,7 +378,6 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("日本語の書体が見つかりません", "No Japanese font found"),
 ("このセルの式は他のセルを参照していません", "This cell's formula references no other cells"),
 ("トレースを消しました", "Trace cleared"),
-("元の表を範囲で選んでください(1行目が見出し)", "Select the source table as a range (row 1 = headings)"),
 ("見出しの下にデータの行が要ります", "Data rows are needed below the headings"),
 ("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)", "Encryption is on. Type a new password and press Enter (empty Enter turns it off)"),
 ("暗号化: パスワードを打って Enter(次の保存から効きます)", "Encrypt: type a password and press Enter (takes effect from the next save)"),
@@ -729,4 +728,9 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("列に広げる見出し(なくてもよい)。選んだら「決定」", "Headers to spread as columns (optional), then「決定」(Done)"),
 ("値にする見出しをクリック(次に集計を選びます)", "Click the header to use as values (aggregation comes next)"),
 ("「{}」をどう集計しますか", "How should \"{}\" be aggregated?"),
+("元の表がありません(1行目が見出し、下にデータの行)", "No source table (row 1 = headers, data rows below)"),
+("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)", "Pivot 1/4 — headers for the rows (click to toggle, multiple OK)"),
+("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — headers for the columns (click to toggle, optional)"),
+("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — one header for the values"),
+("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — how to aggregate \"{}\""),
 ];

@@ -375,7 +375,6 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("日本語の書体が見つかりません", "Nessun carattere giapponese trovato"),
     ("このセルの式は他のセルを参照していません", "La formula di questa cella non fa riferimento ad altre celle"),
     ("トレースを消しました", "Traccia rimossa"),
-    ("元の表を範囲で選んでください(1行目が見出し)", "Selezionare la tabella di origine come intervallo (riga 1 = intestazioni)"),
     ("見出しの下にデータの行が要ります", "Servono righe di dati sotto le intestazioni"),
     ("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)", "La crittografia è attiva. Digitare una nuova password e premere Enter (Enter a vuoto la disattiva)"),
     ("暗号化: パスワードを打って Enter(次の保存から効きます)", "Crittografia: digitare una password e premere Enter (attiva dal prossimo salvataggio)"),
@@ -726,4 +725,9 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("列に広げる見出し(なくてもよい)。選んだら「決定」", "Intestazioni per le colonne (facoltative), poi「決定」(Fatto)"),
     ("値にする見出しをクリック(次に集計を選びます)", "Clicca l'intestazione dei valori (poi scegli l'aggregazione)"),
     ("「{}」をどう集計しますか", "Come aggregare «{}»?"),
+    ("元の表がありません(1行目が見出し、下にデータの行)", "Nessuna tabella di origine (riga 1 = intestazioni, dati sotto)"),
+    ("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)", "Pivot 1/4 — intestazioni per le righe (clic per attivare, anche più di una)"),
+    ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — intestazioni per le colonne (clic per attivare, facoltative)"),
+    ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — un'intestazione per i valori"),
+    ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — come aggregare «{}»"),
 ];

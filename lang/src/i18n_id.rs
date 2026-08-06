@@ -375,7 +375,6 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("日本語の書体が見つかりません", "Tidak ada font Jepang yang ditemukan"),
     ("このセルの式は他のセルを参照していません", "Rumus sel ini tidak mereferensikan sel lain"),
     ("トレースを消しました", "Jejak dibersihkan"),
-    ("元の表を範囲で選んでください(1行目が見出し)", "Pilih tabel sumbernya sebagai rentang (baris 1 = judul)"),
     ("見出しの下にデータの行が要ります", "Perlu baris data di bawah judul"),
     ("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)", "Enkripsi aktif. Ketik kata sandi baru lalu tekan Enter (Enter dengan kosong mematikan enkripsi)"),
     ("暗号化: パスワードを打って Enter(次の保存から効きます)", "Enkripsi: ketik kata sandi lalu tekan Enter (berlaku mulai penyimpanan berikutnya)"),
@@ -726,4 +725,9 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("列に広げる見出し(なくてもよい)。選んだら「決定」", "Tajuk untuk kolom (opsional), lalu「決定」(Selesai)"),
     ("値にする見出しをクリック(次に集計を選びます)", "Klik tajuk untuk nilai (lalu pilih agregasi)"),
     ("「{}」をどう集計しますか", "Bagaimana mengagregasi «{}»?"),
+    ("元の表がありません(1行目が見出し、下にデータの行)", "Tidak ada tabel sumber (baris 1 = tajuk, data di bawahnya)"),
+    ("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)", "Pivot 1/4 — tajuk untuk baris (klik untuk beralih, boleh beberapa)"),
+    ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — tajuk untuk kolom (klik untuk beralih, opsional)"),
+    ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — satu tajuk untuk nilai"),
+    ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — cara mengagregasi «{}»"),
 ];

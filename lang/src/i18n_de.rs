@@ -375,7 +375,6 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("日本語の書体が見つかりません", "Keine japanische Schriftart gefunden"),
     ("このセルの式は他のセルを参照していません", "Die Formel dieser Zelle verweist auf keine anderen Zellen"),
     ("トレースを消しました", "Spur entfernt"),
-    ("元の表を範囲で選んでください(1行目が見出し)", "Die Ausgangstabelle als Bereich auswählen (Zeile 1 = Überschriften)"),
     ("見出しの下にデータの行が要ります", "Unter den Überschriften werden Datenzeilen gebraucht"),
     ("暗号化は入っています。新しいパスワードを打って Enter(空のまま Enter で暗号化をやめる)", "Verschlüsselung ist an. Neues Passwort eingeben und Enter (leer + Enter schaltet sie ab)"),
     ("暗号化: パスワードを打って Enter(次の保存から効きます)", "Verschlüsseln: Passwort eingeben und Enter (wirkt ab dem nächsten Speichern)"),
@@ -726,4 +725,9 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("列に広げる見出し(なくてもよい)。選んだら「決定」", "Überschriften für die Spalten (optional), dann „決定“ (Fertig)"),
     ("値にする見出しをクリック(次に集計を選びます)", "Überschrift für die Werte anklicken (danach die Aggregation)"),
     ("「{}」をどう集計しますか", "Wie soll „{}“ aggregiert werden?"),
+    ("元の表がありません(1行目が見出し、下にデータの行)", "Keine Quelltabelle (Zeile 1 = Überschriften, darunter Datenzeilen)"),
+    ("ピボット 1/4 — 行に並べる見出し(クリックで入切・複数可)", "Pivot 1/4 — Überschriften für die Zeilen (Klick schaltet um, mehrere möglich)"),
+    ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — Überschriften für die Spalten (Klick schaltet um, optional)"),
+    ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — eine Überschrift für die Werte"),
+    ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — wie „{}“ aggregieren?"),
 ];
