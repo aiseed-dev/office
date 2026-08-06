@@ -62,6 +62,46 @@ mod size_grip_tests {
 }
 
 #[cfg(test)]
+mod numfmt_tests {
+    use crate::*;
+
+    #[gpui::test]
+    fn 数値の書式は一覧とコード直打ちで掛かる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            let a1 = Pos::parse("A1").unwrap();
+            this.cursor = a1;
+            this.sync_input();
+            this.input.insert("1234.5");
+            assert!(this.commit());
+            // 一覧から: パーセント
+            this.run_cmd("format", cx);
+            assert_eq!(this.pick_kind, "numfmt-pick");
+            this.apply_pick("パーセント (12.34%)", cx);
+            assert_eq!(
+                this.sheet().get(a1).unwrap().fmt.number_format.as_deref(),
+                Some("0.00%")
+            );
+            // その他 → コード直打ち(今のコードが下敷きに入る)
+            this.run_cmd("format", cx);
+            this.apply_pick("その他(書式コードを打つ)…", cx);
+            let (kind, ed) = this.prompt.as_ref().expect("コードの板が開かない");
+            assert_eq!(*kind, "numfmt-custom");
+            assert_eq!(ed.text(), "0.00%", "今のコードが下敷きにならない");
+            this.prompt = Some(("numfmt-custom", Editor::new("#,##0.0")));
+            this.finish_prompt(cx);
+            assert_eq!(
+                this.sheet().get(a1).unwrap().fmt.number_format.as_deref(),
+                Some("#,##0.0")
+            );
+            // 一般に戻す
+            this.run_cmd("format", cx);
+            this.apply_pick("一般", cx);
+            assert_eq!(this.sheet().get(a1).unwrap().fmt.number_format, None);
+        });
+    }
+}
+
 mod sort_tests {
     use crate::*;
 

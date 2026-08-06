@@ -680,4 +680,8 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("「{}」という見出しが見つかりません。使える見出し: {}", "Tidak ada judul \"{}\". Judul yang tersedia: {}"),
     ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Diurutkan menurut {} (baris judul tetap; Ctrl+Z membatalkan)"),
     ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Urutkan — kriteria, terkuat lebih dulu (mis. Jumlah desc, Barang)"),
+    ("数値の書式を「{}」にしました(コード: {})", "Format angka diatur ke \"{}\" (kode: {})"),
+    ("数値の書式を「一般」に戻しました", "Format angka dikembalikan ke Umum"),
+    ("数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)", "Kode format angka diatur ke \"{}\" (kode yang tak bisa digambar tampil sebagai angka biasa; tersimpan di xlsx saat menyimpan)"),
+    ("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)", "Kode format angka (mis. #,##0.00 / yyyy/m/d; Enter kosong = Umum)"),
 ];

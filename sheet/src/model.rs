@@ -1044,6 +1044,27 @@ pub fn format_value(v: &Value, code: Option<&str>) -> String {
     let Value::Number(n) = v else { return v.display() };
     let Some(code) = code else { return v.display() };
 
+    // テキスト形式(@)は素のまま(新しく打つ分を文字として扱うのは Excel の話。
+    // 表示は変えない)
+    if code.trim() == "@" {
+        return v.display();
+    }
+
+    // 指数(0.00E+00 の形)。仮数の小数桁は書式の `.00` から数える
+    if let Some(epos) = code.to_uppercase().find("E+") {
+        let dec = code[..epos]
+            .rsplit_once('.')
+            .map(|(_, d)| d.chars().take_while(|c| *c == '0' || *c == '#').count())
+            .unwrap_or(0);
+        if *n == 0.0 {
+            return format!("{:.*}E+00", dec, 0.0);
+        }
+        let e = n.abs().log10().floor() as i32;
+        let m = n / 10f64.powi(e);
+        let sign = if e < 0 { '-' } else { '+' };
+        return format!("{:.*}E{}{:02}", dec, m, sign, e.abs());
+    }
+
     // 日付・時刻の書式なら、通し番号を暦に直して描く
     if let Some(s) = format_date(*n, code) {
         return s;
@@ -1233,6 +1254,15 @@ mod format_tests {
 
     fn f(n: f64, code: &str) -> String {
         format_value(&Value::Number(n), Some(code))
+    }
+
+    #[test]
+    fn 指数とテキスト形式() {
+        assert_eq!(f(12345.0, "0.00E+00"), "1.23E+04");
+        assert_eq!(f(0.00123, "0.00E+00"), "1.23E-03");
+        assert_eq!(f(-4500.0, "0.00E+00"), "-4.50E+03");
+        assert_eq!(f(0.0, "0.00E+00"), "0.00E+00");
+        assert_eq!(f(1234.5, "@"), "1234.5", "テキスト形式は素のまま");
     }
 
     #[test]

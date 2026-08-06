@@ -171,6 +171,26 @@ impl Calc {
                     }
                 }
             }
+            "numfmt-pick" => {
+                if v.starts_with("その他") {
+                    // 書式コードの直打ち(カスタム書式)。今のコードを下敷きに
+                    let cur = self
+                        .sheet()
+                        .get(self.cursor)
+                        .and_then(|c| c.fmt.number_format.clone())
+                        .unwrap_or_default();
+                    self.prompt = Some(("numfmt-custom", Editor::new(&cur)));
+                    return; // pick_kind を戻さない(板の確定まで)
+                }
+                if let Some((_, code)) = NUMFMTS.iter().find(|(n, _)| *n == v) {
+                    let c = code.map(|s| s.to_string());
+                    self.fmt(move |f| f.number_format = c.clone());
+                    self.status = match code {
+                        Some(c) => ui::tf!("数値の書式を「{}」にしました(コード: {})", v, c).into(),
+                        None => ui::t!("数値の書式を「一般」に戻しました").into(),
+                    };
+                }
+            }
             "changecase" => {
                 self.checkpoint();
                 let (a, b) = self.sel_rect();
@@ -376,6 +396,7 @@ impl Calc {
                 self.status = ui::tf!("「{}」だけを表示しています(見出しの ▼ で選び直せます)", label).into();
             }
             "filter-clear" => self.run_cmd("clear-filter", cx),
+            "numfmt-more" => self.run_cmd("format", cx),
             "reapply" => {
                 // 値は動的に見ているので掛け直しは常に済んでいる — 数を言い直す
                 if let Some((total, shown)) = self.filter_counts() {
@@ -523,6 +544,7 @@ impl Calc {
                 ("percents", "パーセント(%)", true),
                 ("digit-inc", "小数を増やす", true),
                 ("digit-dec", "小数を減らす", true),
+                ("numfmt-more", "その他の表示形式…", true),
             ],
             "func" => vec![
                 ("sum", "SUM(合計)", true),
@@ -883,6 +905,21 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // カスタムの数値書式(xlsx のコードをそのまま)。空 Enter = 一般に戻す
+            "numfmt-custom" => {
+                if text.is_empty() {
+                    self.fmt(|f| f.number_format = None);
+                    self.status = ui::t!("数値の書式を「一般」に戻しました").into();
+                } else {
+                    let code = text.clone();
+                    self.fmt(move |f| f.number_format = Some(code.clone()));
+                    self.status = ui::tf!(
+                        "数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)",
+                        text
+                    )
+                    .into();
+                }
+            }
             // 並べ替えの基準(複数可)。「見出し名か列の字 [昇順|降順]」を
             // カンマ区切りで。向きを省けば昇順
             "sort-by" => {

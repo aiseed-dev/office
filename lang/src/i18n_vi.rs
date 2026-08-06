@@ -680,4 +680,8 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("「{}」という見出しが見つかりません。使える見出し: {}", "Không có tiêu đề \"{}\". Tiêu đề dùng được: {}"),
     ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Đã sắp xếp theo {} (hàng tiêu đề giữ nguyên; Ctrl+Z hoàn tác)"),
     ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Sắp xếp — tiêu chí, mạnh nhất trước (vd: Số tiền desc, Mặt hàng)"),
+    ("数値の書式を「{}」にしました(コード: {})", "Đã đặt định dạng số thành \"{}\" (mã: {})"),
+    ("数値の書式を「一般」に戻しました", "Đã trả định dạng số về Chung"),
+    ("数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)", "Đã đặt mã định dạng số \"{}\" (mã không vẽ được sẽ hiện số thường; khi lưu sẽ giữ trong xlsx)"),
+    ("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)", "Mã định dạng số (vd: #,##0.00 / yyyy/m/d; Enter trống = Chung)"),
 ];

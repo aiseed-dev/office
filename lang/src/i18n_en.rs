@@ -683,4 +683,8 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("「{}」という見出しが見つかりません。使える見出し: {}", "No header named \"{}\". Available headers: {}"),
 ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Sorted by {} (header row kept in place; Ctrl+Z undoes it)"),
 ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Sort — criteria, strongest first (e.g. Amount desc, Item)"),
+("数値の書式を「{}」にしました(コード: {})", "Number format set to \"{}\" (code: {})"),
+("数値の書式を「一般」に戻しました", "Number format reset to General"),
+("数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)", "Number format code set to \"{}\" (unrenderable codes fall back to the plain number; kept in the xlsx on save)"),
+("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)", "Number format code (e.g. #,##0.00 / yyyy/m/d; empty Enter = General)"),
 ];

@@ -680,4 +680,8 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("「{}」という見出しが見つかりません。使える見出し: {}", "\"{}\" adlı başlık yok. Kullanılabilir başlıklar: {}"),
     ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "{} ölçütüyle sıralandı (başlık satırı yerinde; Ctrl+Z geri alır)"),
     ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Sırala — ölçütler, en güçlüsü önce (örn. Tutar desc, Ürün)"),
+    ("数値の書式を「{}」にしました(コード: {})", "Sayı biçimi \"{}\" yapıldı (kod: {})"),
+    ("数値の書式を「一般」に戻しました", "Sayı biçimi Genel'e döndürüldü"),
+    ("数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)", "Sayı biçim kodu \"{}\" yapıldı (çizilemeyen kodlar düz sayı olarak görünür; kaydedince xlsx'te kalır)"),
+    ("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)", "Sayı biçim kodu (örn. #,##0.00 / yyyy/m/d; boş Enter = Genel)"),
 ];

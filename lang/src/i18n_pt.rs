@@ -680,4 +680,8 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile com cargo
     ("「{}」という見出しが見つかりません。使える見出し: {}", "Não há cabeçalho \"{}\". Cabeçalhos disponíveis: {}"),
     ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Ordenado por {} (o cabeçalho fica no lugar; Ctrl+Z desfaz)"),
     ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Ordenar — critérios, do mais forte (ex.: Valor desc, Item)"),
+    ("数値の書式を「{}」にしました(コード: {})", "Formato de número definido como \"{}\" (código: {})"),
+    ("数値の書式を「一般」に戻しました", "Formato de número restaurado para Geral"),
+    ("数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)", "Código de formato definido como \"{}\" (códigos não representáveis caem no número simples; permanece no xlsx ao salvar)"),
+    ("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)", "Código de formato de número (ex.: #,##0.00 / yyyy/m/d; Enter vazio = Geral)"),
 ];

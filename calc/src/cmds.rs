@@ -273,7 +273,20 @@ impl Calc {
                 ));
             }
             // 数値の書式・セルのスタイル: 書式の小窓(道具箱)を開く
-            "format" | "cell-format" => {
+            // 数値の書式。本家のドロップダウン相当の一覧(その他=コード直打ち)
+            "format" => {
+                self.commit();
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let mut items: Vec<String> =
+                    NUMFMTS.iter().map(|(n, _)| n.to_string()).collect();
+                items.push("その他(書式コードを打つ)…".into());
+                self.pick_kind = "numfmt-pick";
+                self.pick = Some((items, at));
+            }
+            "cell-format" => {
                 let at = self
                     .cell_origin_px(self.cursor)
                     .map(|(x, y)| (x + 16.0, y + 16.0))

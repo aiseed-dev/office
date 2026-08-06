@@ -680,4 +680,8 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("「{}」という見出しが見つかりません。使える見出し: {}", "Aucun en-tête « {} ». En-têtes disponibles : {}"),
     ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Trié par {} (l'en-tête reste en place ; Ctrl+Z annule)"),
     ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Trier — critères, du plus fort au plus faible (ex. : Montant desc, Article)"),
+    ("数値の書式を「{}」にしました(コード: {})", "Format numérique défini sur « {} » (code : {})"),
+    ("数値の書式を「一般」に戻しました", "Format numérique remis sur Standard"),
+    ("数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)", "Code de format défini sur « {} » (les codes non affichables retombent sur le nombre brut ; conservé dans le xlsx à l'enregistrement)"),
+    ("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)", "Code de format numérique (ex. : #,##0.00 / yyyy/m/d ; Enter vide = Standard)"),
 ];

@@ -680,4 +680,8 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("「{}」という見出しが見つかりません。使える見出し: {}", "Keine Überschrift „{}“. Verfügbare Überschriften: {}"),
     ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Sortiert nach {} (Kopfzeile bleibt stehen; Ctrl+Z macht es rückgängig)"),
     ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Sortieren — Kriterien, stärkstes zuerst (z. B. Betrag desc, Artikel)"),
+    ("数値の書式を「{}」にしました(コード: {})", "Zahlenformat auf „{}“ gesetzt (Code: {})"),
+    ("数値の書式を「一般」に戻しました", "Zahlenformat auf „Standard“ zurückgesetzt"),
+    ("数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)", "Zahlenformat-Code auf „{}“ gesetzt (nicht darstellbare Codes fallen auf die reine Zahl zurück; bleibt beim Speichern in der xlsx)"),
+    ("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)", "Zahlenformat-Code (z. B. #,##0.00 / yyyy/m/d; leer + Enter = Standard)"),
 ];

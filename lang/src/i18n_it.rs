@@ -680,4 +680,8 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("「{}」という見出しが見つかりません。使える見出し: {}", "Nessuna intestazione \"{}\". Intestazioni disponibili: {}"),
     ("並べ替えました: {}(見出しは据え置き。Ctrl+Z で1手)", "Ordinato per {} (l'intestazione resta ferma; Ctrl+Z annulla)"),
     ("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)", "Ordina — criteri, dal più forte (es. Importo desc, Articolo)"),
+    ("数値の書式を「{}」にしました(コード: {})", "Formato numero impostato su \"{}\" (codice: {})"),
+    ("数値の書式を「一般」に戻しました", "Formato numero riportato a Generale"),
+    ("数値の書式コードを「{}」にしました(描けない書き方は素の数で出ます。保存で xlsx にも残ります)", "Codice di formato impostato su \"{}\" (i codici non rappresentabili ricadono sul numero semplice; resta nel file xlsx al salvataggio)"),
+    ("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)", "Codice formato numero (es. #,##0.00 / yyyy/m/d; Enter vuoto = Generale)"),
 ];
