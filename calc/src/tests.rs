@@ -203,6 +203,22 @@ mod numfmt_tests {
                 this.sheet().get(a1).unwrap().fmt.number_format.as_deref(),
                 Some("0.00%")
             );
+            // 開き直すと今の書式に ✓ が付き、状態行にも出る(本家のコンボの追従の代わり)
+            this.run_cmd("format", cx);
+            {
+                let (items, _) = this.pick.as_ref().expect("一覧が開かない");
+                assert!(
+                    items.iter().any(|i| i == "✓ パーセント (12.34%)"),
+                    "今の書式に印が付かない: {items:?}"
+                );
+                assert!(this.status.contains("今の書式"), "{}", this.status);
+            }
+            // ✓ 付きのまま選び直しても効く(印は値ではない)
+            this.apply_pick("✓ パーセント (12.34%)", cx);
+            assert_eq!(
+                this.sheet().get(a1).unwrap().fmt.number_format.as_deref(),
+                Some("0.00%")
+            );
             // その他 → コード直打ち(今のコードが下敷きに入る)
             this.run_cmd("format", cx);
             this.apply_pick("その他(書式コードを打つ)…", cx);

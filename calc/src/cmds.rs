@@ -293,9 +293,32 @@ impl Calc {
                     .cell_origin_px(self.cursor)
                     .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
                     .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
-                let mut items: Vec<String> =
-                    NUMFMTS.iter().map(|(n, _)| n.to_string()).collect();
+                // 今の書式に ✓ を付け、状態行にも言う(本家はコンボが
+                // 選択セルの書式に追従する — その代わり)
+                let cur = self
+                    .sheet()
+                    .get(self.cursor)
+                    .and_then(|c| c.fmt.number_format.clone());
+                let cur_name = NUMFMTS
+                    .iter()
+                    .find(|(_, code)| code.map(|s| s.to_string()) == cur.as_ref().map(|s| s.to_string()))
+                    .map(|(n, _)| *n);
+                let mut items: Vec<String> = NUMFMTS
+                    .iter()
+                    .map(|(n, _)| {
+                        if Some(*n) == cur_name {
+                            format!("✓ {n}")
+                        } else {
+                            n.to_string()
+                        }
+                    })
+                    .collect();
                 items.push("その他(書式コードを打つ)…".into());
+                self.status = match (cur_name, &cur) {
+                    (Some(n), _) => ui::tf!("今の書式: {}", n).into(),
+                    (None, Some(code)) => ui::tf!("今の書式: カスタム(コード: {})", code).into(),
+                    (None, None) => ui::t!("今の書式: 一般").into(),
+                };
                 self.pick_kind = "numfmt-pick";
                 self.pick = Some((items, at));
             }

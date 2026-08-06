@@ -5,6 +5,9 @@ use crate::*;
 impl Calc {
     /// 一覧から選んだものを適用する(pick_kind で意味が変わる)。
     pub(crate) fn apply_pick(&mut self, v: &str, cx: &mut Context<Self>) {
+        // 「✓ 」は「今これが効いている」の印(数値の書式の一覧など)。
+        // 値そのものではないので、ここで剥がしてから照合する
+        let v = v.strip_prefix("✓ ").unwrap_or(v);
         match self.pick_kind {
             "font" => {
                 let name = v.to_string();
