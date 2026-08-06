@@ -34,10 +34,10 @@ fn inquiries() -> Book {
         ("用件", 44.0), ("状態", 10.0), ("対応メモ", 30.0),
     ]);
     // 状態は三択(入力規則)
-    s.validations.push(Validation {
-        range: (Pos::new(1, 4), Pos::new(500, 4)),
-        formula: "\"未対応,対応中,完了\"".into(),
-    });
+    s.validations.push(Validation::list(
+        (Pos::new(1, 4), Pos::new(500, 4)),
+        "\"未対応,対応中,完了\"".into(),
+    ));
     // 見本の1行
     for (c, v) in ["2026-08-04 09:12", "山田花子", "hanako@example.jp",
                    "見積書の再発行をお願いします", "未対応", ""].iter().enumerate() {

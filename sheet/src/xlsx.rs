@@ -987,47 +987,80 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
             let mut r = Reader::from_str(&s);
             let mut buf = Vec::new();
             // (sqref の原文, list か)。formula1 は子要素なので End まで貯める
-            let mut dv: Option<(String, bool)> = None;
-            let mut in_f1 = false;
-            let mut f1 = String::new();
+            // 種類・比較・第2式・文言まで全部持ち越す(知らない種類も落とさない)
+            let mut dv: Option<crate::model::Validation> = None;
+            let mut dv_sq = String::new();
+            let mut in_f: u8 = 0; // 1=formula1 2=formula2
+            let read_attrs = |e: &quick_xml::events::BytesStart| -> (crate::model::Validation, String) {
+                let a = |k: &str| attr(e, k).unwrap_or_default();
+                let input = {
+                    let (t, b) = (a("promptTitle"), a("prompt"));
+                    (!t.is_empty() || !b.is_empty()).then_some((t, b))
+                };
+                let error = {
+                    let (t, b) = (a("errorTitle"), a("error"));
+                    let style = attr(e, "errorStyle").unwrap_or_else(|| "stop".into());
+                    (!t.is_empty() || !b.is_empty()).then_some((style, t, b))
+                };
+                (
+                    crate::model::Validation {
+                        range: (Pos::new(0, 0), Pos::new(0, 0)),
+                        formula: String::new(),
+                        kind: a("type"),
+                        op: a("operator"),
+                        formula2: String::new(),
+                        input_msg: input,
+                        error_msg: error,
+                    },
+                    a("sqref"),
+                )
+            };
+            let push = |sh: &mut crate::model::Sheet, v: crate::model::Validation, sq: &str| {
+                // sqref は空白区切りで複数の範囲を持てる
+                for part in sq.split_whitespace() {
+                    let range = match part.split_once(':') {
+                        Some((a, b)) => Pos::parse(a).zip(Pos::parse(b)),
+                        None => Pos::parse(part).map(|p| (p, p)),
+                    };
+                    if let Some(range) = range {
+                        let mut v = v.clone();
+                        v.range = range;
+                        sh.validations.push(v);
+                    }
+                }
+            };
             loop {
                 match r.read_event_into(&mut buf) {
                     Ok(Event::Eof) | Err(_) => break,
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"dataValidation" => {
-                        let is_list = attr(&e, "type").as_deref() == Some("list");
-                        if !is_list {
-                            rep.note("入力規則(list 以外。保存で失われる)");
-                        }
-                        dv = attr(&e, "sqref").map(|sq| (sq, is_list));
-                        f1.clear();
+                        let (v, sq) = read_attrs(&e);
+                        dv = Some(v);
+                        dv_sq = sq;
                     }
-                    // 自己閉じは formula1 を持てない = list として成立しない
+                    // 自己閉じ = 式を持たない規則(文言だけ等)。それも持ち越す
                     Ok(Event::Empty(e)) if local(e.name().as_ref()) == b"dataValidation" => {
-                        rep.note("入力規則(候補が無い。保存で失われる)");
+                        let (v, sq) = read_attrs(&e);
+                        push(&mut sh, v, &sq);
                     }
-                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"formula1" => {
-                        in_f1 = true;
-                    }
-                    Ok(Event::Text(t)) if in_f1 => {
-                        f1.push_str(&t.unescape().unwrap_or_default());
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"formula1" => in_f = 1,
+                    Ok(Event::Start(e)) if local(e.name().as_ref()) == b"formula2" => in_f = 2,
+                    Ok(Event::Text(t)) if in_f > 0 => {
+                        let s = t.unescape().unwrap_or_default();
+                        if let Some(v) = &mut dv {
+                            if in_f == 1 {
+                                v.formula.push_str(&s);
+                            } else {
+                                v.formula2.push_str(&s);
+                            }
+                        }
                     }
                     Ok(Event::End(e)) => match local(e.name().as_ref()) {
-                        b"formula1" => in_f1 = false,
+                        b"formula1" | b"formula2" => in_f = 0,
                         b"dataValidation" => {
-                            if let Some((sq, true)) = dv.take() {
-                                // sqref は空白区切りで複数の範囲を持てる
-                                for part in sq.split_whitespace() {
-                                    let range = match part.split_once(':') {
-                                        Some((a, b)) => Pos::parse(a).zip(Pos::parse(b)),
-                                        None => Pos::parse(part).map(|p| (p, p)),
-                                    };
-                                    if let Some(range) = range {
-                                        sh.validations.push(crate::model::Validation {
-                                            range,
-                                            formula: f1.trim().to_string(),
-                                        });
-                                    }
-                                }
+                            if let Some(mut v) = dv.take() {
+                                v.formula = v.formula.trim().to_string();
+                                v.formula2 = v.formula2.trim().to_string();
+                                push(&mut sh, v, &dv_sq);
                             }
                         }
                         _ => {}
@@ -2429,14 +2462,41 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         // データの入力規則(schema では conditionalFormatting の後・hyperlinks の前)
         if !sh.validations.is_empty() {
+            // 属性は " も守る(文言が入るため)。本文は & と < だけ
+            let ea = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
+            let et = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
             let mut dv = format!(r#"<dataValidations count="{}">"#, sh.validations.len());
             for v in &sh.validations {
                 let (a, b) = v.range;
                 let sq = if a == b { a.a1() } else { format!("{}:{}", a.a1(), b.a1()) };
-                // formula1 の中の & と < だけ字面を守る(" は本文では素のまま合法)
-                let f = v.formula.replace('&', "&amp;").replace('<', "&lt;");
+                let mut attrs = String::new();
+                if !v.kind.is_empty() {
+                    attrs.push_str(&format!(r#" type="{}""#, ea(&v.kind)));
+                }
+                if !v.op.is_empty() {
+                    attrs.push_str(&format!(r#" operator="{}""#, ea(&v.op)));
+                }
+                if let Some((style, t, m)) = &v.error_msg {
+                    attrs.push_str(&format!(
+                        r#" errorStyle="{}" errorTitle="{}" error="{}""#,
+                        ea(style), ea(t), ea(m)
+                    ));
+                }
+                if let Some((t, m)) = &v.input_msg {
+                    attrs.push_str(&format!(
+                        r#" promptTitle="{}" prompt="{}""#,
+                        ea(t), ea(m)
+                    ));
+                }
+                let mut fs = String::new();
+                if !v.formula.is_empty() {
+                    fs.push_str(&format!("<formula1>{}</formula1>", et(&v.formula)));
+                }
+                if !v.formula2.is_empty() {
+                    fs.push_str(&format!("<formula2>{}</formula2>", et(&v.formula2)));
+                }
                 dv.push_str(&format!(
-                    r#"<dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="{sq}"><formula1>{f}</formula1></dataValidation>"#,
+                    r#"<dataValidation{attrs} allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="{sq}">{fs}</dataValidation>"#,
                 ));
             }
             dv.push_str("</dataValidations>");
@@ -3083,14 +3143,14 @@ mod validation_roundtrip_tests {
         let mut b = Book::new();
         b.sheets[0].set(Pos::parse("D2").unwrap(), Cell::input("東京"));
         b.sheets[0].set(Pos::parse("D3").unwrap(), Cell::input("大阪"));
-        b.sheets[0].validations.push(Validation {
-            range: (Pos::parse("B2").unwrap(), Pos::parse("B10").unwrap()),
-            formula: r#""甲,乙,丙""#.into(),
-        });
-        b.sheets[0].validations.push(Validation {
-            range: (Pos::parse("C2").unwrap(), Pos::parse("C2").unwrap()),
-            formula: "$D$2:$D$3".into(),
-        });
+        b.sheets[0].validations.push(Validation::list(
+            (Pos::parse("B2").unwrap(), Pos::parse("B10").unwrap()),
+            r#""甲,乙,丙""#.into(),
+        ));
+        b.sheets[0].validations.push(Validation::list(
+            (Pos::parse("C2").unwrap(), Pos::parse("C2").unwrap()),
+            "$D$2:$D$3".into(),
+        ));
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
         buf.set_position(0);
@@ -3107,14 +3167,14 @@ mod validation_roundtrip_tests {
     }
 
     #[test]
-    fn list以外の規則は報告して落とす() {
+    fn list以外の規則も持ち越す() {
         // 手書きの最小 xlsx を作るのは大掛かりなので、書いた xlsx の
         // dataValidation の type を書き換えて読み直す
         let mut b = Book::new();
-        b.sheets[0].validations.push(Validation {
-            range: (Pos::parse("A1").unwrap(), Pos::parse("A1").unwrap()),
-            formula: r#""x""#.into(),
-        });
+        b.sheets[0].validations.push(Validation::list(
+            (Pos::parse("A1").unwrap(), Pos::parse("A1").unwrap()),
+            r#""x""#.into(),
+        ));
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
         // zip の中の sheet1.xml を直に書き換える
@@ -3135,13 +3195,48 @@ mod validation_roundtrip_tests {
             w.write_all(&s).unwrap();
         }
         let out = w.finish().unwrap();
-        let (back, rep) = read(Cursor::new(out.into_inner())).expect("読めない");
-        assert!(back.sheets[0].validations.is_empty(), "list 以外を黙って読んだ");
-        assert!(
-            rep.unsupported.iter().any(|(n, _)| n.contains("入力規則")),
-            "落としたのに報告が無い: {:?}",
-            rep.unsupported
+        let (back, _rep) = read(Cursor::new(out.into_inner())).expect("読めない");
+        // 2026-08-06 改訂: list 以外も落とさず、種類ごと持ち越す
+        assert_eq!(back.sheets[0].validations.len(), 1, "規則が消えた");
+        assert_eq!(back.sheets[0].validations[0].kind, "whole", "種類が持ち越せない");
+    }
+
+    #[test]
+    fn 整数の規則と文言が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        let mut v = Validation::list(
+            (Pos::parse("B2").unwrap(), Pos::parse("B9").unwrap()),
+            "1".into(),
         );
+        v.kind = "whole".into();
+        v.op = "between".into();
+        v.formula2 = "100".into();
+        v.input_msg = Some(("数量".into(), "1 から 100 の整数で".into()));
+        v.error_msg = Some(("stop".into(), "".into(), "その数は使えません".into()));
+        b.sheets[0].validations.push(v);
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let v = &back.sheets[0].validations[0];
+        assert_eq!(v.kind, "whole");
+        assert_eq!(v.op, "between");
+        assert_eq!((v.formula.as_str(), v.formula2.as_str()), ("1", "100"));
+        assert_eq!(
+            v.input_msg,
+            Some(("数量".to_string(), "1 から 100 の整数で".to_string()))
+        );
+        assert_eq!(
+            v.error_msg,
+            Some(("stop".to_string(), String::new(), "その数は使えません".to_string()))
+        );
+        // 判定も一緒に確かめる
+        let s = &back.sheets[0];
+        assert!(v.passes(s, "50"));
+        assert!(!v.passes(s, "0"), "範囲の外が通った");
+        assert!(!v.passes(s, "2.5"), "小数が整数の規則を通った");
+        assert!(!v.passes(s, "あ"), "文字が数の規則を通った");
     }
 }
 

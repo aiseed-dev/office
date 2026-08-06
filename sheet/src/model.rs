@@ -497,13 +497,110 @@ pub struct SheetImage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Validation {
     pub range: (Pos, Pos),
+    /// list の候補(直書き `"a,b"` か範囲参照)。他の種類では formula1
     pub formula: String,
+    /// 種類。xlsx の type をそのまま持つ: "list" / "whole"(整数)/
+    /// "decimal" / "textLength" / "date" / "time" / "custom" / ""(文言だけ)。
+    /// 知らない種類も**落とさず持ち越す**(判定は分かるものだけ)
+    pub kind: String,
+    /// 比較(xlsx の operator)。between / notBetween / equal / notEqual /
+    /// greaterThan / lessThan / greaterThanOrEqual / lessThanOrEqual
+    pub op: String,
+    /// formula2(between / notBetween の右端)
+    pub formula2: String,
+    /// 入力メッセージ(題, 本文)。セルに乗ると出す
+    pub input_msg: Option<(String, String)>,
+    /// エラーの文言(様式 "stop"/"warning"/"information", 題, 本文)。
+    /// stop は堰き止める、warning/information は通すが言う
+    pub error_msg: Option<(String, String, String)>,
 }
 
 impl Validation {
+    /// リストの規則(従来の形)
+    pub fn list(range: (Pos, Pos), formula: String) -> Validation {
+        Validation {
+            range,
+            formula,
+            kind: "list".into(),
+            op: String::new(),
+            formula2: String::new(),
+            input_msg: None,
+            error_msg: None,
+        }
+    }
+
     pub fn contains(&self, p: Pos) -> bool {
         let (a, b) = self.range;
         (a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col)
+    }
+
+    /// 打った文字が規則に合うか。**判定できない規則は堰き止めない**
+    /// (date/time/custom、数でない式 — 読めない規則で入力を止めない家訓)
+    pub fn passes(&self, sheet: &Sheet, text: &str) -> bool {
+        match self.kind.as_str() {
+            "list" => {
+                let opts = self.options(sheet);
+                opts.is_empty() || opts.iter().any(|o| o == text)
+            }
+            "whole" | "decimal" => {
+                let Ok(x) = text.replace(',', "").parse::<f64>() else {
+                    return false; // 数の規則に数でないものは合わない
+                };
+                if self.kind == "whole" && x.fract() != 0.0 {
+                    return false;
+                }
+                self.op_passes(x).unwrap_or(true)
+            }
+            "textLength" => {
+                let n = text.chars().count() as f64;
+                self.op_passes(n).unwrap_or(true)
+            }
+            _ => true,
+        }
+    }
+
+    /// 比較そのもの。式が数として読めなければ None(判定できない)
+    fn op_passes(&self, x: f64) -> Option<bool> {
+        let f1: f64 = self.formula.trim().parse().ok()?;
+        Some(match self.op.as_str() {
+            "between" | "" => {
+                let f2: f64 = self.formula2.trim().parse().ok()?;
+                (f1..=f2).contains(&x)
+            }
+            "notBetween" => {
+                let f2: f64 = self.formula2.trim().parse().ok()?;
+                !(f1..=f2).contains(&x)
+            }
+            "equal" => x == f1,
+            "notEqual" => x != f1,
+            "greaterThan" => x > f1,
+            "lessThan" => x < f1,
+            "greaterThanOrEqual" => x >= f1,
+            "lessThanOrEqual" => x <= f1,
+            _ => return None,
+        })
+    }
+
+    /// 規則の言い直し(エラーの既定の文言に使う)。例: 「1 から 100 の整数」
+    pub fn describe(&self) -> String {
+        let noun = match self.kind.as_str() {
+            "whole" => "整数",
+            "decimal" => "数",
+            "textLength" => "文字数",
+            _ => return String::new(),
+        };
+        let (f1, f2) = (self.formula.trim(), self.formula2.trim());
+        match self.op.as_str() {
+            "between" | "" => format!("{f1} から {f2} の{noun}"),
+            "notBetween" => format!("{f1} から {f2} の外の{noun}"),
+            "equal" => format!("{f1} に等しい{noun}"),
+            "notEqual" => format!("{f1} 以外の{noun}"),
+            "greaterThan" => format!("{f1} より大きい{noun}"),
+            "lessThan" => format!("{f1} より小さい{noun}"),
+            "greaterThanOrEqual" => format!("{f1} 以上の{noun}"),
+            "lessThanOrEqual" => format!("{f1} 以下の{noun}"),
+            _ => noun.to_string(),
+        }
     }
 
     /// 候補の一覧。直書きは `,` で割り、範囲参照はそのシートの値を集める。
@@ -2121,10 +2218,10 @@ mod validation_tests {
 
     #[test]
     fn 直書きの候補が割れる() {
-        let v = Validation {
-            range: (Pos::new(1, 1), Pos::new(9, 1)),
-            formula: r#""甲, 乙,丙""#.into(),
-        };
+        let v = Validation::list(
+            (Pos::new(1, 1), Pos::new(9, 1)),
+            r#""甲, 乙,丙""#.into(),
+        );
         let s = Sheet::default();
         assert_eq!(v.options(&s), vec!["甲", "乙", "丙"], "空白ごと候補にした");
         assert!(v.contains(Pos::new(5, 1)));
@@ -2137,26 +2234,26 @@ mod validation_tests {
         for (r, t) in [(1, "東京"), (2, "大阪"), (3, "東京"), (4, "")] {
             s.set(Pos::new(r, 3), Cell::input(t));
         }
-        let v = Validation {
-            range: (Pos::new(0, 0), Pos::new(0, 0)),
-            formula: "$D$2:$D$5".into(),
-        };
+        let v = Validation::list(
+            (Pos::new(0, 0), Pos::new(0, 0)),
+            "$D$2:$D$5".into(),
+        );
         assert_eq!(v.options(&s), vec!["東京", "大阪"], "重複と空欄が候補に入った");
         // 解決できない参照は空(制限なしと扱う側の約束)
-        let alien = Validation {
-            range: (Pos::new(0, 0), Pos::new(0, 0)),
-            formula: "Sheet2!$A$1:$A$3".into(),
-        };
+        let alien = Validation::list(
+            (Pos::new(0, 0), Pos::new(0, 0)),
+            "Sheet2!$A$1:$A$3".into(),
+        );
         assert!(alien.options(&s).is_empty());
     }
 
     #[test]
     fn 位置に効く規則が引ける() {
         let mut s = Sheet::default();
-        s.validations.push(Validation {
-            range: (Pos::new(1, 1), Pos::new(3, 1)),
-            formula: r#""a,b""#.into(),
-        });
+        s.validations.push(Validation::list(
+            (Pos::new(1, 1), Pos::new(3, 1)),
+            r#""a,b""#.into(),
+        ));
         assert!(s.validation_at(Pos::new(2, 1)).is_some());
         assert!(s.validation_at(Pos::new(2, 2)).is_none());
     }

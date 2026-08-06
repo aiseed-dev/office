@@ -377,10 +377,10 @@ fn chumon() -> Book {
     }
 
     // 品番の入力規則: 候補は写しの品番列(範囲参照 — @更新 に追従する)
-    s.validations.push(Validation {
-        range: (Pos::new(6, 0), Pos::new(15, 0)),
-        formula: "$H$2:$H$40".into(),
-    });
+    s.validations.push(Validation::list(
+        (Pos::new(6, 0), Pos::new(15, 0)),
+        "$H$2:$H$40".into(),
+    ));
 
     s.paper_size = Some(9); // A4
     s.print_areas.push((Pos::new(0, 0), Pos::new(21, 4)));

@@ -137,6 +137,8 @@ struct Calc {
     auto_filter: Option<AutoFilter>,
     /// 開いている▼の板(列, 値の検索)。Esc で閉じる
     filter_panel: Option<(u32, Editor)>,
+    /// 入力規則の聞き取り中の種類("whole" / "decimal" / "textLength")
+    dv_pend: Option<&'static str>,
     /// 表の操作(書式・フィル・行列・結合・並べ替え)を戻すための控え。
     /// 入力欄の undo とは別 — **戻せない操作は事故のとき逃げ道が無い**。
     /// 1手 = シートの控えの束。普通の操作は1枚、Python の実行のように
@@ -315,6 +317,7 @@ impl Calc {
             frozen: None,
             auto_filter: None,
             filter_panel: None,
+            dv_pend: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             sheet_ui: Vec::new(),
@@ -367,6 +370,20 @@ impl Calc {
         self.edit_armed = false; // セルを移った=編集は仕切り直し
         if self.pick_kind == "fn-complete" {
             self.pick = None; // 補完の一覧も畳む
+        }
+        // 入力メッセージ付きの規則のセルに乗ったら、その説明を出す
+        if let Some((t, m)) = self
+            .sheet()
+            .validation_at(self.cursor)
+            .and_then(|v| v.input_msg.clone())
+        {
+            self.status = if t.is_empty() {
+                m.into()
+            } else if m.is_empty() {
+                t.into()
+            } else {
+                format!("{t}: {m}").into()
+            };
         }
     }
 
@@ -1599,18 +1616,44 @@ impl Calc {
         }
         // 空にするのは常に許す(allowBlank の既定)。式は結果が変わり得るので通す
         if !text.trim().is_empty() && !text.starts_with('=') {
-            if let Some(v) = self.sheet().validation_at(cur) {
-                let opts = v.options(self.sheet());
-                // 候補が解決できない規則(別のシートへの参照等)では堰き止めない
-                if !opts.is_empty() && !opts.iter().any(|o| *o == text.trim()) {
-                    self.status = format!(
-                        "「{}」は入力規則に合いません(候補: {} / Esc で戻す)",
-                        text.trim(),
-                        opts.join(" / ")
+            // 判定は Validation::passes(判定できない規則は堰き止めない)。
+            // 文言は規則に付いたエラーの文言が正、無ければ規則の言い直し
+            let verdict = self.sheet().validation_at(cur).and_then(|v| {
+                if v.passes(self.sheet(), text.trim()) {
+                    None
+                } else {
+                    let fallback = if v.kind == "list" {
+                        format!("候補: {}", v.options(self.sheet()).join(" / "))
+                    } else {
+                        v.describe()
+                    };
+                    Some((v.error_msg.clone(), fallback))
+                }
+            });
+            if let Some((em, fallback)) = verdict {
+                let stop = em.as_ref().map(|(s, _, _)| s == "stop").unwrap_or(true);
+                let said = match &em {
+                    Some((_, t, m)) if !t.is_empty() || !m.is_empty() => {
+                        if t.is_empty() {
+                            m.clone()
+                        } else if m.is_empty() {
+                            t.clone()
+                        } else {
+                            format!("{t}: {m}")
+                        }
+                    }
+                    _ => fallback,
+                };
+                if stop {
+                    self.status = ui::tf!(
+                        "「{}」は入力規則に合いません({} / Esc で戻す)",
+                        text.trim(), said
                     )
                     .into();
                     return false;
                 }
+                // 警告・情報は通すが言う(Excel の「警告」で続行した形)
+                self.status = ui::tf!("入力規則に合いませんが、通しました({})", said).into();
             }
         }
         self.checkpoint();

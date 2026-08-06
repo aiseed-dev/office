@@ -62,6 +62,60 @@ mod size_grip_tests {
 }
 
 #[cfg(test)]
+mod validation_tests {
+    use crate::*;
+
+    #[gpui::test]
+    fn 整数の規則を掛けて堰き止める(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            // B2:B4 に 1〜100 の整数
+            this.anchor = Some(Pos::parse("B2").unwrap());
+            this.cursor = Pos::parse("B4").unwrap();
+            this.run_cmd("data-validation", cx);
+            assert_eq!(this.pick_kind, "dv-kind");
+            this.apply_pick("整数", cx);
+            let (kind, _) = this.prompt.as_ref().expect("条件の板が開かない");
+            assert_eq!(*kind, "dv-cond");
+            this.prompt = Some(("dv-cond", Editor::new("1〜100")));
+            this.finish_prompt(cx);
+            let v = &this.sheet().validations[0];
+            assert_eq!((v.kind.as_str(), v.op.as_str()), ("whole", "between"));
+            // 範囲の外の数は堰き止められる
+            this.anchor = None;
+            this.cursor = Pos::parse("B2").unwrap();
+            this.sync_input();
+            this.input.insert("200");
+            assert!(!this.commit(), "200 が 1〜100 を通った");
+            assert!(this.status.contains("入力規則"), "{}", this.status);
+            // 範囲の中は入る
+            this.input.select_all();
+            this.input.insert("50");
+            assert!(this.commit());
+            // エラーの文言を「警告」にすると、通して言うだけ
+            this.anchor = Some(Pos::parse("B2").unwrap());
+            this.cursor = Pos::parse("B4").unwrap();
+            this.prompt = Some(("dv-err", Editor::new("警告: 大きすぎます")));
+            this.finish_prompt(cx);
+            this.anchor = None;
+            this.cursor = Pos::parse("B3").unwrap();
+            this.sync_input();
+            this.input.insert("999");
+            assert!(this.commit(), "警告なのに堰き止めた");
+            assert!(this.status.contains("通しました"), "{}", this.status);
+            // 入力メッセージはセルに乗ると状態行に出る
+            this.anchor = Some(Pos::parse("B2").unwrap());
+            this.cursor = Pos::parse("B4").unwrap();
+            this.prompt = Some(("dv-msg", Editor::new("数量: 1〜100 で")));
+            this.finish_prompt(cx);
+            this.anchor = None;
+            this.cursor = Pos::parse("B4").unwrap();
+            this.sync_input();
+            assert!(this.status.contains("数量"), "{}", this.status);
+        });
+    }
+}
+
 mod numfmt_tests {
     use crate::*;
 
