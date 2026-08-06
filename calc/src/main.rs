@@ -61,6 +61,8 @@ struct Calc {
     pivot_pend: Option<PivotPend>,
     /// 小計の聞き取りの途中経過(同じ形の控えを使い回す)
     sub_pend: Option<PivotPend>,
+    /// 並べ替えの「拡張しますか」の聞き取り中(昇順か)。Esc でやめる
+    sort_pend: Option<bool>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
@@ -293,6 +295,7 @@ impl Calc {
             find_term: None,
             pivot_pend: None,
             sub_pend: None,
+            sort_pend: None,
             solver: None,
             sa_cat: 0,
             slicer: None,
@@ -1222,7 +1225,61 @@ impl Calc {
     /// メニューの項目を実行する。
     /// いまの列で並べ替え(右クリックとリボンの昇順/降順が同じ道)
     fn sort_active(&mut self, asc: bool) {
-        self.sort_col(self.cursor.col, asc);
+        // 範囲を選んでいなければ従来どおり: カーソル列で表全体
+        if self.anchor.is_none() {
+            self.sort_col(self.cursor.col, asc);
+            return;
+        }
+        let (a, b) = self.sel_rect();
+        if a == b {
+            self.sort_col(self.cursor.col, asc);
+            return;
+        }
+        // 選択の左右(同じ行)に続きのデータがあるか。あるなら本家と同じく
+        // 「拡張して並べ替え/選択だけ」を聞く — 黙って行をずらさない
+        let filled = |p: Pos| {
+            self.sheet().get(p).map(|c| !c.editable().trim().is_empty()).unwrap_or(false)
+        };
+        let neighbor = (a.row..=b.row).any(|r| {
+            let left = a.col > 0 && filled(Pos::new(r, a.col - 1));
+            left || filled(Pos::new(r, b.col + 1))
+        });
+        if neighbor {
+            let at = self
+                .cell_origin_px(self.cursor)
+                .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+            self.sort_pend = Some(asc);
+            self.pick_kind = "sort-expand";
+            self.pick = Some((
+                vec![
+                    "拡張して並べ替え(続きの列も一緒に動く)".into(),
+                    "選択した範囲だけ並べ替え(横の列とはずれます)".into(),
+                    "やめる".into(),
+                ],
+                at,
+            ));
+            self.status =
+                ui::t!("選択の横にデータが続いています。どう並べ替えますか?").into();
+            return;
+        }
+        self.sort_range_now(a, b, asc);
+    }
+
+    /// 選んだ範囲だけを並べ替える(確認の後もここに来る)
+    pub(crate) fn sort_range_now(&mut self, a: Pos, b: Pos, asc: bool) {
+        self.commit();
+        self.checkpoint();
+        self.book.sheets[self.active].sort_range(a, b, self.cursor.col, asc);
+        self.dirty = true;
+        recalc_book(&mut self.book, self.active);
+        self.sync_input(); // 古い控えの書き戻しを防ぐ(sort_col と同じ)
+        self.status = ui::tf!(
+            "{}:{} を{}に並べ替えました(範囲の中だけ。Ctrl+Z で1手)",
+            a.a1(), b.a1(),
+            if asc { "昇順" } else { "降順" }
+        )
+        .into();
     }
 
     /// 指定の列で並べ替え(▼の板の昇順/降順もここに来る)
@@ -1232,6 +1289,9 @@ impl Calc {
         self.book.sheets[self.active].sort_by_column(c, asc, true);
         self.dirty = true;
         recalc_book(&mut self.book, self.active);
+        // 数式バーの控えを並べ替え後のセルに合わせる — 同期を怠ると、
+        // 次の commit で並べ替え前の古い値が書き戻される
+        self.sync_input();
         self.status = ui::tf!("{} 列で{}に並べ替えました", Pos::new(0, c).a1().trim_end_matches('1'), if asc { "昇順" } else { "降順" })
             .into();
     }

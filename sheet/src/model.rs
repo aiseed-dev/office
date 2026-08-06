@@ -1691,6 +1691,44 @@ impl Sheet {
         }
     }
 
+    /// 選んだ範囲**だけ**を並べ替える(範囲の外の列は動かさない)。
+    /// 本家の「現在選択されているセルのみの並べ替え」— 隣のデータと
+    /// 行がずれるのは承知の上で使う形。見出しは仮定しない
+    pub fn sort_range(&mut self, a: Pos, b: Pos, key_col: u32, ascending: bool) {
+        if a.row >= b.row {
+            return; // 1行なら並べ替えるものが無い
+        }
+        let key_col = key_col.clamp(a.col, b.col);
+        // 範囲の行を(範囲の列だけ)取り出す
+        let mut rows: Vec<Vec<(u32, Cell)>> = (a.row..=b.row)
+            .map(|r| {
+                (a.col..=b.col)
+                    .filter_map(|c| {
+                        self.cells.get(&Pos { row: r, col: c }).map(|x| (c, x.clone()))
+                    })
+                    .collect()
+            })
+            .collect();
+        rows.sort_by(|x, y| {
+            let key = |v: &Vec<(u32, Cell)>| {
+                v.iter().find(|(c, _)| *c == key_col).map(|(_, x)| x.value.clone())
+            };
+            let o = cmp_value(&key(x), &key(y));
+            if ascending { o } else { o.reverse() }
+        });
+        for r in a.row..=b.row {
+            for c in a.col..=b.col {
+                self.cells.remove(&Pos { row: r, col: c });
+            }
+        }
+        for (i, cells) in rows.into_iter().enumerate() {
+            let r = a.row + i as u32;
+            for (c, cell) in cells {
+                self.cells.insert(Pos { row: r, col: c }, cell);
+            }
+        }
+    }
+
     /// 中身が同じ行を落とす。**先に出てきた方を残す。**
     ///
     /// 返すのは落とした行数 — 何件消したかを黙らない。

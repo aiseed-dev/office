@@ -182,6 +182,19 @@ impl Calc {
                     }
                 }
             }
+            // 並べ替えの「拡張しますか」(選択の横にデータが続いているとき)
+            "sort-expand" => {
+                let asc = self.sort_pend.take().unwrap_or(true);
+                if v.starts_with("拡張して") {
+                    // 表全体をカーソル列で(見出しは据え置き — 従来の道)
+                    self.sort_col(self.cursor.col, asc);
+                } else if v.starts_with("選択した範囲だけ") {
+                    let (a, b) = self.sel_rect();
+                    self.sort_range_now(a, b, asc);
+                } else {
+                    self.status = ui::t!("並べ替えをやめました").into();
+                }
+            }
             // 結合の確認(範囲に値が複数あるとき)。値は消さない設計のまま
             "merge-confirm" => {
                 if v.starts_with("結合する") {
@@ -1098,6 +1111,7 @@ impl Calc {
         // の順で閉じる
         self.pivot_pend = None; // 聞き取り途中のピボット・小計は Esc でやめる
         self.sub_pend = None;
+        self.sort_pend = None; // 並べ替えの「拡張しますか」も
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる

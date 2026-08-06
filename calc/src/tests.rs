@@ -243,6 +243,65 @@ mod sort_tests {
     use crate::*;
 
     #[gpui::test]
+    fn 選択の横にデータが続くときは拡張するか聞く(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            // A=名前, B=数(隣り合った2列の表)
+            for (a1, v) in [
+                ("A1", "c"), ("B1", "3"),
+                ("A2", "a"), ("B2", "1"),
+                ("A3", "b"), ("B3", "2"),
+            ] {
+                this.cursor = Pos::parse(a1).unwrap();
+                this.sync_input();
+                this.input.insert(v);
+                assert!(this.commit());
+            }
+            // A列だけ選んで昇順 → 横(B列)にデータが続くので聞かれる
+            this.anchor = Some(Pos::parse("A1").unwrap());
+            this.cursor = Pos::parse("A3").unwrap();
+            this.sync_input();
+            this.run_cmd("sort-asc", cx);
+            assert_eq!(this.pick_kind, "sort-expand", "拡張の確認が出ない");
+            let get = |this: &Calc, p: &str| {
+                this.sheet().get(Pos::parse(p).unwrap()).map(|c| c.editable()).unwrap_or_default()
+            };
+            assert_eq!(get(this, "A1"), "c", "聞く前に並べ替えられた");
+            // 「選択した範囲だけ」→ A列だけ並び、B列はそのまま(ずれる)
+            this.apply_pick("選択した範囲だけ並べ替え(横の列とはずれます)", cx);
+            assert_eq!(
+                (get(this, "A1"), get(this, "A2"), get(this, "A3")),
+                ("a".into(), "b".into(), "c".into())
+            );
+            assert_eq!(
+                (get(this, "B1"), get(this, "B2"), get(this, "B3")),
+                ("3".into(), "1".into(), "2".into()),
+                "選択の外まで動いた"
+            );
+            // 「拡張して」→ 表全体が行ごと動く(1行目は見出しとして据え置き、
+            // 残りが A の降順。B が行ごと付いてくる)
+            this.run_cmd("sort-desc", cx);
+            assert_eq!(this.pick_kind, "sort-expand");
+            this.apply_pick("拡張して並べ替え(続きの列も一緒に動く)", cx);
+            assert_eq!(get(this, "A2"), "c");
+            assert_eq!(get(this, "B2"), "2", "拡張なのに行が付いてこない");
+            // 横に何も無い離れ小島は、聞かずに選択だけを並べ替える
+            for (a1, v) in [("E1", "2"), ("E2", "1")] {
+                this.cursor = Pos::parse(a1).unwrap();
+                this.sync_input();
+                this.input.insert(v);
+                assert!(this.commit());
+            }
+            this.anchor = Some(Pos::parse("E1").unwrap());
+            this.cursor = Pos::parse("E2").unwrap();
+            this.sync_input();
+            this.run_cmd("sort-asc", cx);
+            assert_eq!(get(this, "E1"), "1", "島の並べ替えが効かない");
+            assert_eq!(this.pick_kind, "value", "島なのに聞いた");
+        });
+    }
+
+    #[gpui::test]
     fn 複数の基準で並べ替える(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
