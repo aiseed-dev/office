@@ -698,4 +698,5 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)", "Veri doğrulama — koşul (örn. 1〜100 / 1〜100 以外 / >=0 / <>0)"),
     ("入力メッセージ(題: 本文 の形。空 Enter = 消す)", "Girdi iletisi (başlık: metin; boş Enter = sil)"),
     ("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)", "Hata iletisi (başına 警告: koyarsanız notla kabul eder; boş Enter = sil)"),
+    ("画面の文字の大きさ {}%(次回もこの大きさで開きます)", "Ekran yazı boyutu {}% (bir dahaki sefere de bu boyutta açılır)"),
 ];

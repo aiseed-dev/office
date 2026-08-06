@@ -221,6 +221,9 @@ impl Render for Calc {
         // 窓の大きさを控える(見える行数・列数がこれに追従する)
         self.view_w_px = f32::from(window.viewport_size().width);
         self.view_h_px = f32::from(window.viewport_size().height);
+        // 画面の文字の大きさ(Ctrl+= / Ctrl+- 、表示タブ)。リボン・数式バー・
+        // メニュー・見出し・状態行の文字と釦がこれに追従する。格子のズームとは別
+        let us = self.ui_scale;
         if std::env::var_os("JO_SELFTEST").is_some() {
             // 実際に描画が走った証拠を残す(notify だけでは画面は変わらない —
             // これが止まってティックが続くなら、提示(present)の停止)
@@ -248,7 +251,7 @@ impl Render for Calc {
                 .hover(move |s| s.bg(rgb(0x2E8B57)))
                 .child(gpui::svg()
                     .path(SharedString::from(format!("icons/{icon}.svg")))
-                    .size(px(15.0)).text_color(rgb(0xE8F3EC)))
+                    .size(px(us * 15.0)).text_color(rgb(0xE8F3EC)))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
         };
         let title = self
@@ -258,7 +261,7 @@ impl Render for Calc {
             .unwrap_or_else(|| ui::t!("無題のブック").into());
         let winbtn = |id: &'static str, label: &'static str| {
             div().id(id).px_2p5().py_1().rounded_sm()
-                .text_size(px(12.0)).text_color(rgb(0xCFE6D8))
+                .text_size(px(us * 12.0)).text_color(rgb(0xCFE6D8))
                 .cursor_pointer()
                 .hover(move |s| if id == "close" { s.bg(rgb(0xC0392B)).text_color(rgb(0xFFFFFF)) }
                                 else { s.bg(rgb(0x2E8B57)).text_color(rgb(0xFFFFFF)) })
@@ -292,14 +295,14 @@ impl Render for Calc {
                 cx.notify()
             })))
             .child(div().flex_1())
-            .child(div().text_size(px(12.5)).text_color(rgb(0xFFFFFF))
+            .child(div().text_size(px(us * 12.5)).text_color(rgb(0xFFFFFF))
                 .whitespace_nowrap().overflow_hidden()
                 .child(SharedString::from(format!(
                     "{}{title}",
                     if self.dirty { "*" } else { "" }
                 ))))
             .child(div().flex_1())
-            .child(div().pr_2().text_size(px(10.5)).text_color(rgb(0x9CC9AF))
+            .child(div().pr_2().text_size(px(us * 10.5)).text_color(rgb(0x9CC9AF))
                 .child(SharedString::from(ui::tf!("calc — 実装済み {}/{}", ready, all))))
             .child(winbtn("min", "─").on_click(cx.listener(|_, _, window, _| {
                 window.minimize_window();
@@ -318,7 +321,7 @@ impl Render for Calc {
             tabs = tabs.child(div()
                 .id(SharedString::from(format!("tab{i}")))
                 .px_2p5().pt_1p5()
-                .text_size(px(12.0))
+                .text_size(px(us * 12.0))
                 .text_color(if on { rgb(0x2E8B57) } else { th_fg })
                 .font_weight(if on { gpui::FontWeight::BOLD } else { gpui::FontWeight::NORMAL })
                 .cursor_pointer()
@@ -337,7 +340,7 @@ impl Render for Calc {
                 })));
         }
         tabs = tabs.child(div().flex_1())
-            .child(div().id("tab-find").px_2().pb_1().text_size(px(12.0))
+            .child(div().id("tab-find").px_2().pb_1().text_size(px(us * 12.0))
                 .text_color(rgb(0x555E66)).cursor_pointer()
                 .hover(|s| s.text_color(rgb(0x1B6E3C)))
                 .child("🔍")
@@ -409,10 +412,10 @@ impl Render for Calc {
                     cx.notify()
                 });
                 return div().id(SharedString::from(format!("h-{icon}")))
-                    .w(px(w)).h(px(22.0)).px_1p5().rounded_sm()
+                    .w(px(us * w)).h(px(us * 22.0)).px_1p5().rounded_sm()
                     .border_1().border_color(th_line)
                     .flex().items_center()
-                    .text_size(px(10.5)).text_color(th_fg)
+                    .text_size(px(us * 10.5)).text_color(th_fg)
                     .whitespace_nowrap().overflow_hidden()
                     .on_hover(hoverable)
                     .cursor_pointer().hover(move |st| st.bg(th_btn_hover))
@@ -443,15 +446,15 @@ impl Render for Calc {
             if let Some(short) = big {
                 // 名札つきの大釦(絵の下に短い名前 — 本家の言い方)
                 let mut b = div().id(SharedString::from(format!("h-{icon}")))
-                    .px_2().h(px(46.0)).rounded_sm()
+                    .px_2().h(px(us * 46.0)).rounded_sm()
                     .flex().flex_col().items_center().justify_center().gap_1()
                     .on_hover(hoverable)
                     .children(has_icon.then(|| {
                         gpui::svg()
                             .path(SharedString::from(format!("icons/{icon}.svg")))
-                            .size(px(20.0)).text_color(fg)
+                            .size(px(us * 20.0)).text_color(fg)
                     }))
-                    .child(div().text_size(px(10.5)).text_color(fg).child(short));
+                    .child(div().text_size(px(us * 10.5)).text_color(fg).child(short));
                 if cmd.ready {
                     let cid = cmd.id;
                     b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
@@ -463,18 +466,18 @@ impl Render for Calc {
                 return b.into_any_element();
             }
             let mut b = div().id(SharedString::from(format!("h-{icon}")))
-                .h(px(26.0)).rounded_sm()
+                .h(px(us * 26.0)).rounded_sm()
                 .flex().items_center().justify_center()
                 .on_hover(hoverable);
-            b = if has_icon { b.w(px(26.0)) } else { b.px_1p5() };
+            b = if has_icon { b.w(px(us * 26.0)) } else { b.px_1p5() };
             b = b
                 .children(has_icon.then(|| {
                     gpui::svg()
                         .path(SharedString::from(format!("icons/{icon}.svg")))
-                        .size(px(18.0)).text_color(fg)
+                        .size(px(us * 18.0)).text_color(fg)
                 }))
                 .children((!has_icon).then(|| {
-                    div().text_size(px(10.5)).text_color(fg).child(label)
+                    div().text_size(px(us * 10.5)).text_color(fg).child(label)
                 }));
             if cmd.ready {
                 let cid = cmd.id;
@@ -517,14 +520,14 @@ impl Render for Calc {
                     continue; // 表に無い組は出さない(将来の並び替えでも落ちない)
                 }
                 if !first {
-                    band = band.child(div().w(px(1.0)).h(px(46.0))
+                    band = band.child(div().w(px(1.0)).h(px(us * 46.0))
                         .bg(th_cmd_border).mx_1());
                 }
                 first = false;
                 let mut col = div().flex().flex_col().gap_0p5();
                 for ids in [*topr, *botr] {
                     let mut r = div().flex().flex_row().items_center()
-                        .gap_0p5().h(px(26.0));
+                        .gap_0p5().h(px(us * 26.0));
                     for id in ids {
                         if let Some(cmd) = items.iter().find(|c| c.id == *id) {
                             used.insert(cmd.id);
@@ -539,13 +542,13 @@ impl Render for Calc {
             let rest: Vec<&ribbon::Cmd> =
                 items.iter().filter(|c| !used.contains(c.id)).collect();
             if !rest.is_empty() {
-                band = band.child(div().w(px(1.0)).h(px(46.0))
+                band = band.child(div().w(px(1.0)).h(px(us * 46.0))
                     .bg(th_cmd_border).mx_1());
                 let half = rest.len().div_ceil(2);
                 let mut col = div().flex().flex_col().gap_0p5();
                 for chunk in rest.chunks(half.max(1)) {
                     let mut r = div().flex().flex_row().items_center()
-                        .gap_0p5().h(px(26.0));
+                        .gap_0p5().h(px(us * 26.0));
                     for cmd in chunk {
                         r = r.child(mk_btn(cmd, cx));
                     }
@@ -588,12 +591,12 @@ impl Render for Calc {
             t.insert(cur, '|');
             div().w(px(88.0)).px_1().py_0p5().bg(gpui::white())
                 .border_1().border_color(rgb(0x1B6E3C)).rounded_sm()
-                .text_size(px(12.0)).whitespace_nowrap().overflow_hidden()
+                .text_size(px(us * 12.0)).whitespace_nowrap().overflow_hidden()
                 .child(SharedString::from(t))
         } else {
             div().w(px(88.0)).px_1().py_0p5()
                 .border_1().border_color(rgb(0xC6CDD3)).rounded_sm()
-                .text_size(px(12.0))
+                .text_size(px(us * 12.0))
                 .font_weight(gpui::FontWeight::BOLD).text_color(rgb(0x1B6E3C))
                 .cursor_text()
                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -616,7 +619,7 @@ impl Render for Calc {
             // 数式編集のクリック位置の換算(下の 156px)が崩れないように
             .child(div().id("fx").w(px(28.0)).py_0p5().rounded_sm()
                    .flex().items_center().justify_center()
-                   .text_size(px(13.0)).italic()
+                   .text_size(px(us * 13.0)).italic()
                    .font_weight(gpui::FontWeight::BOLD).text_color(rgb(0x1B6E3C))
                    .cursor_pointer().hover(|s| s.bg(rgb(0xE4EFE8)))
                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -632,7 +635,7 @@ impl Render for Calc {
             .child(div().flex_1().px_2().py_1().bg(gpui::white())
                    .border_1().border_color(if in_edit { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
                    .rounded_sm()
-                   .text_size(px(13.0)).font_family("Noto Sans JP")
+                   .text_size(px(us * 13.0)).font_family("Noto Sans JP")
                    .cursor_text()
                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                        |this, e: &gpui::MouseDownEvent, _, cx| {
@@ -804,7 +807,7 @@ impl Render for Calc {
                 .border_r_1().border_b_1()
                 .border_color(rgb(0xD5DBE0))
                 .flex().items_center().justify_center()
-                .text_size(px(11.5))
+                .text_size(px(us * 11.5))
                 .text_color(if on { rgb(0x1B6E3C) } else if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) })
                 .child(SharedString::from(col_name(c)))
                 // 右端の帯は幅を変える取っ手(カーソル形状の誘いだけ。
@@ -833,7 +836,7 @@ impl Render for Calc {
                     .border_r_1().border_b_1()
                     .border_color(rgb(0xD5DBE0))
                     .flex().items_center().justify_center()
-                    .text_size(px(11.5))
+                    .text_size(px(us * 11.5))
                     .text_color(if row_on { rgb(0x1B6E3C) } else if filtered_blue { rgb(0x1B6EC2) } else if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) })
                     .child(SharedString::from((r + 1).to_string()))
                     // 下端の帯は高さを変える取っ手(列見出しの右端と同じ仕掛け)
@@ -867,7 +870,7 @@ impl Render for Calc {
                                 .border_1().border_color(rgb(0x8FA3AE))
                                 .bg(gpui::white())
                                 .flex().items_center().justify_center()
-                                .text_size(px(9.0)).text_color(rgb(0x1B6E3C))
+                                .text_size(px(us * 9.0)).text_color(rgb(0x1B6E3C))
                                 .cursor_pointer()
                                 .hover(|s| s.bg(rgb(0xEAF5EE)))
                                 .child(if hidden { "+" } else { "−" })
@@ -1104,7 +1107,7 @@ impl Render for Calc {
                 if sel && self.sheet().validation_at(p).is_some() {
                     d = d.relative().child(div().absolute()
                         .bottom(px(-1.0)).right(px(1.0))
-                        .text_size(px(8.5)).text_color(rgb(0x1B6E3C))
+                        .text_size(px(us * 8.5)).text_color(rgb(0x1B6E3C))
                         .child("▾"));
                 }
                 // 選択中のセルは、確定前の入力をその場に見せる
@@ -1164,7 +1167,7 @@ impl Render for Calc {
                         .top(px(y + (hrh - 14.0).max(0.0) / 2.0))
                         .w(px(14.0)).h(px(14.0)).rounded_sm()
                         .flex().items_center().justify_center()
-                        .text_size(px(8.0))
+                        .text_size(px(us * 8.0))
                         .cursor_pointer()
                         .bg(if on { rgb(0x1B6E3C) } else { rgb(0xEFF2F4) })
                         .border_1()
@@ -1195,13 +1198,13 @@ impl Render for Calc {
                     .w(px(236.0))
                     .p_1().rounded_md().bg(rgb(0xFFFFFF))
                     .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
-                    .text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                    .text_size(px(us * 12.5)).text_color(rgb(0x1B1B1B))
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
                 // 検索欄(開いている間は打鍵がここへ来る)
                 panel = panel.child(
                     div().px_2().py_1().mb_1().rounded_sm()
                         .border_1().border_color(rgb(0x1B6E3C))
-                        .text_size(px(12.0))
+                        .text_size(px(us * 12.0))
                         .child(if search.is_empty() {
                             div().text_color(rgb(0x9AA5AE))
                                 .child(SharedString::from(format!("|{}", ui::t!("(打つと絞り込み)"))))
@@ -1218,7 +1221,7 @@ impl Render for Calc {
                         .border_color(if on { rgb(0x1B6E3C) } else { rgb(0xB6BDC4) })
                         .bg(if on { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
                         .flex().items_center().justify_center()
-                        .text_size(px(9.0)).text_color(rgb(0xFFFFFF))
+                        .text_size(px(us * 9.0)).text_color(rgb(0xFFFFFF))
                         .children(on.then(|| "✓"))
                 };
                 panel = panel.child(
@@ -1256,7 +1259,7 @@ impl Render for Calc {
                             .child(checkbox(on))
                             .child(div().flex_1().whitespace_nowrap().overflow_hidden()
                                 .child(SharedString::from(label)))
-                            .child(div().text_size(px(11.0)).text_color(rgb(0x66707A))
+                            .child(div().text_size(px(us * 11.0)).text_color(rgb(0x66707A))
                                 .child(SharedString::from(n.to_string())))
                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                                 move |this, _, _, cx| {
@@ -1273,7 +1276,7 @@ impl Render for Calc {
                 }
                 panel = panel.child(list);
                 if cut {
-                    panel = panel.child(div().px_1p5().text_size(px(11.0))
+                    panel = panel.child(div().px_1p5().text_size(px(us * 11.0))
                         .text_color(rgb(0x8A4B00))
                         .child(ui::t!("値が多いので上位 1,000 種で切っています")));
                 }
@@ -1281,7 +1284,7 @@ impl Render for Calc {
                 let footer_btn = |id: &'static str, label: SharedString| {
                     div().id(id).px_1p5().py_0p5().rounded_sm().cursor_pointer()
                         .hover(|s| s.bg(rgb(0xEAF5EE)))
-                        .text_size(px(12.0)).text_color(rgb(0x1B6E3C))
+                        .text_size(px(us * 12.0)).text_color(rgb(0x1B6E3C))
                         .child(label)
                 };
                 panel = panel.child(
@@ -1310,7 +1313,7 @@ impl Render for Calc {
                                     cx.notify();
                                 }))),
                 );
-                panel = panel.child(div().px_1p5().pt_0p5().text_size(px(10.5))
+                panel = panel.child(div().px_1p5().pt_0p5().text_size(px(us * 10.5))
                     .text_color(rgb(0x9AA5AE))
                     .child(ui::t!("クリックで入切 — すぐ効きます。Esc で閉じる")));
                 grid = grid.child(panel);
@@ -1347,7 +1350,7 @@ impl Render for Calc {
                     (true, None) => rgb(0x1B6E3C),
                     (false, None) => rgb(0xD5DBE0),
                 })
-                .text_size(px(11.5))
+                .text_size(px(us * 11.5))
                 .text_color(if on {
                     rgb(0x1B6E3C)
                 } else if dark_bg {
@@ -1388,7 +1391,7 @@ impl Render for Calc {
         sheets_bar = sheets_bar.child(div()
             .id("addsheet")
             .px_2().py_1().rounded_sm()
-            .text_size(px(12.5)).text_color(rgb(0x1B6E3C))
+            .text_size(px(us * 12.5)).text_color(rgb(0x1B6E3C))
             .cursor_pointer().hover(|s| s.bg(gpui::white()))
             .child("+")
             .on_click(cx.listener(|this, _, _, cx| {
@@ -1427,7 +1430,7 @@ impl Render for Calc {
             let mut w = div().flex().flex_row().flex_wrap().gap_3()
                 .px_3().py_1().bg(rgb(0xF7F9FA))
                 .border_t_1().border_color(rgb(0xD5DBE0))
-                .text_size(px(11.0)).text_color(rgb(0x1B1B1B));
+                .text_size(px(us * 11.0)).text_color(rgb(0x1B1B1B));
             w = w.child(div().font_weight(gpui::FontWeight::BOLD)
                 .text_color(rgb(0x1B6E3C)).child(ui::t!("見張り")));
             for (si, p) in self.watch.iter().take(24) {
@@ -1445,7 +1448,7 @@ impl Render for Calc {
         // 下端はステータスバーを兼ねる(デスクトップ版の形):
         // 状態の文言と、選択の生きた値(合計・平均・個数)
         sheets_bar = sheets_bar
-            .child(div().pl_3().text_size(px(11.0)).text_color(rgb(0x66707A))
+            .child(div().pl_3().text_size(px(us * 11.0)).text_color(rgb(0x66707A))
                 .whitespace_nowrap().overflow_hidden()
                 .child(SharedString::from(match self.hover_hint {
                     // 釦に乗っている間はその名前(本家の作法)
@@ -1459,12 +1462,12 @@ impl Render for Calc {
             .child(div().flex_1())
             // 絞り込み中は残りの行数を常に見せる(本家のステータスバーと同じ)
             .children(self.filter_counts().map(|(total, shown)| {
-                div().pr_3().text_size(px(11.0))
+                div().pr_3().text_size(px(us * 11.0))
                     .text_color(rgb(0x1B6EC2)).whitespace_nowrap()
                     .child(SharedString::from(ui::tf!("{} 行中 {} 行を表示", total, shown).to_string()))
             }))
             .children(self.sel_stats().map(|s| {
-                div().pr_2().text_size(px(11.0)).font_weight(gpui::FontWeight::BOLD)
+                div().pr_2().text_size(px(us * 11.0)).font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(0x1B6E3C)).whitespace_nowrap()
                     .child(SharedString::from(s))
             }));
@@ -1507,10 +1510,11 @@ impl Render for Calc {
                 ("freeze", "枠の固定", "", true, false),
             ];
             // 画面の右・下で切れないように少し戻す
-            const ITEM_H: f32 = 25.0;
-            const SEP_H: f32 = 9.0;
+            // 文字の大きさに追従(子メニューの位置合わせにも使う)
+            let item_h: f32 = us * 25.0;
+            let sep_h: f32 = us * 9.0;
             let h_est: f32 = entries.iter()
-                .map(|e| if e.0.is_empty() && e.1.is_empty() { SEP_H } else { ITEM_H })
+                .map(|e| if e.0.is_empty() && e.1.is_empty() { sep_h } else { item_h })
                 .sum::<f32>() + 10.0;
             let grid_w = HEAD_W
                 + self.visible_cols()
@@ -1525,7 +1529,7 @@ impl Render for Calc {
             let mx = mx.min((grid_w - 250.0).max(0.0));
             let my = my.min((grid_h - h_est).max(0.0));
 
-            let mut m = div().absolute().left(px(mx)).top(px(my)).w(px(244.0))
+            let mut m = div().absolute().left(px(mx)).top(px(my)).w(px(us * 244.0))
                 .p_1().rounded_md().bg(rgb(0xFFFFFF))
                 .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
                 // メニューの余白を押してもセルに抜けない
@@ -1537,19 +1541,19 @@ impl Render for Calc {
                 let (id, label, hint, ready, is_sub) = (*id, *label, *hint, *ready, *is_sub);
                 if id.is_empty() && label.is_empty() {
                     m = m.child(div().h(px(1.0)).my_1().bg(rgb(0xE1E6EA)));
-                    y_acc += SEP_H;
+                    y_acc += sep_h;
                     continue;
                 }
                 let row_y = y_acc;
-                y_acc += ITEM_H;
+                y_acc += item_h;
                 if !ready {
                     // 未実装。押せるように見せない(場所だけ本家どおりに残す)
                     m = m.child(div()
                         .flex().flex_row().items_center().justify_between().gap_4()
                         .px_3().py_1()
-                        .child(div().text_size(px(12.5)).text_color(rgb(0xB6BDC4))
+                        .child(div().text_size(px(us * 12.5)).text_color(rgb(0xB6BDC4))
                             .child(label))
-                        .child(div().text_size(px(10.5)).text_color(rgb(0xD5DBE0))
+                        .child(div().text_size(px(us * 10.5)).text_color(rgb(0xD5DBE0))
                             .child(if is_sub { "▸" } else { hint })));
                     continue;
                 }
@@ -1561,9 +1565,9 @@ impl Render for Calc {
                         .px_3().py_1().rounded_sm().cursor_pointer()
                         .bg(if open { rgb(0xEAF5EE) } else { rgb(0xFFFFFF) })
                         .hover(|s| s.bg(rgb(0xEAF5EE)))
-                        .child(div().text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                        .child(div().text_size(px(us * 12.5)).text_color(rgb(0x1B1B1B))
                             .child(label))
-                        .child(div().text_size(px(11.0)).text_color(rgb(0x66707A)).child("▸"))
+                        .child(div().text_size(px(us * 11.0)).text_color(rgb(0x66707A)).child("▸"))
                         // 触れたら開く(本家と同じ)。押しても開く
                         .on_mouse_move(cx.listener(move |this, _, _, cx| {
                             if this.menu_sub != Some(id) {
@@ -1580,8 +1584,8 @@ impl Render for Calc {
                     if open {
                         // 子の板。親項目の右横に出す
                         let mut sp = div().absolute()
-                            .left(px(mx + 244.0)).top(px(my + row_y))
-                            .w(px(210.0)).p_1().rounded_md().bg(rgb(0xFFFFFF))
+                            .left(px(mx + us * 244.0)).top(px(my + row_y))
+                            .w(px(us * 210.0)).p_1().rounded_md().bg(rgb(0xFFFFFF))
                             .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
                             .on_mouse_down(gpui::MouseButton::Left,
                                 |_, _, cx| cx.stop_propagation());
@@ -1590,7 +1594,7 @@ impl Render for Calc {
                         {
                             if !sready {
                                 sp = sp.child(div().px_3().py_1()
-                                    .text_size(px(12.5)).text_color(rgb(0xB6BDC4))
+                                    .text_size(px(us * 12.5)).text_color(rgb(0xB6BDC4))
                                     .child(slabel));
                                 continue;
                             }
@@ -1598,7 +1602,7 @@ impl Render for Calc {
                                 .id(SharedString::from(format!("s{i}-{j}")))
                                 .px_3().py_1().rounded_sm().cursor_pointer()
                                 .hover(|s| s.bg(rgb(0xEAF5EE)))
-                                .text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                                .text_size(px(us * 12.5)).text_color(rgb(0x1B1B1B))
                                 .child(slabel)
                                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                                     move |this, _, window, cx| {
@@ -1616,9 +1620,9 @@ impl Render for Calc {
                     .flex().flex_row().items_center().justify_between().gap_4()
                     .px_3().py_1().rounded_sm().cursor_pointer()
                     .hover(|s| s.bg(rgb(0xEAF5EE)))
-                    .child(div().text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                    .child(div().text_size(px(us * 12.5)).text_color(rgb(0x1B1B1B))
                         .child(label))
-                    .child(div().text_size(px(10.5)).text_color(rgb(0x9AA5AE)).child(hint))
+                    .child(div().text_size(px(us * 10.5)).text_color(rgb(0x9AA5AE)).child(hint))
                     // 実行できる普通の項目に触れたら、開いていた子は閉じる
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
                         if this.menu_sub.is_some() {
@@ -1678,7 +1682,7 @@ impl Render for Calc {
                 let on = gi == d.group;
                 chips = chips.child(div()
                     .id(SharedString::from(format!("fng{gi}")))
-                    .px_2().py_0p5().rounded_sm().text_size(px(11.5))
+                    .px_2().py_0p5().rounded_sm().text_size(px(us * 11.5))
                     .border_1()
                     .border_color(if on { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
                     .bg(if on { rgb(0xE4EFE8) } else { rgb(0xFFFFFF) })
@@ -1698,7 +1702,7 @@ impl Render for Calc {
             let mut lst = div().flex().flex_col().h(px(252.0)).overflow_hidden()
                 .border_1().border_color(rgb(0xC6CDD3)).rounded_sm().bg(rgb(0xFFFFFF));
             if list.is_empty() {
-                lst = lst.child(div().px_2().py_1().text_size(px(12.5))
+                lst = lst.child(div().px_2().py_1().text_size(px(us * 12.5))
                     .text_color(rgb(0x66707A))
                     .child(ui::t!("その条件の関数がありません")));
             }
@@ -1706,7 +1710,7 @@ impl Render for Calc {
                 let on = i == sel;
                 lst = lst.child(div()
                     .id(SharedString::from(format!("fnr{i}")))
-                    .px_2().py_0p5().text_size(px(12.5)).flex_none()
+                    .px_2().py_0p5().text_size(px(us * 12.5)).flex_none()
                     .bg(if on { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
                     .text_color(if on { rgb(0xFFFFFF) } else { rgb(0x1B1B1B) })
                     .cursor_pointer()
@@ -1728,7 +1732,7 @@ impl Render for Calc {
                 .map(|f| (format!("{}{}", f.name, f.args), f.desc.to_string()))
                 .unwrap_or_default();
             let btn = |id: &'static str, label: String, primary: bool| {
-                div().id(id).px_3().py_1().rounded_sm().text_size(px(12.5))
+                div().id(id).px_3().py_1().rounded_sm().text_size(px(us * 12.5))
                     .border_1()
                     .border_color(if primary { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
                     .bg(if primary { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
@@ -1742,10 +1746,10 @@ impl Render for Calc {
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .flex().flex_col().gap_1p5()
                     .child(div().flex().flex_row().items_center()
-                        .child(div().text_size(px(13.0)).font_weight(gpui::FontWeight::BOLD)
+                        .child(div().text_size(px(us * 13.0)).font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(0x1B6E3C)).child(ui::t!("関数を挿入")))
                         .child(div().flex_1())
-                        .child(div().id("fn-x").px_2().cursor_pointer().text_size(px(13.0))
+                        .child(div().id("fn-x").px_2().cursor_pointer().text_size(px(us * 13.0))
                             .text_color(rgb(0x66707A)).hover(|s| s.text_color(rgb(0xC0392B)))
                             .child("✕")
                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -1755,7 +1759,7 @@ impl Render for Calc {
                             }))))
                     .child(div().px_2().py_1().bg(rgb(0xFFFFFF))
                         .border_1().border_color(rgb(0xC6CDD3)).rounded_sm()
-                        .text_size(px(12.5)).whitespace_nowrap().overflow_hidden()
+                        .text_size(px(us * 12.5)).whitespace_nowrap().overflow_hidden()
                         .child(SharedString::from(if search_t == "|" {
                             format!("|{}", ui::t!("(打つと絞り込み)"))
                         } else {
@@ -1763,9 +1767,9 @@ impl Render for Calc {
                         })))
                     .child(chips)
                     .child(lst)
-                    .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::BOLD)
+                    .child(div().text_size(px(us * 12.5)).font_weight(gpui::FontWeight::BOLD)
                         .child(SharedString::from(syntax)))
-                    .child(div().text_size(px(11.5)).text_color(rgb(0x4A545E))
+                    .child(div().text_size(px(us * 11.5)).text_color(rgb(0x4A545E))
                         .min_h(px(48.0))
                         .child(SharedString::from(desc)))
                     .child(div().flex().flex_row().gap_2().justify_center()
@@ -1805,7 +1809,7 @@ impl Render for Calc {
                         }
                         cx.notify();
                     }))
-                    .child(div().w(px(110.0)).text_size(px(12.0))
+                    .child(div().w(px(us * 110.0)).text_size(px(us * 12.0))
                         .text_color(rgb(0x1B1B1B))
                         .child(SharedString::from(if *opt {
                             format!("{name}(省略可)")
@@ -1815,7 +1819,7 @@ impl Render for Calc {
                     .child(div().flex_1().px_2().py_0p5().bg(rgb(0xFFFFFF))
                         .border_1()
                         .border_color(if on { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
-                        .rounded_sm().text_size(px(12.5))
+                        .rounded_sm().text_size(px(us * 12.5))
                         .whitespace_nowrap().overflow_hidden()
                         .child(SharedString::from(if t.is_empty() { " ".into() } else { t }))));
             }
@@ -1832,7 +1836,7 @@ impl Render for Calc {
                 })
                 .unwrap_or_default();
             let btn = |id: &'static str, label: String, primary: bool| {
-                div().id(id).px_3().py_1().rounded_sm().text_size(px(12.5))
+                div().id(id).px_3().py_1().rounded_sm().text_size(px(us * 12.5))
                     .border_1()
                     .border_color(if primary { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
                     .bg(if primary { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
@@ -1846,10 +1850,10 @@ impl Render for Calc {
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .flex().flex_col().gap_1p5()
                     .child(div().flex().flex_row().items_center()
-                        .child(div().text_size(px(13.0)).font_weight(gpui::FontWeight::BOLD)
+                        .child(div().text_size(px(us * 13.0)).font_weight(gpui::FontWeight::BOLD)
                             .text_color(rgb(0x1B6E3C)).child(ui::t!("関数の引数")))
                         .child(div().flex_1())
-                        .child(div().id("fna-x").px_2().cursor_pointer().text_size(px(13.0))
+                        .child(div().id("fna-x").px_2().cursor_pointer().text_size(px(us * 13.0))
                             .text_color(rgb(0x66707A)).hover(|s| s.text_color(rgb(0xC0392B)))
                             .child("✕")
                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -1857,18 +1861,18 @@ impl Render for Calc {
                                 this.fn_args = None;
                                 cx.notify();
                             }))))
-                    .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::BOLD)
+                    .child(div().text_size(px(us * 12.5)).font_weight(gpui::FontWeight::BOLD)
                         .child(SharedString::from(format!("{}{}", a.f.name, a.f.args))))
-                    .child(div().text_size(px(11.5)).text_color(rgb(0x4A545E))
+                    .child(div().text_size(px(us * 11.5)).text_color(rgb(0x4A545E))
                         .child(SharedString::from(a.f.desc)))
                     .child(rows_el)
-                    .child(div().text_size(px(11.5)).text_color(rgb(0x4A545E))
+                    .child(div().text_size(px(us * 11.5)).text_color(rgb(0x4A545E))
                         .min_h(px(44.0)).px_2().py_1()
                         .bg(rgb(0xEFF2F4)).rounded_sm()
                         .child(SharedString::from(arg_hint)))
-                    .child(div().text_size(px(12.0))
+                    .child(div().text_size(px(us * 12.0))
                         .child(SharedString::from(ui::tf!("関数の結果 = {}", a.result))))
-                    .child(div().text_size(px(11.0)).text_color(rgb(0x66707A))
+                    .child(div().text_size(px(us * 11.0)).text_color(rgb(0x66707A))
                         .child(ui::t!("セルをクリックすると、いまの欄に参照が入ります")))
                     .child(div().flex().flex_row().gap_2().justify_center()
                         .child(btn("fna-back", ui::t!("戻る").to_string(), false)
@@ -1899,7 +1903,7 @@ impl Render for Calc {
         // ---- 終了確認の板(窓の中の中央。rfd はスクリーン中央に出て遠い) ----
         let quit_panel = self.quit_ask.then(|| {
             let btn = |id: &'static str, label: String, primary: bool| {
-                div().id(id).px_3().py_1().rounded_sm().text_size(px(12.5))
+                div().id(id).px_3().py_1().rounded_sm().text_size(px(us * 12.5))
                     .border_1()
                     .border_color(if primary { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
                     .bg(if primary { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
@@ -1912,10 +1916,10 @@ impl Render for Calc {
                     .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .flex().flex_col().gap_2()
-                    .child(div().text_size(px(13.0)).font_weight(gpui::FontWeight::BOLD)
+                    .child(div().text_size(px(us * 13.0)).font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(0x1B6E3C))
                         .child(ui::t!("保存していない変更があります")))
-                    .child(div().text_size(px(12.0))
+                    .child(div().text_size(px(us * 12.0))
                         .child(ui::t!("保存して終了しますか?(Enter = 保存して終了 / Esc = やめる)")))
                     .child(div().flex().flex_row().gap_2().justify_center()
                         .child(btn("q-save", ui::t!("保存して終了").to_string(), true)
@@ -1974,7 +1978,7 @@ impl Render for Calc {
                     .max_w(px(280.0)).p_2().rounded_md()
                     .bg(rgb(0xFFF9DB)).border_1().border_color(rgb(0xE0C97F)).shadow_lg();
                 for line in tip_lines {
-                    t = t.child(div().text_size(px(11.5)).text_color(rgb(0x5C4A00))
+                    t = t.child(div().text_size(px(us * 11.5)).text_color(rgb(0x5C4A00))
                         .child(SharedString::from(line)));
                 }
                 t
@@ -2045,13 +2049,13 @@ impl Render for Calc {
                 .p_3().rounded_md().bg(rgb(0xF7F9FA))
                 .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(div().text_size(px(12.0)).font_weight(gpui::FontWeight::BOLD)
+                .child(div().text_size(px(us * 12.0)).font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(0x1B6E3C)).child(SharedString::from(title)))
                 .child(div().mt_1p5().px_2().py_1().bg(rgb(0xFFFFFF))
                     .border_1().border_color(rgb(0xC6CDD3)).rounded_sm()
-                    .text_size(px(13.0)).font_family("Noto Sans JP")
+                    .text_size(px(us * 13.0)).font_family("Noto Sans JP")
                     .child(SharedString::from(text)))
-                .child(div().mt_1().text_size(px(10.5)).text_color(rgb(0x66707A))
+                .child(div().mt_1().text_size(px(us * 10.5)).text_color(rgb(0x66707A))
                     .child(match *kind {
                         "name" => "Enter で決定 / Esc で取消。定義した名前は式の中で使えます(=単価*2)",
                         "validation" => "候補の直書き(甲,乙,丙)か、範囲の参照(=D2:D5)。Enter で決定 / Esc で取消",
@@ -2093,7 +2097,7 @@ impl Render for Calc {
                 div().id(id).flex_1().px_2().py_1().bg(rgb(0xFFFFFF))
                     .border_1().rounded_sm()
                     .border_color(if focus == f { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
-                    .text_size(px(12.5)).font_family("Noto Sans JP")
+                    .text_size(px(us * 12.5)).font_family("Noto Sans JP")
                     .whitespace_nowrap().overflow_hidden()
                     .child(SharedString::from(text))
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
@@ -2105,18 +2109,18 @@ impl Render for Calc {
                     }))
             };
             let label = |t: &'static str| {
-                div().mt_1p5().text_size(px(11.5)).text_color(rgb(0x444B52)).child(t)
+                div().mt_1p5().text_size(px(us * 11.5)).text_color(rgb(0x444B52)).child(t)
             };
             let btn = |id: &'static str, t: &'static str, on: bool| {
                 div().id(id).px_2p5().py_1().rounded_sm().border_1()
                     .border_color(if on { rgb(0xC6CDD3) } else { rgb(0xEDEFF1) })
-                    .text_size(px(11.5))
+                    .text_size(px(us * 11.5))
                     .text_color(if on { rgb(0x1B1B1B) } else { rgb(0xB6BDC4) })
                     .when(on, |d| d.cursor_pointer().hover(|s| s.bg(rgb(0xEAF5EE))))
             };
             let radio = |id: &'static str, m: u8, t: &'static str, cx: &mut Context<Self>| {
                 div().id(id).flex().flex_row().items_center().gap_1()
-                    .cursor_pointer().text_size(px(12.0))
+                    .cursor_pointer().text_size(px(us * 12.0))
                     .child(if mode == m { "◉" } else { "○" })
                     .child(t)
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
@@ -2136,14 +2140,14 @@ impl Render for Calc {
                 .flex().flex_col().overflow_hidden();
             if sv.cons.is_empty() {
                 list = list.child(div().flex_1().flex().items_center().justify_center()
-                    .text_size(px(11.5)).text_color(rgb(0xB6BDC4))
+                    .text_size(px(us * 11.5)).text_color(rgb(0xB6BDC4))
                     .child(ui::t!("まだ制約はありません。左辺・記号・右辺を打って「追加」")));
             } else {
                 for (i, (l, op, r)) in sv.cons.iter().enumerate() {
                     let on = sel == Some(i);
                     list = list.child(div()
                         .id(SharedString::from(format!("con{i}")))
-                        .px_2().py_0p5().rounded_sm().text_size(px(12.0))
+                        .px_2().py_0p5().rounded_sm().text_size(px(us * 12.0))
                         .bg(if on { rgb(0xEAF5EE) } else { rgb(0xFAFBFC) })
                         .cursor_pointer()
                         .child(SharedString::from(format!("{l} {op} {r}")))
@@ -2169,10 +2173,10 @@ impl Render for Calc {
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .flex().flex_col().gap_1()
                 .child(div().flex().flex_row().items_center()
-                    .child(div().text_size(px(13.0)).font_weight(gpui::FontWeight::BOLD)
+                    .child(div().text_size(px(us * 13.0)).font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(0x1B6E3C)).child(ui::t!("ソルバーのパラメータ")))
                     .child(div().flex_1())
-                    .child(div().id("sv-x").px_2().cursor_pointer().text_size(px(13.0))
+                    .child(div().id("sv-x").px_2().cursor_pointer().text_size(px(us * 13.0))
                         .text_color(rgb(0x66707A)).hover(|s| s.text_color(rgb(0xC0392B)))
                         .child("✕")
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -2195,7 +2199,7 @@ impl Render for Calc {
                 .child(div().flex().flex_row().items_center().gap_1()
                     .child(field("sv-conl", 3, show(&sv.con_l, focus == 3), cx))
                     .child(div().id("sv-op").px_2().py_1().rounded_sm().border_1()
-                        .border_color(rgb(0xC6CDD3)).text_size(px(12.0))
+                        .border_color(rgb(0xC6CDD3)).text_size(px(us * 12.0))
                         .cursor_pointer().hover(|s| s.bg(rgb(0xEAF5EE)))
                         .child(SOLVER_OPS[sv.con_op])
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -2256,7 +2260,7 @@ impl Render for Calc {
                         }))))
                 .child(list)
                 .child(div().id("sv-nonneg").mt_1().flex().flex_row().items_center().gap_1()
-                    .cursor_pointer().text_size(px(12.0))
+                    .cursor_pointer().text_size(px(us * 12.0))
                     .child(if nonneg { "☑" } else { "☐" })
                     .child(ui::t!("制約のない変数を非負にする"))
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -2267,11 +2271,11 @@ impl Render for Calc {
                         cx.notify();
                     })))
                 .child(div().mt_1().flex().flex_row().items_center().gap_2()
-                    .child(div().text_size(px(12.0)).font_weight(gpui::FontWeight::BOLD)
+                    .child(div().text_size(px(us * 12.0)).font_weight(gpui::FontWeight::BOLD)
                         .child(ui::t!("解法の方法")))
                     .child(div().px_2().py_0p5().border_1().border_color(rgb(0xC6CDD3))
-                        .rounded_sm().text_size(px(11.5)).child(ui::t!("単体法 LP"))))
-                .child(div().text_size(px(10.5)).text_color(rgb(0x66707A))
+                        .rounded_sm().text_size(px(us * 11.5)).child(ui::t!("単体法 LP"))))
+                .child(div().text_size(px(us * 10.5)).text_color(rgb(0x66707A))
                     .child(ui::t!("線形の問題を LP シンプレックスで解きます(裏方 scipy)。非線形はまだ解けません — そのときは断ります")))
                 .child(div().mt_1p5().flex().flex_row().gap_1()
                     .child(btn("sv-reset", "すべてリセット", true).child(ui::t!("すべてリセット"))
@@ -2284,7 +2288,7 @@ impl Render for Calc {
                     .child(div().flex_1())
                     .child(div().id("sv-solve").px_3().py_1().rounded_sm()
                         .bg(rgb(0x1B6E3C)).text_color(rgb(0xFFFFFF))
-                        .text_size(px(12.0)).cursor_pointer()
+                        .text_size(px(us * 12.0)).cursor_pointer()
                         .hover(|s| s.bg(rgb(0x2E8B57)))
                         .child(ui::t!("解を求める"))
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -2307,7 +2311,7 @@ impl Render for Calc {
             let fg = rgb(0x444B52);
             let dim = rgb(0x66707A);
             let mk = |id: &'static str, label: &'static str, ready: bool| {
-                let d = div().id(id).px_4().py_1p5().text_size(px(13.0));
+                let d = div().id(id).px_4().py_1p5().text_size(px(us * 13.0));
                 if ready {
                     d.text_color(fg).cursor_pointer().hover(move |s| s.bg(item_bg))
                 } else {
@@ -2407,25 +2411,25 @@ impl Render for Calc {
                 .child(mk("f-help", ui::t!("ヘルプ"), false))
                 .child(mk("f-req", ui::t!("機能のリクエスト"), false));
             let mut pane = div().flex_1().bg(gpui::white()).p_8()
-                .flex().flex_col().gap_3().text_size(px(12.5)).text_color(fg);
+                .flex().flex_col().gap_3().text_size(px(us * 12.5)).text_color(fg);
             if self.file_view == 2 {
                 // 詳細設定 — 器は ~/.config/office/settings.toml
                 // (SEKKEI「設定 — 器と言語」。環境変数が一時上書きで優先)
                 let lang_now = ui::settings::get("language").unwrap_or_else(|| "ja".into());
                 let row = |label: &'static str, value: String| {
                     div().flex().flex_row().items_center().gap_2()
-                        .child(div().w(px(200.0)).text_color(dim).child(label))
+                        .child(div().w(px(us * 200.0)).text_color(dim).child(label))
                         .child(div().child(SharedString::from(value)))
                 };
                 pane = pane
-                    .child(div().text_size(px(16.0))
+                    .child(div().text_size(px(us * 16.0))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(ui::t!("詳細設定")))
                     .child(div().text_color(dim).child(SharedString::from(
                         ui::tf!("置き場: {}", ui::settings::path().display()))))
                     .child(div().h(px(6.0)))
                     .child(div().flex().flex_row().items_center().gap_2()
-                        .child(div().w(px(200.0)).text_color(dim)
+                        .child(div().w(px(us * 200.0)).text_color(dim)
                             .child(ui::t!("言語(リボンと文言)")))
                         .child(div().id("set-lang")
                             .px_3().py_1().rounded_sm().cursor_pointer()
@@ -2457,7 +2461,7 @@ impl Render for Calc {
                             .unwrap_or_else(|_| ui::t!("(自動: .venv → python3)").into())))
                     .child(row(ui::t!("名前(ロック・チャット・署名)"), lock_identity()));
             } else if self.file_view == 1 {
-                pane = pane.child(div().text_size(px(16.0))
+                pane = pane.child(div().text_size(px(us * 16.0))
                     .font_weight(gpui::FontWeight::BOLD)
                     .child(ui::t!("最近開いた")));
                 let list = Self::recent_list();
@@ -2477,8 +2481,8 @@ impl Render for Calc {
                         .px_2().py_1().rounded_sm().cursor_pointer()
                         .hover(move |s| s.bg(item_bg))
                         .flex().flex_row().items_center().gap_2()
-                        .child(div().text_size(px(13.0)).child(SharedString::from(name)))
-                        .child(div().text_size(px(11.0)).text_color(dim)
+                        .child(div().text_size(px(us * 13.0)).child(SharedString::from(name)))
+                        .child(div().text_size(px(us * 11.0)).text_color(dim)
                             .child(SharedString::from(dir)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.tab = this.prev_tab;
@@ -2505,10 +2509,10 @@ impl Render for Calc {
                             + s.images_new.len()
                     })
                     .sum();
-                pane = pane.child(div().text_size(px(16.0))
+                pane = pane.child(div().text_size(px(us * 16.0))
                     .font_weight(gpui::FontWeight::BOLD)
                     .child(ui::t!("ブックの情報")))
-                    .child(div().text_size(px(13.5))
+                    .child(div().text_size(px(us * 13.5))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(ui::t!("統計")));
                 for (k, v) in [
@@ -2522,7 +2526,7 @@ impl Render for Calc {
                         .child(SharedString::from(format!("{v}"))));
                 }
                 pane = pane.child(div().h(px(6.0)))
-                    .child(div().text_size(px(13.5))
+                    .child(div().text_size(px(us * 13.5))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(ui::t!("プロパティ")));
                 let pr = &self.book.props;
@@ -2555,7 +2559,7 @@ impl Render for Calc {
                                 cx.notify()
                             }))));
                 }
-                pane = pane.child(div().text_size(px(11.5)).text_color(dim)
+                pane = pane.child(div().text_size(px(us * 11.5)).text_color(dim)
                     .child(ui::t!("欄を押して打ち、Enter で控える(保存で xlsx の情報に入ります)")));
             }
             div().absolute().inset_0().bg(gpui::white())
@@ -2595,19 +2599,19 @@ impl Render for Calc {
             if has_blank {
                 items.push(ui::t!("(空白)").to_string());
             }
-            let mut p = div().absolute().right(px(24.0)).top(px(ROW_H + 16.0)).w(px(190.0))
+            let mut p = div().absolute().right(px(24.0)).top(px(ROW_H + 16.0)).w(px(us * 190.0))
                 .p_2().rounded_md().bg(gpui::white())
                 .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
                 .flex().flex_col().gap_1()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(div().flex().flex_row().items_center()
-                    .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::BOLD)
+                    .child(div().text_size(px(us * 12.5)).font_weight(gpui::FontWeight::BOLD)
                         .whitespace_nowrap().overflow_hidden()
                         .child(SharedString::from(head)))
                     .child(div().flex_1())
                     // ≡ = 複数選択の入切(本家のスライサーと同じ並び)
                     .child(div().id("sl-multi").px_1p5().rounded_sm().cursor_pointer()
-                        .text_size(px(12.5))
+                        .text_size(px(us * 12.5))
                         .bg(if multi { rgb(0xCFE6D8) } else { rgb(0xFFFFFF) })
                         .hover(|s| s.bg(rgb(0xEAF5EE)))
                         .child("≡")
@@ -2625,7 +2629,7 @@ impl Render for Calc {
                         })))
                     // ✕ = 選びを解除(全部見せる)
                     .child(div().id("sl-clear").px_1p5().rounded_sm().cursor_pointer()
-                        .text_size(px(12.5)).hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .text_size(px(us * 12.5)).hover(|s| s.bg(rgb(0xEAF5EE)))
                         .child("✕")
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                             cx.stop_propagation();
@@ -2642,7 +2646,7 @@ impl Render for Calc {
                     .px_2().py_1().rounded_sm().border_1()
                     .border_color(rgb(0xC6CDD3))
                     .bg(if on { rgb(0xBBD9EA) } else { rgb(0xFFFFFF) })
-                    .text_size(px(12.0)).cursor_pointer()
+                    .text_size(px(us * 12.0)).cursor_pointer()
                     .whitespace_nowrap().overflow_hidden()
                     .hover(|s| s.bg(rgb(0xEAF5EE)))
                     .child(SharedString::from(v.clone()))
@@ -2681,7 +2685,7 @@ impl Render for Calc {
             let btn = |id: &'static str, label: &'static str| {
                 div().id(id).px_2().py_1().rounded_sm()
                     .border_1().border_color(rgb(0xC6CDD3))
-                    .text_size(px(11.5)).text_color(rgb(0x1B1B1B))
+                    .text_size(px(us * 11.5)).text_color(rgb(0x1B1B1B))
                     .cursor_pointer().hover(|s| s.bg(rgb(0xEAF5EE)))
                     .child(label)
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(
@@ -2699,7 +2703,7 @@ impl Render for Calc {
                     Some(c) => s.bg(hex(c)),
                     // 「なし」は斜線の代わりに白+薄字の×
                     None => s.bg(rgb(0xFFFFFF)).flex().items_center().justify_center()
-                        .text_size(px(10.0)).text_color(rgb(0x9AA5AE)).child("×"),
+                        .text_size(px(us * 10.0)).text_color(rgb(0x9AA5AE)).child("×"),
                 };
                 s.on_mouse_down(gpui::MouseButton::Left, cx.listener(
                     move |this, _, _, cx| {
@@ -2708,7 +2712,7 @@ impl Render for Calc {
                         cx.notify();
                     }))
             };
-            let title = |t: &'static str| div().text_size(px(10.5))
+            let title = |t: &'static str| div().text_size(px(us * 10.5))
                 .text_color(rgb(0x66707A)).mt_1p5().child(t);
             let row = || div().flex().flex_row().flex_wrap().gap_1().items_center();
 
@@ -2717,11 +2721,11 @@ impl Render for Calc {
                 .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(div().flex().flex_row().items_center().justify_between()
-                    .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::BOLD)
+                    .child(div().text_size(px(us * 12.5)).font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(0x1B6E3C))
                         .child(ui::t!("セルの書式(選んでいる範囲に効く)")))
                     .child(div().id("fmtclose").px_2().rounded_sm().cursor_pointer()
-                        .text_size(px(12.0)).text_color(rgb(0x66707A))
+                        .text_size(px(us * 12.0)).text_color(rgb(0x66707A))
                         .hover(|s| s.bg(rgb(0xE1E6EA)))
                         .child("✕")
                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(
@@ -2802,7 +2806,7 @@ impl Render for Calc {
                     .px_2().py_1().rounded_sm().cursor_pointer()
                     .hover(|s| s.bg(rgb(0xEAF5EE)))
                     .flex().flex_row().items_center().gap_2()
-                    .text_size(px(12.5)).text_color(rgb(0x1B1B1B))
+                    .text_size(px(us * 12.5)).text_color(rgb(0x1B1B1B))
                     .whitespace_nowrap().overflow_hidden()
                     .children(sw.map(|hx| {
                         let q = div().w(px(14.0)).h(px(14.0)).rounded_sm()
@@ -2827,10 +2831,10 @@ impl Render for Calc {
         let notes = if self.notes.is_empty() { None } else {
             let mut n = div().px_4().py_2().bg(rgb(0xFFF6E6))
                 .border_t_1().border_color(rgb(0xE8D5A8))
-                .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
+                .child(div().text_size(px(us * 11.5)).font_weight(gpui::FontWeight::BOLD)
                        .text_color(rgb(0x8A4B00)).child(ui::t!("この版で読み飛ばしたもの")));
             for x in &self.notes {
-                n = n.child(div().text_size(px(11.0)).text_color(rgb(0x8A4B00))
+                n = n.child(div().text_size(px(us * 11.0)).text_color(rgb(0x8A4B00))
                             .child(x.clone()));
             }
             Some(n)
@@ -2872,11 +2876,23 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_recalc))
             .on_action(cx.listener(Calc::a_recalc_sheet))
             .on_action(cx.listener(Calc::a_newline))
+            .on_action(cx.listener(Calc::a_ui_bigger))
+            .on_action(cx.listener(Calc::a_ui_smaller))
             .child(bar)
             .children((self.tab != 0 && self.show_formula_bar).then(|| formula_bar))
             .child(div().flex_1().overflow_hidden().relative()
                    // ホイールで窓を動かす(下に回すと先の行が見える)
                    .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, _, cx| {
+                       // Ctrl+ホイール = 格子の拡大縮小(Excel と同じ)
+                       if e.modifiers.control {
+                           let up = match e.delta {
+                               gpui::ScrollDelta::Pixels(p) => f32::from(p.y) > 0.0,
+                               gpui::ScrollDelta::Lines(l) => l.y > 0.0,
+                           };
+                           this.run_cmd(if up { "zoom-in" } else { "zoom-out" }, cx);
+                           cx.notify();
+                           return;
+                       }
                        let (dx, dy) = match e.delta {
                            gpui::ScrollDelta::Pixels(p) =>
                                (-f32::from(p.x) / COL_W, -f32::from(p.y) / ROW_H),
@@ -2975,7 +2991,7 @@ impl Render for Calc {
                                        .w(px((sp.width_px - 12.0).max(8.0)))
                                        .h(px((sp.height_px - 8.0).max(8.0)))
                                        .overflow_hidden()
-                                       .text_size(px(12.5))
+                                       .text_size(px(us * 12.5))
                                        .font_family("Noto Sans JP")
                                        .text_color(rgb(0x1B1B1B))
                                        .whitespace_normal()

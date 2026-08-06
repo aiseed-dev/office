@@ -698,4 +698,5 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)", "Validación de datos — condición (ej.: 1〜100 / 1〜100 以外 / >=0 / <>0)"),
     ("入力メッセージ(題: 本文 の形。空 Enter = 消す)", "Mensaje de entrada (título: cuerpo; Enter vacío = quitar)"),
     ("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)", "Mensaje de error (prefijo 警告: acepta con aviso; Enter vacío = quitar)"),
+    ("画面の文字の大きさ {}%(次回もこの大きさで開きます)", "Tamaño del texto de la pantalla {}% (la próxima vez se abrirá con este tamaño)"),
 ];

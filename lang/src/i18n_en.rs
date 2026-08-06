@@ -701,4 +701,5 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)", "Data validation — condition (e.g. 1〜100 / 1〜100 以外 / >=0 / <>0)"),
 ("入力メッセージ(題: 本文 の形。空 Enter = 消す)", "Input message (title: body; empty Enter = remove)"),
 ("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)", "Error message (prefix 警告: to accept with a note; empty Enter = remove)"),
+("画面の文字の大きさ {}%(次回もこの大きさで開きます)", "UI text size {}% (opens at this size next time too)"),
 ];

@@ -139,6 +139,9 @@ struct Calc {
     filter_panel: Option<(u32, Editor)>,
     /// 入力規則の聞き取り中の種類("whole" / "decimal" / "textLength")
     dv_pend: Option<&'static str>,
+    /// 画面の文字の大きさ(リボン・メニュー・状態行まで全部に掛かる倍率。
+    /// 格子のズームとは別。設定に覚える — 次回も同じ大きさで開く)
+    ui_scale: f32,
     /// 表の操作(書式・フィル・行列・結合・並べ替え)を戻すための控え。
     /// 入力欄の undo とは別 — **戻せない操作は事故のとき逃げ道が無い**。
     /// 1手 = シートの控えの束。普通の操作は1枚、Python の実行のように
@@ -318,6 +321,10 @@ impl Calc {
             auto_filter: None,
             filter_panel: None,
             dv_pend: None,
+            ui_scale: ui::settings::get("ui_scale")
+                .and_then(|v| v.parse::<f32>().ok())
+                .map(|v| v.clamp(0.8, 2.0))
+                .unwrap_or(1.0),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             sheet_ui: Vec::new(),
@@ -2150,6 +2157,13 @@ impl Calc {
         recalc(&mut self.book.sheets[self.active]);
         self.status = ui::t!("再計算しました(このシートだけ)").into();
         cx.notify();
+    }
+    /// Ctrl+= / Ctrl+- = 画面の文字の大きさ(リボンから状態行まで全部)
+    fn a_ui_bigger(&mut self, _: &ui::UiBigger, _: &mut Window, cx: &mut Context<Self>) {
+        self.run_cmd("ui-bigger", cx);
+    }
+    fn a_ui_smaller(&mut self, _: &ui::UiSmaller, _: &mut Window, cx: &mut Context<Self>) {
+        self.run_cmd("ui-smaller", cx);
     }
     /// Alt+Enter = セルの中の改行(Excel と同じ)。確定時に折り返しも立てる
     fn a_newline(&mut self, _: &ui::NewLine, _: &mut Window, cx: &mut Context<Self>) {

@@ -172,6 +172,7 @@ actions!(
         Copy, Cut, Paste, PasteValues, Quit, ContextMenu, Cancel,
         WordLeft, WordRight, SelectWordLeft, SelectWordRight, PageUp, PageDown,
         Find, DocHome, DocEnd, EditCell, Recalc, RecalcSheet, NewLine,
+        UiBigger, UiSmaller,
     ]
 );
 
@@ -224,6 +225,10 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("shift-f9", RecalcSheet, Some(context)),
         // セルの中の改行(Excel と同じ)
         KeyBinding::new("alt-enter", NewLine, Some(context)),
+        // 画面の文字の大きさ(リボン・メニュー・状態行まで全部)
+        KeyBinding::new("ctrl-=", UiBigger, Some(context)),
+        KeyBinding::new("ctrl-shift-=", UiBigger, Some(context)),
+        KeyBinding::new("ctrl--", UiSmaller, Some(context)),
         KeyBinding::new("escape", Cancel, Some(context)),
     ]
 }

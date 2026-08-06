@@ -349,6 +349,8 @@ pub const CALC: &[Tab] = &[
         x("Pratinjau Jeda Halaman", "view-pagebreak"),
         c("zoom-in", "Perbesar", "zoom-in"),
         c("zoom-out", "Perkecil", "zoom-out"),
+        c("ui-bigger", "Perbesar teks layar", "ui-bigger"),
+        c("ui-smaller", "Perkecil teks layar", "ui-smaller"),
         c("theme", "Tema antarmuka", "theme"),
         c("freeze", "Freeze Panes", "freeze"),
         c("formula-bar", "Bar formula", "formula-bar"),

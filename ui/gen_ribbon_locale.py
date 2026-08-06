@@ -24,6 +24,9 @@ RIBBON = Path(__file__).resolve().parent / "src/ribbon.rs"
 # このスクリプトは止まる — その語をここに足してから出し直す
 OVERRIDES = {
     "en": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Bigger UI text",
+        "画面の文字を小さく": "Smaller UI text",
         # タブ
         "AI": "AI",
         # ファイル
@@ -109,10 +112,16 @@ OVERRIDES = {
     },
     # vendor のロケールに無い語の穴埋め(gen_lang.py が材料の訳と併用する)
     "zh-tw": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "放大介面文字",
+        "画面の文字を小さく": "縮小介面文字",
         "ページ数": "頁數",
         "表のデザイン": "表格設計",
     },
     "it": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Ingrandisci testo dello schermo",
+        "画面の文字を小さく": "Riduci testo dello schermo",
         "フィルタのボタン": "Pulsante filtro",
         "ヘッダー行": "Riga di intestazione",
         "合計行": "Riga totale",
@@ -122,6 +131,9 @@ OVERRIDES = {
         "テーブルのサイズ変更": "Ridimensiona tabella",
     },
     "tr": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Ekran yazısını büyüt",
+        "画面の文字を小さく": "Ekran yazısını küçült",
         "範囲を保護する": "Aralığı koru",
         "図形を結合": "Şekilleri birleştir",
         "改ページ プレビュー": "Sayfa Sonu Önizlemesi",
@@ -147,6 +159,9 @@ OVERRIDES = {
         "すべて更新": "Tümünü yenile",
     },
     "id": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Perbesar teks layar",
+        "画面の文字を小さく": "Perkecil teks layar",
         "図形を結合": "Gabungkan bentuk",
         "ゴールシーク": "Pencarian Tujuan",
         "テーブルのサイズ変更": "Ubah ukuran tabel",
@@ -160,6 +175,9 @@ OVERRIDES = {
         "表のデザイン": "Desain tabel",
     },
     "vi": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Phóng to chữ màn hình",
+        "画面の文字を小さく": "Thu nhỏ chữ màn hình",
         "シートを保護する": "Bảo vệ trang tính",
         "ブックを保護する": "Bảo vệ sổ làm việc",
         "範囲を保護する": "Bảo vệ phạm vi",
@@ -238,6 +256,41 @@ OVERRIDES = {
         "重複データを削除": "Xóa dữ liệu trùng lặp",
         "開く": "Mở",
         "電話番号": "Số điện thoại",
+    },
+    "de": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Oberflächentext größer",
+        "画面の文字を小さく": "Oberflächentext kleiner",
+    },
+    "es": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Agrandar texto de la pantalla",
+        "画面の文字を小さく": "Reducir texto de la pantalla",
+    },
+    "fr": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Agrandir le texte de l'écran",
+        "画面の文字を小さく": "Réduire le texte de l'écran",
+    },
+    "pt": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Aumentar texto da tela",
+        "画面の文字を小さく": "Diminuir texto da tela",
+    },
+    "ru": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "Крупнее текст интерфейса",
+        "画面の文字を小さく": "Мельче текст интерфейса",
+    },
+    "ko": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "화면 글자 크게",
+        "画面の文字を小さく": "화면 글자 작게",
+    },
+    "zh": {
+        # 表示タブ(こちらで足した釦 — 画面の文字の大きさ)
+        "画面の文字を大きく": "放大界面文字",
+        "画面の文字を小さく": "缩小界面文字",
     },
 }
 

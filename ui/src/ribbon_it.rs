@@ -349,6 +349,8 @@ pub const CALC: &[Tab] = &[
         x("Anteprima interruzione di pagina", "view-pagebreak"),
         c("zoom-in", "Zoom avanti", "zoom-in"),
         c("zoom-out", "Zoom indietro", "zoom-out"),
+        c("ui-bigger", "Ingrandisci testo dello schermo", "ui-bigger"),
+        c("ui-smaller", "Riduci testo dello schermo", "ui-smaller"),
         c("theme", "Tema dell'interfaccia", "theme"),
         c("freeze", "Blocca riquadri", "freeze"),
         c("formula-bar", "Barra della formula", "formula-bar"),

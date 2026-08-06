@@ -349,6 +349,8 @@ pub const CALC: &[Tab] = &[
         x("分頁預覽", "view-pagebreak"),
         c("zoom-in", "放大", "zoom-in"),
         c("zoom-out", "縮小", "zoom-out"),
+        c("ui-bigger", "放大介面文字", "ui-bigger"),
+        c("ui-smaller", "縮小介面文字", "ui-smaller"),
         c("theme", "介面佈景主題", "theme"),
         c("freeze", "凍結窗格", "freeze"),
         c("formula-bar", "公式欄", "formula-bar"),

@@ -349,6 +349,8 @@ pub const CALC: &[Tab] = &[
         x("Sayfa Sonu Önizlemesi", "view-pagebreak"),
         c("zoom-in", "Yakınlaştır", "zoom-in"),
         c("zoom-out", "Uzaklaştır", "zoom-out"),
+        c("ui-bigger", "Ekran yazısını büyüt", "ui-bigger"),
+        c("ui-smaller", "Ekran yazısını küçült", "ui-smaller"),
         c("theme", "Arayüz teması", "theme"),
         c("freeze", "Parçaları Dondur", "freeze"),
         c("formula-bar", "Formül çubuğu", "formula-bar"),

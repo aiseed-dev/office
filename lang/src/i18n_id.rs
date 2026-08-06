@@ -698,4 +698,5 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)", "Validasi data — kondisi (mis. 1〜100 / 1〜100 以外 / >=0 / <>0)"),
     ("入力メッセージ(題: 本文 の形。空 Enter = 消す)", "Pesan input (judul: isi; Enter kosong = hapus)"),
     ("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)", "Pesan kesalahan (awalan 警告: menerima dengan catatan; Enter kosong = hapus)"),
+    ("画面の文字の大きさ {}%(次回もこの大きさで開きます)", "Ukuran teks layar {}% (lain kali dibuka dengan ukuran ini juga)"),
 ];

@@ -397,6 +397,8 @@ pub const CALC: &[Tab] = &[
         x("改ページ プレビュー", "view-pagebreak"),
         c("zoom-in", "拡大", "zoom-in"),
         c("zoom-out", "縮小", "zoom-out"),
+        c("ui-bigger", "画面の文字を大きく", "ui-bigger"),
+        c("ui-smaller", "画面の文字を小さく", "ui-smaller"),
         c("theme", "インターフェイステーマ", "theme"),
         c("freeze", "ウィンドウ枠の固定", "freeze"),
         c("formula-bar", "数式バー", "formula-bar"),

@@ -698,4 +698,5 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)", "Convalida dati — condizione (es. 1〜100 / 1〜100 以外 / >=0 / <>0)"),
     ("入力メッセージ(題: 本文 の形。空 Enter = 消す)", "Messaggio di input (titolo: testo; Enter vuoto = rimuovi)"),
     ("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)", "Messaggio di errore (prefisso 警告: accetta con avviso; Enter vuoto = rimuovi)"),
+    ("画面の文字の大きさ {}%(次回もこの大きさで開きます)", "Dimensione del testo dello schermo {}% (alla prossima apertura resterà così)"),
 ];

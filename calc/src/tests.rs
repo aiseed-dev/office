@@ -858,6 +858,24 @@ mod recalc_tests {
         });
     }
 
+    #[gpui::test]
+    fn 画面の文字の大きさは段階で動き両端で止まる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            let base = this.ui_scale;
+            this.run_cmd("ui-bigger", cx);
+            assert!(this.ui_scale > base, "大きくならない");
+            for _ in 0..30 {
+                this.run_cmd("ui-bigger", cx);
+            }
+            assert_eq!(this.ui_scale, 2.0, "上の端(200%)で止まらない");
+            for _ in 0..30 {
+                this.run_cmd("ui-smaller", cx);
+            }
+            assert_eq!(this.ui_scale, 0.8, "下の端(80%)で止まらない");
+        });
+    }
+
     #[test]
     fn 大文字小文字の5つの変え方() {
         let t = "hello WORLD こんにちは 3rd";

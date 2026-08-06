@@ -349,6 +349,8 @@ pub const CALC: &[Tab] = &[
         x("Seitenumbruch-Vorschau", "view-pagebreak"),
         c("zoom-in", "Vergrößern", "zoom-in"),
         c("zoom-out", "Verkleinern", "zoom-out"),
+        c("ui-bigger", "Oberflächentext größer", "ui-bigger"),
+        c("ui-smaller", "Oberflächentext kleiner", "ui-smaller"),
         c("theme", "Oberflächendesign", "theme"),
         c("freeze", "Fensterausschnitt fixieren", "freeze"),
         c("formula-bar", "Formelleiste", "formula-bar"),

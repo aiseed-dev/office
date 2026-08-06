@@ -349,6 +349,8 @@ pub const CALC: &[Tab] = &[
         x("페이지 나누기 미리보기", "view-pagebreak"),
         c("zoom-in", "확대", "zoom-in"),
         c("zoom-out", "축소", "zoom-out"),
+        c("ui-bigger", "화면 글자 크게", "ui-bigger"),
+        c("ui-smaller", "화면 글자 작게", "ui-smaller"),
         c("theme", "인터페이스 테마", "theme"),
         c("freeze", "창 고정", "freeze"),
         c("formula-bar", "수식 입력줄", "formula-bar"),

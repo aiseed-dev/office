@@ -698,4 +698,5 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)", "Kiểm tra dữ liệu — điều kiện (vd: 1〜100 / 1〜100 以外 / >=0 / <>0)"),
     ("入力メッセージ(題: 本文 の形。空 Enter = 消す)", "Thông báo nhập (tiêu đề: nội dung; Enter trống = xóa)"),
     ("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)", "Thông báo lỗi (thêm 警告: ở đầu để chỉ nhắc; Enter trống = xóa)"),
+    ("画面の文字の大きさ {}%(次回もこの大きさで開きます)", "Cỡ chữ màn hình {}% (lần sau cũng mở với cỡ này)"),
 ];

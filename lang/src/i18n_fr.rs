@@ -698,4 +698,5 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)", "Validation de données — condition (ex. : 1〜100 / 1〜100 以外 / >=0 / <>0)"),
     ("入力メッセージ(題: 本文 の形。空 Enter = 消す)", "Message de saisie (titre : corps ; Enter vide = supprimer)"),
     ("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)", "Message d'erreur (préfixe 警告: accepte avec note ; Enter vide = supprimer)"),
+    ("画面の文字の大きさ {}%(次回もこの大きさで開きます)", "Taille du texte de l'écran {}% (s'ouvrira à cette taille la prochaine fois)"),
 ];

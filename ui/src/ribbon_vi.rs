@@ -349,6 +349,8 @@ pub const CALC: &[Tab] = &[
         x("Xem trước ngắt trang", "view-pagebreak"),
         c("zoom-in", "Phóng to", "zoom-in"),
         c("zoom-out", "Thu nhỏ", "zoom-out"),
+        c("ui-bigger", "Phóng to chữ màn hình", "ui-bigger"),
+        c("ui-smaller", "Thu nhỏ chữ màn hình", "ui-smaller"),
         c("theme", "Chủ đề giao diện", "theme"),
         c("freeze", "Cố định ngăn", "freeze"),
         c("formula-bar", "Thanh công thức", "formula-bar"),

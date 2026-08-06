@@ -698,4 +698,5 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("入力規則 — 条件(例: 1〜100 / 1〜100 以外 / >=0 / <>0)", "Eingaberegel — Bedingung (z. B. 1〜100 / 1〜100 以外 / >=0 / <>0)"),
     ("入力メッセージ(題: 本文 の形。空 Enter = 消す)", "Eingabemeldung (Titel: Text; leer + Enter = entfernen)"),
     ("エラーの文言(頭に 警告: を付けると通して言うだけ。空 Enter = 消す)", "Fehlertext (Präfix 警告: nimmt mit Hinweis an; leer + Enter = entfernen)"),
+    ("画面の文字の大きさ {}%(次回もこの大きさで開きます)", "Textgröße der Oberfläche {}% (öffnet beim nächsten Mal wieder in dieser Größe)"),
 ];

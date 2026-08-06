@@ -38,7 +38,7 @@ impl Calc {
         "coauth-mode", "co-delcomment", "co-showcomment", "co-chat",
         "co-history", "plug-macros", "plug-manage",
         "prot-doc", "prot-encrypt", "prot-sign",
-        "zoom-in", "zoom-out", "formula-bar", "show-headings", "show-zeros",
+        "zoom-in", "zoom-out", "ui-bigger", "ui-smaller", "formula-bar", "show-headings", "show-zeros",
         "subscript", "align-just", "text-orient", "calc-mode",
         "td-torange", "td-resize", "rtl-sheet", "direction",
         "colorschemas", "theme",
@@ -1084,6 +1084,22 @@ impl Calc {
             "zoom-out" => {
                 self.zoom = (self.zoom - 0.1).max(0.5);
                 self.status = format!("ズーム {}%", (self.zoom * 100.0).round() as i32).into();
+            }
+            // 画面の文字の大きさ(リボン・数式バー・メニュー・状態行まで全部)。
+            // 格子のズームとは別。設定に覚えて、次回も同じ大きさで開く
+            "ui-bigger" | "ui-smaller" => {
+                let step = if id == "ui-bigger" { 0.1 } else { -0.1 };
+                self.ui_scale = ((self.ui_scale + step) * 10.0).round() / 10.0;
+                self.ui_scale = self.ui_scale.clamp(0.8, 2.0);
+                // 試験では書かない(実利用者の settings.toml を汚さない)
+                if !cfg!(test) {
+                    ui::settings::set("ui_scale", &format!("{:.1}", self.ui_scale));
+                }
+                self.status = ui::tf!(
+                    "画面の文字の大きさ {}%(次回もこの大きさで開きます)",
+                    (self.ui_scale * 100.0).round() as i32
+                )
+                .into();
             }
             "formula-bar" => {
                 self.show_formula_bar = !self.show_formula_bar;
