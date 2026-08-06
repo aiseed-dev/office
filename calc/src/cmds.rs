@@ -1920,6 +1920,12 @@ impl Calc {
                 items.push("いまの位置で固定(上と左が留まる)".into());
                 items.push("最上行の固定".into());
                 items.push("最初の列の固定".into());
+                // 本家の「固定された枠に影を付ける」(viewtab:freezeshadow)
+                items.push(if self.freeze_shadow {
+                    "✓ 固定した枠に影を付ける".into()
+                } else {
+                    "固定した枠に影を付ける".into()
+                });
                 self.pick_kind = "freeze";
                 self.pick = Some((items, at));
             }

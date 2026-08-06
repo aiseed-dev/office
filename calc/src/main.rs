@@ -131,6 +131,8 @@ struct Calc {
     view: Pos,
     /// 固定する行数・列数(見出しを置き去りにしないため)。カーソル位置で決める
     frozen: Option<Pos>,
+    /// 固定した枠に影を付ける(本家の viewtab:freezeshadow。見た目だけ)
+    freeze_shadow: bool,
     /// オートフィルタ(Excel の▼)。**見え方だけ** — 保存される中身は
     /// 変わらず、閉じれば消える。範囲の1行目が見出しで、列ごとに
     /// 「隠す値」を持つ(map に無い列は素通し)
@@ -324,6 +326,7 @@ impl Calc {
             show_formulas: false,
             view: Pos::new(0, 0),
             frozen: None,
+            freeze_shadow: false,
             auto_filter: None,
             filter_panel: None,
             dv_dlg: None,

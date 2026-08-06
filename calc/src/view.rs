@@ -1968,6 +1968,37 @@ impl Render for Calc {
                             })))))
         });
 
+        // ---- 固定した枠の影(表示タブの「固定した枠に影を付ける」) ----
+        // 見た目だけ。マウスは受けない。固定の境目の下・右に薄い帯を落とす
+        let freeze_shadow: Vec<gpui::AnyElement> = {
+            let mut bands = Vec::new();
+            if self.freeze_shadow {
+                if let Some(f) = self.frozen {
+                    let c0 = self.visible_cols().first().copied().unwrap_or(0);
+                    let r0 = self.visible_rows().first().copied().unwrap_or(0);
+                    if f.row > 0 {
+                        if let Some((_, _, _, y1)) =
+                            self.range_px(Pos::new(f.row - 1, c0), Pos::new(f.row - 1, c0))
+                        {
+                            bands.push(div().absolute().left(px(0.0)).top(px(y1))
+                                .w_full().h(px(3.0)).bg(gpui::rgba(0x00000030))
+                                .into_any_element());
+                        }
+                    }
+                    if f.col > 0 {
+                        if let Some((_, _, x1, _)) =
+                            self.range_px(Pos::new(r0, f.col - 1), Pos::new(r0, f.col - 1))
+                        {
+                            bands.push(div().absolute().left(px(x1)).top(px(0.0))
+                                .w(px(3.0)).h_full().bg(gpui::rgba(0x00000030))
+                                .into_any_element());
+                        }
+                    }
+                }
+            }
+            bands
+        };
+
         // ---- コピーした範囲の破線(蟻の行進の静止版) ----
         // セルの罫線と混ざらないよう、重ね描きの1枚で囲む。マウスは受けない
         let ants = self.clip_range.and_then(|(si, a, b)| {
@@ -3205,6 +3236,7 @@ impl Render for Calc {
                        }
                    }))
                    .child(grid)
+                   .children(freeze_shadow)
                    .children(ink_preview)
                    .children({
                        // 浮かぶ画像(グラフ)。錨のセルが見えている間だけ描く。

@@ -163,6 +163,14 @@ impl Calc {
                         self.frozen = Some(Pos::new(0, 1));
                         self.status = ui::t!("最初の列を固定しました").into();
                     }
+                    "固定した枠に影を付ける" => {
+                        self.freeze_shadow = !self.freeze_shadow;
+                        self.status = if self.freeze_shadow {
+                            ui::t!("固定した枠に影を付けます(固定中だけ見えます)").into()
+                        } else {
+                            ui::t!("固定した枠の影を消しました").into()
+                        };
+                    }
                     _ => {
                         // いまの位置で固定(その上と左が留まる)
                         if self.cursor.row == 0 && self.cursor.col == 0 {

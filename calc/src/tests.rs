@@ -938,6 +938,13 @@ mod recalc_tests {
             this.run_cmd("freeze", cx);
             this.apply_pick("固定の解除", cx);
             assert_eq!(this.frozen, None, "固定が解けない");
+            // 影の入切(本家の「固定された枠に影を付ける」)。✓ 付きでも効く
+            this.run_cmd("freeze", cx);
+            this.apply_pick("固定した枠に影を付ける", cx);
+            assert!(this.freeze_shadow, "影が入らない");
+            this.run_cmd("freeze", cx);
+            this.apply_pick("✓ 固定した枠に影を付ける", cx);
+            assert!(!this.freeze_shadow, "影が切れない");
         });
     }
 
