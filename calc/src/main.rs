@@ -9221,8 +9221,10 @@ impl Render for Calc {
             .px_4().py_1p5().bg(rgb(0xFAFBFC))
             .border_b_1().border_color(rgb(0xE1E6EA))
             .child(name_box)
-            // fx = 関数を挿入(本家と同じ場所)
-            .child(div().id("fx").px_1p5().py_0p5().rounded_sm()
+            // fx = 関数を挿入(本家と同じ場所)。幅は固定 —
+            // 数式編集のクリック位置の換算(下の 156px)が崩れないように
+            .child(div().id("fx").w(px(28.0)).py_0p5().rounded_sm()
+                   .flex().items_center().justify_center()
                    .text_size(px(13.0)).italic()
                    .font_weight(gpui::FontWeight::BOLD).text_color(rgb(0x1B6E3C))
                    .cursor_pointer().hover(|s| s.bg(rgb(0xE4EFE8)))
@@ -9244,8 +9246,10 @@ impl Render for Calc {
                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                        |this, e: &gpui::MouseDownEvent, _, cx| {
                            cx.stop_propagation();
-                           // 押した位置へ文字カーソル(幅は 全角=1em・半角=0.5em の見積り)
-                           let x = f32::from(e.position.x) - (16.0 + 56.0 + 8.0 + 8.0);
+                           // 押した位置へ文字カーソル(幅は 全角=1em・半角=0.5em の見積り)。
+                           // 起点 = 左余白16 + 名前ボックス88 + 隙間8 + fx 28 + 隙間8 + 内余白8
+                           let x = f32::from(e.position.x)
+                               - (16.0 + 88.0 + 8.0 + 28.0 + 8.0 + 8.0);
                            let text = this.input.text().to_string();
                            let mut acc = 0.0;
                            let mut at = text.len();
