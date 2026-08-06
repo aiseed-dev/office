@@ -60,11 +60,13 @@ for group, names in GROUPS.items():
         info = ja.get(name)
         if info is None:
             missing.append(name)
-            args, desc = "(…)", "(この関数の説明は本家の表にありません)"
+            args, desc, ads = "(…)", "(この関数の説明は本家の表にありません)", []
         else:
             args = info.get("a", "(…)").replace("; ", ", ")
             desc = info.get("d", "")
-        rows.append((name, group, args, desc))
+            # 引数ごとの説明。本家は ! 区切りで引数順に並ぶ
+            ads = [s for s in info.get("ad", "").split("!") if s.strip()]
+        rows.append((name, group, args, desc, ads))
 rows.sort(key=lambda r: r[0])
 
 print("//! 関数の一覧(名前・分類・引数・説明)。**このファイルは手で書かない** —")
@@ -77,12 +79,15 @@ print("    pub name: &'static str,")
 print("    pub group: &'static str,")
 print("    pub args: &'static str,")
 print("    pub desc: &'static str,")
+print("    /// 引数ごとの説明(引数の並び順。可変長引数は最後の1つが代表)")
+print("    pub arg_desc: &'static [&'static str],")
 print("}")
 print()
 print(f"pub static FUNCS: &[FnInfo] = &[  // {len(rows)} 関数")
-for name, group, args, desc in rows:
+for name, group, args, desc, ads in rows:
+    ad = ", ".join(f'"{esc(a)}"' for a in ads)
     print(f'    FnInfo {{ name: "{esc(name)}", group: "{esc(group)}", '
-          f'args: "{esc(args)}", desc: "{esc(desc)}" }},')
+          f'args: "{esc(args)}", desc: "{esc(desc)}", arg_desc: &[{ad}] }},')
 print("];")
 
 if missing:

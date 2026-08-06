@@ -249,6 +249,32 @@ struct FnDlg {
 /// 分類の耳。「すべて」+ funcs.rs の分類
 const FN_GROUPS: &[&str] = &["すべて", "数学", "統計", "文字列", "論理", "日付", "検索", "財務", "情報"];
 
+/// 「関数の引数」の画面(本家の第2段)。引数ごとの欄と説明、結果の下見
+struct FnArgs {
+    f: &'static funcs::FnInfo,
+    /// (引数名, 省略可)
+    names: Vec<(String, bool)>,
+    eds: Vec<Editor>,
+    focus: usize,
+    /// 関数の結果(引数を打つたびに、表の複製で計算した下見)
+    result: String,
+}
+
+/// 引数の書き方「(数値1, [数値2], ...)」を(名前, 省略可)の列に解く
+fn parse_fn_args(spec: &str) -> Vec<(String, bool)> {
+    spec.trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != "...")
+        .map(|s| {
+            let opt = s.starts_with('[');
+            (s.trim_start_matches('[').trim_end_matches(']').to_string(), opt)
+        })
+        .collect()
+}
+
 /// 検索と分類で絞った一覧(名前順は funcs.rs の並びのまま)
 fn fn_filtered(search: &str, group: usize) -> Vec<&'static funcs::FnInfo> {
     let q = search.trim().to_uppercase();
@@ -665,6 +691,8 @@ struct Calc {
     name_edit: Option<Editor>,
     /// 「関数を挿入」の小窓(検索・分類・一覧・説明)
     fn_dlg: Option<FnDlg>,
+    /// 「関数の引数」の画面(次へ、で進む第2段)
+    fn_args: Option<FnArgs>,
     /// 右クリックのメニュー(出ている場所。格子領域の px)
     menu_at: Option<(f32, f32)>,
     /// 開いている子メニュー(挿入▸ など)
@@ -748,6 +776,12 @@ impl HasEditor for Calc {
         if let Some(ed) = &mut self.name_edit {
             return ed;
         }
+        if let Some(a) = &mut self.fn_args {
+            if !a.eds.is_empty() {
+                let i = a.focus.min(a.eds.len() - 1);
+                return &mut a.eds[i];
+            }
+        }
         if let Some(d) = &mut self.fn_dlg {
             return &mut d.search;
         }
@@ -762,6 +796,12 @@ impl HasEditor for Calc {
     fn editor_ref(&self) -> &Editor {
         if let Some(ed) = &self.name_edit {
             return ed;
+        }
+        if let Some(a) = &self.fn_args {
+            if !a.eds.is_empty() {
+                let i = a.focus.min(a.eds.len() - 1);
+                return &a.eds[i];
+            }
         }
         if let Some(d) = &self.fn_dlg {
             return &d.search;
@@ -779,8 +819,14 @@ impl HasEditor for Calc {
         if let Some(d) = &mut self.fn_dlg {
             d.sel = 0;
         }
+        // 引数を打ち替えたら結果の下見を計算し直す
+        if self.fn_args.is_some() {
+            self.fn_args_recalc();
+        }
         // 板・小窓・名前ボックスへの打鍵は文書を変えない
-        if self.prompt.is_none() && self.name_edit.is_none() && self.fn_dlg.is_none() {
+        if self.prompt.is_none() && self.name_edit.is_none()
+            && self.fn_dlg.is_none() && self.fn_args.is_none()
+        {
             self.dirty = true;
         }
     }
@@ -821,6 +867,7 @@ impl Calc {
             edit_armed: false,
             name_edit: None,
             fn_dlg: None,
+            fn_args: None,
             menu_at: None,
             menu_sub: None,
             pick: None,
@@ -1328,6 +1375,21 @@ impl Calc {
             return;
         }
         let Some(p) = self.cell_at(x, y) else { return };
+        // 関数の引数の画面が開いている間は、セルのクリックで
+        // **いまの欄に参照が入る**(Excel の引数ダイアログと同じ)
+        if self.fn_args.is_some() {
+            let a1 = p.a1();
+            if let Some(a) = &mut self.fn_args {
+                if a.eds.is_empty() {
+                    return;
+                }
+                let i = a.focus.min(a.eds.len() - 1);
+                a.eds[i] = Editor::new(&a1);
+                a.eds[i].move_to(a1.len(), false);
+            }
+            self.fn_args_recalc();
+            return;
+        }
         // Ctrl+クリックはリンクを開く(基幹網の外は既定のブラウザに任せる)
         if ctrl && !shift {
             if let Some(url) = self.sheet().links.get(&p).cloned() {
@@ -2074,23 +2136,67 @@ impl Calc {
         self.status = ui::tf!("名前「{}」を {} に付けました(名前ボックスで呼べます)", t, range).into();
     }
 
-    /// 「関数を挿入」の決定。編集中なら差し込み、でなければ =名前( で始める
-    fn fn_insert_selected(&mut self) {
+    /// 「関数を挿入」の次へ = 選んだ関数の**引数の画面**へ進む(本家の第2段)
+    fn fn_next(&mut self) {
         let Some(d) = self.fn_dlg.take() else { return };
         let list = fn_filtered(d.search.text(), d.group);
-        let Some(f) = list.get(d.sel.min(list.len().saturating_sub(1))) else {
+        let Some(f) = list.get(d.sel.min(list.len().saturating_sub(1))).copied() else {
             self.status = ui::t!("その条件の関数がありません").into();
             return;
         };
+        let names = parse_fn_args(f.args);
+        let eds = (0..names.len()).map(|_| Editor::new("")).collect();
+        self.fn_args = Some(FnArgs { f, names, eds, focus: 0, result: String::new() });
+        self.fn_args_recalc();
+        self.status = ui::t!(
+            "関数の引数: Tab で次の欄。セルをクリックすると参照が入ります。Enter で式に")
+        .into();
+    }
+
+    /// 引数の画面の中身から式の文字を組む(埋めた欄まで)
+    fn fn_args_formula(&self) -> Option<String> {
+        let a = self.fn_args.as_ref()?;
+        let vals: Vec<String> = a.eds.iter().map(|e| e.text().trim().to_string()).collect();
+        let mut last = 0;
+        for (i, v) in vals.iter().enumerate() {
+            if !v.is_empty() {
+                last = i + 1;
+            }
+        }
+        Some(format!("{}({})", a.f.name, vals[..last].join(", ")))
+    }
+
+    /// 関数の結果の下見。**表の複製**の空きセルで計算する(ゴールシークと
+    /// 同じ流儀 — 本物の表は触らない)
+    fn fn_args_recalc(&mut self) {
+        let Some(fstr) = self.fn_args_formula() else { return };
+        let mut s = self.sheet().clone();
+        let (rows, _) = s.extent();
+        let p = Pos::new(rows + 2, 0);
+        s.set(p, Cell::input(&format!("={fstr}")));
+        recalc(&mut s);
+        let out = s.get(p).map(|c| c.value.display()).unwrap_or_default();
+        if let Some(a) = &mut self.fn_args {
+            a.result = out;
+        }
+    }
+
+    /// 引数の画面の OK。組んだ式をセルへ(編集中ならカーソルに差し込み)
+    fn fn_args_ok(&mut self) {
+        let Some(fstr) = self.fn_args_formula() else {
+            self.fn_args = None;
+            return;
+        };
+        self.fn_args = None;
         if self.editing() || self.edit_armed {
-            self.input.insert(&format!("{}(", f.name));
+            self.input.insert(&fstr);
         } else {
-            self.input = Editor::new(&format!("={}(", f.name));
+            self.input = Editor::new(&format!("={fstr}"));
             let end = self.input.text().len();
             self.input.move_to(end, false);
         }
         self.edit_armed = true;
-        self.status = format!("{}{} — {}", f.name, f.args, f.desc).into();
+        self.status = ui::t!("式を入れました(Enter で確定 / Esc で取消)").into();
     }
 
     /// F2 = このセルを編集(次の打鍵が**追記**になる。Excel と同じ)
@@ -2106,7 +2212,10 @@ impl Calc {
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
         // 名前ボックス・関数の小窓は最優先で閉じる
-        if self.name_edit.take().is_some() || self.fn_dlg.take().is_some() {
+        if self.name_edit.take().is_some()
+            || self.fn_args.take().is_some()
+            || self.fn_dlg.take().is_some()
+        {
             cx.notify();
             return;
         }
@@ -3701,6 +3810,9 @@ impl Calc {
     fn a_backspace(&mut self, _: &ui::Backspace, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(ed) = &mut self.name_edit {
             ed.backspace();
+        } else if self.fn_args.is_some() {
+            self.editor().backspace();
+            self.fn_args_recalc();
         } else if let Some(d) = &mut self.fn_dlg {
             d.search.backspace();
             d.sel = 0;
@@ -3880,6 +3992,7 @@ impl Calc {
     fn a_left(&mut self, _: &ui::Left, _: &mut Window, cx: &mut Context<Self>) {
         // 小窓 → 板 → 打ちかけの文字 → セル、の順で見る
         if let Some(ed) = &mut self.name_edit { ed.move_char(false, false) }
+        else if self.fn_args.is_some() { self.editor().move_char(false, false) }
         else if let Some(d) = &mut self.fn_dlg { d.search.move_char(false, false) }
         else if let Some(sv) = &mut self.solver { sv.focused().move_char(false, false) }
         else if let Some((_, ed)) = &mut self.prompt { ed.move_char(false, false) }
@@ -3889,6 +4002,7 @@ impl Calc {
     }
     fn a_right(&mut self, _: &ui::Right, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(ed) = &mut self.name_edit { ed.move_char(true, false) }
+        else if self.fn_args.is_some() { self.editor().move_char(true, false) }
         else if let Some(d) = &mut self.fn_dlg { d.search.move_char(true, false) }
         else if let Some(sv) = &mut self.solver { sv.focused().move_char(true, false) }
         else if let Some((_, ed)) = &mut self.prompt { ed.move_char(true, false) }
@@ -3932,7 +4046,9 @@ impl Calc {
         cx.notify();
     }
     fn a_up(&mut self, _: &ui::Up, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(d) = &mut self.fn_dlg {
+        if let Some(a) = &mut self.fn_args {
+            a.focus = a.focus.saturating_sub(1);
+        } else if let Some(d) = &mut self.fn_dlg {
             d.sel = d.sel.saturating_sub(1);
         } else {
             self.move_cursor(-1, 0);
@@ -3940,7 +4056,9 @@ impl Calc {
         cx.notify();
     }
     fn a_down(&mut self, _: &ui::Down, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(d) = &mut self.fn_dlg {
+        if let Some(a) = &mut self.fn_args {
+            a.focus = (a.focus + 1).min(a.eds.len().saturating_sub(1));
+        } else if let Some(d) = &mut self.fn_dlg {
             let n = fn_filtered(d.search.text(), d.group).len();
             d.sel = (d.sel + 1).min(n.saturating_sub(1));
         } else {
@@ -3949,7 +4067,14 @@ impl Calc {
         cx.notify();
     }
     fn a_tab(&mut self, _: &ui::Tab, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_cursor(0, 1); cx.notify();
+        if let Some(a) = &mut self.fn_args {
+            if !a.eds.is_empty() {
+                a.focus = (a.focus + 1) % a.eds.len();
+            }
+        } else {
+            self.move_cursor(0, 1);
+        }
+        cx.notify();
     }
     fn a_enter(&mut self, _: &ui::Enter, _: &mut Window, cx: &mut Context<Self>) {
         if self.name_edit.is_some() {
@@ -3957,8 +4082,13 @@ impl Calc {
             cx.notify();
             return;
         }
+        if self.fn_args.is_some() {
+            self.fn_args_ok();
+            cx.notify();
+            return;
+        }
         if self.fn_dlg.is_some() {
-            self.fn_insert_selected();
+            self.fn_next();
             cx.notify();
             return;
         }
@@ -7763,6 +7893,7 @@ impl EntityInputHandler for Calc {
         // 2打目以降。IME の変換途中(marked)は消さない
         if self.prompt.is_none() && self.solver.is_none()
             && self.name_edit.is_none() && self.fn_dlg.is_none()
+            && self.fn_args.is_none()
             && !self.edit_armed && !self.editing()
             && handler::marked_range_utf16(self).is_none()
         {
@@ -7778,6 +7909,7 @@ impl EntityInputHandler for Calc {
         // IME の1打目も同じ(変換中の下線ごと、空にしてから始める)
         if self.prompt.is_none() && self.solver.is_none()
             && self.name_edit.is_none() && self.fn_dlg.is_none()
+            && self.fn_args.is_none()
             && !self.edit_armed && !self.editing()
             && handler::marked_range_utf16(self).is_none()
         {
@@ -9774,7 +9906,7 @@ impl Render for Calc {
                                 d.sel = i;
                             }
                             if e.click_count >= 2 {
-                                this.fn_insert_selected();
+                                this.fn_next();
                             }
                             cx.notify();
                         }))
@@ -9826,16 +9958,129 @@ impl Render for Calc {
                         .min_h(px(48.0))
                         .child(SharedString::from(desc)))
                     .child(div().flex().flex_row().gap_2().justify_center()
-                        .child(btn("fn-ok", ui::t!("OK").to_string(), true)
+                        .child(btn("fn-next", ui::t!("次へ").to_string(), true)
                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
-                                this.fn_insert_selected();
+                                this.fn_next();
                                 cx.notify();
                             })))
                         .child(btn("fn-cancel", ui::t!("キャンセル").to_string(), false)
                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.fn_dlg = None;
+                                cx.notify();
+                            })))))
+        });
+
+        // ---- 関数の引数の画面(本家の第2段) ----
+        // 引数ごとの欄と説明、結果の下見。セルをクリックすると欄に参照が入る
+        let fn_args_panel = self.fn_args.as_ref().map(|a| {
+            let mut rows_el = div().flex().flex_col().gap_1();
+            for (i, (name, opt)) in a.names.iter().enumerate() {
+                let on = i == a.focus;
+                let mut t = a.eds[i].text().to_string();
+                if on {
+                    let cur = a.eds[i].cursor().min(t.len());
+                    t.insert(cur, '|');
+                }
+                rows_el = rows_el.child(div()
+                    .id(SharedString::from(format!("fna{i}")))
+                    .flex().flex_row().items_center().gap_2()
+                    .cursor_text()
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(a) = &mut this.fn_args {
+                            a.focus = i;
+                        }
+                        cx.notify();
+                    }))
+                    .child(div().w(px(110.0)).text_size(px(12.0))
+                        .text_color(rgb(0x1B1B1B))
+                        .child(SharedString::from(if *opt {
+                            format!("{name}(省略可)")
+                        } else {
+                            name.clone()
+                        })))
+                    .child(div().flex_1().px_2().py_0p5().bg(rgb(0xFFFFFF))
+                        .border_1()
+                        .border_color(if on { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                        .rounded_sm().text_size(px(12.5))
+                        .whitespace_nowrap().overflow_hidden()
+                        .child(SharedString::from(if t.is_empty() { " ".into() } else { t }))));
+            }
+            // いまの欄の説明(本家の ad — 引数順。可変長は最後の1つが代表)
+            let arg_hint = a
+                .names
+                .get(a.focus)
+                .map(|(n, _)| {
+                    let d = a.f.arg_desc.get(a.focus)
+                        .or(a.f.arg_desc.last())
+                        .copied()
+                        .unwrap_or("");
+                    format!("{n}: {d}")
+                })
+                .unwrap_or_default();
+            let btn = |id: &'static str, label: String, primary: bool| {
+                div().id(id).px_3().py_1().rounded_sm().text_size(px(12.5))
+                    .border_1()
+                    .border_color(if primary { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                    .bg(if primary { rgb(0x1B6E3C) } else { rgb(0xFFFFFF) })
+                    .text_color(if primary { rgb(0xFFFFFF) } else { rgb(0x1B1B1B) })
+                    .cursor_pointer()
+                    .child(SharedString::from(label))
+            };
+            div().absolute().inset_0().flex().items_center().justify_center()
+                .child(div().w(px(520.0)).p_3().rounded_md().bg(rgb(0xF7F9FA))
+                    .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .flex().flex_col().gap_1p5()
+                    .child(div().flex().flex_row().items_center()
+                        .child(div().text_size(px(13.0)).font_weight(gpui::FontWeight::BOLD)
+                            .text_color(rgb(0x1B6E3C)).child(ui::t!("関数の引数")))
+                        .child(div().flex_1())
+                        .child(div().id("fna-x").px_2().cursor_pointer().text_size(px(13.0))
+                            .text_color(rgb(0x66707A)).hover(|s| s.text_color(rgb(0xC0392B)))
+                            .child("✕")
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.fn_args = None;
+                                cx.notify();
+                            }))))
+                    .child(div().text_size(px(12.5)).font_weight(gpui::FontWeight::BOLD)
+                        .child(SharedString::from(format!("{}{}", a.f.name, a.f.args))))
+                    .child(div().text_size(px(11.5)).text_color(rgb(0x4A545E))
+                        .child(SharedString::from(a.f.desc)))
+                    .child(rows_el)
+                    .child(div().text_size(px(11.5)).text_color(rgb(0x4A545E))
+                        .min_h(px(44.0)).px_2().py_1()
+                        .bg(rgb(0xEFF2F4)).rounded_sm()
+                        .child(SharedString::from(arg_hint)))
+                    .child(div().text_size(px(12.0))
+                        .child(SharedString::from(ui::tf!("関数の結果 = {}", a.result))))
+                    .child(div().text_size(px(11.0)).text_color(rgb(0x66707A))
+                        .child(ui::t!("セルをクリックすると、いまの欄に参照が入ります")))
+                    .child(div().flex().flex_row().gap_2().justify_center()
+                        .child(btn("fna-back", ui::t!("戻る").to_string(), false)
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.fn_args = None;
+                                this.fn_dlg = Some(FnDlg {
+                                    search: Editor::new(""),
+                                    group: 0,
+                                    sel: 0,
+                                });
+                                cx.notify();
+                            })))
+                        .child(btn("fna-ok", ui::t!("OK").to_string(), true)
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.fn_args_ok();
+                                cx.notify();
+                            })))
+                        .child(btn("fna-cancel", ui::t!("キャンセル").to_string(), false)
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.fn_args = None;
                                 cx.notify();
                             })))))
         });
@@ -10872,6 +11117,7 @@ impl Render for Calc {
                    .children(prompt_panel)
                    .children(solver_panel)
                    .children(fn_panel)
+                   .children(fn_args_panel)
                    .children(slicer_panel))
             .children(watch_bar)
             .child(sheets_bar)
