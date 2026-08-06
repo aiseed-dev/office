@@ -8054,6 +8054,9 @@ impl gpui::Element for InputSink {
                     || c.head_drag.is_some()
                     || c.ink_cur.is_some()
                     || c.tool == Some(2)
+                    // 関数の引数のセル掴み(範囲をなぞる)もここを通す —
+                    // この表に入れ忘れると「押せるのに伸びない」(writer で踏んだ罠)
+                    || c.fn_args.as_ref().is_some_and(|a| a.pick_from.is_some())
                 {
                     // 筆と消しゴムもここを通る(描きかけ・なぞり)
                     c.mouse_drag_at(f32::from(rel.x), f32::from(rel.y));
