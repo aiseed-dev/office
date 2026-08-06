@@ -537,6 +537,8 @@ pub(crate) struct PivotPend {
     pub(crate) headers: Vec<String>,
     pub(crate) rows_sel: Vec<String>,
     pub(crate) cols_sel: Vec<String>,
+    /// 値にする見出し(集計の選択へ渡す控え)
+    pub(crate) val_sel: String,
 }
 
 /// 見出しの列挙を割る(カンマ・読点・セミコロン・空白のどれでも。
@@ -551,28 +553,6 @@ pub(crate) fn split_fields(text: &str) -> Vec<String> {
 
 pub(crate) const PIVOT_AGGS: [&str; 5] = ["合計", "平均", "個数", "最大", "最小"];
 
-/// 「金額 合計」を(見出し, 集計)に読む。集計を省けば合計。
-pub(crate) fn parse_pivot_val(text: &str, headers: &[String]) -> Result<(String, &'static str), String> {
-    let mut parts = split_fields(text);
-    let agg = match parts.last().map(|s| s.as_str()) {
-        Some(last) => match PIVOT_AGGS.iter().find(|a| **a == last) {
-            Some(a) => {
-                parts.pop();
-                *a
-            }
-            None => "合計",
-        },
-        None => "合計",
-    };
-    let name = parts.join(" ");
-    if name.is_empty() {
-        return Err(ui::t!("値にする見出しを書いてください(例: 金額 合計)").into());
-    }
-    if !headers.iter().any(|h| *h == name) {
-        return Err(ui::tf!("「{}」は見出しにありません", name));
-    }
-    Ok((name, agg))
-}
 
 /// ピボットの指図を JSON にする(手で組む — グラフと同じ割り切り)。
 pub(crate) fn pivot_spec_json(headers: &[String], rows: &[Vec<String>], d: &sheet::model::PivotDef) -> String {

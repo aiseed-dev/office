@@ -458,18 +458,16 @@ impl Calc {
                                 if v.is_empty() { col_name(c) } else { v }
                             })
                             .collect();
-                        self.status = format!(
-                            "行に並べる見出し(カンマ区切り可): {}",
-                            headers.join(" / ")
-                        ).into();
+                        self.status = ui::t!("行に並べる見出しをクリックで選ぶ(複数可)。選んだら「決定」").into();
                         self.pivot_pend = Some(PivotPend {
                             a,
                             b,
                             headers,
                             rows_sel: Vec::new(),
                             cols_sel: Vec::new(),
+                            val_sel: String::new(),
                         });
-                        self.prompt = Some(("pivot-rows", Editor::new("")));
+                        self.pivot_pick("pivot-rows-pick");
                     }
                 }
             }
@@ -1191,6 +1189,7 @@ impl Calc {
                         )
                         .into();
                         self.sub_pend = Some(PivotPend {
+                            val_sel: String::new(),
                             a,
                             b,
                             headers,

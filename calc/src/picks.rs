@@ -182,6 +182,72 @@ impl Calc {
                     }
                 }
             }
+            // ピボットの聞き取り(クリックで入切 → 決定で次へ)。
+            // 行 → 列 → 値 → 集計の4段。Esc でいつでもやめられる
+            "pivot-rows-pick" => {
+                if v == "決定(列の選択へ)" {
+                    let ok = self
+                        .pivot_pend
+                        .as_ref()
+                        .map(|p| !p.rows_sel.is_empty())
+                        .unwrap_or(false);
+                    if !ok {
+                        self.status =
+                            ui::t!("行に並べる見出しを1つは選んでください").into();
+                    } else {
+                        self.status = ui::t!("列に広げる見出し(なくてもよい)。選んだら「決定」").into();
+                        self.pivot_pick("pivot-cols-pick");
+                        return;
+                    }
+                } else if let Some(p) = &mut self.pivot_pend {
+                    let h = v.to_string();
+                    if let Some(i) = p.rows_sel.iter().position(|x| *x == h) {
+                        p.rows_sel.remove(i);
+                    } else if p.headers.contains(&h) {
+                        p.rows_sel.push(h);
+                    }
+                }
+                self.pivot_pick("pivot-rows-pick");
+                return;
+            }
+            "pivot-cols-pick" => {
+                if v == "決定(値の選択へ)" {
+                    self.status = ui::t!("値にする見出しをクリック(次に集計を選びます)").into();
+                    self.pivot_pick("pivot-val-pick");
+                    return;
+                }
+                if let Some(p) = &mut self.pivot_pend {
+                    let h = v.to_string();
+                    if let Some(i) = p.cols_sel.iter().position(|x| *x == h) {
+                        p.cols_sel.remove(i);
+                    } else if p.headers.contains(&h) {
+                        p.cols_sel.push(h);
+                    }
+                }
+                self.pivot_pick("pivot-cols-pick");
+                return;
+            }
+            "pivot-val-pick" => {
+                let known = self
+                    .pivot_pend
+                    .as_ref()
+                    .map(|p| p.headers.contains(&v.to_string()))
+                    .unwrap_or(false);
+                if known {
+                    if let Some(p) = &mut self.pivot_pend {
+                        p.val_sel = v.to_string();
+                    }
+                    self.status = ui::tf!("「{}」をどう集計しますか", v).into();
+                    self.pivot_pick("pivot-agg-pick");
+                    return;
+                }
+            }
+            "pivot-agg-pick" => {
+                let Some(pend) = self.pivot_pend.take() else { return };
+                let agg = PIVOT_AGGS.iter().find(|a| **a == v).copied().unwrap_or("合計");
+                let value = pend.val_sel.clone();
+                self.insert_pivot(pend, value, agg, cx);
+            }
             // 並べ替えの「拡張しますか」(選択の横にデータが続いているとき)
             "sort-expand" => {
                 let asc = self.sort_pend.take().unwrap_or(true);
@@ -831,6 +897,51 @@ impl Calc {
         self.input.move_to(self.input.text().len(), false);
         self.status = ui::t!("編集: そのまま打つと続きに入ります(Esc で取消)").into();
         cx.notify();
+    }
+
+    /// ピボットの聞き取りの一覧を(いまの控えから)組み直して開く。
+    /// クリックのたびに呼ばれる — ✓ の付け外しはここで反映される
+    pub(crate) fn pivot_pick(&mut self, kind: &'static str) {
+        let Some(pend) = &self.pivot_pend else { return };
+        let at = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let mut items: Vec<String> = Vec::new();
+        match kind {
+            "pivot-rows-pick" => {
+                for h in &pend.headers {
+                    items.push(if pend.rows_sel.contains(h) {
+                        format!("✓ {h}")
+                    } else {
+                        h.clone()
+                    });
+                }
+                items.push("決定(列の選択へ)".into());
+            }
+            "pivot-cols-pick" => {
+                for h in pend.headers.iter().filter(|h| !pend.rows_sel.contains(h)) {
+                    items.push(if pend.cols_sel.contains(h) {
+                        format!("✓ {h}")
+                    } else {
+                        h.clone()
+                    });
+                }
+                items.push("決定(値の選択へ)".into());
+            }
+            "pivot-val-pick" => {
+                for h in &pend.headers {
+                    items.push(h.clone());
+                }
+            }
+            _ => {
+                for a in PIVOT_AGGS {
+                    items.push(a.to_string());
+                }
+            }
+        }
+        self.pick_kind = kind;
+        self.pick = Some((items, at));
     }
 
     /// 「データの入力規則」の板を開く(いまの規則を下敷きに)
@@ -1709,55 +1820,6 @@ impl Calc {
                 self.sync_input();
                 self.status = ui::tf!("{} 区切りに小計と総計を入れ、明細をグループ化しました — 「詳細の非表示」で畳むと合計だけ残ります(Ctrl+Z で1手)", n)
                 .into();
-            }
-            // ピボットの聞き取り(行 → 列 → 値と集計)。間違いは板を出し直して言う
-            "pivot-rows" => {
-                let Some(mut pend) = self.pivot_pend.take() else { return };
-                let sel = split_fields(&text);
-                if sel.is_empty() {
-                    self.status =
-                        ui::tf!("行に並べる見出しを1つは選んでください: {}", pend.headers.join(" / ")).into();
-                    self.pivot_pend = Some(pend);
-                    self.prompt = Some(("pivot-rows", Editor::new("")));
-                    return;
-                }
-                if let Some(bad) = sel.iter().find(|s| !pend.headers.contains(s)) {
-                    self.status = ui::tf!("「{}」は見出しにありません: {}", bad, pend.headers.join(" / ")).into();
-                    self.pivot_pend = Some(pend);
-                    self.prompt = Some(("pivot-rows", Editor::new(&text)));
-                    return;
-                }
-                pend.rows_sel = sel;
-                let rest: Vec<&String> =
-                    pend.headers.iter().filter(|h| !pend.rows_sel.contains(h)).collect();
-                self.status = ui::tf!("列に広げる見出し(空 Enter = なし): {}", rest.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" / ")).into();
-                self.pivot_pend = Some(pend);
-                self.prompt = Some(("pivot-cols", Editor::new("")));
-            }
-            "pivot-cols" => {
-                let Some(mut pend) = self.pivot_pend.take() else { return };
-                let sel = split_fields(&text);
-                if let Some(bad) = sel.iter().find(|s| !pend.headers.contains(s)) {
-                    self.status = ui::tf!("「{}」は見出しにありません: {}", bad, pend.headers.join(" / ")).into();
-                    self.pivot_pend = Some(pend);
-                    self.prompt = Some(("pivot-cols", Editor::new(&text)));
-                    return;
-                }
-                pend.cols_sel = sel;
-                self.status = ui::t!("値にする見出しと集計(例: 金額 合計。合計/平均/個数/最大/最小)").into();
-                self.pivot_pend = Some(pend);
-                self.prompt = Some(("pivot-val", Editor::new("")));
-            }
-            "pivot-val" => {
-                let Some(pend) = self.pivot_pend.take() else { return };
-                match parse_pivot_val(&text, &pend.headers) {
-                    Ok((value, agg)) => self.insert_pivot(pend, value, agg, cx),
-                    Err(e) => {
-                        self.status = e.into();
-                        self.pivot_pend = Some(pend);
-                        self.prompt = Some(("pivot-val", Editor::new(&text)));
-                    }
-                }
             }
             "find" => {
                 if text.is_empty() {

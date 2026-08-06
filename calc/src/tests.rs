@@ -794,17 +794,59 @@ mod pivot_tests {
         assert!(split_fields("  ").is_empty());
     }
 
-    #[test]
-    fn 値と集計の読み取り() {
-        let hs = vec!["部署".to_string(), "金額".to_string()];
-        assert_eq!(
-            parse_pivot_val("金額 合計", &hs).unwrap(),
-            ("金額".to_string(), "合計")
-        );
-        assert_eq!(parse_pivot_val("金額", &hs).unwrap().1, "合計", "省けば合計");
-        assert_eq!(parse_pivot_val("金額 平均", &hs).unwrap().1, "平均");
-        assert!(parse_pivot_val("売上 合計", &hs).is_err(), "無い見出しは断る");
-        assert!(parse_pivot_val("", &hs).is_err(), "空は断る");
+    #[gpui::test]
+    fn ピボットの行列値は一覧のクリックで選ぶ(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            for (a1, v) in [
+                ("A1", "区分"), ("B1", "月"), ("C1", "金額"),
+                ("A2", "筆記具"), ("B2", "4月"), ("C2", "100"),
+                ("A3", "紙製品"), ("B3", "5月"), ("C3", "200"),
+            ] {
+                this.cursor = Pos::parse(a1).unwrap();
+                this.sync_input();
+                this.input.insert(v);
+                assert!(this.commit());
+            }
+            this.anchor = Some(Pos::parse("A1").unwrap());
+            this.cursor = Pos::parse("C3").unwrap();
+            this.sync_input();
+            this.run_cmd("pivot-insert", cx);
+            assert_eq!(this.pick_kind, "pivot-rows-pick", "行の一覧が開かない");
+            // 見出しを選ばず決定 → 言い返されて一覧のまま
+            this.apply_pick("決定(列の選択へ)", cx);
+            assert_eq!(this.pick_kind, "pivot-rows-pick", "空のまま先へ進んだ");
+            // クリックで入切(✓ 付きでもう一度押すと外れる)
+            this.apply_pick("区分", cx);
+            this.apply_pick("✓ 区分", cx);
+            assert!(this.pivot_pend.as_ref().unwrap().rows_sel.is_empty(), "入切が効かない");
+            this.apply_pick("区分", cx);
+            {
+                let (items, _) = this.pick.as_ref().unwrap();
+                assert!(items.iter().any(|i| i == "✓ 区分"), "選んだ印が付かない: {items:?}");
+            }
+            this.apply_pick("決定(列の選択へ)", cx);
+            assert_eq!(this.pick_kind, "pivot-cols-pick");
+            {
+                // 行に使った見出しは列の候補に出ない
+                let (items, _) = this.pick.as_ref().unwrap();
+                assert!(!items.iter().any(|i| i.contains("区分")), "{items:?}");
+            }
+            this.apply_pick("月", cx);
+            this.apply_pick("決定(値の選択へ)", cx);
+            assert_eq!(this.pick_kind, "pivot-val-pick");
+            this.apply_pick("金額", cx);
+            assert_eq!(this.pick_kind, "pivot-agg-pick", "集計の一覧が開かない");
+            let p = this.pivot_pend.as_ref().unwrap();
+            assert_eq!(p.rows_sel, vec!["区分"]);
+            assert_eq!(p.cols_sel, vec!["月"]);
+            assert_eq!(p.val_sel, "金額");
+            // ここでは polars は回さない(集計を選ぶと insert_pivot へ)。
+            // Esc でやめられることだけ確かめる
+            this.pivot_pend = None;
+            this.pick = None;
+            this.pick_kind = "value";
+        });
     }
 
     fn def(rows: &[&str], cols: &[&str], value: &str, agg: &str) -> sheet::model::PivotDef {

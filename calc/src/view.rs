@@ -2086,9 +2086,6 @@ impl Render for Calc {
                 "numfmt-custom" => ui::t!("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)").to_string(),
                 "subtotal-by" => ui::t!("小計 1/2 — 何の区切りで集めるか(見出しを1つ)").to_string(),
                 "subtotal-vals" => ui::t!("小計 2/2 — 合計する見出し").to_string(),
-                "pivot-rows" => ui::t!("ピボット 1/3 — 行に並べる見出し(カンマ区切り可)").to_string(),
-                "pivot-cols" => ui::t!("ピボット 2/3 — 列に広げる見出し(空 Enter = なし)").to_string(),
-                "pivot-val" => ui::t!("ピボット 3/3 — 値にする見出しと集計").to_string(),
                 _ => String::new(),
             };
             // キャレットは | で見せる(writer の検索欄と同じ割り切り)。
