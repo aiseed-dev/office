@@ -15,7 +15,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCES = [ROOT / "writer/src/main.rs", ROOT / "calc/src/main.rs"]
+# calc は部屋割り済み(2026-08-06)— src の全部屋を見る(試験は除く)
+SOURCES = [ROOT / "writer/src/main.rs"] + sorted(
+    p for p in (ROOT / "calc/src").glob("*.rs") if p.name != "tests.rs"
+)
 TABLE = ROOT / "lang/src/i18n_en.rs"
 
 
@@ -33,9 +36,20 @@ def literal_at(src, i):
 
 def keys_from(path):
     src = open(path, encoding="utf-8").read()
-    cut = src.find("#[cfg(test)]")
-    if cut >= 0:
+    # 試験モジュールから先は見ない。ただし `#[cfg(test)] mod tests;` の
+    # **宣言**は本文の頭にある(calc の部屋割り)— そこでは切らない
+    pos = 0
+    while True:
+        cut = src.find("#[cfg(test)]", pos)
+        if cut < 0:
+            break
+        lines = src[cut:cut + 64].splitlines()
+        next_line = lines[1].strip() if len(lines) > 1 else ""
+        if next_line.startswith("mod ") and next_line.endswith(";"):
+            pos = cut + 1  # 宣言 — 本文はこの先も続く
+            continue
         src = src[:cut]
+        break
     out = []
     for m in re.finditer(r"ui::tf?!\(\s*", src):
         j = m.end()
