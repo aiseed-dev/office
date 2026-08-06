@@ -860,6 +860,9 @@ impl Calc {
             // 計算方法(自動 ⇔ 手動)。手動のときは F9 で計算する
             "calc-mode" => {
                 self.auto_calc = !self.auto_calc;
+                // ファイルにも残す(calcPr)。開き直して勝手に自動へ戻さない
+                self.book.calc_manual = !self.auto_calc;
+                self.dirty = true;
                 self.status = if self.auto_calc {
                     ui::t!("計算方法: 自動(いつもすぐ計算します)").into()
                 } else {

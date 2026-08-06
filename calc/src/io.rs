@@ -158,6 +158,9 @@ impl Calc {
                 )
                 .into();
                 self.book = book;
+                // 計算方法はファイルの指定に従う(開いたときは上の一度きりの
+                // 計算で値を見せ、以後の編集では勝手に回さない)
+                self.auto_calc = !self.book.calc_manual;
                 self.active = 0;
                 self.cursor = Pos::new(0, 0);
                 self.view = Pos::new(0, 0);
@@ -284,6 +287,9 @@ impl Calc {
                 self.release_lock();
                 self.locked_by = None;
                 self.book = book;
+                // 計算方法はファイルの指定に従う(開いたときは上の一度きりの
+                // 計算で値を見せ、以後の編集では勝手に回さない)
+                self.auto_calc = !self.book.calc_manual;
                 self.active = 0;
                 self.cursor = Pos::new(0, 0);
                 self.view = Pos::new(0, 0);

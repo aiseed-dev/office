@@ -845,6 +845,9 @@ pub struct Book {
     /// ピボットの指図(xl/joPivot.xml で往復する独自部品)。
     /// Excel で保存し直すと消える — そのときピボットはただの値になる(正直な劣化)
     pub pivots: Vec<PivotDef>,
+    /// 計算方法が手動(xlsx の calcPr calcMode="manual")。
+    /// F9 で手回し。ファイルに残す — 開き直して勝手に自動へ戻さない
+    pub calc_manual: bool,
 }
 
 impl Book {

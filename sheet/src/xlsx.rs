@@ -797,6 +797,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     let mut defined: Vec<(String, String)> = Vec::new();
     // 理解できなかった definedName の原文(hidden 属性つき等)。捨てない
     let mut defined_raw: Vec<String> = Vec::new();
+    let mut calc_manual = false;
     if let Ok(mut f) = zip.by_name("xl/workbook.xml") {
         let mut s = String::new();
         let _ = f.read_to_string(&mut s);
@@ -819,6 +820,12 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                         attr(&e, "state").as_deref(),
                         Some("hidden") | Some("veryHidden")
                     ));
+                }
+                // 計算方法(calcPr)。manual を落とすと開き直しで勝手に自動へ戻る
+                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                    if local(e.name().as_ref()) == b"calcPr" =>
+                {
+                    calc_manual = attr(&e, "calcMode").as_deref() == Some("manual");
                 }
                 Ok(Event::Start(e)) if local(e.name().as_ref()) == b"definedName" => {
                     // name= 以外の属性(hidden 等)が付いていたら「単純ではない」
@@ -858,6 +865,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
         sheets: Vec::new(),
         names_raw: defined_raw,
         theme: theme_colors.clone(),
+        calc_manual,
         ..Default::default()
     };
     // ブックの情報(docProps/core.xml)。読んで見せる。保存は原文持ち越し
@@ -1464,6 +1472,44 @@ fn dollars(r: &str) -> String {
 /// 原本の workbook.xml の definedNames を、こちらの塊に置き換える。
 /// 原文の workbook.xml の <sheet> に state="hidden" を差し替える。
 /// **知らない属性は残す** — 名前・sheetId・r:id はそのまま。
+/// 原本の workbook.xml の計算方法(calcPr calcMode)をこちらのモデルに合わせる。
+/// 他の属性(calcId 等)は据え置く。calcPr が無い原本に手動を書くときは
+/// definedNames の後(スキーマの順)に差し込む
+fn patch_calc_pr(workbook: &str, manual: bool) -> String {
+    let mode = if manual { "manual" } else { "auto" };
+    if let Some(start) = workbook.find("<calcPr") {
+        let Some(len) = workbook[start..].find('>') else { return workbook.into() };
+        let tag = &workbook[start..start + len + 1];
+        let new_tag = if let Some(a) = tag.find("calcMode=\"") {
+            // 既にある calcMode の値だけ差し替える
+            let vstart = a + "calcMode=\"".len();
+            match tag[vstart..].find('"') {
+                Some(vend) => format!("{}{}{}", &tag[..vstart], mode, &tag[vstart + vend..]),
+                None => return workbook.into(),
+            }
+        } else if manual {
+            tag.replacen("<calcPr", r#"<calcPr calcMode="manual""#, 1)
+        } else {
+            return workbook.into(); // calcMode 無し=自動。触らない
+        };
+        format!("{}{}{}", &workbook[..start], new_tag, &workbook[start + len + 1..])
+    } else if manual {
+        // calcPr が無い原本。definedNames の後(無ければ sheets の後)に差し込む
+        let ins = r#"<calcPr calcMode="manual"/>"#;
+        if let Some(p) = workbook.find("</definedNames>") {
+            let at = p + "</definedNames>".len();
+            format!("{}{}{}", &workbook[..at], ins, &workbook[at..])
+        } else if let Some(p) = workbook.find("</sheets>") {
+            let at = p + "</sheets>".len();
+            format!("{}{}{}", &workbook[..at], ins, &workbook[at..])
+        } else {
+            workbook.into()
+        }
+    } else {
+        workbook.into()
+    }
+}
+
 fn patch_sheet_states(workbook: &str, book: &Book) -> String {
     let mut out = String::new();
     let mut rest = workbook;
@@ -1791,6 +1837,8 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     let patched = patch_defined_names(&s, &defined_names_xml(book));
                     // 隠しシートの state はこちらのモデルが正(原文へ属性差し替え)
                     let patched = patch_sheet_states(&patched, book);
+                    // 計算方法もこちらが正(F9 で手動にしたら残す)
+                    let patched = patch_calc_pr(&patched, book.calc_manual);
                     carried.push((name, patched.into_bytes()));
                     continue;
                 }
@@ -2218,8 +2266,10 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     if !carry {
     put("xl/workbook.xml", &format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="{NS}" xmlns:r="{RNS}"><sheets>{sheets_xml}</sheets>{}</workbook>"#,
-        defined_names_xml(book)))?;
+<workbook xmlns="{NS}" xmlns:r="{RNS}"><sheets>{sheets_xml}</sheets>{}{}</workbook>"#,
+        defined_names_xml(book),
+        // 手動計算をファイルに残す(自動は既定なので書かない)
+        if book.calc_manual { r#"<calcPr calcMode="manual"/>"# } else { "" }))?;
 
     let wrels: String = (1..=book.sheets.len())
         .map(|i| format!(r#"<Relationship Id="rId{i}" Type="{RNS}/worksheet" Target="worksheets/sheet{i}.xml"/>"#))
@@ -3201,6 +3251,41 @@ mod validation_roundtrip_tests {
         // 2026-08-06 改訂: list 以外も落とさず、種類ごと持ち越す
         assert_eq!(back.sheets[0].validations.len(), 1, "規則が消えた");
         assert_eq!(back.sheets[0].validations[0].kind, "whole", "種類が持ち越せない");
+    }
+
+    #[test]
+    fn 手動計算が往復する() {
+        // 手動(calcPr calcMode="manual")を落とすと、開き直しで勝手に自動へ戻る
+        let mut b = Book::new();
+        b.calc_manual = true;
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert!(back.calc_manual, "手動計算が往復しない");
+        // 自動(既定)は calcPr を書かない → 読みも false
+        let b2 = Book::new();
+        let mut buf2 = Cursor::new(Vec::new());
+        write(&b2, &mut buf2).expect("書けない");
+        buf2.set_position(0);
+        let (back2, _) = read(buf2).expect("読めない");
+        assert!(!back2.calc_manual);
+    }
+
+    #[test]
+    fn 原本のcalcPrはcalcModeだけ差し替える() {
+        // calcId 等の他の属性は据え置き
+        let src = r#"<workbook><sheets/><calcPr calcId="191029"/></workbook>"#;
+        let out = patch_calc_pr(src, true);
+        assert!(out.contains(r#"calcMode="manual""#), "{out}");
+        assert!(out.contains(r#"calcId="191029""#), "calcId が消えた: {out}");
+        // 手動 → 自動へ戻すときは calcMode の値だけ書き換える
+        let back = patch_calc_pr(&out, false);
+        assert!(back.contains(r#"calcMode="auto""#), "{back}");
+        // calcPr が無い原本に手動を差し込む(スキーマの順 = sheets の後)
+        let none = r#"<workbook><sheets><sheet name="a"/></sheets></workbook>"#;
+        let ins = patch_calc_pr(none, true);
+        assert!(ins.contains(r#"</sheets><calcPr calcMode="manual"/>"#), "{ins}");
     }
 
     #[test]
