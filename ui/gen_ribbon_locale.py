@@ -122,6 +122,8 @@ OVERRIDES = {
         "テーブルのサイズ変更": "Ridimensiona tabella",
     },
     "tr": {
+        "図形を結合": "Şekilleri birleştir",
+        "改ページ プレビュー": "Sayfa Sonu Önizlemesi",
         "フィルタのボタン": "Filtre düğmesi",
         "ヘッダー行": "Üst bilgi satırı",
         "ページ数": "Sayfa sayısı",
@@ -144,6 +146,7 @@ OVERRIDES = {
         "すべて更新": "Tümünü yenile",
     },
     "id": {
+        "図形を結合": "Gabungkan bentuk",
         "ゴールシーク": "Pencarian Tujuan",
         "テーブルのサイズ変更": "Ubah ukuran tabel",
         "フィルタのボタン": "Tombol filter",
@@ -156,6 +159,8 @@ OVERRIDES = {
         "表のデザイン": "Desain tabel",
     },
     "vi": {
+        "図形を結合": "Hợp nhất hình dạng",
+        "改ページ プレビュー": "Xem trước ngắt trang",
         "SmartArtの挿入": "Chèn SmartArt",
         "すべて更新": "Làm mới tất cả",
         "その他の関数": "Hàm khác",

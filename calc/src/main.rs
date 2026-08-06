@@ -1935,6 +1935,18 @@ impl Calc {
     }
 
     /// メニューの項目を実行する。
+    /// いまの列で並べ替え(右クリックとリボンの昇順/降順が同じ道)
+    fn sort_active(&mut self, asc: bool) {
+        self.commit();
+        self.checkpoint();
+        let c = self.cursor.col;
+        self.book.sheets[self.active].sort_by_column(c, asc, true);
+        self.dirty = true;
+        recalc_book(&mut self.book, self.active);
+        self.status = ui::tf!("{} 列で{}に並べ替えました", Pos::new(0, c).a1().trim_end_matches('1'), if asc { "昇順" } else { "降順" })
+            .into();
+    }
+
     fn menu_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let menu_was_at = self.menu_at.take();
         self.menu_sub = None;
@@ -1987,16 +1999,7 @@ impl Calc {
                 self.rowcol(|s, p| s.remove_col(p.col));
                 self.status = ui::t!("列を削除しました").into();
             }
-            "sort-asc" | "sort-desc" => {
-                self.commit();
-                self.checkpoint();
-                let c = self.cursor.col;
-                self.book.sheets[self.active].sort_by_column(c, id == "sort-asc", true);
-                self.dirty = true;
-                recalc_book(&mut self.book, self.active);
-                self.status = ui::tf!("{} 列で{}に並べ替えました", Pos::new(0, c).a1().trim_end_matches('1'), if id == "sort-asc" { "昇順" } else { "降順" })
-                .into();
-            }
+            "sort-asc" | "sort-desc" => self.sort_active(id == "sort-asc"),
             "filter-set" => self.run_cmd("setfilter", cx),
             "filter-clear" => self.run_cmd("clear-filter", cx),
             "reapply" => {
@@ -5986,7 +5989,8 @@ calc の隣に置いてください)").to_string()
         "comma", "currency", "percents", "digit-inc", "digit-dec", "clear",
         "strikeout", "top", "middle", "bottom", "wrap", "incfont", "decfont",
         "cell-ins", "cell-del", "insrow", "inscol",
-        "merge", "custom-sort", "rem-duplicates", "setfilter", "clear-filter",
+        "merge", "custom-sort", "sort-asc", "sort-desc",
+        "rem-duplicates", "setfilter", "clear-filter",
         "fill-num", "freeze", "show-formulas", "show-gridlines",
         "fn-math", "fn-text", "fn-logical", "fn-recent",
         "sum", "average", "count", "max", "min",
@@ -6016,7 +6020,7 @@ calc の隣に置いてください)").to_string()
         "ai-where", "ai-summary", "ai-rewrite", "ai-polite", "ai-plain",
         "ai-translate", "ai-furigana", "ai-continue", "ai-table", "ai-ask",
         "insert-function", "cell-styles", "sheet-view", "watch",
-        "pen", "highlighter", "eraser",
+        "pen", "highlighter", "eraser", "draw-select",
     ];
 
     /// シートの保護中でも通す操作(見るだけ・保存・保護の操作そのもの)
@@ -6891,6 +6895,14 @@ calc の隣に置いてください)").to_string()
                     )
                     .into();
                 }
+            }
+            // 昇順/降順(ホーム・データ)。右クリックの並べ替え▸と同じ道
+            "sort-asc" | "sort-desc" => self.sort_active(id == "sort-asc"),
+            // 描画の「選択」= 道具を措いてセルの操作に戻る(本家の並びの先頭)
+            "draw-select" => {
+                self.tool = None;
+                self.ink_cur = None;
+                self.status = ui::t!("セルの操作に戻りました").into();
             }
             // 描画(ペン・蛍光ペン・消しゴム)。writer と同じ形の道具の入切
             "pen" | "highlighter" | "eraser" => {
@@ -9189,11 +9201,12 @@ impl Render for Calc {
                  &["align-left", "align-center", "align-right", "align-just",
                    "merge", "direction"]),
                 (&["insert-function", "fill-num"], &["defname", "clear"]),
+                (&["sort-desc", "sort-asc"], &["setfilter", "clear-filter"]),
                 (&["format", "currency", "percents"],
                  &["comma", "digit-dec", "digit-inc"]),
                 (&["cell-ins", "cell-del", "cell-format"],
                  &["condformat", "table-tpl", "cell-styles"]),
-                (&["replace", "selectall"], &["setfilter", "clear-filter"]),
+                (&["replace"], &["selectall"]),
             ];
             let mut used: std::collections::HashSet<&str> = Default::default();
             let mut band = div().flex().flex_row().items_center().gap_1();
