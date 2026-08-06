@@ -1660,10 +1660,14 @@ mod pivot_e2e_tests {
                 body.iter().any(|v| v == "150"),
                 "筆記具の合計 150 が出ない: {body:?}"
             );
+            // 置いた直後にカーソルが集計へ移り、ピボットのタブが開いている
+            assert_eq!(this.cursor, d.dest, "カーソルが集計へ移らない");
+            let ti = ribbon::calc_tabs()
+                .iter()
+                .position(|t| t.cmds.iter().any(|c| c.id == "pivot-layout"))
+                .unwrap();
+            assert_eq!(this.tab, ti, "ピボットテーブルのタブが開かない");
             // ピボットの上では締まる(文脈タブと同じ判定 pivot_at)
-            this.anchor = None;
-            this.cursor = d.dest;
-            this.sync_input();
             assert!(this.pivot_at(this.cursor).is_some(), "pivot_at が効かない");
             this.run_cmd("data-validation", cx);
             assert!(this.dv_dlg.is_none(), "ピボットの上で入力規則が開いた");

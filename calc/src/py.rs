@@ -712,9 +712,23 @@ impl Calc {
                                     let (value, agg) = (def.value.clone(), def.agg.clone());
                                     this.book.pivots.push(def);
                                     this.dirty = true;
+                                    // カーソルを置いた集計へ移し、ピボットテーブルの
+                                    // タブを開く(本家の showPivotTab と同じ)。
+                                    // 文脈タブに気づかないままにしない
+                                    this.anchor = None;
+                                    this.cursor = at;
+                                    if let Some(ti) = ribbon::calc_tabs()
+                                        .iter()
+                                        .position(|t| t.cmds.iter().any(|c| c.id == "pivot-layout"))
+                                    {
+                                        if this.tab != ti {
+                                            this.prev_tab = this.tab;
+                                            this.tab = ti;
+                                        }
+                                    }
                                     this.sync_input();
                                     this.status = format!(
-                                        "ピボット({value} の {agg})を {} に置きました — その時の値。元が変わったら「更新」(Ctrl+Z で戻せます)",
+                                        "ピボット({value} の {agg})を {} に置きました — その時の値。ピボットテーブルのタブが開いています(更新・総計・小計・レイアウトはここ。Ctrl+Z で戻せます)",
                                         at.a1()
                                     )
                                     .into();
