@@ -107,6 +107,19 @@ impl EntityInputHandler for Calc {
 /// 入力ハンドラは paint のときに窓へ差す(GPUI の作法)。
 struct InputSink { view: Entity<Calc> }
 impl IntoElement for InputSink { type Element = Self; fn into_element(self) -> Self { self } }
+/// マウスを載せたときの名札(本家のツールチップの形 — 黒地に白)
+struct Tip(SharedString, f32);
+impl gpui::Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        div().px_2().py_1().rounded_md()
+            .bg(gpui::rgb(0x2B2F33)).text_color(gpui::rgb(0xF2F5F7))
+            .text_size(gpui::px(self.1 * 11.0))
+            .border_1().border_color(gpui::rgb(0x14161A))
+            .shadow_md()
+            .child(self.0.clone())
+    }
+}
+
 impl gpui::Element for InputSink {
     type RequestLayoutState = ();
     type PrepaintState = ();
@@ -390,7 +403,7 @@ impl Render for Calc {
             ("data-from-text", "テキストから"), ("custom-sort", "並べ替え"),
             ("setfilter", "フィルター"), ("python", "Python"),
             ("subtotal", "小計"), ("solver", "ソルバー"), ("group", "グループ化"),
-            ("pivot-insert", "ピボットの挿入"),
+            ("pivot-insert", "ピボットテーブル"),
             ("td-header", "ヘッダー行"), ("td-total", "合計行"),
             ("coauth-mode", "共同編集モード"), ("co-addcomment", "コメント"),
             ("co-chat", "チャット"), ("co-history", "バージョン履歴"),
@@ -420,6 +433,18 @@ impl Render for Calc {
         };
         // 1つの釦を組み立てる(名札つきの大釦 / 絵だけ / 文字の小釦)。
         // ホームの対の並びと、他タブの一段の並びの両方から使う
+        // 一覧・板・小窓が開く釦(本家は ▼ を添える)。id で見分ける
+        const DROP_IDS: &[&str] = &[
+            "fontname", "fontsize", "changecase", "format", "cell-format",
+            "borders", "fontcolor", "fillparag", "freeze", "clear",
+            "data-validation", "custom-sort", "condformat", "numfmt",
+            "theme", "colorschemas", "pagesize", "pageorient", "pagemargins",
+            "insshape", "inssmartart", "instable", "table-tpl", "inssymbol",
+            "inschart", "pivot-insert", "pivot-fields", "pivot-style",
+            "text-orient", "insert-function", "fn-math", "fn-text",
+            "fn-logical", "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
+            "fn-recent", "sheet-view", "cell-styles",
+        ];
         let mk_btn = |cmd: &ribbon::Cmd, cx: &mut Context<Self>| -> gpui::AnyElement {
             let label = cmd.label;
             let icon = cmd.icon;
@@ -447,6 +472,7 @@ impl Render for Calc {
                     .text_size(px(us * 10.5)).text_color(th_fg)
                     .whitespace_nowrap().overflow_hidden()
                     .on_hover(hoverable)
+                    .tooltip(move |_, cx| cx.new(|_| Tip(label.into(), us)).into())
                     .cursor_pointer().hover(move |st| st.bg(th_btn_hover))
                     .child(val)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -475,18 +501,26 @@ impl Render for Calc {
             // 押しても run_cmd 側で断るが、見た目でも先に伝える)
             let locked = on_pivot && Calc::PIVOT_LOCKED.contains(&cmd.id);
             let fg = if cmd.ready && !locked { th_fg } else { th_gray };
+            let drops = DROP_IDS.contains(&cmd.id);
             if let Some(short) = big {
-                // 名札つきの大釦(絵の下に短い名前 — 本家の言い方)
+                // 名札つきの大釦(絵の下に短い名前 — 本家の言い方)。
+                // 一覧の開く釦は名札の横に小さな ▾
                 let mut b = div().id(SharedString::from(format!("h-{icon}")))
                     .px_2().h(px(us * 46.0)).rounded_sm()
                     .flex().flex_col().items_center().justify_center().gap_1()
                     .on_hover(hoverable)
+                    .tooltip(move |_, cx| cx.new(|_| Tip(label.into(), us)).into())
                     .children(has_icon.then(|| {
                         gpui::svg()
                             .path(SharedString::from(format!("icons/{icon}.svg")))
                             .size(px(us * 20.0)).text_color(fg)
                     }))
-                    .child(div().text_size(px(us * 10.5)).text_color(fg).child(short));
+                    .child(div().flex().flex_row().items_center().gap_0p5()
+                        .text_size(px(us * 10.5)).text_color(fg)
+                        .child(short)
+                        .children(drops.then(|| div()
+                            .text_size(px(us * 8.0)).text_color(th_gray)
+                            .child("▾"))));
                 if cmd.ready {
                     let cid = cmd.id;
                     b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
@@ -500,16 +534,30 @@ impl Render for Calc {
             let mut b = div().id(SharedString::from(format!("h-{icon}")))
                 .h(px(us * 26.0)).rounded_sm()
                 .flex().items_center().justify_center()
-                .on_hover(hoverable);
-            b = if has_icon { b.w(px(us * 26.0)) } else { b.px_1p5() };
+                .on_hover(hoverable)
+                .tooltip(move |_, cx| cx.new(|_| Tip(label.into(), us)).into());
+            b = if has_icon {
+                if drops { b.px_0p5() } else { b.w(px(us * 26.0)) }
+            } else {
+                b.px_1p5()
+            };
             b = b
                 .children(has_icon.then(|| {
                     gpui::svg()
                         .path(SharedString::from(format!("icons/{icon}.svg")))
                         .size(px(us * 18.0)).text_color(fg)
                 }))
+                .children((has_icon && drops).then(|| {
+                    // 一覧が開く印(本家の ▼)
+                    div().text_size(px(us * 8.0)).text_color(th_gray).child("▾")
+                }))
                 .children((!has_icon).then(|| {
-                    div().text_size(px(us * 10.5)).text_color(fg).child(label)
+                    div().text_size(px(us * 10.5)).text_color(fg)
+                        .flex().flex_row().items_center().gap_0p5()
+                        .child(label)
+                        .children(drops.then(|| div()
+                            .text_size(px(us * 8.0)).text_color(th_gray)
+                            .child("▾")))
                 }));
             if cmd.ready {
                 let cid = cmd.id;
