@@ -476,11 +476,25 @@ impl Calc {
                     self.status = ui::t!("並べ替えをやめました").into();
                 }
             }
+            // 結合の4択(本家のドロップダウン)
+            "merge-pick" => {
+                let kind = match v {
+                    "横方向に結合(行ごと)" => "横方向",
+                    "セルの結合(揃えは触らない)" => "結合だけ",
+                    "結合の解除" => "解除",
+                    _ => "中央",
+                };
+                self.merge_selection(kind);
+                if self.pick.is_some() {
+                    return; // 値の確認へ(pick_kind を戻さない)
+                }
+            }
             // 結合の確認(範囲に値が複数あるとき)。値は消さない設計のまま
             "merge-confirm" => {
+                let kind = self.merge_kind_pend.take().unwrap_or_else(|| "中央".into());
                 if v.starts_with("結合する") {
                     let (a, b) = self.sel_rect();
-                    self.merge_do(a, b);
+                    self.merge_do(a, b, &kind);
                 } else {
                     self.status = ui::t!("結合をやめました").into();
                 }
@@ -1643,6 +1657,7 @@ impl Calc {
         self.pivot_flt = None; // ピボットの絞り込みの聞き取りも
         self.hf_pend = None; // ヘッダー/フッターの聞き取りも
         self.name_pend = None; // 名前マネージャーの選択も
+        self.merge_kind_pend = None; // 結合の確認待ちも
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる

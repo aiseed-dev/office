@@ -786,4 +786,8 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("暗い", "Oscuro"),
     ("明るい", "Claro"),
     ("画面の文字の大きさ", "Tamaño del texto de la pantalla"),
+    ("{} 個の結合を解きました", "{} combinaciones deshechas"),
+    ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} combinado por filas ({} filas)"),
+    ("{}:{} を結合しました(揃えはそのまま)", "{}:{} combinado (alineación intacta)"),
+    ("{}:{} を結合し、中央に揃えました", "{}:{} combinado y centrado"),
 ];

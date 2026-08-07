@@ -789,4 +789,8 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("暗い", "Dark"),
 ("明るい", "Light"),
 ("画面の文字の大きさ", "UI text size"),
+("{} 個の結合を解きました", "{} merges removed"),
+("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} merged across ({} rows)"),
+("{}:{} を結合しました(揃えはそのまま)", "{}:{} merged (alignment untouched)"),
+("{}:{} を結合し、中央に揃えました", "{}:{} merged and centered"),
 ];

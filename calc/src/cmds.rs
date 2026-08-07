@@ -187,7 +187,28 @@ impl Calc {
                 }
             }
             // 塗りつぶし。黄 → 水色 → 解除(色を選ぶ小窓がまだ無い)
-            "merge" => self.merge_selection(),
+            // 結合は本家の4択(結合して中央/横方向/結合だけ/解除)
+            "merge" => {
+                self.commit();
+                if self.anchor.is_none() {
+                    self.status = ui::t!("結合する範囲を Shift+矢印で選んでください").into();
+                } else {
+                    let at = self
+                        .cell_origin_px(self.cursor)
+                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    self.pick_kind = "merge-pick";
+                    self.pick = Some((
+                        vec![
+                            "結合して中央に配置".into(),
+                            "横方向に結合(行ごと)".into(),
+                            "セルの結合(揃えは触らない)".into(),
+                            "結合の解除".into(),
+                        ],
+                        at,
+                    ));
+                }
+            }
             // 表示。**値は変えない** — 見え方だけの話
             "show-formulas" => self.show_formulas = !self.show_formulas,
             // 帳票を PDF に。画面に見えているもの(値・書式・罫線)を写す

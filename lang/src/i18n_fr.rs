@@ -786,4 +786,8 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("暗い", "Sombre"),
     ("明るい", "Clair"),
     ("画面の文字の大きさ", "Taille du texte de l'écran"),
+    ("{} 個の結合を解きました", "{} fusions annulées"),
+    ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} fusionné par lignes ({} lignes)"),
+    ("{}:{} を結合しました(揃えはそのまま)", "{}:{} fusionné (alignement intact)"),
+    ("{}:{} を結合し、中央に揃えました", "{}:{} fusionné et centré"),
 ];

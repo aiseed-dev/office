@@ -786,4 +786,8 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("暗い", "Dunkel"),
     ("明るい", "Hell"),
     ("画面の文字の大きさ", "Textgröße der Oberfläche"),
+    ("{} 個の結合を解きました", "{} Verbindungen aufgehoben"),
+    ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} zeilenweise verbunden ({} Zeilen)"),
+    ("{}:{} を結合しました(揃えはそのまま)", "{}:{} verbunden (Ausrichtung unberührt)"),
+    ("{}:{} を結合し、中央に揃えました", "{}:{} verbunden und zentriert"),
 ];

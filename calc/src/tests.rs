@@ -1348,12 +1348,15 @@ mod recalc_tests {
             this.anchor = Some(Pos::parse("A1").unwrap());
             this.cursor = Pos::parse("B2").unwrap();
             this.run_cmd("merge", cx);
+            assert_eq!(this.pick_kind, "merge-pick", "4択が出ない");
+            this.apply_pick("結合して中央に配置", cx);
             assert_eq!(this.pick_kind, "merge-confirm", "確認が出ない");
             assert!(this.sheet().merges.is_empty(), "聞く前に結合された");
             this.apply_pick("やめる", cx);
             assert!(this.sheet().merges.is_empty());
             // 結合する、を選べば結合される(値は消えない)
             this.run_cmd("merge", cx);
+            this.apply_pick("結合して中央に配置", cx);
             this.apply_pick("結合する(見えるのは左上の値だけになります)", cx);
             assert_eq!(this.sheet().merges.len(), 1);
             assert_eq!(
@@ -1365,7 +1368,19 @@ mod recalc_tests {
             this.anchor = Some(Pos::parse("D1").unwrap());
             this.cursor = Pos::parse("E2").unwrap();
             this.run_cmd("merge", cx);
+            this.apply_pick("結合して中央に配置", cx);
             assert_eq!(this.sheet().merges.len(), 2, "空の範囲で余計に聞いた");
+            // 横方向: 行ごとに1本ずつ
+            this.anchor = Some(Pos::parse("G1").unwrap());
+            this.cursor = Pos::parse("H3").unwrap();
+            this.sync_input();
+            this.run_cmd("merge", cx);
+            this.apply_pick("横方向に結合(行ごと)", cx);
+            assert_eq!(this.sheet().merges.len(), 5, "横方向が行ごとにならない");
+            // 解除: 選択に重なる結合をまとめて外す
+            this.run_cmd("merge", cx);
+            this.apply_pick("結合の解除", cx);
+            assert_eq!(this.sheet().merges.len(), 2, "解除で消えない");
         });
     }
 
@@ -1458,7 +1473,7 @@ mod recalc_tests {
             assert!(this.commit());
             this.anchor = Some(Pos::parse("A1").unwrap());
             this.cursor = Pos::parse("C1").unwrap();
-            this.merge_selection();
+            this.merge_selection("中央");
             let f = &this.sheet().get(Pos::parse("A1").unwrap()).unwrap().fmt;
             assert_eq!(f.align, sheet::model::HAlign::Center, "横が中央にならない");
             assert_eq!(f.valign, sheet::model::VAlign::Middle, "縦が中央にならない");

@@ -786,4 +786,8 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("暗い", "Koyu"),
     ("明るい", "Açık"),
     ("画面の文字の大きさ", "Ekran yazı boyutu"),
+    ("{} 個の結合を解きました", "{} birleştirme kaldırıldı"),
+    ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} satır satır birleştirildi ({} satır)"),
+    ("{}:{} を結合しました(揃えはそのまま)", "{}:{} birleştirildi (hizalama dokunulmadı)"),
+    ("{}:{} を結合し、中央に揃えました", "{}:{} birleştirildi ve ortalandı"),
 ];

@@ -786,4 +786,8 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("暗い", "Gelap"),
     ("明るい", "Terang"),
     ("画面の文字の大きさ", "Ukuran teks layar"),
+    ("{} 個の結合を解きました", "{} gabungan dilepas"),
+    ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} digabung per baris ({} baris)"),
+    ("{}:{} を結合しました(揃えはそのまま)", "{}:{} digabung (perataan tak diubah)"),
+    ("{}:{} を結合し、中央に揃えました", "{}:{} digabung dan ditengahkan"),
 ];

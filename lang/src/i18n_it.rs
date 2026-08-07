@@ -786,4 +786,8 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("暗い", "Scuro"),
     ("明るい", "Chiaro"),
     ("画面の文字の大きさ", "Dimensione del testo dello schermo"),
+    ("{} 個の結合を解きました", "{} unioni rimosse"),
+    ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} unito per righe ({} righe)"),
+    ("{}:{} を結合しました(揃えはそのまま)", "{}:{} unito (allineamento intatto)"),
+    ("{}:{} を結合し、中央に揃えました", "{}:{} unito e centrato"),
 ];

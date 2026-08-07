@@ -75,6 +75,8 @@ struct Calc {
     hf_pend: Option<(bool, u8)>,
     /// 名前マネージャーで選んだ名前(移動/打ち直し/削除の相手)
     name_pend: Option<String>,
+    /// 結合の確認待ちの種類(中央/横方向/結合だけ)
+    merge_kind_pend: Option<String>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
@@ -317,6 +319,7 @@ impl Calc {
             pen_color: None,
             hf_pend: None,
             name_pend: None,
+            merge_kind_pend: None,
             solver: None,
             sa_cat: 0,
             slicer: None,
@@ -2373,20 +2376,23 @@ impl Calc {
         recalc_book(&mut self.book, self.active);
     }
 
-    /// 選んだ範囲を結合する。**値は消さない** — 左上以外の値は隠れるだけで、
-    /// 結合を解けば戻る(黙って捨てない)。値が2つ以上見えているときは
-    /// 先に聞く(本家と同じ — 画面と Excel では左上しか見えなくなるから)
-    fn merge_selection(&mut self) {
+    /// 結合の種類を選んだ後の入り口。**値は消さない** — 左上以外の値は
+    /// 隠れるだけで、解除で戻る。値が2つ以上見えているときは先に聞く
+    /// (本家と同じ — 画面と Excel では各結合の左上しか見えなくなるから)
+    pub(crate) fn merge_selection(&mut self, kind: &str) {
         let (a, b) = self.sel_rect();
         if a == b {
             self.status = ui::t!("結合する範囲を Shift+矢印で選んでください").into();
             return;
         }
-        // 同じ範囲がもう結合されていたら解く(押すたびに入切。確認は要らない)
-        if let Some(i) = self.sheet().merges.iter().position(|m| *m == (a, b)) {
+        if kind == "解除" {
             self.checkpoint();
-            self.book.sheets[self.active].merges.remove(i);
-            self.status = format!("{}:{} の結合を解きました", a.a1(), b.a1()).into();
+            let before = self.book.sheets[self.active].merges.len();
+            self.book.sheets[self.active].merges.retain(|(x, y)| {
+                y.row < a.row || x.row > b.row || y.col < a.col || x.col > b.col
+            });
+            let n = before - self.book.sheets[self.active].merges.len();
+            self.status = ui::tf!("{} 個の結合を解きました", n).into();
             self.dirty = true;
             return;
         }
@@ -2401,6 +2407,7 @@ impl Calc {
                 .cell_origin_px(self.cursor)
                 .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
                 .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+            self.merge_kind_pend = Some(kind.to_string());
             self.pick_kind = "merge-confirm";
             self.pick = Some((
                 vec![
@@ -2413,25 +2420,45 @@ impl Calc {
                 ui::t!("範囲に値が複数あります(値は消しません — 解除で戻ります)").into();
             return;
         }
-        self.merge_do(a, b);
+        self.merge_do(a, b, kind);
     }
 
-    /// 結合の実体(確認の後もここに来る)
-    pub(crate) fn merge_do(&mut self, a: Pos, b: Pos) {
+    /// 結合の実体(確認の後もここに来る)。kind: 中央/横方向/結合だけ
+    pub(crate) fn merge_do(&mut self, a: Pos, b: Pos, kind: &str) {
         self.checkpoint();
         let sh = &mut self.book.sheets[self.active];
         sh.merges.retain(|(x, y)| {
             // 重なる結合は先に外す(入れ子の結合は帳票を壊す)
             y.row < a.row || x.row > b.row || y.col < a.col || x.col > b.col
         });
-        sh.merges.push((a, b));
-        // 釦は「結合して、中央に配置する」— 名のとおり中央揃えも掛ける
-        // (本家・Excel と同じ。解くときは揃えを触らない)
-        let mut anchor = sh.get(a).cloned().unwrap_or_default();
-        anchor.fmt.align = sheet::model::HAlign::Center;
-        anchor.fmt.valign = sheet::model::VAlign::Middle;
-        sh.set(a, anchor);
-        self.status = format!("{}:{} を結合し、中央に揃えました", a.a1(), b.a1()).into();
+        match kind {
+            // 横方向: 行ごとに1本ずつ(本家の Merge Across)
+            "横方向" => {
+                for r in a.row..=b.row {
+                    sh.merges.push((Pos::new(r, a.col), Pos::new(r, b.col)));
+                }
+                self.status = ui::tf!(
+                    "{}:{} を横方向に結合しました({} 行ぶん)",
+                    a.a1(), b.a1(), b.row - a.row + 1
+                )
+                .into();
+            }
+            // 結合だけ(揃えは触らない — 本家の Merge Cells)
+            "結合だけ" => {
+                sh.merges.push((a, b));
+                self.status = ui::tf!("{}:{} を結合しました(揃えはそのまま)", a.a1(), b.a1()).into();
+            }
+            _ => {
+                sh.merges.push((a, b));
+                // 名のとおり中央揃えも掛ける(解くときは揃えを触らない)
+                let mut anchor = sh.get(a).cloned().unwrap_or_default();
+                anchor.fmt.align = sheet::model::HAlign::Center;
+                anchor.fmt.valign = sheet::model::VAlign::Middle;
+                sh.set(a, anchor);
+                self.status =
+                    ui::tf!("{}:{} を結合し、中央に揃えました", a.a1(), b.a1()).into();
+            }
+        }
         self.dirty = true;
     }
 
