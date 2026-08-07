@@ -1081,11 +1081,27 @@ impl Render for Calc {
                 let (ra, rb) = self.sel_rect();
                 let in_range = self.anchor.is_some()
                     && (ra.row..=rb.row).contains(&r) && (ra.col..=rb.col).contains(&c);
+                // 結合の中では、結合の外周にあたる辺だけ格子線を引く —
+                // 中の線は**引かない**(重ね描きに頼らず、線の源で消す。
+                // 発注者報告 2026-08-08「元のセルの枠線が残っている」)
+                let in_merge = self
+                    .sheet()
+                    .merges
+                    .iter()
+                    .copied()
+                    .find(|(ma, mb)| {
+                        (ma.row..=mb.row).contains(&r) && (ma.col..=mb.col).contains(&c)
+                    });
+                let (grid_r, grid_b) = match in_merge {
+                    Some((_, mb)) => (c == mb.col, r == mb.row),
+                    None => (true, true),
+                };
                 let mut d = div()
                     .id(SharedString::from(p.a1()))
                     .flex_none()
                     .w(px(self.col_px(c))).h(px(rh))
-                    .border_r_1().border_b_1()
+                    .when(grid_r, |d| d.border_r_1())
+                    .when(grid_b, |d| d.border_b_1())
                     .border_color(if self.gridlines { rgb(0xE1E6EA) } else { rgb(0xFFFFFF) })
                     .bg(rgb(0xFFFFFF))
                     .flex().items_center()
@@ -1204,7 +1220,7 @@ impl Render for Calc {
                 // 黒くなり、外枠が格子に化ける(発注者報告)。
                 // 辺ごとに細い帯を重ねて描く
                 let ink = rgb(0x1B1B1B);
-                if f.borders.any() {
+                if f.borders.any() && in_merge.is_none() {
                     d = d.relative();
                     // 1辺を線種どおりに描く。破線系は gpui の破線、
                     // 二重線は1px2本(間1px)。太さは線種から(hair=細実線)
@@ -2283,7 +2299,11 @@ impl Render for Calc {
             let mut out = Vec::new();
             let merges = self.sheet().merges.clone();
             for (a, b) in merges {
-                let Some((x0, y0, x1, y1)) = self.range_px(a, b) else { continue };
+                let rect = self.range_px(a, b);
+                if std::env::var_os("JO_MERGE_LOG").is_some() {
+                    eprintln!("merge {}:{} rect={rect:?}", a.a1(), b.a1());
+                }
+                let Some((x0, y0, x1, y1)) = rect else { continue };
                 let cell = self.sheet().get(a);
                 let f = cell.map(|x| x.fmt.clone()).unwrap_or_default();
                 let v = cell.map(|x| x.value.clone()).unwrap_or(Value::Empty);
