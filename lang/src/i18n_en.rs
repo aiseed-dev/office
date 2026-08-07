@@ -781,4 +781,8 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("条件付き書式 — {} で、含む文字は?", "Conditional format — text to look for in {}?"),
 ("条件付き書式 — {} で、上位いくつを塗る?", "Conditional format — top how many in {}?"),
 ("条件付き書式 — {} で、下位いくつを塗る?", "Conditional format — bottom how many in {}?"),
+("右下を引いて大きさを変えます(比は保ちます)", "Drag the corner to resize (aspect kept)"),
+("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Image selected (drag to move / corner to resize / Del to delete)"),
+("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Images loaded from the file can't be moved (their original form is preserved on save; re-insert to make them editable)"),
+("画像を削除しました(Ctrl+Z で戻せます)", "Image deleted (Ctrl+Z undoes it)"),
 ];

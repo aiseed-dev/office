@@ -778,4 +778,8 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("条件付き書式 — {} で、含む文字は?", "Koşullu biçim — {} içinde aranacak metin?"),
     ("条件付き書式 — {} で、上位いくつを塗る?", "Koşullu biçim — {} içinde en üst kaç?"),
     ("条件付き書式 — {} で、下位いくつを塗る?", "Koşullu biçim — {} içinde en alt kaç?"),
+    ("右下を引いて大きさを変えます(比は保ちます)", "Boyut için köşeyi sürükleyin (oran korunur)"),
+    ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Görsel seçildi (sürükle = taşı / köşe = boyut / Del = sil)"),
+    ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Dosyadan yüklenen görseller taşınamaz (kayıtta özgün hali korunur; yeniden ekleyince düzenlenebilir)"),
+    ("画像を削除しました(Ctrl+Z で戻せます)", "Görsel silindi (Ctrl+Z geri alır)"),
 ];

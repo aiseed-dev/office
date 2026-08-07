@@ -778,4 +778,8 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("条件付き書式 — {} で、含む文字は?", "Formato condicional — ¿texto a buscar en {}?"),
     ("条件付き書式 — {} で、上位いくつを塗る?", "Formato condicional — ¿cuántos superiores en {}?"),
     ("条件付き書式 — {} で、下位いくつを塗る?", "Formato condicional — ¿cuántos inferiores en {}?"),
+    ("右下を引いて大きさを変えます(比は保ちます)", "Arrastre la esquina para cambiar el tamaño (proporción conservada)"),
+    ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Imagen seleccionada (arrastrar = mover / esquina = tamaño / Supr = borrar)"),
+    ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Las imágenes cargadas del archivo no se pueden mover (su forma original se conserva al guardar; reinsértelas para editarlas)"),
+    ("画像を削除しました(Ctrl+Z で戻せます)", "Imagen borrada (Ctrl+Z lo deshace)"),
 ];

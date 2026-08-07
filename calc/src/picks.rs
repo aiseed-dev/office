@@ -1670,6 +1670,7 @@ impl Calc {
             || self.fmt_panel.take().is_some()
             || self.clip_range.take().is_some()
             || self.shape_sel.take().is_some()
+            || self.img_sel.take().is_some()
         {
             // 一覧・板を閉じたら意味づけも戻す(耳のメニューの狙い先も)
             self.pick_kind = "value";

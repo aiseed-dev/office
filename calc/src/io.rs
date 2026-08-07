@@ -539,6 +539,8 @@ impl Calc {
                                 let at = this.cursor;
                                 this.sheet_mut().images_new.push(sheet::model::SheetImage {
                                     at,
+            dx_px: 0.0,
+            dy_px: 0.0,
                                     width_px: w as f32,
                                     height_px: h as f32,
                                     data,

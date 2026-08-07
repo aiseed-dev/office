@@ -611,6 +611,9 @@ impl SheetShape {
 pub struct SheetImage {
     /// 左上を留めるセル
     pub at: Pos,
+    /// 錨のセルからのずらし(px)。移動でセルに収まらない分を持つ
+    pub dx_px: f32,
+    pub dy_px: f32,
     /// 画面での大きさ(px)。xlsx の EMU とは 9525 EMU = 1px で換算
     pub width_px: f32,
     pub height_px: f32,

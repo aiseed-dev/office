@@ -778,4 +778,8 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("条件付き書式 — {} で、含む文字は?", "Format conditionnel — texte à chercher dans {} ?"),
     ("条件付き書式 — {} で、上位いくつを塗る?", "Format conditionnel — combien en haut dans {} ?"),
     ("条件付き書式 — {} で、下位いくつを塗る?", "Format conditionnel — combien en bas dans {} ?"),
+    ("右下を引いて大きさを変えます(比は保ちます)", "Tirez le coin pour redimensionner (proportions conservées)"),
+    ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Image sélectionnée (glisser = déplacer / coin = taille / Suppr = supprimer)"),
+    ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Les images chargées du fichier ne peuvent pas être déplacées (leur forme d'origine est préservée à l'enregistrement ; réinsérez-les pour les modifier)"),
+    ("画像を削除しました(Ctrl+Z で戻せます)", "Image supprimée (Ctrl+Z annule)"),
 ];

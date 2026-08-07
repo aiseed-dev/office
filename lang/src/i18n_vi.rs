@@ -778,4 +778,8 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("条件付き書式 — {} で、含む文字は?", "Định dạng có điều kiện — chữ cần chứa trong {}?"),
     ("条件付き書式 — {} で、上位いくつを塗る?", "Định dạng có điều kiện — bao nhiêu hàng đầu trong {}?"),
     ("条件付き書式 — {} で、下位いくつを塗る?", "Định dạng có điều kiện — bao nhiêu hàng cuối trong {}?"),
+    ("右下を引いて大きさを変えます(比は保ちます)", "Kéo góc để đổi cỡ (giữ tỉ lệ)"),
+    ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Đã chọn ảnh (kéo = di chuyển / góc = cỡ / Del = xóa)"),
+    ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Ảnh đọc từ tệp không di chuyển được (giữ nguyên bản khi lưu; chèn lại để chỉnh sửa)"),
+    ("画像を削除しました(Ctrl+Z で戻せます)", "Đã xóa ảnh (Ctrl+Z hoàn tác)"),
 ];

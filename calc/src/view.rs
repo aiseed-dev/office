@@ -182,6 +182,9 @@ impl gpui::Element for InputSink {
                 if c.shape_drag.is_some() {
                     c.shape_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
+                } else if c.img_drag.is_some() {
+                    c.image_drag_at(f32::from(rel.x), f32::from(rel.y));
+                    cx.notify();
                 } else if c.size_drag.is_some() {
                     c.size_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
@@ -1813,6 +1816,32 @@ impl Render for Calc {
         });
 
         // ---- 選択中の図形の枠と右下の掴み ----
+        let img_frame = self.img_sel.and_then(|i| {
+            let im = self.sheet().images_new.get(i)?;
+            let (x, y) = self.cell_origin_px(im.at)?;
+            let (x, y) = (x + im.dx_px, y + im.dy_px);
+            Some(
+                div()
+                    .absolute()
+                    .left(px(x - 2.0))
+                    .top(px(y - 2.0))
+                    .w(px(im.width_px + 4.0))
+                    .h(px(im.height_px + 4.0))
+                    .border_2()
+                    .border_dashed()
+                    .border_color(rgb(0x1B6E3C))
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(-1.0))
+                            .bottom(px(-1.0))
+                            .w(px(10.0))
+                            .h(px(10.0))
+                            .bg(rgb(0x1B6E3C))
+                            .cursor_nwse_resize(),
+                    ),
+            )
+        });
         let shape_frame = self.shape_sel.and_then(|i| {
             let sp = self.sheet().shapes_new.get(i)?;
             let (x, y) = self.cell_origin_px(sp.at)?;
@@ -3505,6 +3534,7 @@ impl Render for Calc {
                        let mut layer: Vec<gpui::AnyElement> = Vec::new();
                        for im in self.sheet().images.iter().chain(self.sheet().images_new.iter()) {
                            let Some((x, y)) = self.cell_origin_px(im.at) else { continue };
+                           let (x, y) = (x + im.dx_px, y + im.dy_px);
                            let key = im.data.as_ptr() as usize;
                            let src = self
                                .img_cache
@@ -3596,6 +3626,7 @@ impl Render for Calc {
                    })
                    .child(InputSink { view: me })
                    .children(shape_frame)
+                   .children(img_frame)
                    .children(ants)
                    .children(tip)
                    .children(fmt_panel)

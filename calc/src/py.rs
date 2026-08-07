@@ -544,6 +544,8 @@ impl Calc {
                         this.checkpoint();
                         this.sheet_mut().images_new.push(sheet::model::SheetImage {
                             at,
+            dx_px: 0.0,
+            dy_px: 0.0,
                             width_px: w as f32,
                             height_px: h as f32,
                             data,
@@ -1360,6 +1362,8 @@ calc の隣に置いてください)").to_string()
                         // 200dpi で描いたので画面では半分の大きさに置く
                         this.sheet_mut().images_new.push(sheet::model::SheetImage {
                             at,
+            dx_px: 0.0,
+            dy_px: 0.0,
                             width_px: w as f32 / 2.0,
                             height_px: h as f32 / 2.0,
                             data,

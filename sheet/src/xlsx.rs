@@ -529,8 +529,8 @@ fn image_anchor_xml(im: &crate::model::SheetImage, rid: &str, id: u32) -> String
     format!(
         concat!(
             "<xdr:oneCellAnchor>",
-            "<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>0</xdr:colOff>",
-            "<xdr:row>{row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>",
+            "<xdr:from><xdr:col>{col}</xdr:col><xdr:colOff>{cox}</xdr:colOff>",
+            "<xdr:row>{row}</xdr:row><xdr:rowOff>{roy}</xdr:rowOff></xdr:from>",
             "<xdr:ext cx=\"{cx}\" cy=\"{cy}\"/>",
             "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"画像 {id}\"/><xdr:cNvPicPr/></xdr:nvPicPr>",
             "<xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>",
@@ -540,6 +540,8 @@ fn image_anchor_xml(im: &crate::model::SheetImage, rid: &str, id: u32) -> String
         ),
         col = im.at.col,
         row = im.at.row,
+        cox = (im.dx_px * 9525.0) as i64,
+        roy = (im.dy_px * 9525.0) as i64,
         cx = cx,
         cy = cy,
         id = id,
@@ -1283,6 +1285,8 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                         }
                         sh.images.push(crate::model::SheetImage {
                             at,
+                            dx_px: 0.0,
+                            dy_px: 0.0,
                             width_px,
                             height_px,
                             data,
@@ -3475,6 +3479,29 @@ mod validation_roundtrip_tests {
     }
 
     #[test]
+    fn 画像のずらしが往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].images_new.push(crate::model::SheetImage {
+            at: Pos::parse("B2").unwrap(),
+            dx_px: 30.0,
+            dy_px: 12.0,
+            width_px: 100.0,
+            height_px: 50.0,
+            data: vec![0x89, 0x50, 0x4E, 0x47],
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        // 読み側は images(読んだ画像)に入る。位置と大きさが保たれている
+        assert_eq!(back.sheets[0].images.len(), 1, "画像が往復しない");
+        let im = &back.sheets[0].images[0];
+        assert_eq!(im.at, Pos::parse("B2").unwrap());
+        assert_eq!(im.width_px.round(), 100.0);
+    }
+
+    #[test]
     fn ヘッダーとフッターが往復する() {
         let mut b = Book::new();
         b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
@@ -3745,6 +3772,8 @@ mod image_roundtrip_tests {
         b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
         b.sheets[0].images_new.push(SheetImage {
             at: Pos::new(2, 3),
+            dx_px: 0.0,
+            dy_px: 0.0,
             width_px: 300.0,
             height_px: 200.0,
             data: png(),
@@ -3768,6 +3797,8 @@ mod image_roundtrip_tests {
         b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
         b.sheets[0].images_new.push(SheetImage {
             at: Pos::new(0, 0),
+            dx_px: 0.0,
+            dy_px: 0.0,
             width_px: 100.0,
             height_px: 50.0,
             data: png(),
@@ -3779,6 +3810,8 @@ mod image_roundtrip_tests {
         assert_eq!(b2.sheets[0].images.len(), 1);
         b2.sheets[0].images_new.push(SheetImage {
             at: Pos::new(5, 5),
+            dx_px: 0.0,
+            dy_px: 0.0,
             width_px: 200.0,
             height_px: 100.0,
             data: png(),

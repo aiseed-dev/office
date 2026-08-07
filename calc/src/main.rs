@@ -102,6 +102,9 @@ struct Calc {
     shape_sel: Option<usize>,
     /// 図形のドラッグ(番号, 掴んだ格子px, 掴んだ時の錨の格子px, 大きさ変更か)
     shape_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
+    /// 選んでいる画像(images_new の番号)。グラフもここ
+    img_sel: Option<usize>,
+    img_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
     /// ホイールの端数(触板の細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 窓の大きさ(px)。描画のたびに実測 — **見える範囲**の計算に使う。
@@ -328,6 +331,8 @@ impl Calc {
             locked_by: None,
             shape_sel: None,
             shape_drag: None,
+            img_sel: None,
+            img_drag: None,
             wheel: (0.0, 0.0),
             view_w_px: 0.0,
             view_h_px: 0.0,
@@ -813,6 +818,27 @@ impl Calc {
             return;
         }
         self.shape_sel = None;
+        // 浮いている画像(グラフ)も同じ扱い
+        if let Some((i, (sx, sy), corner)) = self.image_at(x, y) {
+            self.commit();
+            self.checkpoint();
+            self.img_sel = Some(i);
+            self.img_drag = Some((i, (x, y), (sx, sy), corner));
+            self.status = if corner {
+                ui::t!("右下を引いて大きさを変えます(比は保ちます)").into()
+            } else {
+                ui::t!("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)").into()
+            };
+            return;
+        }
+        self.img_sel = None;
+        if self.read_image_at(x, y) {
+            // 読み込んだ画像は原文持ち越しが正 — 動かせないと正直に言う
+            self.status = ui::t!(
+                "読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)"
+            )
+            .into();
+        }
         // 見出しの境界の取っ手が最優先(セルの当たり判定より先に見る)。
         // **ダブルクリックの自動調整は撤去した**(2026-08-03 発注者報告)。
         // 押し直し・掴み直しは 400ms 以内なら click_count が 2,3,… と数えられる
@@ -1063,6 +1089,9 @@ impl Calc {
             // 動かしていない(選んだだけ)なら、積んだ控えは戻す
             let _ = moved;
             return;
+        }
+        if self.img_drag.take().is_some() {
+            return; // 画像の移動・大きさの確定。status はドラッグ中に出している
         }
         if self.drag.take().is_some() && self.anchor.is_some() {
             let (a, b) = self.sel_rect();
@@ -1968,6 +1997,10 @@ impl Calc {
             cx.notify();
             return;
         }
+        if self.delete_selected_image() {
+            cx.notify();
+            return;
+        }
         if self.editing() || self.edit_armed {
             // 編集中の Delete は1文字(いつもの文字カーソルの右)
             self.input.delete();
@@ -2447,6 +2480,78 @@ impl Calc {
             }
         }
         None
+    }
+
+    /// 画像(グラフ)の当たり判定。このアプリで挿した分(images_new)だけ —
+    /// 読み込んだ画像は原文持ち越しが正なので動かせない(押すとそう言う)
+    fn image_at(&self, x: f32, y: f32) -> Option<(usize, (f32, f32), bool)> {
+        for (i, im) in self.sheet().images_new.iter().enumerate().rev() {
+            let Some((sx, sy)) = self.cell_origin_px(im.at) else { continue };
+            let (sx, sy) = (sx + im.dx_px, sy + im.dy_px);
+            let (w, h) = (im.width_px, im.height_px);
+            if x >= sx && x <= sx + w && y >= sy && y <= sy + h {
+                let corner = x >= sx + w - 12.0 && y >= sy + h - 12.0;
+                return Some((i, (sx, sy), corner));
+            }
+        }
+        None
+    }
+
+    /// 読み込んだ画像(動かせない方)の上か
+    fn read_image_at(&self, x: f32, y: f32) -> bool {
+        self.sheet().images.iter().any(|im| {
+            self.cell_origin_px(im.at).is_some_and(|(sx, sy)| {
+                let (sx, sy) = (sx + im.dx_px, sy + im.dy_px);
+                x >= sx && x <= sx + im.width_px && y >= sy && y <= sy + im.height_px
+            })
+        })
+    }
+
+    /// 画像のドラッグ(移動 or 右下の掴みで大きさ変更)。図形と同じ作法
+    fn image_drag_at(&mut self, x: f32, y: f32) {
+        let Some((i, (gx, gy), (ox, oy), resize)) = self.img_drag else { return };
+        if self.sheet().images_new.len() <= i {
+            return;
+        }
+        if resize {
+            // 比を保って大きさを変える(絵が歪まない)
+            let im = &mut self.sheet_mut().images_new[i];
+            let ratio = if im.width_px > 0.0 { im.height_px / im.width_px } else { 1.0 };
+            im.width_px = (x - ox).max(16.0);
+            im.height_px = (im.width_px * ratio).max(16.0);
+            let (w, h) = (im.width_px, im.height_px);
+            self.dirty = true;
+            self.status = format!("大きさ: {w:.0}×{h:.0}px").into();
+        } else {
+            let (nx, ny) = (ox + x - gx, oy + y - gy);
+            if let (Some(c), Some(r)) = (self.col_at(nx.max(HEAD_W)), self.row_at(ny.max(ROW_H))) {
+                let at = Pos::new(r, c);
+                if let Some((cx0, cy0)) = self.cell_origin_px(at) {
+                    let (dx, dy) = ((nx - cx0).max(0.0), (ny - cy0).max(0.0));
+                    let im = &mut self.sheet_mut().images_new[i];
+                    if im.at != at || (im.dx_px - dx).abs() > 0.5 || (im.dy_px - dy).abs() > 0.5 {
+                        im.at = at;
+                        im.dx_px = dx;
+                        im.dy_px = dy;
+                        self.dirty = true;
+                        self.status = format!("画像を {} に留めました", at.a1()).into();
+                    }
+                }
+            }
+        }
+    }
+
+    /// 選んだ画像を消す(Del の実体)
+    pub(crate) fn delete_selected_image(&mut self) -> bool {
+        let Some(i) = self.img_sel.take() else { return false };
+        if self.sheet().images_new.len() <= i {
+            return false;
+        }
+        self.checkpoint();
+        self.sheet_mut().images_new.remove(i);
+        self.dirty = true;
+        self.status = ui::t!("画像を削除しました(Ctrl+Z で戻せます)").into();
+        true
     }
 
     /// 図形のドラッグ(移動 or 右下の掴みで大きさ変更)。

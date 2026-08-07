@@ -1058,6 +1058,47 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 画像は選んで動かして大きさを変えて消せる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            // 1x1 の PNG を B2 に置く(挿した画像の体)
+            let png: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47];
+            this.sheet_mut().images_new.push(sheet::model::SheetImage {
+                at: Pos::parse("B2").unwrap(),
+                dx_px: 0.0,
+                dy_px: 0.0,
+                width_px: 120.0,
+                height_px: 60.0,
+                data: png,
+            });
+            // 当たり判定(B2 の原点 + 中ほど)
+            let (ox, oy) = this.cell_origin_px(Pos::parse("B2").unwrap()).unwrap();
+            let hit = this.image_at(ox + 10.0, oy + 10.0);
+            assert!(hit.is_some(), "画像に当たらない");
+            let (i, _, corner) = hit.unwrap();
+            assert!(!corner);
+            // 右下は大きさの掴み
+            let (_, _, corner) = this.image_at(ox + 115.0, oy + 55.0).unwrap();
+            assert!(corner, "右下の掴みにならない");
+            // 移動(ドラッグの実体を直接)
+            this.img_drag = Some((i, (ox + 10.0, oy + 10.0), (ox, oy), false));
+            this.image_drag_at(ox + 40.0, oy + 15.0);
+            let im = &this.sheet().images_new[0];
+            assert!(im.dx_px > 0.0 || im.at != Pos::parse("B2").unwrap(), "動かない");
+            // 大きさ(比を保つ)
+            this.img_drag = Some((i, (0.0, 0.0), (ox, oy), true));
+            this.image_drag_at(ox + 240.0, oy + 999.0);
+            let im = &this.sheet().images_new[0];
+            assert!((im.height_px / im.width_px - 0.5).abs() < 0.01, "比が崩れた: {}x{}", im.width_px, im.height_px);
+            // 削除
+            this.img_drag = None;
+            this.img_sel = Some(0);
+            assert!(this.delete_selected_image());
+            assert!(this.sheet().images_new.is_empty());
+        });
+    }
+
+    #[gpui::test]
     fn 条件付き書式の板の規則が掛かる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

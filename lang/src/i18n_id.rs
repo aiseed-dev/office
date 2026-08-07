@@ -778,4 +778,8 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("条件付き書式 — {} で、含む文字は?", "Format bersyarat — teks yang dicari di {}?"),
     ("条件付き書式 — {} で、上位いくつを塗る?", "Format bersyarat — berapa teratas di {}?"),
     ("条件付き書式 — {} で、下位いくつを塗る?", "Format bersyarat — berapa terbawah di {}?"),
+    ("右下を引いて大きさを変えます(比は保ちます)", "Tarik sudut untuk mengubah ukuran (rasio dijaga)"),
+    ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Gambar dipilih (seret = pindah / sudut = ukuran / Del = hapus)"),
+    ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Gambar yang dimuat dari berkas tidak bisa dipindah (bentuk aslinya dijaga saat menyimpan; sisipkan ulang agar bisa diedit)"),
+    ("画像を削除しました(Ctrl+Z で戻せます)", "Gambar dihapus (Ctrl+Z membatalkan)"),
 ];

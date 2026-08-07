@@ -778,4 +778,8 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("条件付き書式 — {} で、含む文字は?", "Bedingtes Format — Suchtext in {}?"),
     ("条件付き書式 — {} で、上位いくつを塗る?", "Bedingtes Format — wie viele oberste in {}?"),
     ("条件付き書式 — {} で、下位いくつを塗る?", "Bedingtes Format — wie viele unterste in {}?"),
+    ("右下を引いて大きさを変えます(比は保ちます)", "Ecke ziehen zum Skalieren (Seitenverhältnis bleibt)"),
+    ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Bild gewählt (ziehen = verschieben / Ecke = Größe / Entf = löschen)"),
+    ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Aus der Datei geladene Bilder sind nicht beweglich (ihre Originalform bleibt beim Speichern erhalten; neu einfügen macht sie bearbeitbar)"),
+    ("画像を削除しました(Ctrl+Z で戻せます)", "Bild gelöscht (Ctrl+Z macht es rückgängig)"),
 ];
