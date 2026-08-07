@@ -909,6 +909,154 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn ホームの全釦を一巡り点検(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            use sheet::model::{HAlign, VAlign};
+            this.book.sheets[0].set(Pos::new(0, 0), sheet::Cell::input("abc"));
+            this.cursor = Pos::new(0, 0);
+            this.sync_input();
+            let f = |this: &Calc| this.book.sheets[0].get(Pos::new(0, 0)).unwrap().fmt.clone();
+            // --- 書式の掛かり(モデル) ---
+            for id in ["bold", "italic", "underline", "strikeout", "subscript", "wrap", "direction"] {
+                this.run_cmd(id, cx);
+            }
+            let g = f(this);
+            assert!(g.bold && g.italic && g.underline && g.strike && g.subscript && g.wrap && g.rtl_text,
+                "文字飾りが掛からない: {g:?}");
+            this.run_cmd("top", cx);
+            assert_eq!(f(this).valign, VAlign::Top);
+            this.run_cmd("middle", cx);
+            assert_eq!(f(this).valign, VAlign::Middle);
+            this.run_cmd("bottom", cx);
+            assert_eq!(f(this).valign, VAlign::Bottom);
+            this.run_cmd("align-left", cx);
+            assert_eq!(f(this).align, HAlign::Left);
+            this.run_cmd("align-center", cx);
+            assert_eq!(f(this).align, HAlign::Center);
+            this.run_cmd("align-right", cx);
+            assert_eq!(f(this).align, HAlign::Right);
+            this.run_cmd("align-just", cx);
+            assert_eq!(f(this).align, HAlign::Justify);
+            this.run_cmd("incfont", cx);
+            assert_eq!(f(this).size_c, Some(1200), "文字が大きくならない");
+            this.run_cmd("decfont", cx);
+            assert_eq!(f(this).size_c, Some(1100));
+            this.run_cmd("currency", cx);
+            assert_eq!(f(this).number_format.as_deref(), Some("¥#,##0"));
+            this.run_cmd("percents", cx);
+            assert_eq!(f(this).number_format.as_deref(), Some("0%"));
+            this.run_cmd("comma", cx);
+            assert_eq!(f(this).number_format.as_deref(), Some("#,##0"));
+            this.run_cmd("digit-inc", cx);
+            assert_eq!(f(this).number_format.as_deref(), Some("#,##0.0"));
+            this.run_cmd("digit-dec", cx);
+            assert_eq!(f(this).number_format.as_deref(), Some("#,##0"));
+            this.run_cmd("clear", cx);
+            assert_eq!(f(this), Default::default(), "書式のクリアが効かない");
+            // --- 板・小窓が開く系 ---
+            let mut close = |this: &mut Calc| {
+                this.pick = None;
+                this.pick_kind = "value";
+                this.pick_note = None;
+                this.menu_sub = None;
+                this.prompt = None;
+                this.fn_dlg = None;
+                this.fmt_panel = None;
+            };
+            for (id, kind) in [
+                ("changecase", "changecase"),
+                ("fontname", "font"),
+                ("fontcolor", "font-color"),
+                ("fillparag", "fill-color"),
+                ("borders", "border-pick"),
+                ("text-orient", "orient-pick"),
+                ("merge", "merge-pick"), // 結合は範囲が要る(下で anchor を張る)
+                ("format", "numfmt-pick"),
+                ("cell-styles", "cell-style"),
+                ("defname", "names-pick"),
+            ] {
+                if id == "merge" {
+                    this.anchor = Some(Pos::new(0, 0));
+                    this.cursor = Pos::new(0, 1);
+                    this.sync_input();
+                }
+                this.run_cmd(id, cx);
+                assert_eq!(this.pick_kind, kind, "{id} の板が開かない");
+                assert!(this.pick.is_some(), "{id} の板が無い");
+                close(this);
+                if id == "merge" {
+                    this.anchor = None;
+                    this.cursor = Pos::new(0, 0);
+                    this.sync_input();
+                }
+            }
+            this.run_cmd("fontsize", cx);
+            assert!(this.pick.is_some(), "fontsize の板が開かない");
+            close(this);
+            this.run_cmd("condformat", cx);
+            assert_eq!(this.menu_sub.as_deref(), Some("cond"), "条件付き書式の一覧が開かない");
+            close(this);
+            this.run_cmd("insert-function", cx);
+            assert!(this.fn_dlg.is_some(), "関数の挿入の小窓が開かない");
+            close(this);
+            this.run_cmd("cell-format", cx);
+            assert!(this.fmt_panel.is_some(), "書式の小窓が開かない");
+            close(this);
+            this.run_cmd("replace", cx);
+            assert!(matches!(this.prompt, Some(("find", _))), "置換の板が開かない");
+            close(this);
+            // --- 行動系 ---
+            this.run_cmd("copystyle", cx);
+            assert!(this.brush.is_some(), "書式のコピーの刷毛が持てない");
+            this.brush = None;
+            this.run_cmd("copy", cx);
+            this.cursor = Pos::new(4, 0);
+            this.sync_input();
+            this.run_cmd("paste", cx);
+            assert_eq!(
+                this.book.sheets[0].get(Pos::new(4, 0)).unwrap().value.display(),
+                "abc", "コピー→貼り付けが効かない"
+            );
+            this.run_cmd("selectall", cx);
+            assert!(this.anchor.is_some(), "すべて選択が効かない");
+            this.anchor = None;
+            // フィル(先頭行を下へ)
+            this.book.sheets[0].set(Pos::new(9, 0), sheet::Cell::input("7"));
+            this.anchor = Some(Pos::new(9, 0));
+            this.cursor = Pos::new(11, 0);
+            this.sync_input();
+            this.run_cmd("fill-num", cx);
+            assert_eq!(
+                this.book.sheets[0].get(Pos::new(11, 0)).unwrap().value.display(),
+                "7", "フィルが効かない"
+            );
+            this.anchor = None;
+            // 絞り込みの張り外し
+            this.book.sheets[0].set(Pos::new(20, 0), sheet::Cell::input("見出し"));
+            this.book.sheets[0].set(Pos::new(21, 0), sheet::Cell::input("1"));
+            this.run_cmd("setfilter", cx);
+            assert!(this.auto_filter.is_some(), "絞り込みが張れない");
+            this.run_cmd("clear-filter", cx);
+            assert!(this.auto_filter.is_none(), "絞り込みが解けない");
+            // 行の出し入れ(cell-ins/cell-del は行に固定 — 台帳の既知の控え)
+            let rows0 = this.book.sheets[0].extent().0;
+            this.cursor = Pos::new(0, 0);
+            this.sync_input();
+            this.run_cmd("cell-ins", cx);
+            assert_eq!(this.book.sheets[0].extent().0, rows0 + 1, "行の挿入が効かない");
+            this.run_cmd("cell-del", cx);
+            assert_eq!(this.book.sheets[0].extent().0, rows0, "行の削除が効かない");
+            // 表の雛形(選択に書式+表オブジェクト)
+            this.anchor = Some(Pos::new(30, 0));
+            this.cursor = Pos::new(32, 1);
+            this.sync_input();
+            this.run_cmd("table-tpl", cx);
+            assert!(!this.book.sheets[0].tables.is_empty(), "表の雛形が掛からない");
+        });
+    }
+
+    #[gpui::test]
     fn ホームの文字飾り4種が掛かる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
