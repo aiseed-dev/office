@@ -1211,7 +1211,11 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                                     sh.links.insert(p, target.clone());
                                 }
                             }
-                            _ => rep.note("ハイパーリンク(文書内の場所。保存で失われる)"),
+                            // id が無く location だけ=帳面の中の場所。# 付きで持つ
+                            (Some(p), None) if attr(&e, "location").is_some() => {
+                                sh.links.insert(p, format!("#{}", attr(&e, "location").unwrap()));
+                            }
+                            _ => rep.note("ハイパーリンク(読めない形)"),
                         }
                     }
                     _ => {}
@@ -2754,8 +2758,14 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         // ハイパーリンク(schema では mergeCells の後・印刷まわりの前)
         if !sh.links.is_empty() {
             let mut hl = String::from("<hyperlinks>");
-            for (n, (p, _)) in sh.links.iter().enumerate() {
-                hl.push_str(&format!(r#"<hyperlink ref="{}" r:id="rIdHL{}"/>"#, p.a1(), n + 1));
+            for (n, (p, url)) in sh.links.iter().enumerate() {
+                if let Some(loc) = url.strip_prefix('#') {
+                    hl.push_str(&format!(
+                        r#"<hyperlink ref="{}" location="{}"/>"#, p.a1(), esc(loc)));
+                } else {
+                    hl.push_str(&format!(
+                        r#"<hyperlink ref="{}" r:id="rIdHL{}"/>"#, p.a1(), n + 1));
+                }
             }
             hl.push_str("</hyperlinks>");
             if let Some(pos) = body.rfind("</worksheet>") {
@@ -2828,6 +2838,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 }
             }
             for (n, (_, url)) in sh.links.iter().enumerate() {
+                if url.starts_with('#') {
+                    continue; // 帳面の中の場所は location 属性だけで足りる
+                }
                 inner.push_str(&format!(
                     r#"<Relationship Id="rIdHL{}" Type="{RNS}/hyperlink" Target="{}" TargetMode="External"/>"#,
                     n + 1, esc(url)
@@ -3309,6 +3322,18 @@ mod link_comment_tests {
         let back = roundtrip(&b);
         assert_eq!(back.sheets[0].links.get(&p).map(|s| s.as_str()),
             Some("https://example.co.jp/"), "リンクが往復しない");
+    }
+
+    #[test]
+    fn 帳面の中へのリンクがlocationで往復する() {
+        let mut b = Book::new();
+        b.sheets.push(crate::model::Sheet::new("集計"));
+        let p = Pos::parse("B2").unwrap();
+        b.sheets[0].set(p, Cell::input("集計へ"));
+        b.sheets[0].links.insert(p, "#集計!B5".into());
+        let back = roundtrip(&b);
+        assert_eq!(back.sheets[0].links.get(&p).map(|s| s.as_str()),
+            Some("#集計!B5"), "帳面の中へのリンクが往復しない");
     }
 
     #[test]

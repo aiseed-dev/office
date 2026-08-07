@@ -952,6 +952,34 @@ impl Calc {
         // Ctrl+クリックはリンクを開く(基幹網の外は既定のブラウザに任せる)
         if ctrl && !shift {
             if let Some(url) = self.sheet().links.get(&p).cloned() {
+                if let Some(loc) = url.strip_prefix('#') {
+                    // 帳面の中の場所(#Sheet2!B5 / #B5 / #A1:C9)へ跳ぶ
+                    let (name, refs) = match loc.split_once('!') {
+                        Some((n, r)) => (Some(n.trim_matches('\'')), r),
+                        None => (None, loc),
+                    };
+                    if let Some(n) = name {
+                        match self.book.sheets.iter().position(|s| s.name == n) {
+                            Some(i) => self.active = i,
+                            None => {
+                                self.status = ui::tf!("シート「{}」が見つかりません", n).into();
+                                return;
+                            }
+                        }
+                    }
+                    let mut it = refs.split(':');
+                    let a = it.next().and_then(Pos::parse);
+                    let b = it.next().and_then(Pos::parse);
+                    if let Some(a) = a {
+                        self.anchor = b.map(|_| a);
+                        self.cursor = b.unwrap_or(a);
+                        self.sync_input();
+                        self.status = ui::tf!("リンク先 {} へ移動しました", loc).into();
+                    } else {
+                        self.status = ui::tf!("リンク先({})が場所として読めません", loc).into();
+                    }
+                    return;
+                }
                 let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
                 self.status = ui::tf!("開きます: {}", url).into();
                 return;

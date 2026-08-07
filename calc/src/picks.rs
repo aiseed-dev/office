@@ -2578,6 +2578,27 @@ impl Calc {
                     self.dirty = true;
                     self.status =
                         format!("{} にリンクを付けました(Ctrl+クリックで開く)", p.a1()).into();
+                    // 続けて表示テキスト(セルに見せる文字)。本家のリンク設定の欄と同じ
+                    let cur = self.sheet().get(p).map(|c| c.value.display()).unwrap_or_default();
+                    self.prompt = Some(("link-text", Editor::new(&cur)));
+                }
+            }
+            // リンクの表示テキスト。空 Enter = セルはそのまま
+            "link-text" => {
+                let p = self.cursor;
+                if !text.is_empty() {
+                    let cur = self.sheet().get(p).map(|c| c.value.display()).unwrap_or_default();
+                    if text != cur {
+                        self.checkpoint();
+                        let mut cell = self.sheet().get(p).cloned().unwrap_or_default();
+                        let v = sheet::Cell::input(&text);
+                        cell.formula = v.formula;
+                        cell.value = v.value;
+                        self.book.sheets[self.active].set(p, cell);
+                        recalc_book(&mut self.book, self.active);
+                        self.dirty = true;
+                        self.sync_input();
+                    }
                 }
             }
             _ => {}

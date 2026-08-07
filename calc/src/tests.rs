@@ -1136,6 +1136,31 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn リンクの後に表示テキストを聞かれてセルに入る(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.cursor = Pos::new(1, 1);
+            this.sync_input();
+            this.prompt = Some(("link", Editor::new("https://example.co.jp/")));
+            this.finish_prompt(cx);
+            assert!(this.sheet().links.contains_key(&Pos::new(1, 1)), "リンクが付かない");
+            // 続けて表示テキストの板が開く
+            assert_eq!(this.prompt.as_ref().map(|(k, _)| *k), Some("link-text"), "表示テキストの板が開かない");
+            this.prompt = Some(("link-text", Editor::new("会社サイト")));
+            this.finish_prompt(cx);
+            let got = this.sheet().get(Pos::new(1, 1)).map(|c| c.value.display());
+            assert_eq!(got.as_deref(), Some("会社サイト"), "表示テキストがセルに入らない");
+            // 空 Enter ならそのまま
+            this.prompt = Some(("link", Editor::new("#B9")));
+            this.finish_prompt(cx);
+            this.prompt = Some(("link-text", Editor::new("")));
+            this.finish_prompt(cx);
+            let got = this.sheet().get(Pos::new(1, 1)).map(|c| c.value.display());
+            assert_eq!(got.as_deref(), Some("会社サイト"), "空 Enter でセルが変わった");
+        });
+    }
+
+    #[gpui::test]
     fn 列の幅と行の高さを数で指定して既定にも戻せる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

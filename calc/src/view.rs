@@ -2328,7 +2328,8 @@ impl Render for Calc {
             let title = match *kind {
                 "name" => ui::tf!("名前の定義 — {} に名前を付ける", range),
                 "comment" => ui::tf!("コメント — {}(空にして Enter で消す)", self.cursor.a1()),
-                "link" => ui::tf!("ハイパーリンク — {}(空にして Enter で外す)", self.cursor.a1()),
+                "link" => ui::tf!("ハイパーリンク — {}(URL か #シート名!B5。空にして Enter で外す)", self.cursor.a1()),
+                "link-text" => ui::tf!("表示テキスト — {} に見せる文字(空 Enter = そのまま)", self.cursor.a1()),
                 "cond-gt" => ui::tf!("条件付き書式 — {} で、いくつより大きい値を塗る?", range),
                 "cond-lt" => ui::tf!("条件付き書式 — {} で、いくつより小さい値を塗る?", range),
                 "cond-between" => ui::tf!("条件付き書式 — {} で、間なら塗る(8〜15 の形)", range),

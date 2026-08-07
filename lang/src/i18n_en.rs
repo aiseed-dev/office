@@ -804,4 +804,9 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("行の高さを {} pt にしました({} 行)", "Row height set to {} pt ({} rows)"),
 ("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)", "Column width — 0–255 (in zeros of the standard font; empty Enter = default)"),
 ("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)", "Row height — 0–409 pt (empty Enter = default)"),
+("シート「{}」が見つかりません", "Sheet \"{}\" not found"),
+("リンク先 {} へ移動しました", "Jumped to link target {}"),
+("リンク先({})が場所として読めません", "Link target ({}) is not a valid reference"),
+("ハイパーリンク — {}(URL か #シート名!B5。空にして Enter で外す)", "Hyperlink — {} (URL or #Sheet!B5; empty Enter removes it)"),
+("表示テキスト — {} に見せる文字(空 Enter = そのまま)", "Display text — what {} shows (empty Enter = keep as is)"),
 ];
