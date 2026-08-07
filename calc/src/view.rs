@@ -2165,31 +2165,41 @@ impl Render for Calc {
                             })))))
         });
 
-        // ---- 固定した枠の影(表示タブの「固定した枠に影を付ける」) ----
-        // 見た目だけ。マウスは受けない。固定の境目の下・右に薄い帯を落とす
+        // ---- 固定した枠の境目(表示タブの「固定した枠に影を付ける」) ----
+        // 見た目だけ。マウスは受けない。本家の作法: 影あり=固定の開始
+        // 位置にひかえめな緑の線+薄い影の帯、影なし=灰色の線だけ
         let freeze_shadow: Vec<gpui::AnyElement> = {
             let mut bands = Vec::new();
-            if self.freeze_shadow {
-                if let Some(f) = self.frozen {
-                    let c0 = self.visible_cols().first().copied().unwrap_or(0);
-                    let r0 = self.visible_rows().first().copied().unwrap_or(0);
-                    if f.row > 0 {
-                        if let Some((_, _, _, y1)) =
-                            self.range_px(Pos::new(f.row - 1, c0), Pos::new(f.row - 1, c0))
-                        {
+            if let Some(f) = self.frozen {
+                let c0 = self.visible_cols().first().copied().unwrap_or(0);
+                let r0 = self.visible_rows().first().copied().unwrap_or(0);
+                let line = if self.freeze_shadow { rgb(0x37A16C) } else { rgb(0x9AA5AE) };
+                if f.row > 0 {
+                    if let Some((_, _, _, y1)) =
+                        self.range_px(Pos::new(f.row - 1, c0), Pos::new(f.row - 1, c0))
+                    {
+                        if self.freeze_shadow {
                             bands.push(div().absolute().left(px(0.0)).top(px(y1))
                                 .w_full().h(px(3.0)).bg(gpui::rgba(0x00000030))
                                 .into_any_element());
                         }
+                        bands.push(div().absolute().left(px(0.0)).top(px(y1 - 1.0))
+                            .w_full().h(px(1.0)).bg(line)
+                            .into_any_element());
                     }
-                    if f.col > 0 {
-                        if let Some((_, _, x1, _)) =
-                            self.range_px(Pos::new(r0, f.col - 1), Pos::new(r0, f.col - 1))
-                        {
+                }
+                if f.col > 0 {
+                    if let Some((_, _, x1, _)) =
+                        self.range_px(Pos::new(r0, f.col - 1), Pos::new(r0, f.col - 1))
+                    {
+                        if self.freeze_shadow {
                             bands.push(div().absolute().left(px(x1)).top(px(0.0))
                                 .w(px(3.0)).h_full().bg(gpui::rgba(0x00000030))
                                 .into_any_element());
                         }
+                        bands.push(div().absolute().left(px(x1 - 1.0)).top(px(0.0))
+                            .w(px(1.0)).h_full().bg(line)
+                            .into_any_element());
                     }
                 }
             }
