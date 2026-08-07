@@ -1995,7 +1995,7 @@ mod recalc_tests {
     }
 
     #[gpui::test]
-    fn 値が複数ある範囲の結合は先に聞く(cx: &mut gpui::TestAppContext) {
+    fn 結合は聞かずに掛かり値も消えない(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
             for (p, v) in [("A1", "甲"), ("B2", "乙")] {
@@ -2004,32 +2004,26 @@ mod recalc_tests {
                 this.input.insert(v);
                 assert!(this.commit());
             }
-            // 値が2つ → 確認の一覧が開き、まだ結合されない
+            // 値が2つあっても**聞かずに**結合する(発注者 2026-08-08 —
+            // うちは値を消さないのだから止める理由が無い)。状態行で言うだけ
             this.anchor = Some(Pos::parse("A1").unwrap());
             this.cursor = Pos::parse("B2").unwrap();
             this.run_cmd("merge", cx);
             assert_eq!(this.pick_kind, "merge-pick", "4択が出ない");
             this.apply_pick("結合して中央に配置", cx);
-            assert_eq!(this.pick_kind, "merge-confirm", "確認が出ない");
-            assert!(this.sheet().merges.is_empty(), "聞く前に結合された");
-            this.apply_pick("やめる", cx);
-            assert!(this.sheet().merges.is_empty());
-            // 結合する、を選べば結合される(値は消えない)
-            this.run_cmd("merge", cx);
-            this.apply_pick("結合して中央に配置", cx);
-            this.apply_pick("結合する(見えるのは左上の値だけになります)", cx);
-            assert_eq!(this.sheet().merges.len(), 1);
+            assert_eq!(this.sheet().merges.len(), 1, "確認を挟まず結合されるべき");
+            assert!(this.status.contains("隠れた値は消していません"), "案内が無い: {}", this.status);
             assert_eq!(
                 this.sheet().get(Pos::parse("B2").unwrap()).unwrap().editable(),
                 "乙",
                 "結合で値が消えた"
             );
-            // 値が1つ以下なら聞かずに結合する
+            // 空の範囲も同じくそのまま
             this.anchor = Some(Pos::parse("D1").unwrap());
             this.cursor = Pos::parse("E2").unwrap();
             this.run_cmd("merge", cx);
             this.apply_pick("結合して中央に配置", cx);
-            assert_eq!(this.sheet().merges.len(), 2, "空の範囲で余計に聞いた");
+            assert_eq!(this.sheet().merges.len(), 2);
             // 横方向: 行ごとに1本ずつ
             this.anchor = Some(Pos::parse("G1").unwrap());
             this.cursor = Pos::parse("H3").unwrap();

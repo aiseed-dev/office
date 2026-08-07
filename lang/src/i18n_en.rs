@@ -891,4 +891,5 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("罫線(連続で押せます。Esc で閉じる)", "Borders (keep clicking; Esc closes)"),
 ("線のスタイル: {}…", "Line style: {}…"),
 ("線の色: {}…", "Line color: {}…"),
+("{}(隠れた値は消していません — 結合の解除でそのまま戻ります)", "{} (hidden values are not deleted — unmerge brings them right back)"),
 ];

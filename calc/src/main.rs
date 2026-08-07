@@ -87,7 +87,6 @@ struct Calc {
     /// 名前マネージャーで選んだ名前(移動/打ち直し/削除の相手)
     name_pend: Option<String>,
     /// 結合の確認待ちの種類(中央/横方向/結合だけ)
-    merge_kind_pend: Option<String>,
     /// 書式のコピー(刷毛)で持っている書式。次のクリックで塗って手放す
     brush: Option<CellFormat>,
     /// 右クリックメニューの出どころ(Some(true)=列見出し / Some(false)=行見出し)
@@ -341,7 +340,6 @@ impl Calc {
             pen_color: None,
             hf_pend: None,
             name_pend: None,
-            merge_kind_pend: None,
             brush: None,
             menu_head: None,
             solver: None,
@@ -2568,31 +2566,24 @@ impl Calc {
             self.dirty = true;
             return;
         }
+        // 確認は出さない(発注者 2026-08-08「どうして警告を出すのか」)。
+        // うちは Excel と違って**値を消さない** — 呑まれたセルの値はモデルに
+        // 残り、解除すればそのまま戻る。消さないのだから止める理由が無い
         let filled = (a.row..=b.row)
             .flat_map(|r| (a.col..=b.col).map(move |c| Pos::new(r, c)))
             .filter(|p| {
                 self.sheet().get(*p).map(|c| !c.editable().trim().is_empty()).unwrap_or(false)
             })
             .count();
-        if filled >= 2 {
-            let at = self
-                .cell_origin_px(self.cursor)
-                .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
-            self.merge_kind_pend = Some(kind.to_string());
-            self.pick_kind = "merge-confirm";
-            self.pick = Some((
-                vec![
-                    "結合する(見えるのは左上の値だけになります)".into(),
-                    "やめる".into(),
-                ],
-                at,
-            ));
-            self.status =
-                ui::t!("範囲に値が複数あります(値は消しません — 解除で戻ります)").into();
-            return;
-        }
         self.merge_do(a, b, kind);
+        if filled >= 2 {
+            // 見えなくなる値があることだけは言う(黙らない。止めもしない)
+            self.status = ui::tf!(
+                "{}(隠れた値は消していません — 結合の解除でそのまま戻ります)",
+                self.status
+            )
+            .into();
+        }
     }
 
     /// 結合の実体(確認の後もここに来る)。kind: 中央/横方向/結合だけ
