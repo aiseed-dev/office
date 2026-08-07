@@ -2620,11 +2620,11 @@ impl Calc {
                     .flat_map(|r| (ba.col..=bb.col).map(move |cc| Pos::new(r, cc)))
                     .find(|p| !empty(sh, *p));
                 if let Some(p) = first {
+                    // 値だけでなく**書式ごと**移す(発注者 2026-08-08 —
+                    // 「書式は値があった場所の書式」)。太字や色を置いて
+                    // けぼりにすると、移った値が素の見た目に化ける
                     let src = sh.get(p).cloned().unwrap_or_default();
-                    let mut dst = sh.get(ba).cloned().unwrap_or_default();
-                    dst.formula = src.formula;
-                    dst.value = src.value;
-                    sh.set(ba, dst);
+                    sh.set(ba, src);
                     promoted = true;
                 }
             }

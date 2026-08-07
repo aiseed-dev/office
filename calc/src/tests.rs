@@ -960,6 +960,24 @@ mod pivot_tests {
                 "元の場所に残っている"
             );
             assert!(this.status.contains("移しました"), "移したことを言わない: {}", this.status);
+            // 「セルの結合」: 書式は値があった場所の書式ごと移り、中央揃えにはしない
+            let mut src = sheet::Cell::input("題2");
+            src.fmt.bold = true;
+            src.fmt.align = sheet::model::HAlign::Right;
+            this.book.sheets[0].set(Pos::new(5, 1), src);
+            this.merge_do(Pos::new(5, 0), Pos::new(5, 2), "結合だけ");
+            let got = this.book.sheets[0].get(Pos::new(5, 0)).unwrap().clone();
+            assert_eq!(got.value.display(), "題2");
+            assert!(got.fmt.bold, "書式(太字)が移らない");
+            assert_eq!(got.fmt.align, sheet::model::HAlign::Right, "揃えまで変えられた");
+            // 「結合して中央に配置」だけが中央を掛ける
+            let mut src = sheet::Cell::input("題3");
+            src.fmt.bold = true;
+            this.book.sheets[0].set(Pos::new(7, 1), src);
+            this.merge_do(Pos::new(7, 0), Pos::new(7, 2), "中央");
+            let got = this.book.sheets[0].get(Pos::new(7, 0)).unwrap().clone();
+            assert!(got.fmt.bold, "中央配置で書式が落ちた");
+            assert_eq!(got.fmt.align, sheet::model::HAlign::Center, "中央配置が中央でない");
             // 横方向: 行ごとに同じ扱い(2行目は C2 の値が左端へ)
             this.book.sheets[0].set(Pos::new(2, 2), sheet::Cell::input("乙"));
             this.merge_do(Pos::new(2, 0), Pos::new(2, 2), "横方向");
