@@ -2007,65 +2007,23 @@ impl Calc {
                 self.commit();
                 if self.anchor.is_none() {
                     self.status =
-                        ui::t!("折れ線にする数の範囲を選んでください(置き場所はいまのセル)").into();
+                        ui::t!("スパークラインにする数の範囲を選んでください(置き場所はいまのセル)").into();
                 } else {
-                    let (a, b) = self.sel_rect();
-                    let mut vals: Vec<f64> = Vec::new();
-                    for r in a.row..=b.row {
-                        for c in a.col..=b.col {
-                            if let Some(cell) = self.sheet().get(Pos::new(r, c)) {
-                                if let sheet::Value::Number(n) = cell.value {
-                                    vals.push(n);
-                                }
-                            }
-                        }
-                    }
-                    if vals.len() < 2 {
-                        self.status = ui::t!("数が2つ以上要ります").into();
-                    } else {
-                        let (lo, hi) = vals
-                            .iter()
-                            .fold((f64::MAX, f64::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
-                        let span = (hi - lo).max(1e-9);
-                        let n = vals.len();
-                        let points: Vec<(f32, f32)> = vals
-                            .iter()
-                            .enumerate()
-                            .map(|(i, v)| {
-                                (
-                                    i as f32 / (n - 1) as f32,
-                                    (1.0 - ((v - lo) / span)) as f32,
-                                )
-                            })
-                            .collect();
-                        // 置き場所はいまのセル(選択の中なら右のセル)、大きさはそのセル
-                        let at = if (a.row..=b.row).contains(&self.cursor.row)
-                            && (a.col..=b.col).contains(&self.cursor.col)
-                        {
-                            Pos::new(a.row, b.col + 1)
-                        } else {
-                            self.cursor
-                        };
-                        self.checkpoint();
-                        let (w, h) = (self.col_px(at.col) - 2.0, self.row_px(at.row) - 2.0);
-                        self.sheet_mut().shapes_new.push(sheet::model::SheetShape {
-                            at,
-                            width_px: w,
-                            height_px: h,
-                            kind: "spark".into(),
-                            fill: None,
-                            line: Some("1B6E3C".into()),
-                            points,
-                            ..Default::default()
-                        });
-                        self.dirty = true;
-                        self.status = format!(
-                            "スパークラインを {} に置きました(その時の値で描く固定の線。\
-データを変えたら作り直してください)",
-                            at.a1()
-                        )
-                        .into();
-                    }
+                    // 本家と同じ3種から選ぶ(折れ線・縦棒・勝ち負け)
+                    let at = self
+                        .cell_origin_px(self.cursor)
+                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                        .unwrap_or((HEAD_W + 24.0, ROW_H + 24.0));
+                    self.pick_note = Some(ui::t!("スパークラインの種類").into());
+                    self.pick_kind = "spark-kind-pick";
+                    self.pick = Some((
+                        vec![
+                            "折れ線".into(),
+                            "縦棒(カラム)".into(),
+                            "勝ち負け(正負)".into(),
+                        ],
+                        at,
+                    ));
                 }
             }
             "insshape" => {

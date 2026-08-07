@@ -508,8 +508,11 @@ pub struct SheetShape {
     /// 図形の中の文字(テキストボックス)。xlsx の txBody と往復する。
     /// 画面へは SVG でなく重ね描き(組版の質と日本語のため)
     pub text: Option<String>,
-    /// 折れ線の点(0..1 に正規化した x, y)。kind="spark" が使う
+    /// 折れ線の点(0..1 に正規化した x, y)。kind="spark" が使う。
+    /// "spark-col"/"spark-wl"(縦棒・勝ち負け)では (棒の中心x, 棒の先端y)
     pub points: Vec<(f32, f32)>,
+    /// 棒の底(0..1 の y)。"spark-col"/"spark-wl" が使う(他は 0 のまま)
+    pub base: f32,
     /// 錨のセルからの右・下へのずらし(px)。SmartArt のような
     /// 図形の集まりを、セルの粗さに縛られずに組むための細かい座標
     pub dx_px: f32,
@@ -575,6 +578,34 @@ impl SheetShape {
             ),
             "line" => format!(r#"<line x1="{x0}" y1="{y0}" x2="{x1}" y2="{y1}" {style}/>"#),
             // 手描きの線(ペン=細い / 蛍光ペン=太くて薄い)も同じ折れ線
+            // 縦棒・勝ち負けのスパークライン: base(底)から先端まで棒を立てる。
+            // 勝ち負けは負(先端が底より下)を赤に
+            "spark-col" | "spark-wl" => {
+                let n = self.points.len().max(1) as f32;
+                let bw = ((x1 - x0) / n * 0.7).max(1.5);
+                let base_y = y0 + self.base * (y1 - y0);
+                let mut bars = String::new();
+                for (px_, py_) in &self.points {
+                    let cx_ = x0 + px_ * (x1 - x0);
+                    let top = y0 + py_ * (y1 - y0);
+                    let neg = *py_ > self.base + 1e-6;
+                    let col = if self.kind == "spark-wl" && neg {
+                        "#C0504D"
+                    } else {
+                        &line
+                    };
+                    let (ry, rh) = if neg {
+                        (base_y, (top - base_y).max(1.0))
+                    } else {
+                        (top, (base_y - top).max(1.0))
+                    };
+                    bars.push_str(&format!(
+                        r#"<rect x="{:.1}" y="{ry:.1}" width="{bw:.1}" height="{rh:.1}" fill="{col}"/>"#,
+                        cx_ - bw / 2.0
+                    ));
+                }
+                bars
+            }
             "spark" | "ink" | "marker" => {
                 // 正規化した点を大きさに展開した折れ線(塗らない)
                 let pts = self

@@ -250,7 +250,7 @@ enum DrawKind {
         Option<String>,
         Option<String>,
         Option<String>,
-        Vec<(f32, f32)>,
+        (Vec<(f32, f32)>, f32),
     ),
 }
 
@@ -313,6 +313,7 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
     let mut text = String::new();
     let mut in_t = false;
     let mut pts: Vec<(f32, f32)> = Vec::new();
+    let mut sp_name: Option<String> = None;
     let (mut path_w, mut path_h) = (1000.0f32, 1000.0f32);
     let mut has_custom = false;
     let mut in_from = false;
@@ -329,6 +330,7 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                     (off_x, off_y) = (0, 0);
                     text.clear();
                     pts.clear();
+                    sp_name = None;
                     has_custom = false;
                     (path_w, path_h) = (1000.0, 1000.0);
                     in_sp = false;
@@ -339,6 +341,7 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                     cur = t.to_vec()
                 }
                 b"sp" => in_sp = true,
+                b"cNvPr" if sp_name.is_none() => sp_name = attr(&e, "name"),
                 b"ln" => in_ln = true,
                 b"blip" => {
                     if embed.is_none() {
@@ -370,6 +373,7 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                         embed = attr(&e, "embed");
                     }
                 }
+                b"cNvPr" if sp_name.is_none() => sp_name = attr(&e, "name"),
                 b"pt" if has_custom => {
                     let x = attr(&e, "x").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
                     let y = attr(&e, "y").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
@@ -413,15 +417,42 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                     let kind = match (embed.take(), prst.take(), has_custom) {
                         (Some(em), _, _) => Some(DrawKind::Image(em)),
                         (None, Some(pr), _) => {
-                            Some(DrawKind::Shape(pr, fill.take(), line.take(), tx, Vec::new()))
+                            Some(DrawKind::Shape(pr, fill.take(), line.take(), tx, (Vec::new(), 0.0)))
                         }
-                        (None, None, true) if !pts.is_empty() => Some(DrawKind::Shape(
-                            "spark".into(),
-                            fill.take(),
-                            line.take(),
-                            tx,
-                            std::mem::take(&mut pts),
-                        )),
+                        (None, None, true) if !pts.is_empty() => {
+                            // 自作の札(jo:spark-col:底)があれば棒に組み直す。
+                            // 棒は4点1組の閉じた小道 — 先頭2点の中点が中心、
+                            // 1点目の y が先端
+                            let marker = sp_name
+                                .as_deref()
+                                .and_then(|n| n.strip_prefix("jo:"))
+                                .and_then(|n| n.split_once(':'))
+                                .filter(|(k, _)| *k == "spark-col" || *k == "spark-wl");
+                            match marker {
+                                Some((k, b)) if pts.len() >= 4 => {
+                                    let base: f32 = b.parse().unwrap_or(1.0);
+                                    let tops: Vec<(f32, f32)> = pts
+                                        .chunks(4)
+                                        .filter(|c| c.len() == 4)
+                                        .map(|c| ((c[0].0 + c[1].0) / 2.0, c[0].1))
+                                        .collect();
+                                    Some(DrawKind::Shape(
+                                        k.into(),
+                                        fill.take(),
+                                        line.take(),
+                                        tx,
+                                        (tops, base),
+                                    ))
+                                }
+                                _ => Some(DrawKind::Shape(
+                                    "spark".into(),
+                                    fill.take(),
+                                    line.take(),
+                                    tx,
+                                    (std::mem::take(&mut pts), 0.0),
+                                )),
+                            }
+                        }
                         _ => None,
                     };
                     if let (Some(c), Some(rr), Some(k)) = (col, row, kind) {
@@ -457,9 +488,42 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
         ),
         None => String::new(),
     };
-    // 形: 折れ線(spark)は custGeom、他は prstGeom
+    // 形: 折れ線(spark)は custGeom、他は prstGeom。
+    // 縦棒・勝ち負けも custGeom(棒ごとに4点の閉じた小道 — Excel でも棒に見える)
+    let bars = matches!(sp.kind.as_str(), "spark-col" | "spark-wl");
     let poly = matches!(sp.kind.as_str(), "spark" | "ink" | "marker");
-    let geom = if poly && !sp.points.is_empty() {
+    let geom = if bars && !sp.points.is_empty() {
+        let n = sp.points.len().max(1) as f32;
+        let bw = (10000.0 / n * 0.7).max(120.0);
+        let base = (sp.base * 10000.0) as i64;
+        let mut path = String::new();
+        for (cx_, ty) in &sp.points {
+            let (l, r) = (
+                ((cx_ * 10000.0) - bw / 2.0) as i64,
+                ((cx_ * 10000.0) + bw / 2.0) as i64,
+            );
+            let t = (ty * 10000.0) as i64;
+            path.push_str(&format!(
+                concat!(
+                    "<a:moveTo><a:pt x=\"{l}\" y=\"{t}\"/></a:moveTo>",
+                    "<a:lnTo><a:pt x=\"{r}\" y=\"{t}\"/></a:lnTo>",
+                    "<a:lnTo><a:pt x=\"{r}\" y=\"{b}\"/></a:lnTo>",
+                    "<a:lnTo><a:pt x=\"{l}\" y=\"{b}\"/></a:lnTo>",
+                    "<a:close/>"
+                ),
+                l = l, r = r, t = t, b = base
+            ));
+        }
+        format!(
+            concat!(
+                "<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>",
+                "<a:rect l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>",
+                "<a:pathLst><a:path w=\"10000\" h=\"10000\">{}</a:path></a:pathLst>",
+                "</a:custGeom>"
+            ),
+            path
+        )
+    } else if poly && !sp.points.is_empty() {
         let mut path = String::new();
         for (i, (x, y)) in sp.points.iter().enumerate() {
             let (px_, py_) = ((x * 10000.0) as i64, (y * 10000.0) as i64);
@@ -504,7 +568,7 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
             "<xdr:row>{row}</xdr:row><xdr:rowOff>{dy}</xdr:rowOff></xdr:from>",
             "<xdr:ext cx=\"{cx}\" cy=\"{cy}\"/>",
             "<xdr:sp macro=\"\" textlink=\"\">",
-            "<xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"図形 {id}\"/><xdr:cNvSpPr/></xdr:nvSpPr>",
+            "<xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"{name}\"/><xdr:cNvSpPr/></xdr:nvSpPr>",
             "<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>",
             "{geom}{fill}{line}</xdr:spPr>{txt}",
             "</xdr:sp><xdr:clientData/></xdr:oneCellAnchor>"
@@ -516,6 +580,12 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
         cx = cx,
         cy = cy,
         id = id,
+        // 縦棒・勝ち負けは name に自作の札を残す — 開き直しで棒に組み直せる
+        name = if matches!(sp.kind.as_str(), "spark-col" | "spark-wl") {
+            format!("jo:{}:{:.4}", sp.kind, sp.base)
+        } else {
+            format!("図形 {id}")
+        },
         geom = geom,
         fill = fill,
         line = line,
@@ -1368,7 +1438,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             data,
                         });
                     }
-                    DrawKind::Shape(prst, fill, line, text, points) => {
+                    DrawKind::Shape(prst, fill, line, text, (points, base)) => {
                         sh.shapes.push(crate::model::SheetShape {
                             at,
                             width_px,
@@ -1378,6 +1448,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             line,
                             text,
                             points,
+                            base,
                             // ずらし(colOff/rowOff)も読む — SmartArt の
                             // 図形の集まりが保存後も同じ場所に見える
                             dx_px: ox_emu as f32 / 9525.0,
@@ -3584,6 +3655,31 @@ mod link_comment_tests {
             "スケールが往復しない(FF の剥がし過ぎに注意)"
         );
         assert_eq!(cond[2].kind, CondKind::Icons("3Arrows".into()), "アイコンが往復しない");
+    }
+
+    #[test]
+    fn 縦棒のスパークラインが棒のまま往復する() {
+        let mut b = Book::new();
+        b.sheets[0].shapes_new.push(crate::model::SheetShape {
+            at: Pos::parse("C2").unwrap(),
+            width_px: 90.0,
+            height_px: 22.0,
+            kind: "spark-col".into(),
+            line: Some("1B6E3C".into()),
+            points: vec![(0.17, 0.0), (0.5, 0.9), (0.83, 0.25)],
+            base: 0.75,
+            ..Default::default()
+        });
+        let back = roundtrip(&b);
+        let sp = back.sheets[0]
+            .shapes
+            .iter()
+            .find(|s| s.kind == "spark-col")
+            .expect("棒が折れ線に化けた(jo: の札が読めていない)");
+        assert!((sp.base - 0.75).abs() < 1e-3, "底が違う: {}", sp.base);
+        assert_eq!(sp.points.len(), 3, "棒の本数が違う: {:?}", sp.points);
+        assert!((sp.points[1].0 - 0.5).abs() < 0.02, "中心が違う: {:?}", sp.points[1]);
+        assert!((sp.points[1].1 - 0.9).abs() < 0.02, "先端が違う: {:?}", sp.points[1]);
     }
 
     #[test]

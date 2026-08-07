@@ -407,6 +407,24 @@ pub fn sheet_to_pdf<W: Write>(
                     (x, y_top - h / 2.0),
                 ],
                 "line" => vec![(x, y_top), (x + w, y_top - h)],
+                // 縦棒・勝ち負け: 棒ごとに閉じた長方形を落とす(紙も棒で)
+                "spark-col" | "spark-wl" => {
+                    let n = sp.points.len().max(1) as f32;
+                    let bw = (w / n * 0.7).max(0.5);
+                    let base_y = y_top - sp.base * h;
+                    for (cx_, ty) in &sp.points {
+                        let (l, r) = (x + cx_ * w - bw / 2.0, x + cx_ * w + bw / 2.0);
+                        let t = y_top - ty * h;
+                        l1.add_line(Line {
+                            points: [(l, t), (r, t), (r, base_y), (l, base_y)]
+                                .into_iter()
+                                .map(|(px_, py_)| (Point::new(Mm(px_), Mm(py_)), false))
+                                .collect(),
+                            is_closed: true,
+                        });
+                    }
+                    continue;
+                }
                 "spark" | "ink" | "marker" => sp
                     .points
                     .iter()

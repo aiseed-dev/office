@@ -909,6 +909,32 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn スパークラインは3種を選んで置ける(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            for (i, v) in ["3", "-1", "2"].iter().enumerate() {
+                this.book.sheets[0].set(Pos::new(0, i as u32), sheet::Cell::input(v));
+            }
+            this.anchor = Some(Pos::new(0, 0));
+            this.cursor = Pos::new(0, 2);
+            this.sync_input();
+            this.insert_sparkline("spark-col");
+            let sp = this.book.sheets[0].shapes_new.last().unwrap().clone();
+            assert_eq!(sp.kind, "spark-col");
+            assert_eq!(sp.points.len(), 3);
+            // 底は 0 の高さ(範囲は -1..3 → 0 は 3/4 の位置 = y 0.75)
+            assert!((sp.base - 0.75).abs() < 1e-4, "底が違う: {}", sp.base);
+            // 負の値の棒の先端は底より下
+            assert!(sp.points[1].1 > sp.base, "負の棒が下に伸びていない");
+            this.insert_sparkline("spark-wl");
+            let sp = this.book.sheets[0].shapes_new.last().unwrap().clone();
+            assert_eq!(sp.kind, "spark-wl");
+            assert_eq!(sp.base, 0.5);
+            assert_eq!(sp.points.iter().map(|p| p.1).collect::<Vec<_>>(), vec![0.1, 0.9, 0.1]);
+        });
+    }
+
+    #[gpui::test]
     fn r1c1では見せ方が変わり中身はa1のまま(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

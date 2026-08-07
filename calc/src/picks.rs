@@ -476,6 +476,14 @@ impl Calc {
                     .into();
                 }
             }
+            "spark-kind-pick" => {
+                let kind = match v {
+                    "縦棒(カラム)" => "spark-col",
+                    "勝ち負け(正負)" => "spark-wl",
+                    _ => "spark",
+                };
+                self.insert_sparkline(kind);
+            }
             "dedup-pick" => {
                 let header_label = ui::t!("先頭行は見出し(消さない)").to_string();
                 if v == format!("→ {}", ui::t!("削除する")) {
@@ -1577,6 +1585,110 @@ impl Calc {
         recalc_book(&mut self.book, self.active);
         self.dirty = true;
         self.sync_input();
+    }
+
+    /// スパークラインを置く(kind: spark=折れ線 / spark-col=縦棒 / spark-wl=勝ち負け)。
+    /// その時の値で描く固定の絵 — データに追従しない(文言でそう言う)
+    pub(crate) fn insert_sparkline(&mut self, kind: &str) {
+        let (a, b) = self.sel_rect();
+        let mut vals: Vec<f64> = Vec::new();
+        for r in a.row..=b.row {
+            for c in a.col..=b.col {
+                if let Some(cell) = self.sheet().get(Pos::new(r, c)) {
+                    if let sheet::Value::Number(n) = cell.value {
+                        vals.push(n);
+                    }
+                }
+            }
+        }
+        if vals.len() < 2 {
+            self.status = ui::t!("数が2つ以上要ります").into();
+            return;
+        }
+        let (lo, hi) = vals
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+        let n = vals.len();
+        let (points, base): (Vec<(f32, f32)>, f32) = match kind {
+            // 縦棒: 0 を物差しに入れて、底(0 の高さ)から棒を立てる
+            "spark-col" => {
+                let lo2 = lo.min(0.0);
+                let hi2 = hi.max(0.0);
+                let span = (hi2 - lo2).max(1e-9);
+                let base = (1.0 - ((0.0 - lo2) / span)) as f32;
+                (
+                    vals.iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            (
+                                (i as f32 + 0.5) / n as f32,
+                                (1.0 - ((v - lo2) / span)) as f32,
+                            )
+                        })
+                        .collect(),
+                    base,
+                )
+            }
+            // 勝ち負け: 符号だけ(正は上へ・負は下へ同じ長さ。0 は底のまま)
+            "spark-wl" => (
+                vals.iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let y = if *v > 0.0 { 0.1 } else if *v < 0.0 { 0.9 } else { 0.5 };
+                        ((i as f32 + 0.5) / n as f32, y)
+                    })
+                    .collect(),
+                0.5,
+            ),
+            // 折れ線(従来)
+            _ => {
+                let span = (hi - lo).max(1e-9);
+                (
+                    vals.iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            (
+                                i as f32 / (n - 1) as f32,
+                                (1.0 - ((v - lo) / span)) as f32,
+                            )
+                        })
+                        .collect(),
+                    0.0,
+                )
+            }
+        };
+        // 置き場所はいまのセル(選択の中なら右のセル)、大きさはそのセル
+        let at = if (a.row..=b.row).contains(&self.cursor.row)
+            && (a.col..=b.col).contains(&self.cursor.col)
+        {
+            Pos::new(a.row, b.col + 1)
+        } else {
+            self.cursor
+        };
+        self.checkpoint();
+        let (w, h) = (self.col_px(at.col) - 2.0, self.row_px(at.row) - 2.0);
+        self.sheet_mut().shapes_new.push(sheet::model::SheetShape {
+            at,
+            width_px: w,
+            height_px: h,
+            kind: kind.into(),
+            fill: None,
+            line: Some("1B6E3C".into()),
+            points,
+            base,
+            ..Default::default()
+        });
+        self.dirty = true;
+        let said = match kind {
+            "spark-col" => ui::t!("縦棒のスパークライン"),
+            "spark-wl" => ui::t!("勝ち負けのスパークライン"),
+            _ => ui::t!("折れ線のスパークライン"),
+        };
+        self.status = ui::tf!(
+            "{}を {} に置きました(その時の値で描く固定の絵。データを変えたら作り直してください)",
+            said, at.a1()
+        )
+        .into();
     }
 
     /// 重複の削除の板 — 比べる列の入切と「先頭行は見出し」。

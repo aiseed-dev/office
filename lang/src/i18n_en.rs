@@ -869,4 +869,10 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("参照の形式: R1C1(R[行]C[列] — 列見出しも数字になります)", "Reference style: R1C1 (R[row]C[col] — column headers turn numeric)"),
 ("参照の形式: A1(いつもの B2 の形)", "Reference style: A1 (the usual B2 form)"),
 ("参照の形式", "Reference style"),
+("スパークラインにする数の範囲を選んでください(置き場所はいまのセル)", "Select the range of numbers for the sparkline (it is placed at the current cell)"),
+("スパークラインの種類", "Sparkline type"),
+("縦棒のスパークライン", "Column sparkline"),
+("勝ち負けのスパークライン", "Win/loss sparkline"),
+("折れ線のスパークライン", "Line sparkline"),
+("{}を {} に置きました(その時の値で描く固定の絵。データを変えたら作り直してください)", "Placed a {} at {} (a fixed picture of the current values; recreate it after the data changes)"),
 ];
