@@ -525,7 +525,7 @@ impl Calc {
     pub(crate) fn insert_image_dialog(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new()
-                .add_filter("画像", &["png", "jpg", "jpeg"])
+                .add_filter("画像", &["png", "jpg", "jpeg", "bmp", "gif"])
                 .pick_file()
         });
         cx.spawn(async move |this, cx| {

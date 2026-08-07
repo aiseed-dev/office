@@ -3574,6 +3574,10 @@ impl Render for Calc {
                                .or_insert_with(|| {
                                    let fmt = if im.data.starts_with(&[0xFF, 0xD8]) {
                                        gpui::ImageFormat::Jpeg
+                                   } else if im.data.starts_with(b"GIF8") {
+                                       gpui::ImageFormat::Gif
+                                   } else if im.data.starts_with(b"BM") {
+                                       gpui::ImageFormat::Bmp
                                    } else {
                                        gpui::ImageFormat::Png
                                    };

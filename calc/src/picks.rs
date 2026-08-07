@@ -1366,6 +1366,15 @@ impl Calc {
                             top: e, bottom: e, left: e, right: e,
                         };
                     }
+                    // 内側だけ(外周には引かない)— 帳票の中身の区切り
+                    "内側の縦線" => {
+                        if c > a.col { bd.left = e }
+                        if c < b.col { bd.right = e }
+                    }
+                    "内側の横線" => {
+                        if r > a.row { bd.top = e }
+                        if r < b.row { bd.bottom = e }
+                    }
                     _ => *bd = sheet::model::Borders::NONE, // 罫線を消す
                 }
                 sh.set(p, cell);

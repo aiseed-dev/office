@@ -2159,7 +2159,15 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         for (k, im) in sh.images_new.iter().enumerate() {
             media_n += 1;
-            let ext = if im.data.starts_with(&[0xFF, 0xD8]) { "jpeg" } else { "png" };
+            let ext = if im.data.starts_with(&[0xFF, 0xD8]) {
+                "jpeg"
+            } else if im.data.starts_with(b"GIF8") {
+                "gif"
+            } else if im.data.starts_with(b"BM") {
+                "bmp"
+            } else {
+                "png"
+            };
             let _ = k;
             let rid = format!("rIdC{media_n}");
             media_out.push((format!("xl/media/imageC{media_n}.{ext}"), im.data.clone()));
@@ -2303,6 +2311,12 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         if media_out.iter().any(|(n, _)| n.ends_with(".jpeg")) && !ct.contains("Extension=\"jpeg\"") {
             add.push_str(r#"<Default Extension="jpeg" ContentType="image/jpeg"/>"#);
+        }
+        if media_out.iter().any(|(n, _)| n.ends_with(".gif")) && !ct.contains("Extension=\"gif\"") {
+            add.push_str(r#"<Default Extension="gif" ContentType="image/gif"/>"#);
+        }
+        if media_out.iter().any(|(n, _)| n.ends_with(".bmp")) && !ct.contains("Extension=\"bmp\"") {
+            add.push_str(r#"<Default Extension="bmp" ContentType="image/bmp"/>"#);
         }
         for (name, _) in &fresh_parts {
             if name.starts_with("xl/drawings/drawingC") && name.ends_with(".xml") {
