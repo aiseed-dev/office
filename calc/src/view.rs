@@ -1667,6 +1667,15 @@ impl Render for Calc {
                 ("clr", "消去", "", true, true),
                 ("", "", "", false, false),
                 ("sort", "並べ替え", "", true, true),
+                ("subtotal", "合計の集計のしかた", "", {
+                    // 合計行の =SUM / =SUBTOTAL の上でだけ生かす(本家のセル右の▼)
+                    self.sheet().get(self.cursor).and_then(|c| c.formula.as_deref()).is_some_and(
+                        |f| {
+                            let f = f.trim_start_matches('=').trim_start().to_ascii_uppercase();
+                            f.starts_with("SUM(") || f.starts_with("SUBTOTAL(")
+                        },
+                    )
+                }, true),
                 ("filter", "フィルター", "", true, true),
                 ("reapply", "再適用", "", self.filter_active(), false),
                 ("", "", "", false, false),

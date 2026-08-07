@@ -1136,6 +1136,30 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 合計行の集計のしかたを替えられる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            this.book.sheets[0].set(Pos::new(0, 0), sheet::Cell::input("10"));
+            this.book.sheets[0].set(Pos::new(1, 0), sheet::Cell::input("30"));
+            this.book.sheets[0].set(Pos::new(2, 0), sheet::Cell::input("=SUM(A1:A2)"));
+            recalc_book(&mut this.book, 0);
+            this.cursor = Pos::new(2, 0);
+            this.sync_input();
+            // 平均に替える
+            this.set_subtotal_kind("1");
+            let cell = this.book.sheets[0].get(Pos::new(2, 0)).unwrap();
+            assert_eq!(cell.formula.as_deref(), Some("SUBTOTAL(1,A1:A2)"), "式が替わらない");
+            assert_eq!(cell.value.display(), "20", "平均が出ない");
+            // なし → 式が消えて書式は残る
+            this.set_subtotal_kind("none");
+            let gone = this.book.sheets[0]
+                .get(Pos::new(2, 0))
+                .is_none_or(|c| c.formula.is_none() && c.value.is_empty());
+            assert!(gone, "式が消えない");
+        });
+    }
+
+    #[gpui::test]
     fn 重複の削除は列と見出しの有無を選べる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

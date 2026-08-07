@@ -771,6 +771,7 @@ impl Calc {
             }
             "sort-asc" | "sort-desc" => self.sort_active(id == "sort-asc"),
             "sort-fill-top" | "sort-font-top" => self.sort_color_top(id == "sort-fill-top"),
+            id if id.starts_with("subt-") => self.set_subtotal_kind(&id["subt-".len()..]),
             // 選んだ値で絞り込む = その列で「選んだ値以外」を隠す
             // (オートフィルタの1操作。▼で選び直せる)
             "filter-set" => {
@@ -989,6 +990,17 @@ impl Calc {
                 ("clear-fmt", "書式(中身は残す)", true),
                 ("clear-comment", "コメント", !self.sheet().comments.is_empty()),
                 ("clear-link", "ハイパーリンク", !self.sheet().links.is_empty()),
+            ],
+            // 本家の合計行のセル右の▼と同じ8択(SUBTOTAL の集計番号)
+            "subtotal" => vec![
+                ("subt-9", "合計", true),
+                ("subt-1", "平均", true),
+                ("subt-3", "個数", true),
+                ("subt-4", "最大", true),
+                ("subt-5", "最小", true),
+                ("subt-7", "標準偏差", true),
+                ("subt-10", "分散", true),
+                ("subt-none", "なし(式を消す)", true),
             ],
             "sort" => {
                 let f = self.sheet().get(self.cursor).map(|c| c.fmt.clone()).unwrap_or_default();
@@ -1339,6 +1351,50 @@ impl Calc {
 
     /// ピボットの聞き取りの一覧を(いまの控えから)組み直して開く。
     /// クリックのたびに呼ばれる — ✓ の付け外しはここで反映される
+    /// 合計行のセルの集計のしかたを替える(=SUM/=SUBTOTAL → =SUBTOTAL(n, 範囲))。
+    pub(crate) fn set_subtotal_kind(&mut self, kind: &str) {
+        let p = self.cursor;
+        let Some(f) = self.sheet().get(p).and_then(|c| c.formula.clone()) else { return };
+        // いまの式から範囲を取り出す(SUM(範囲) / SUBTOTAL(番号, 範囲))
+        let inner = f
+            .find('(')
+            .and_then(|i| f.rfind(')').map(|j| &f[i + 1..j]))
+            .unwrap_or("");
+        let range = inner.split_once(',').map(|(_, r)| r).unwrap_or(inner).trim().to_string();
+        if range.is_empty() {
+            self.status = ui::t!("式から範囲が読み取れません").into();
+            return;
+        }
+        self.commit();
+        self.checkpoint();
+        let mut cell = self.sheet().get(p).cloned().unwrap_or_default();
+        if kind == "none" {
+            cell.formula = None;
+            cell.value = sheet::Value::Empty;
+            self.book.sheets[self.active].set(p, cell);
+            self.status = ui::t!("集計の式を消しました(書式はそのまま)").into();
+        } else {
+            let v = sheet::Cell::input(&format!("=SUBTOTAL({kind},{range})"));
+            cell.formula = v.formula;
+            cell.value = v.value;
+            self.book.sheets[self.active].set(p, cell);
+            let name = match kind {
+                "1" => ui::t!("平均"),
+                "3" => ui::t!("個数"),
+                "4" => ui::t!("最大"),
+                "5" => ui::t!("最小"),
+                "7" => ui::t!("標準偏差"),
+                "10" => ui::t!("分散"),
+                _ => ui::t!("合計"),
+            };
+            self.status =
+                ui::tf!("{} を {} の{}に替えました(絞り込み中の行は数えません)", p.a1(), range, name).into();
+        }
+        recalc_book(&mut self.book, self.active);
+        self.dirty = true;
+        self.sync_input();
+    }
+
     /// 重複の削除の板 — 比べる列の入切と「先頭行は見出し」。
     pub(crate) fn dedup_pick(&mut self) {
         let Some((list, header)) = &self.dedup_pend else { return };

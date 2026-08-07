@@ -818,4 +818,12 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("このセルの文字に色が付いていません", "This cell has no font color"),
 ("セルの色が同じ行を上に集めました", "Rows with the same cell color moved to the top"),
 ("フォントの色が同じ行を上に集めました", "Rows with the same font color moved to the top"),
+("式から範囲が読み取れません", "Could not read a range from the formula"),
+("集計の式を消しました(書式はそのまま)", "Removed the total formula (format kept)"),
+("平均", "Average"),
+("個数", "Count"),
+("標準偏差", "StdDev"),
+("分散", "Variance"),
+("合計", "Sum"),
+("{} を {} の{}に替えました(絞り込み中の行は数えません)", "Changed {} over {} to: {} (filtered-out rows are skipped)"),
 ];
