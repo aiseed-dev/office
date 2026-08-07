@@ -1955,7 +1955,7 @@ impl Render for Calc {
                     .child(SharedString::from(label))
             };
             div().absolute().inset_0().flex().items_center().justify_center()
-                .child(div().w(px(420.0)).p_3().rounded_md().bg(rgb(0xF7F9FA))
+                .child(div().w(px(us * 420.0)).p_3().rounded_md().bg(rgb(0xF7F9FA))
                     .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .flex().flex_col().gap_2()
@@ -2201,7 +2201,7 @@ impl Render for Calc {
             // 板は表の中央に出す(発注者 2026-08-06「表示位置を見直す」)。
             // 外側の受け皿は聞き手を持たない = 後ろのセルの操作を遮らない
             div().absolute().inset_0().flex().items_center().justify_center()
-                .child(div().w(px(380.0))
+                .child(div().w(px(us * 380.0))
                 .p_3().rounded_md().bg(rgb(0xF7F9FA))
                 .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())

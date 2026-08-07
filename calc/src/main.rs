@@ -342,7 +342,7 @@ impl Calc {
             dv_dlg: None,
             ui_scale: ui::settings::get("ui_scale")
                 .and_then(|v| v.parse::<f32>().ok())
-                .map(|v| v.clamp(0.8, 2.0))
+                .map(|v| v.clamp(0.8, 1.5))
                 .unwrap_or(1.0),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),

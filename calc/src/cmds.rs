@@ -1137,7 +1137,8 @@ impl Calc {
             "ui-bigger" | "ui-smaller" => {
                 let step = if id == "ui-bigger" { 0.1 } else { -0.1 };
                 self.ui_scale = ((self.ui_scale + step) * 10.0).round() / 10.0;
-                self.ui_scale = self.ui_scale.clamp(0.8, 2.0);
+                // 上限は 150% — これ以上は板や欄の設えが崩れる(発注者 2026-08-07)
+                self.ui_scale = self.ui_scale.clamp(0.8, 1.5);
                 // 試験では書かない(実利用者の settings.toml を汚さない)
                 if !cfg!(test) {
                     ui::settings::set("ui_scale", &format!("{:.1}", self.ui_scale));

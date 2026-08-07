@@ -1166,13 +1166,15 @@ mod recalc_tests {
     fn 画面の文字の大きさは段階で動き両端で止まる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
+            // 実利用者の settings.toml の値に左右されない(試験は素の 100% から)
+            this.ui_scale = 1.0;
             let base = this.ui_scale;
             this.run_cmd("ui-bigger", cx);
             assert!(this.ui_scale > base, "大きくならない");
             for _ in 0..30 {
                 this.run_cmd("ui-bigger", cx);
             }
-            assert_eq!(this.ui_scale, 2.0, "上の端(200%)で止まらない");
+            assert_eq!(this.ui_scale, 1.5, "上の端(150%)で止まらない");
             for _ in 0..30 {
                 this.run_cmd("ui-smaller", cx);
             }
