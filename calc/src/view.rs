@@ -759,7 +759,7 @@ impl Render for Calc {
             .child(div().flex_1().px_2().py_1().bg(gpui::white())
                    .border_1().border_color(if in_edit { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
                    .rounded_sm()
-                   .text_size(px(us * 13.0)).font_family("Noto Sans JP")
+                   .text_size(px(us * 13.0)).font_family(self.font_name.clone())
                    .cursor_text()
                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
                        |this, e: &gpui::MouseDownEvent, _, cx| {
@@ -895,7 +895,7 @@ impl Render for Calc {
                         .w(px(wd)).h(px(rh))
                         .px_1p5().flex()
                         .text_size(px(size))
-                        .font_family("Noto Sans JP")
+                        .font_family(self.font_name.clone())
                         .whitespace_nowrap().overflow_hidden();
                     match f.valign {
                         sheet::model::VAlign::Top => d = d.items_start(),
@@ -908,6 +908,12 @@ impl Render for Calc {
                     }
                     if f.italic {
                         d = d.italic();
+                    }
+                    if f.underline {
+                        d = d.underline();
+                    }
+                    if f.strike {
+                        d = d.line_through();
                     }
                     d = if let Some(cv) = &f.color {
                         d.text_color(hex(cv))
@@ -1087,7 +1093,7 @@ impl Render for Calc {
                     .text_size(px(self.zoom * cell.and_then(|x| x.fmt.size_c)
                         .map(|c| c as f32 / 100.0 * 24.0 / 15.0 * 0.8)
                         .unwrap_or(12.5)))
-                    .font_family("Noto Sans JP")
+                    .font_family(self.font_name.clone())
                     .overflow_hidden().whitespace_nowrap()
                     // セルの上は Excel と同じ十字(手のひらだと「押す物」に見える)
                     .cursor(gpui::CursorStyle::Crosshair);
@@ -1167,6 +1173,12 @@ impl Render for Calc {
                 }
                 if f.italic {
                     d = d.italic();
+                }
+                if f.underline {
+                    d = d.underline();
+                }
+                if f.strike {
+                    d = d.line_through();
                 }
                 // 下付きは小さく下げて見せる(xlsx へは vertAlign で入る)
                 if f.subscript {
@@ -2472,7 +2484,7 @@ impl Render for Calc {
                     .text_color(rgb(0x1B6E3C)).child(SharedString::from(title)))
                 .child(div().mt_1p5().px_2().py_1().bg(rgb(0xFFFFFF))
                     .border_1().border_color(rgb(0xC6CDD3)).rounded_sm()
-                    .text_size(px(us * 13.0)).font_family("Noto Sans JP")
+                    .text_size(px(us * 13.0)).font_family(self.font_name.clone())
                     .child(SharedString::from(text)))
                 .child(div().mt_1().text_size(px(us * 10.5)).text_color(rgb(0x66707A))
                     .child(match *kind {
@@ -2520,7 +2532,7 @@ impl Render for Calc {
                     .w_full().px_2().py_1().bg(rgb(0xFFFFFF))
                     .border_1().rounded_sm()
                     .border_color(if focus == i { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
-                    .text_size(px(us * 12.5)).font_family("Noto Sans JP")
+                    .text_size(px(us * 12.5)).font_family(self.font_name.clone())
                     .whitespace_nowrap().overflow_hidden()
                     .child(SharedString::from(show(i)))
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
@@ -2793,7 +2805,7 @@ impl Render for Calc {
                 div().id(id).flex_1().px_2().py_1().bg(rgb(0xFFFFFF))
                     .border_1().rounded_sm()
                     .border_color(if focus == f { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
-                    .text_size(px(us * 12.5)).font_family("Noto Sans JP")
+                    .text_size(px(us * 12.5)).font_family(self.font_name.clone())
                     .whitespace_nowrap().overflow_hidden()
                     .child(SharedString::from(text))
                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
@@ -3768,7 +3780,7 @@ impl Render for Calc {
                                        .h(px((sp.height_px - 8.0).max(8.0)))
                                        .overflow_hidden()
                                        .text_size(px(us * 12.5))
-                                       .font_family("Noto Sans JP")
+                                       .font_family(self.font_name.clone())
                                        .text_color(rgb(0x1B1B1B))
                                        .whitespace_normal()
                                        .child(SharedString::from(t.clone()))

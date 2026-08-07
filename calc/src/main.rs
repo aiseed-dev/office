@@ -74,6 +74,9 @@ struct Calc {
     pub(crate) cond_pend: Option<usize>,
     /// テキスト取り込みの下ごしらえ(ウィザードの板が持つ)
     pub(crate) import_pend: Option<crate::py::ImportPend>,
+    /// 既定の書体(実在する家族に解決済み)。「Noto Sans JP」の名指しは
+    /// 入っていない機械で**素通りして太字も効かなくなる**(発注者報告)
+    pub(crate) font_name: gpui::SharedString,
     /// 罫線のペン(線種と色)。罫線の一覧から掛けるときに使う
     pen_style: sheet::model::BStyle,
     pen_color: Option<u32>,
@@ -328,6 +331,9 @@ impl Calc {
             dedup_pend: None,
             cond_pend: None,
             import_pend: None,
+            font_name: kumihan::font::for_document(None)
+                .map(|(fam, _)| gpui::SharedString::from(fam.name.clone()))
+                .unwrap_or_else(|_| "Noto Sans JP".into()),
             pen_style: sheet::model::BStyle::default(),
             pen_color: None,
             hf_pend: None,

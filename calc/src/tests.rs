@@ -909,6 +909,24 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn ホームの文字飾り4種が掛かる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.book.sheets[0].set(Pos::new(0, 0), sheet::Cell::input("字"));
+            this.cursor = Pos::new(0, 0);
+            this.sync_input();
+            for id in ["bold", "italic", "underline", "strikeout"] {
+                this.run_cmd(id, cx);
+            }
+            let f = &this.book.sheets[0].get(Pos::new(0, 0)).unwrap().fmt;
+            assert!(f.bold, "太字が掛からない");
+            assert!(f.italic, "斜体が掛からない");
+            assert!(f.underline, "下線が掛からない");
+            assert!(f.strike, "取り消し線が掛からない");
+        });
+    }
+
+    #[gpui::test]
     fn テキスト取り込みの板は置き場所と取り込みが効く(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
