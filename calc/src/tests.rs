@@ -1136,6 +1136,28 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn グループ化は7段で頭打ち_基底と合わせて8レベル(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            for r in 0..4 {
+                this.book.sheets[0].set(Pos::new(r, 0), sheet::Cell::input("x"));
+            }
+            // 同じ2〜3行目を9回まとめる → outlineLevel は 7 で止まる
+            // (ECMA-376 の上限。本家の「最大8レベル」= 基底+7段と同じ意味)
+            this.anchor = Some(Pos::new(1, 0));
+            this.cursor = Pos::new(2, 0);
+            this.sync_input();
+            for _ in 0..9 {
+                this.run_cmd("group", cx);
+            }
+            assert_eq!(this.sheet().row_outline.get(&1), Some(&7), "7段で止まらない");
+            // 1段ほどく → 6
+            this.run_cmd("ungroup", cx);
+            assert_eq!(this.sheet().row_outline.get(&1), Some(&6), "ほどけない");
+        });
+    }
+
+    #[gpui::test]
     fn 値だけをcsvに書き出せる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, _cx| {
