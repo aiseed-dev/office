@@ -172,7 +172,7 @@ actions!(
         Copy, Cut, Paste, PasteValues, Quit, ContextMenu, Cancel,
         WordLeft, WordRight, SelectWordLeft, SelectWordRight, PageUp, PageDown,
         Find, DocHome, DocEnd, EditCell, Recalc, RecalcSheet, NewLine,
-        UiBigger, UiSmaller,
+        UiBigger, UiSmaller, InsLink,
     ]
 );
 
@@ -229,6 +229,8 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-=", UiBigger, Some(context)),
         KeyBinding::new("ctrl-shift-=", UiBigger, Some(context)),
         KeyBinding::new("ctrl--", UiSmaller, Some(context)),
+        // ハイパーリンク(Excel と同じ)
+        KeyBinding::new("ctrl-k", InsLink, Some(context)),
         KeyBinding::new("escape", Cancel, Some(context)),
     ]
 }

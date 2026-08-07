@@ -3522,6 +3522,7 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_newline))
             .on_action(cx.listener(Calc::a_ui_bigger))
             .on_action(cx.listener(Calc::a_ui_smaller))
+            .on_action(cx.listener(Calc::a_ins_link))
             .child(bar)
             .children((self.tab != 0 && self.show_formula_bar).then(|| formula_bar))
             .child(div().flex_1().overflow_hidden().relative()

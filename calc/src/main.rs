@@ -2336,6 +2336,10 @@ impl Calc {
         self.status = ui::t!("再計算しました(このシートだけ)").into();
         cx.notify();
     }
+    /// Ctrl+K = ハイパーリンク(Excel と同じ)
+    fn a_ins_link(&mut self, _: &ui::InsLink, _: &mut Window, cx: &mut Context<Self>) {
+        self.run_cmd("inshyperlink", cx);
+    }
     /// Ctrl+= / Ctrl+- = 画面の文字の大きさ(リボンから状態行まで全部)
     fn a_ui_bigger(&mut self, _: &ui::UiBigger, _: &mut Window, cx: &mut Context<Self>) {
         self.run_cmd("ui-bigger", cx);
