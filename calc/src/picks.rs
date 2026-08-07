@@ -186,6 +186,36 @@ impl Calc {
             // ピボットの聞き取り(クリックで入切 → 決定で次へ)。
             // 行 → 列 → 値 → 集計の4段。Esc でいつでもやめられる
             // 罫線: 辺の選択(ペンの線種・色で掛ける)
+            // ヘッダー/フッター: 6つの区分から選んで板で打つ
+            "hf-pick" => {
+                if v == "全部消す" {
+                    self.checkpoint();
+                    self.sheet_mut().header = None;
+                    self.sheet_mut().footer = None;
+                    self.dirty = true;
+                    self.status = ui::t!("ヘッダー/フッターを消しました").into();
+                } else {
+                    let name = v.split(':').next().unwrap_or(v).trim();
+                    let (footer, slot) = match name {
+                        "ヘッダー左" => (false, 0u8),
+                        "ヘッダー中" => (false, 1),
+                        "ヘッダー右" => (false, 2),
+                        "フッター左" => (true, 0),
+                        "フッター中" => (true, 1),
+                        _ => (true, 2),
+                    };
+                    let raw = if footer {
+                        self.sheet().footer.clone()
+                    } else {
+                        self.sheet().header.clone()
+                    };
+                    let (l, c, r) = sheet::model::hf_split(raw.as_deref().unwrap_or(""));
+                    let cur = match slot { 0 => l, 1 => c, _ => r };
+                    self.hf_pend = Some((footer, slot));
+                    self.prompt = Some(("hf-edit", Editor::new(&cur)));
+                    return; // 板の確定まで
+                }
+            }
             "border-pick" => {
                 match v {
                     "→ 線のスタイル…" => {
@@ -1466,6 +1496,7 @@ impl Calc {
         self.sub_pend = None;
         self.sort_pend = None; // 並べ替えの「拡張しますか」も
         self.pivot_flt = None; // ピボットの絞り込みの聞き取りも
+        self.hf_pend = None; // ヘッダー/フッターの聞き取りも
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる
@@ -1517,6 +1548,32 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // ヘッダー/フッターの1区分(空 Enter = その区分を消す)
+            "hf-edit" => {
+                let Some((footer, slot)) = self.hf_pend.take() else { return };
+                self.checkpoint();
+                let raw = if footer {
+                    self.sheet().footer.clone()
+                } else {
+                    self.sheet().header.clone()
+                };
+                let (mut l, mut c, mut r) =
+                    sheet::model::hf_split(raw.as_deref().unwrap_or(""));
+                match slot { 0 => l = text.clone(), 1 => c = text.clone(), _ => r = text.clone() }
+                let joined = sheet::model::hf_join(&l, &c, &r);
+                let val = if joined.is_empty() { None } else { Some(joined) };
+                if footer {
+                    self.sheet_mut().footer = val;
+                } else {
+                    self.sheet_mut().header = val;
+                }
+                self.dirty = true;
+                self.status = if text.is_empty() {
+                    ui::t!("その区分を消しました").into()
+                } else {
+                    ui::t!("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)").into()
+                };
+            }
             // 文字の色・塗りの直指定(RRGGBB)。空 Enter = 自動/塗りなし
             "font-color-rgb" | "fill-color-rgb" => {
                 let is_font = kind == "font-color-rgb";

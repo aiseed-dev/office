@@ -71,6 +71,8 @@ struct Calc {
     /// 罫線のペン(線種と色)。罫線の一覧から掛けるときに使う
     pen_style: sheet::model::BStyle,
     pen_color: Option<u32>,
+    /// ヘッダー/フッターの聞き取り中: (フッターか, 0=左 1=中 2=右)
+    hf_pend: Option<(bool, u8)>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
@@ -308,6 +310,7 @@ impl Calc {
             pivot_flt: None,
             pen_style: sheet::model::BStyle::default(),
             pen_color: None,
+            hf_pend: None,
             solver: None,
             sa_cat: 0,
             slicer: None,

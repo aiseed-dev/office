@@ -615,12 +615,18 @@ fn parse_sheet(xml: &str, shared: &[String], rubies: &[Option<String>],
     let (mut pos, mut ty) = (None::<Pos>, String::new());
     let (mut in_v, mut in_f, mut in_is) = (false, false, false);
     let (mut v, mut f) = (String::new(), String::new());
+    // 印刷のヘッダー/フッター(Some(true)=oddHeader の中)
+    let mut hf_side: Option<bool> = None;
     let mut style: Option<usize> = None;
     let mut buf = Vec::new();
     loop {
         match r.read_event_into(&mut buf) {
             Ok(Event::Eof) | Err(_) => break,
             Ok(Event::Start(e)) => match local(e.name().as_ref()) {
+                // 印刷のヘッダー/フッター(文字は子の Text で拾う)
+                b"oddHeader" | b"oddFooter" => {
+                    hf_side = Some(local(e.name().as_ref()) == b"oddHeader");
+                }
                 b"row" => row_height(&e, &mut sh),
                 b"c" => {
                     pos = attr(&e, "r").and_then(|s| Pos::parse(&s));
@@ -698,11 +704,22 @@ fn parse_sheet(xml: &str, shared: &[String], rubies: &[Option<String>],
                 }
                 _ => {}
             },
+            Ok(Event::Text(t)) if hf_side.is_some() => {
+                let s = t.unescape().unwrap_or_default().to_string();
+                if !s.is_empty() {
+                    if hf_side == Some(true) {
+                        sh.header = Some(s);
+                    } else {
+                        sh.footer = Some(s);
+                    }
+                }
+            }
             Ok(Event::Text(t)) if in_v || in_f || in_is => {
                 let s = t.unescape().unwrap_or_default();
                 if in_f { f.push_str(&s) } else { v.push_str(&s) }
             }
             Ok(Event::End(e)) => match local(e.name().as_ref()) {
+                b"oddHeader" | b"oddFooter" => hf_side = None,
                 b"v" => in_v = false,
                 b"f" => in_f = false,
                 b"is" => in_is = false,
@@ -1716,6 +1733,18 @@ fn print_extra_xml(orig: &str, sh: &Sheet) -> String {
     }
     if let Some(su) = setup {
         out.push_str(&su);
+    }
+    // 印刷のヘッダー/フッター(schema では pageSetup の後・rowBreaks の前)
+    if sh.header.is_some() || sh.footer.is_some() {
+        let esc = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;");
+        out.push_str("<headerFooter>");
+        if let Some(h) = &sh.header {
+            out.push_str(&format!("<oddHeader>{}</oddHeader>", esc(h)));
+        }
+        if let Some(f) = &sh.footer {
+            out.push_str(&format!("<oddFooter>{}</oddFooter>", esc(f)));
+        }
+        out.push_str("</headerFooter>");
     }
     // 改ページ(モデルが正。原文の rowBreaks は読みでモデルへ入っている)
     if !sh.row_breaks.is_empty() {
@@ -3279,6 +3308,20 @@ mod validation_roundtrip_tests {
         // 2026-08-06 改訂: list 以外も落とさず、種類ごと持ち越す
         assert_eq!(back.sheets[0].validations.len(), 1, "規則が消えた");
         assert_eq!(back.sheets[0].validations[0].kind, "whole", "種類が持ち越せない");
+    }
+
+    #[test]
+    fn ヘッダーとフッターが往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].header = Some("&C月次売上&R&P / &N".into());
+        b.sheets[0].footer = Some("&L社外秘".into());
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        assert_eq!(back.sheets[0].header.as_deref(), Some("&C月次売上&R&P / &N"));
+        assert_eq!(back.sheets[0].footer.as_deref(), Some("&L社外秘"));
     }
 
     #[test]

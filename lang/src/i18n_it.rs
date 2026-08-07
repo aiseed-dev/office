@@ -750,4 +750,9 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("文字の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Colore carattere — 6 cifre esadecimali RRGGBB (es. FF0000; vuoto + Invio = automatico)"),
     ("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)", "Colore riempimento — 6 cifre esadecimali RRGGBB (es. FFF2CC; vuoto + Invio = nessun riempimento)"),
     ("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)", "Angolo del testo — numero da -90 a 90 (positivo verso l'alto; vuoto + Invio = 0)"),
+    ("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)", "Intestazione/piè — appare in stampa e PDF (&P = pagina, &N = totale)"),
+    ("ヘッダー/フッターを消しました", "Intestazione/piè rimossi"),
+    ("その区分を消しました", "Sezione rimossa"),
+    ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Aggiunto a intestazione/piè (visibile in stampa e PDF; &P = pagina, &N = totale)"),
+    ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Intestazione/piè — testo di questa sezione (&P = pagina, &N = totale; vuoto + Invio = rimuovere)"),
 ];

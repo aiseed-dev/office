@@ -750,4 +750,9 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("文字の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Warna huruf — 6 digit hex RRGGBB (mis. FF0000; kosong + Enter = otomatis)"),
     ("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)", "Warna isian — 6 digit hex RRGGBB (mis. FFF2CC; kosong + Enter = tanpa isian)"),
     ("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)", "Sudut teks — angka -90 s.d. 90 (positif ke atas; kosong + Enter = 0)"),
+    ("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)", "Kepala/kaki halaman — tampil saat cetak dan di PDF (&P = halaman, &N = total)"),
+    ("ヘッダー/フッターを消しました", "Kepala/kaki halaman dihapus"),
+    ("その区分を消しました", "Bagian itu dihapus"),
+    ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Dimasukkan ke kepala/kaki (terlihat saat cetak dan di PDF; &P = halaman, &N = total)"),
+    ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Kepala/kaki — teks bagian ini (&P = halaman, &N = total; kosong + Enter = hapus)"),
 ];

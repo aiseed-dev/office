@@ -750,4 +750,9 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("文字の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Schriftfarbe — 6 Hexziffern RRGGBB (z. B. FF0000; leer + Enter = automatisch)"),
     ("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)", "Füllfarbe — 6 Hexziffern RRGGBB (z. B. FFF2CC; leer + Enter = keine Füllung)"),
     ("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)", "Textwinkel — Zahl von -90 bis 90 (positiv aufwärts; leer + Enter = 0)"),
+    ("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)", "Kopf-/Fußzeile — erscheint in Druck und PDF (&P = Seite, &N = Seiten gesamt)"),
+    ("ヘッダー/フッターを消しました", "Kopf-/Fußzeile entfernt"),
+    ("その区分を消しました", "Dieser Abschnitt entfernt"),
+    ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "In die Kopf-/Fußzeile übernommen (in Druck und PDF sichtbar; &P = Seite, &N = gesamt)"),
+    ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Kopf-/Fußzeile — Text dieses Abschnitts (&P = Seite, &N = gesamt; leer + Enter = entfernen)"),
 ];

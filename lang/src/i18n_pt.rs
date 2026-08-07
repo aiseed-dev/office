@@ -750,4 +750,9 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile com cargo
     ("文字の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Cor da fonte — 6 dígitos hex RRGGBB (ex. FF0000; vazio + Enter = automática)"),
     ("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)", "Cor de preenchimento — 6 dígitos hex RRGGBB (ex. FFF2CC; vazio + Enter = sem preenchimento)"),
     ("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)", "Ângulo do texto — número de -90 a 90 (positivo para cima; vazio + Enter = 0)"),
+    ("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)", "Cabeçalho/rodapé — aparece na impressão e no PDF (&P = página, &N = total)"),
+    ("ヘッダー/フッターを消しました", "Cabeçalho/rodapé removido"),
+    ("その区分を消しました", "Essa seção removida"),
+    ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Adicionado ao cabeçalho/rodapé (visível na impressão e no PDF; &P = página, &N = total)"),
+    ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Cabeçalho/rodapé — texto desta seção (&P = página, &N = total; vazio + Enter = remover)"),
 ];

@@ -44,7 +44,7 @@ impl Calc {
         "colorschemas", "theme",
         "ai-where", "ai-summary", "ai-rewrite", "ai-polite", "ai-plain",
         "ai-translate", "ai-furigana", "ai-continue", "ai-table", "ai-ask",
-        "insert-function", "cell-styles", "sheet-view", "watch",
+        "insert-function", "cell-styles", "sheet-view", "watch", "editheader",
         "pen", "highlighter", "eraser", "draw-select",
     ];
 
@@ -1481,6 +1481,31 @@ impl Calc {
                         self.pick = Some((items, at));
                     }
                 }
+            }
+            // 印刷のヘッダー/フッター(&P=頁 &N=総頁。紙と PDF に出る)
+            "editheader" => {
+                self.commit();
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let (hl, hc, hr) =
+                    sheet::model::hf_split(self.sheet().header.as_deref().unwrap_or(""));
+                let (fl, fc, fr) =
+                    sheet::model::hf_split(self.sheet().footer.as_deref().unwrap_or(""));
+                let show = |name: &str, v: &str| {
+                    if v.is_empty() { name.to_string() } else { format!("{name}: {v}") }
+                };
+                let items: Vec<String> = vec![
+                    show("ヘッダー左", &hl), show("ヘッダー中", &hc), show("ヘッダー右", &hr),
+                    show("フッター左", &fl), show("フッター中", &fc), show("フッター右", &fr),
+                    "全部消す".into(),
+                ];
+                self.pick_note = Some(
+                    ui::t!("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)").into(),
+                );
+                self.pick_kind = "hf-pick";
+                self.pick = Some((items, at));
             }
             "pivot-select" => {
                 match self.pivot_at(self.cursor) {

@@ -750,4 +750,9 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("文字の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Couleur de police — 6 chiffres hex RRGGBB (ex. FF0000 ; vide + Entrée = automatique)"),
     ("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)", "Couleur de remplissage — 6 chiffres hex RRGGBB (ex. FFF2CC ; vide + Entrée = sans remplissage)"),
     ("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)", "Angle du texte — nombre de -90 à 90 (positif vers le haut ; vide + Entrée = 0)"),
+    ("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)", "En-tête/pied — visible à l'impression et en PDF (&P = page, &N = total)"),
+    ("ヘッダー/フッターを消しました", "En-tête/pied supprimé"),
+    ("その区分を消しました", "Section supprimée"),
+    ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Ajouté à l'en-tête/pied (visible à l'impression et en PDF ; &P = page, &N = total)"),
+    ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "En-tête/pied — texte de cette section (&P = page, &N = total ; vide + Entrée = supprimer)"),
 ];

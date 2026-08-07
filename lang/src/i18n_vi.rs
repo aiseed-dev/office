@@ -750,4 +750,9 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("文字の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Màu chữ — 6 chữ số hex RRGGBB (vd: FF0000; để trống + Enter = tự động)"),
     ("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)", "Màu tô — 6 chữ số hex RRGGBB (vd: FFF2CC; để trống + Enter = không tô)"),
     ("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)", "Góc chữ — số từ -90 đến 90 (dương hướng lên; để trống + Enter = 0)"),
+    ("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)", "Đầu/chân trang — hiện khi in và trong PDF (&P = trang, &N = tổng)"),
+    ("ヘッダー/フッターを消しました", "Đã xóa đầu/chân trang"),
+    ("その区分を消しました", "Đã xóa phần đó"),
+    ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Đã đưa vào đầu/chân trang (thấy khi in và trong PDF; &P = trang, &N = tổng)"),
+    ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Đầu/chân trang — chữ của phần này (&P = trang, &N = tổng; để trống + Enter = xóa)"),
 ];

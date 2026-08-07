@@ -1058,6 +1058,34 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn ヘッダーとフッターを板から入れて消す(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.run_cmd("editheader", cx);
+            assert_eq!(this.pick_kind, "hf-pick", "一覧が開かない");
+            this.apply_pick("ヘッダー中", cx);
+            assert!(this.prompt.is_some(), "板が開かない");
+            this.prompt = Some(("hf-edit", Editor::new("月次売上")));
+            this.finish_prompt(cx);
+            assert_eq!(this.sheet().header.as_deref(), Some("&C月次売上"));
+            // フッター右に頁(既存の値が一覧に見える)
+            this.run_cmd("editheader", cx);
+            {
+                let (items, _) = this.pick.as_ref().unwrap();
+                assert!(items.iter().any(|i| i == "ヘッダー中: 月次売上"), "{items:?}");
+            }
+            this.apply_pick("フッター右: ", cx); // 値の付いた札でも先頭で見分ける
+            this.prompt = Some(("hf-edit", Editor::new("&P / &N")));
+            this.finish_prompt(cx);
+            assert_eq!(this.sheet().footer.as_deref(), Some("&R&P / &N"));
+            // 全部消す
+            this.run_cmd("editheader", cx);
+            this.apply_pick("全部消す", cx);
+            assert!(this.sheet().header.is_none() && this.sheet().footer.is_none());
+        });
+    }
+
+    #[gpui::test]
     fn 色のその他と文字の角度の直指定(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

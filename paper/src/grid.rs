@@ -70,6 +70,8 @@ pub fn sheet_to_pdf<W: Write>(
         .add_external_font(std::io::Cursor::new(font_data))
         .map_err(|e| e.to_string())?;
     let mut l = doc.get_page(page).get_layer(layer);
+    // 各ページの控え(ヘッダー/フッターは総頁が決まってから描く)
+    let mut hf_pages = vec![(page, layer)];
 
     // 列の幅と左端(文書の指定に従う)。印刷範囲の左端が原点。
     // グループ化で畳んだ列は幅ゼロ(画面と同じく出さない)
@@ -335,6 +337,7 @@ pub fn sheet_to_pdf<W: Write>(
                 format!("帳票 {page_no}"),
             );
             l = doc.get_page(np).get_layer(nl);
+            hf_pages.push((np, nl));
             draw_col_heads(&l);
             // タイトル行を頭で繰り返す(いま描く行が自分自身なら繰り返さない)
             if !title_rows.contains(&r) {
@@ -424,6 +427,70 @@ pub fn sheet_to_pdf<W: Write>(
             if let Some(t) = &sp.text {
                 l1.use_text(t, 9.0 * scale, Mm(x + 1.5), Mm(y_top - 4.5), &font);
             }
+        }
+    }
+
+    // 印刷のヘッダー/フッター(&L/&C/&R の区分。&P=頁 &N=総頁。
+    // 他の &コード(&"書体" など)は落とす — 黙って化けさせない)
+    if grid.header.is_some() || grid.footer.is_some() {
+        let total = hf_pages.len();
+        let strip = |s: &str| -> String {
+            let mut out = String::new();
+            let mut it = s.chars().peekable();
+            while let Some(ch) = it.next() {
+                if ch == '&' {
+                    match it.peek() {
+                        Some('"') => {
+                            it.next();
+                            for c2 in it.by_ref() {
+                                if c2 == '"' { break }
+                            }
+                        }
+                        Some(c2) if c2.is_ascii_alphanumeric() => { it.next(); }
+                        _ => {}
+                    }
+                    continue;
+                }
+                out.push(ch);
+            }
+            out
+        };
+        let est = |s: &str| -> f32 {
+            // 文字幅の見積り(全角=1em・半角=0.5em)。9pt ≒ 3.175mm/em
+            s.chars()
+                .map(|c| if (c as u32) < 0x2E80 { 0.5 } else { 1.0 })
+                .sum::<f32>() * 3.175
+        };
+        for (i, (pi, li)) in hf_pages.iter().enumerate() {
+            let lyr = doc.get_page(*pi).get_layer(*li);
+            lyr.set_fill_color(Color::Rgb(Rgb::new(0.25, 0.28, 0.31, None)));
+            let subst = |raw: &str| -> String {
+                strip(&raw
+                    .replace("&P", &(i + 1).to_string())
+                    .replace("&N", &total.to_string()))
+            };
+            let mut put3 = |raw: &str, y: f32| {
+                let (lf, cn, rt) = sheet::model::hf_split(raw);
+                let (lf, cn, rt) = (subst(&lf), subst(&cn), subst(&rt));
+                if !lf.is_empty() {
+                    lyr.use_text(lf, 9.0, Mm(ml), Mm(y), &font);
+                }
+                if !cn.is_empty() {
+                    let x = (paper.width_mm - est(&cn)) / 2.0;
+                    lyr.use_text(cn, 9.0, Mm(x.max(ml)), Mm(y), &font);
+                }
+                if !rt.is_empty() {
+                    let x = paper.width_mm - mr - est(&rt);
+                    lyr.use_text(rt, 9.0, Mm(x.max(ml)), Mm(y), &font);
+                }
+            };
+            if let Some(h) = &grid.header {
+                put3(h, paper.height_mm - mt * 0.55);
+            }
+            if let Some(f) = &grid.footer {
+                put3(f, mb * 0.35);
+            }
+            lyr.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
         }
     }
     doc.save(&mut BufWriter::new(out)).map_err(|e| e.to_string())?;

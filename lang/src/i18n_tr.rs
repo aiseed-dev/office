@@ -750,4 +750,9 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("文字の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Yazı rengi — 6 onaltılık basamak RRGGBB (örn. FF0000; boş + Enter = otomatik)"),
     ("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)", "Dolgu rengi — 6 onaltılık basamak RRGGBB (örn. FFF2CC; boş + Enter = dolgusuz)"),
     ("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)", "Metin açısı — -90 ile 90 arası sayı (pozitif yukarı; boş + Enter = 0)"),
+    ("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)", "Üst/alt bilgi — baskıda ve PDF'te görünür (&P = sayfa, &N = toplam)"),
+    ("ヘッダー/フッターを消しました", "Üst/alt bilgi silindi"),
+    ("その区分を消しました", "O bölüm silindi"),
+    ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Üst/alt bilgiye eklendi (baskıda ve PDF'te görünür; &P = sayfa, &N = toplam)"),
+    ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Üst/alt bilgi — bu bölümün metni (&P = sayfa, &N = toplam; boş + Enter = sil)"),
 ];

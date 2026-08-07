@@ -91,6 +91,35 @@ impl Value {
     }
 }
 
+/// ヘッダー/フッターの文字列(&L 左 &C 中 &R 右)を3つに割る。
+/// 区分の印より前の文字は中(xlsx の慣わし)
+pub fn hf_split(s: &str) -> (String, String, String) {
+    let (mut l, mut c, mut r) = (String::new(), String::new(), String::new());
+    let mut cur = 1u8;
+    let mut it = s.chars().peekable();
+    while let Some(ch) = it.next() {
+        if ch == '&' {
+            match it.peek() {
+                Some('L') => { it.next(); cur = 0; continue }
+                Some('C') => { it.next(); cur = 1; continue }
+                Some('R') => { it.next(); cur = 2; continue }
+                _ => {}
+            }
+        }
+        match cur { 0 => l.push(ch), 1 => c.push(ch), _ => r.push(ch) }
+    }
+    (l, c, r)
+}
+
+/// 3つの区分をヘッダー/フッターの文字列に組む。全部空なら空文字
+pub fn hf_join(l: &str, c: &str, r: &str) -> String {
+    let mut out = String::new();
+    if !l.is_empty() { out.push_str("&L"); out.push_str(l); }
+    if !c.is_empty() { out.push_str("&C"); out.push_str(c); }
+    if !r.is_empty() { out.push_str("&R"); out.push_str(r); }
+    out
+}
+
 /// 罫線の線種(xlsx の style 属性と対)。並びは細→太のおおよそ。
 /// 知らない線種は Thin に落とすが、**書きでは読んだ線種を返す**(往復で保つ)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -431,6 +460,11 @@ pub struct Sheet {
     pub print_headings: bool,
     /// タイトル行(各ページの頭で繰り返す行の範囲。Print_Titles の行の部)
     pub print_title_rows: Option<(u32, u32)>,
+    /// 印刷のヘッダー(xlsx の oddHeader の生の文字列。&L/&C/&R が区分、
+    /// &P=頁 &N=総頁。紙(PDF)に出る — 画面の格子には出ない)
+    pub header: Option<String>,
+    /// 印刷のフッター(oddFooter)。作法は header と同じ
+    pub footer: Option<String>,
     /// 読んだ xlsx の図形(**表示だけ**。保存は原文の持ち越しが担う)
     pub shapes: Vec<SheetShape>,
     /// **このアプリで挿した**図形。保存でこちらが DrawingML として書き出す
@@ -2412,6 +2446,16 @@ mod validation_tests {
             "Sheet2!$A$1:$A$3".into(),
         );
         assert!(alien.options(&s).is_empty());
+    }
+
+    #[test]
+    fn ヘッダーの区分の割りと組み() {
+        let (l, c, r) = hf_split("&L左&C中&R右");
+        assert_eq!((l.as_str(), c.as_str(), r.as_str()), ("左", "中", "右"));
+        // 印なしは中(xlsx の慣わし)
+        assert_eq!(hf_split("題").1, "題");
+        assert_eq!(hf_join("", "月次", "&P / &N"), "&C月次&R&P / &N");
+        assert_eq!(hf_join("", "", ""), "");
     }
 
     #[test]

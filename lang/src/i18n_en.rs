@@ -753,4 +753,9 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("文字の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Font color — 6 hex digits RRGGBB (e.g. FF0000; empty Enter = automatic)"),
 ("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)", "Fill color — 6 hex digits RRGGBB (e.g. FFF2CC; empty Enter = no fill)"),
 ("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)", "Text angle — a number from -90 to 90 (positive is upward; empty Enter = 0)"),
+("ヘッダー/フッター — 印刷と PDF に出ます(&P=頁 &N=総頁)", "Header/footer — appears in print and PDF (&P = page, &N = total pages)"),
+("ヘッダー/フッターを消しました", "Header/footer removed"),
+("その区分を消しました", "That section removed"),
+("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Added to the header/footer (visible in print and PDF; &P = page, &N = total)"),
+("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Header/footer — text for this section (&P = page, &N = total; empty Enter = remove)"),
 ];
