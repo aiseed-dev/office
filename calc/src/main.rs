@@ -1402,6 +1402,31 @@ impl Calc {
         .into();
     }
 
+    /// カーソルのセルの色(塗り/文字色)を上に集める並べ替え
+    pub(crate) fn sort_color_top(&mut self, use_fill: bool) {
+        let fmt = self.sheet().get(self.cursor).map(|c| c.fmt.clone()).unwrap_or_default();
+        let Some(target) = (if use_fill { fmt.fill } else { fmt.color }) else {
+            self.status = if use_fill {
+                ui::t!("このセルに塗りつぶしの色がありません").into()
+            } else {
+                ui::t!("このセルの文字に色が付いていません").into()
+            };
+            return;
+        };
+        self.commit();
+        self.checkpoint();
+        let col = self.cursor.col;
+        self.book.sheets[self.active].sort_color_top(col, use_fill, &target, true);
+        self.dirty = true;
+        recalc_book(&mut self.book, self.active);
+        self.sync_input(); // 古い控えの書き戻しを防ぐ(sort_col と同じ)
+        self.status = if use_fill {
+            ui::t!("セルの色が同じ行を上に集めました").into()
+        } else {
+            ui::t!("フォントの色が同じ行を上に集めました").into()
+        };
+    }
+
     /// 指定の列で並べ替え(▼の板の昇順/降順もここに来る)
     fn sort_col(&mut self, c: u32, asc: bool) {
         self.commit();

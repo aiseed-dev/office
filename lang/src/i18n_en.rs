@@ -814,4 +814,8 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("削除する", "Delete"),
 ("比べる列を1つは選んでください", "Pick at least one column to compare"),
 ("重複の削除 — 比べる列(クリックで入切)", "Remove duplicates — columns to compare (click to toggle)"),
+("このセルに塗りつぶしの色がありません", "This cell has no fill color"),
+("このセルの文字に色が付いていません", "This cell has no font color"),
+("セルの色が同じ行を上に集めました", "Rows with the same cell color moved to the top"),
+("フォントの色が同じ行を上に集めました", "Rows with the same font color moved to the top"),
 ];

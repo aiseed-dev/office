@@ -770,6 +770,7 @@ impl Calc {
                 self.status = ui::t!("列を削除しました").into();
             }
             "sort-asc" | "sort-desc" => self.sort_active(id == "sort-asc"),
+            "sort-fill-top" | "sort-font-top" => self.sort_color_top(id == "sort-fill-top"),
             // 選んだ値で絞り込む = その列で「選んだ値以外」を隠す
             // (オートフィルタの1操作。▼で選び直せる)
             "filter-set" => {
@@ -989,10 +990,15 @@ impl Calc {
                 ("clear-comment", "コメント", !self.sheet().comments.is_empty()),
                 ("clear-link", "ハイパーリンク", !self.sheet().links.is_empty()),
             ],
-            "sort" => vec![
-                ("sort-asc", "昇順", true),
-                ("sort-desc", "降順", true),
-            ],
+            "sort" => {
+                let f = self.sheet().get(self.cursor).map(|c| c.fmt.clone()).unwrap_or_default();
+                vec![
+                    ("sort-asc", "昇順", true),
+                    ("sort-desc", "降順", true),
+                    ("sort-fill-top", "選択したセルの色を上に", f.fill.is_some()),
+                    ("sort-font-top", "選択したフォントの色を上に", f.color.is_some()),
+                ]
+            }
             "filter" => vec![
                 ("filter-set", "選択した値で絞り込む", true),
                 ("filter-clear", "絞り込みを解く", self.auto_filter.is_some()),

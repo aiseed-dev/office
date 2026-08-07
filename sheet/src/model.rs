@@ -1948,6 +1948,43 @@ impl Sheet {
         }
     }
 
+    /// 指定の列の**色**で並べ替える — 目当ての色の行を上に集める。
+    /// 本家の「選択したセルの色を上に/フォントの色を上に」。順序は安定
+    /// (色が合う行どうし・合わない行どうしの元の並びは変えない)。
+    pub fn sort_color_top(&mut self, col: u32, use_fill: bool, target: &str, header: bool) {
+        let (rows, cols) = self.extent();
+        if rows == 0 { return }
+        let (last_row, last_col) = (rows - 1, cols.saturating_sub(1));
+        let first = if header { 1 } else { 0 };
+        if last_row < first { return }
+        let mut rows: Vec<Vec<(u32, Cell)>> = Vec::new();
+        for r in first..=last_row {
+            rows.push(
+                (0..=last_col)
+                    .filter_map(|c| self.cells.get(&Pos { row: r, col: c }).map(|x| (c, x.clone())))
+                    .collect(),
+            );
+        }
+        rows.sort_by_key(|cells| {
+            let hit = cells.iter().find(|(c, _)| *c == col).map(|(_, x)| {
+                let got = if use_fill { x.fmt.fill.as_deref() } else { x.fmt.color.as_deref() };
+                got.is_some_and(|v| v.eq_ignore_ascii_case(target))
+            });
+            if hit.unwrap_or(false) { 0u8 } else { 1 }
+        });
+        for r in first..=last_row {
+            for c in 0..=last_col {
+                self.cells.remove(&Pos { row: r, col: c });
+            }
+        }
+        for (i, cells) in rows.into_iter().enumerate() {
+            let r = first + i as u32;
+            for (c, cell) in cells {
+                self.cells.insert(Pos { row: r, col: c }, cell);
+            }
+        }
+    }
+
     /// 選んだ範囲**だけ**を並べ替える(範囲の外の列は動かさない)。
     /// 本家の「現在選択されているセルのみの並べ替え」— 隣のデータと
     /// 行がずれるのは承知の上で使う形。見出しは仮定しない
@@ -2135,6 +2172,21 @@ mod sort_tests {
             formula: None, value: Value::Text("空欄".into()), fmt: Default::default() });
         s.sort_by_column(1, true, false);
         assert_eq!(col0(&s, 0), "甲", "空が先に来た");
+    }
+
+    #[test]
+    fn 色の付いた行を上に集められる() {
+        let mut s = table(&[("甲", 100.0), ("乙", 200.0), ("丙", 300.0)], true);
+        // 「丙」の行(row 3)のキー列に塗り
+        let p = Pos { row: 3, col: 0 };
+        let mut c = s.cells.get(&p).cloned().unwrap();
+        c.fmt.fill = Some("FFFF00".into());
+        s.cells.insert(p, c);
+        s.sort_color_top(0, true, "FFFF00", true);
+        assert_eq!(col0(&s, 0), "品名", "見出しが動いた");
+        assert_eq!(col0(&s, 1), "丙", "色の行が上に来ない");
+        assert_eq!(col0(&s, 2), "甲", "残りの順が崩れた");
+        assert_eq!(col0(&s, 3), "乙");
     }
 
     #[test]
