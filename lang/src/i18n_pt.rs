@@ -755,4 +755,13 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile com cargo
     ("その区分を消しました", "Essa seção removida"),
     ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Adicionado ao cabeçalho/rodapé (visível na impressão e no PDF; &P = página, &N = total)"),
     ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Cabeçalho/rodapé — texto desta seção (&P = página, &N = total; vazio + Enter = remover)"),
+    ("名前の管理 — 名前を選ぶと 移動/打ち直し/削除。式の中で使えます", "Gerenciador de nomes — escolha um: ir / reescrever / excluir. Usável em fórmulas"),
+    ("テーブルへ移動しました(名前の変更・削除は表のデザインで)", "Movido para a tabela (renomear/excluir no Design da tabela)"),
+    ("名前「{}」をどうしますか", "O que fazer com «{}»?"),
+    ("「{}」({})へ移動しました", "Movido para «{}» ({})"),
+    ("「{}」の中身({})が場所として読めません", "O conteúdo de «{}» ({}) não é um lugar legível"),
+    ("名前「{}」を消しました(式の中の {} は #NAME? になります)", "Nome «{}» excluído ({} nas fórmulas vira #NAME?)"),
+    ("場所が読めません(B12 か A1:C9 の形)", "Lugar ilegível (B12 ou A1:C9)"),
+    ("名前「{}」= {} にしました", "Nome «{}» = {}"),
+    ("名前の中身 — 場所(B12 か A1:C9 の形)", "Conteúdo do nome — lugar (B12 ou A1:C9)"),
 ];

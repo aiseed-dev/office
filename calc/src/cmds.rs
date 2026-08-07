@@ -2047,9 +2047,28 @@ impl Calc {
                 self.menu_sub = Some("cond");
             }
             // 名前の管理。右クリックの「名前の定義」と同じ板
+            // 名前マネージャー(本家の一覧+新規/編集/削除に相当)
             "defname" => {
                 self.commit();
-                self.prompt = Some(("name", Editor::new("")));
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let mut items: Vec<String> = self
+                    .sheet()
+                    .names
+                    .iter()
+                    .map(|(n, r)| format!("{n} = {r}"))
+                    .collect();
+                for t in &self.sheet().tables {
+                    items.push(format!("{} = {}:{}(テーブル)", t.name, t.a.a1(), t.b.a1()));
+                }
+                items.push("→ 新しい名前(いまの選択に付ける)…".into());
+                self.pick_note = Some(
+                    ui::t!("名前の管理 — 名前を選ぶと 移動/打ち直し/削除。式の中で使えます").into(),
+                );
+                self.pick_kind = "names-pick";
+                self.pick = Some((items, at));
             }
             // ウィンドウ枠の固定。本家はドロップダウンで「最上行」「最初の列」を
             // 個別に選べる — トグルだけの形をやめ、一覧から選ぶ

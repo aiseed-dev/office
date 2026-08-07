@@ -755,4 +755,13 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("その区分を消しました", "O bölüm silindi"),
     ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Üst/alt bilgiye eklendi (baskıda ve PDF'te görünür; &P = sayfa, &N = toplam)"),
     ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Üst/alt bilgi — bu bölümün metni (&P = sayfa, &N = toplam; boş + Enter = sil)"),
+    ("名前の管理 — 名前を選ぶと 移動/打ち直し/削除。式の中で使えます", "Ad yöneticisi — bir ad seçin: git / yeniden yaz / sil. Formüllerde kullanılabilir"),
+    ("テーブルへ移動しました(名前の変更・削除は表のデザインで)", "Tabloya gidildi (ad değiştirme/silme Tablo Tasarımında)"),
+    ("名前「{}」をどうしますか", "«{}» ile ne yapılsın?"),
+    ("「{}」({})へ移動しました", "«{}» ({}) konumuna gidildi"),
+    ("「{}」の中身({})が場所として読めません", "«{}» içeriği ({}) konum olarak okunamıyor"),
+    ("名前「{}」を消しました(式の中の {} は #NAME? になります)", "«{}» adı silindi (formüllerdeki {} #NAME? olur)"),
+    ("場所が読めません(B12 か A1:C9 の形)", "Konum okunamadı (B12 veya A1:C9)"),
+    ("名前「{}」= {} にしました", "«{}» adı = {}"),
+    ("名前の中身 — 場所(B12 か A1:C9 の形)", "Ad içeriği — konum (B12 veya A1:C9)"),
 ];

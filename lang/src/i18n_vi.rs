@@ -755,4 +755,13 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("その区分を消しました", "Đã xóa phần đó"),
     ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Đã đưa vào đầu/chân trang (thấy khi in và trong PDF; &P = trang, &N = tổng)"),
     ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Đầu/chân trang — chữ của phần này (&P = trang, &N = tổng; để trống + Enter = xóa)"),
+    ("名前の管理 — 名前を選ぶと 移動/打ち直し/削除。式の中で使えます", "Quản lý tên — chọn tên để đi tới / viết lại / xóa. Dùng được trong công thức"),
+    ("テーブルへ移動しました(名前の変更・削除は表のデザインで)", "Đã đến bảng (đổi tên/xóa trong Thiết kế bảng)"),
+    ("名前「{}」をどうしますか", "Làm gì với «{}»?"),
+    ("「{}」({})へ移動しました", "Đã đến «{}» ({})"),
+    ("「{}」の中身({})が場所として読めません", "Nội dung của «{}» ({}) không đọc được thành vị trí"),
+    ("名前「{}」を消しました(式の中の {} は #NAME? になります)", "Đã xóa tên «{}» ({} trong công thức sẽ thành #NAME?)"),
+    ("場所が読めません(B12 か A1:C9 の形)", "Không đọc được vị trí (B12 hoặc A1:C9)"),
+    ("名前「{}」= {} にしました", "Tên «{}» = {}"),
+    ("名前の中身 — 場所(B12 か A1:C9 の形)", "Nội dung tên — vị trí (B12 hoặc A1:C9)"),
 ];

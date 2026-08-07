@@ -186,6 +186,89 @@ impl Calc {
             // ピボットの聞き取り(クリックで入切 → 決定で次へ)。
             // 行 → 列 → 値 → 集計の4段。Esc でいつでもやめられる
             // 罫線: 辺の選択(ペンの線種・色で掛ける)
+            // 名前マネージャー: 名前を選ぶ → 移動/打ち直し/削除
+            "names-pick" => {
+                if v.starts_with("→ 新しい名前") {
+                    self.prompt = Some(("name", Editor::new("")));
+                    return; // 板の確定まで
+                }
+                let name = v.split(" = ").next().unwrap_or(v).to_string();
+                if v.ends_with("(テーブル)") {
+                    // テーブル名は表オブジェクトの持ち物 — ここでは消さない
+                    let hit = self
+                        .sheet()
+                        .tables
+                        .iter()
+                        .find(|t| t.name == name)
+                        .map(|t| (t.a, t.b));
+                    if let Some((a, b)) = hit {
+                        self.anchor = Some(a);
+                        self.cursor = b;
+                        self.sync_input();
+                        self.status = ui::t!("テーブルへ移動しました(名前の変更・削除は表のデザインで)").into();
+                    }
+                    return;
+                }
+                if self.sheet().names.iter().any(|(n, _)| *n == name) {
+                    let at = self
+                        .cell_origin_px(self.cursor)
+                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    self.name_pend = Some(name.clone());
+                    self.pick_note = Some(ui::tf!("名前「{}」をどうしますか", name).into());
+                    self.pick_kind = "name-act-pick";
+                    self.pick = Some((
+                        vec![
+                            "そこへ移動".into(),
+                            "中身を打ち直す…".into(),
+                            "名前を消す".into(),
+                        ],
+                        at,
+                    ));
+                    return;
+                }
+            }
+            "name-act-pick" => {
+                let Some(name) = self.name_pend.take() else { return };
+                let range = self
+                    .sheet()
+                    .names
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, r)| r.clone())
+                    .unwrap_or_default();
+                match v {
+                    "そこへ移動" => {
+                        let mut it = range.split(':');
+                        let a = it.next().and_then(Pos::parse);
+                        let b = it.next().and_then(Pos::parse);
+                        if let Some(a) = a {
+                            self.anchor = b.map(|_| a);
+                            self.cursor = b.unwrap_or(a);
+                            if b.is_some() {
+                                self.anchor = Some(a);
+                            }
+                            self.sync_input();
+                            self.status = ui::tf!("「{}」({})へ移動しました", name, range).into();
+                        } else {
+                            self.status = ui::tf!("「{}」の中身({})が場所として読めません", name, range).into();
+                        }
+                    }
+                    "中身を打ち直す…" => {
+                        self.name_pend = Some(name);
+                        self.prompt = Some(("name-range", Editor::new(&range)));
+                        return; // 板の確定まで
+                    }
+                    _ => {
+                        // 名前を消す
+                        self.checkpoint();
+                        self.book.sheets[self.active].names.retain(|(n, _)| *n != name);
+                        recalc_book(&mut self.book, self.active);
+                        self.dirty = true;
+                        self.status = ui::tf!("名前「{}」を消しました(式の中の {} は #NAME? になります)", name, name).into();
+                    }
+                }
+            }
             // ヘッダー/フッター: 6つの区分から選んで板で打つ
             "hf-pick" => {
                 if v == "全部消す" {
@@ -1497,6 +1580,7 @@ impl Calc {
         self.sort_pend = None; // 並べ替えの「拡張しますか」も
         self.pivot_flt = None; // ピボットの絞り込みの聞き取りも
         self.hf_pend = None; // ヘッダー/フッターの聞き取りも
+        self.name_pend = None; // 名前マネージャーの選択も
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる
@@ -1548,6 +1632,29 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // 名前の中身の打ち直し(A1 か A1:C9 の形)
+            "name-range" => {
+                let Some(name) = self.name_pend.take() else { return };
+                let t = text.trim().to_uppercase();
+                let ok = match t.split_once(':') {
+                    Some((a, b)) => Pos::parse(a).is_some() && Pos::parse(b).is_some(),
+                    None => Pos::parse(&t).is_some(),
+                };
+                if !ok {
+                    self.status = ui::t!("場所が読めません(B12 か A1:C9 の形)").into();
+                    self.name_pend = Some(name);
+                    self.prompt = Some(("name-range", Editor::new(&t)));
+                    return;
+                }
+                self.checkpoint();
+                let s = &mut self.book.sheets[self.active];
+                if let Some(e) = s.names.iter_mut().find(|(n, _)| *n == name) {
+                    e.1 = t.clone();
+                }
+                recalc_book(&mut self.book, self.active);
+                self.dirty = true;
+                self.status = ui::tf!("名前「{}」= {} にしました", name, t).into();
+            }
             // ヘッダー/フッターの1区分(空 Enter = その区分を消す)
             "hf-edit" => {
                 let Some((footer, slot)) = self.hf_pend.take() else { return };

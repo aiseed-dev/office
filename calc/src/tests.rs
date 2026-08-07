@@ -1058,6 +1058,48 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 名前マネージャーで移動と打ち直しと削除(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            // 名前を1つ付ける(B2:C3 = 単価表)
+            this.anchor = Some(Pos::parse("B2").unwrap());
+            this.cursor = Pos::parse("C3").unwrap();
+            this.sync_input();
+            this.prompt = Some(("name", Editor::new("単価表")));
+            this.finish_prompt(cx);
+            assert_eq!(this.sheet().names, vec![("単価表".into(), "B2:C3".into())]);
+            // 一覧に出る
+            this.anchor = None;
+            this.cursor = Pos::parse("A1").unwrap();
+            this.sync_input();
+            this.run_cmd("defname", cx);
+            assert_eq!(this.pick_kind, "names-pick");
+            {
+                let (items, _) = this.pick.as_ref().unwrap();
+                assert!(items.iter().any(|i| i == "単価表 = B2:C3"), "{items:?}");
+            }
+            // 移動
+            this.apply_pick("単価表 = B2:C3", cx);
+            assert_eq!(this.pick_kind, "name-act-pick");
+            this.apply_pick("そこへ移動", cx);
+            assert_eq!(this.cursor, Pos::parse("C3").unwrap());
+            assert_eq!(this.anchor, Some(Pos::parse("B2").unwrap()));
+            // 打ち直し
+            this.run_cmd("defname", cx);
+            this.apply_pick("単価表 = B2:C3", cx);
+            this.apply_pick("中身を打ち直す…", cx);
+            this.prompt = Some(("name-range", Editor::new("B2:D9")));
+            this.finish_prompt(cx);
+            assert_eq!(this.sheet().names[0].1, "B2:D9");
+            // 削除
+            this.run_cmd("defname", cx);
+            this.apply_pick("単価表 = B2:D9", cx);
+            this.apply_pick("名前を消す", cx);
+            assert!(this.sheet().names.is_empty(), "名前が消えない");
+        });
+    }
+
+    #[gpui::test]
     fn ヘッダーとフッターを板から入れて消す(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

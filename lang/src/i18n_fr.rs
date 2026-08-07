@@ -755,4 +755,13 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("その区分を消しました", "Section supprimée"),
     ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Ajouté à l'en-tête/pied (visible à l'impression et en PDF ; &P = page, &N = total)"),
     ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "En-tête/pied — texte de cette section (&P = page, &N = total ; vide + Entrée = supprimer)"),
+    ("名前の管理 — 名前を選ぶと 移動/打ち直し/削除。式の中で使えます", "Gestionnaire de noms — choisir un nom : y aller / réécrire / supprimer. Utilisable dans les formules"),
+    ("テーブルへ移動しました(名前の変更・削除は表のデザインで)", "Déplacé vers la table (renommer/supprimer via Conception de table)"),
+    ("名前「{}」をどうしますか", "Que faire de « {} » ?"),
+    ("「{}」({})へ移動しました", "Déplacé vers « {} » ({})"),
+    ("「{}」の中身({})が場所として読めません", "Le contenu de « {} » ({}) n'est pas un emplacement lisible"),
+    ("名前「{}」を消しました(式の中の {} は #NAME? になります)", "Nom « {} » supprimé ({} dans les formules devient #NAME?)"),
+    ("場所が読めません(B12 か A1:C9 の形)", "Emplacement illisible (B12 ou A1:C9)"),
+    ("名前「{}」= {} にしました", "Nom « {} » = {}"),
+    ("名前の中身 — 場所(B12 か A1:C9 の形)", "Contenu du nom — emplacement (B12 ou A1:C9)"),
 ];

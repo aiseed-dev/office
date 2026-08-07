@@ -758,4 +758,13 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("その区分を消しました", "That section removed"),
 ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Added to the header/footer (visible in print and PDF; &P = page, &N = total)"),
 ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Header/footer — text for this section (&P = page, &N = total; empty Enter = remove)"),
+("名前の管理 — 名前を選ぶと 移動/打ち直し/削除。式の中で使えます", "Name manager — pick a name to go there / rewrite / delete. Usable in formulas"),
+("テーブルへ移動しました(名前の変更・削除は表のデザインで)", "Moved to the table (rename/delete it from Table Design)"),
+("名前「{}」をどうしますか", "What to do with «{}»?"),
+("「{}」({})へ移動しました", "Moved to «{}» ({})"),
+("「{}」の中身({})が場所として読めません", "The content of «{}» ({}) is not a readable location"),
+("名前「{}」を消しました(式の中の {} は #NAME? になります)", "Name «{}» deleted ({} in formulas becomes #NAME?)"),
+("場所が読めません(B12 か A1:C9 の形)", "Can't read the location (B12 or A1:C9)"),
+("名前「{}」= {} にしました", "Name «{}» set to {}"),
+("名前の中身 — 場所(B12 か A1:C9 の形)", "Name content — location (B12 or A1:C9)"),
 ];

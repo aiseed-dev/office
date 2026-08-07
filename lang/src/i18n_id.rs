@@ -755,4 +755,13 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("その区分を消しました", "Bagian itu dihapus"),
     ("ヘッダー/フッターに入れました(印刷と PDF で見えます。&P=頁 &N=総頁)", "Dimasukkan ke kepala/kaki (terlihat saat cetak dan di PDF; &P = halaman, &N = total)"),
     ("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)", "Kepala/kaki — teks bagian ini (&P = halaman, &N = total; kosong + Enter = hapus)"),
+    ("名前の管理 — 名前を選ぶと 移動/打ち直し/削除。式の中で使えます", "Pengelola nama — pilih nama: pergi / tulis ulang / hapus. Bisa dipakai di rumus"),
+    ("テーブルへ移動しました(名前の変更・削除は表のデザインで)", "Pindah ke tabel (ganti nama/hapus lewat Desain Tabel)"),
+    ("名前「{}」をどうしますか", "Apa yang dilakukan dengan «{}»?"),
+    ("「{}」({})へ移動しました", "Pindah ke «{}» ({})"),
+    ("「{}」の中身({})が場所として読めません", "Isi «{}» ({}) tidak terbaca sebagai lokasi"),
+    ("名前「{}」を消しました(式の中の {} は #NAME? になります)", "Nama «{}» dihapus ({} di rumus menjadi #NAME?)"),
+    ("場所が読めません(B12 か A1:C9 の形)", "Lokasi tak terbaca (B12 atau A1:C9)"),
+    ("名前「{}」= {} にしました", "Nama «{}» = {}"),
+    ("名前の中身 — 場所(B12 か A1:C9 の形)", "Isi nama — lokasi (B12 atau A1:C9)"),
 ];

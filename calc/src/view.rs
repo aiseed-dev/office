@@ -2310,6 +2310,7 @@ impl Render for Calc {
                 "fill-color-rgb" => ui::t!("塗りの色 — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)").to_string(),
                 "text-angle" => ui::t!("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)").to_string(),
                 "hf-edit" => ui::t!("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)").to_string(),
+                "name-range" => ui::t!("名前の中身 — 場所(B12 か A1:C9 の形)").to_string(),
                 "subtotal-by" => ui::t!("小計 1/2 — 何の区切りで集めるか(見出しを1つ)").to_string(),
                 "subtotal-vals" => ui::t!("小計 2/2 — 合計する見出し").to_string(),
                 _ => String::new(),
