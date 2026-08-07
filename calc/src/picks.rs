@@ -399,6 +399,46 @@ impl Calc {
                 self.pivot_filter_pick();
                 return;
             }
+            "cond-manage-pick" => {
+                let Some(i) = v.split(')').next().and_then(|n| n.trim().parse::<usize>().ok())
+                else { return };
+                let i = i - 1;
+                if i >= self.book.sheets[self.active].cond.len() { return }
+                self.cond_pend = Some(i);
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                self.pick_note = Some(ui::tf!("規則 {} をどうしますか", i + 1).into());
+                self.pick_kind = "cond-act-pick";
+                self.pick = Some((
+                    vec!["そこへ移動".into(), "この規則を消す".into()],
+                    at,
+                ));
+                return;
+            }
+            "cond-act-pick" => {
+                let Some(i) = self.cond_pend.take() else { return };
+                let Some(rule) = self.book.sheets[self.active].cond.get(i).cloned() else {
+                    return;
+                };
+                if v == "そこへ移動" {
+                    let (a, b) = rule.range;
+                    self.anchor = Some(a);
+                    self.cursor = b;
+                    self.sync_input();
+                    self.status = ui::tf!("{}:{} へ移動しました", a.a1(), b.a1()).into();
+                } else {
+                    self.checkpoint();
+                    self.book.sheets[self.active].cond.remove(i);
+                    self.dirty = true;
+                    self.status = ui::tf!(
+                        "規則({}:{} の {})を消しました",
+                        rule.range.0.a1(), rule.range.1.a1(), cond_kind_name(&rule.kind)
+                    )
+                    .into();
+                }
+            }
             "dedup-pick" => {
                 let header_label = ui::t!("先頭行は見出し(消さない)").to_string();
                 if v == format!("→ {}", ui::t!("削除する")) {
@@ -870,6 +910,34 @@ impl Calc {
             // 板の要らない規則はその場で掛ける
             // 第2版: バー/スケール/アイコン(範囲の最小〜最大が物差し)
             "cond-bar" | "cond-scale" | "cond-icons" => self.cond_visual(id),
+            "cond-manage" => {
+                self.commit();
+                let rules = &self.book.sheets[self.active].cond;
+                if rules.is_empty() {
+                    self.status = ui::t!("このシートに条件付き書式はありません").into();
+                } else {
+                    let at = self
+                        .cell_origin_px(self.cursor)
+                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    let items: Vec<String> = rules
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| {
+                            format!(
+                                "{}) {}:{} — {}",
+                                i + 1,
+                                r.range.0.a1(),
+                                r.range.1.a1(),
+                                cond_kind_name(&r.kind)
+                            )
+                        })
+                        .collect();
+                    self.pick_note = Some(ui::t!("ルールの管理 — 規則をクリックで選ぶ").into());
+                    self.pick_kind = "cond-manage-pick";
+                    self.pick = Some((items, at));
+                }
+            }
             "cond-dup" | "cond-uniq" | "cond-avg-above" | "cond-avg-below" => {
                 self.commit();
                 self.checkpoint();
@@ -1065,6 +1133,7 @@ impl Calc {
                 ("cond-bar", "データバー(青の棒)", true),
                 ("cond-scale", "カラースケール(赤→黄→緑)", true),
                 ("cond-icons", "アイコン(3つの矢印)", true),
+                ("cond-manage", "ルールの管理…", true),
                 ("cond-clear", "この範囲の条件を消す", true),
             ],
             "numfmt" => vec![
@@ -1838,6 +1907,7 @@ impl Calc {
         }
         self.menu_head = None; // 見出しメニューの印も畳む
         self.dedup_pend = None;
+        self.cond_pend = None;
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる

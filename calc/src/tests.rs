@@ -1179,6 +1179,32 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn ルールの管理で規則を選んで消せる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            for (i, v) in ["10", "20"].iter().enumerate() {
+                this.book.sheets[0].set(Pos::new(i as u32, 0), sheet::Cell::input(v));
+            }
+            this.anchor = Some(Pos::new(0, 0));
+            this.cursor = Pos::new(1, 0);
+            this.sync_input();
+            this.cond_visual("cond-bar");
+            this.cond_visual("cond-scale");
+            assert_eq!(this.book.sheets[0].cond.len(), 2);
+            // 1本目を選んで消す
+            this.pick_kind = "cond-manage-pick";
+            this.apply_pick("1) A1:A2 — データバー", cx);
+            assert_eq!(this.pick_kind, "cond-act-pick", "2択が開かない");
+            this.apply_pick("この規則を消す", cx);
+            assert_eq!(this.book.sheets[0].cond.len(), 1, "消えていない");
+            assert!(matches!(
+                this.book.sheets[0].cond[0].kind,
+                sheet::model::CondKind::Scale(..)
+            ), "残る方が違う");
+        });
+    }
+
+    #[gpui::test]
     fn データバーとスケールとアイコンをメニューから掛けられる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

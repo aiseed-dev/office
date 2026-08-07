@@ -995,3 +995,23 @@ pub(crate) fn paper_mm(code: u32) -> Option<(f32, f32, &'static str)> {
         _ => return None,
     })
 }
+
+/// 条件付き書式の種類の、人に見せる名前(ルールの管理の一覧)。
+pub(crate) fn cond_kind_name(k: &sheet::model::CondKind) -> String {
+    use sheet::model::CondKind;
+    match k {
+        CondKind::Cmp(op, v) => format!("{} {}", ui::t!("値の比較"), format_args!("{op:?} {v}")),
+        CondKind::Between(lo, hi, false) => ui::tf!("{} と {} の間", lo, hi).to_string(),
+        CondKind::Between(lo, hi, true) => ui::tf!("{} と {} の外", lo, hi).to_string(),
+        CondKind::Text(t) => ui::tf!("「{}」を含む", t).to_string(),
+        CondKind::Dup(false) => ui::t!("重複する値").to_string(),
+        CondKind::Dup(true) => ui::t!("一意の値").to_string(),
+        CondKind::Top(n, false) => ui::tf!("上位 {}", n).to_string(),
+        CondKind::Top(n, true) => ui::tf!("下位 {}", n).to_string(),
+        CondKind::Avg(false) => ui::t!("平均より上").to_string(),
+        CondKind::Avg(true) => ui::t!("平均より下").to_string(),
+        CondKind::Bar(_) => ui::t!("データバー").to_string(),
+        CondKind::Scale(..) => ui::t!("カラースケール").to_string(),
+        CondKind::Icons(_) => ui::t!("アイコンセット").to_string(),
+    }
+}
