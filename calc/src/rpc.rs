@@ -1,8 +1,8 @@
-//! Python(jooffice)からの遠隔操作の口。
+//! Python(officework)からの遠隔操作の口。
 //!
 //! Jupyter の xlwings 流の使い勝手(Book / Range / .value / DataFrame)を
 //! **動いている calc** に向ける(発注者 2026-08-08 — Qiita の記事の車線)。
-//! ユニックスソケット `$XDG_RUNTIME_DIR/jo-office/calc.sock` に JSON を
+//! ユニックスソケット `$XDG_RUNTIME_DIR/officework/calc.sock` に JSON を
 //! 1行ずつ。**この機械の中だけ**(TCP は開かない — ネイティブファースト)。
 //!
 //! 糸の作法: ソケットの糸は状態に触らない。要求を溜め、GPUI の泵(ポンプ)が
@@ -20,12 +20,12 @@ pub(crate) struct RpcReq {
 
 pub(crate) type RpcQueue = Arc<Mutex<Vec<RpcReq>>>;
 
-/// ソケットの置き場所。`$XDG_RUNTIME_DIR/jo-office/calc.sock`。
+/// ソケットの置き場所。`$XDG_RUNTIME_DIR/officework/calc.sock`。
 /// AF_UNIX の径路は 108 字までなので、長すぎるときは
-/// `/tmp/jo-office-UID/calc.sock` へ落とす(Python 側も同じ規則)
+/// `/tmp/officework-UID/calc.sock` へ落とす(Python 側も同じ規則)
 pub(crate) fn sock_path() -> std::path::PathBuf {
     if let Some(base) = std::env::var_os("XDG_RUNTIME_DIR") {
-        let p = std::path::PathBuf::from(&base).join("jo-office").join("calc.sock");
+        let p = std::path::PathBuf::from(&base).join("officework").join("calc.sock");
         if p.as_os_str().len() <= 90 {
             return p;
         }
@@ -33,7 +33,7 @@ pub(crate) fn sock_path() -> std::path::PathBuf {
     let uid = std::fs::metadata("/proc/self")
         .map(|m| std::os::unix::fs::MetadataExt::uid(&m))
         .unwrap_or(0);
-    std::env::temp_dir().join(format!("jo-office-{uid}")).join("calc.sock")
+    std::env::temp_dir().join(format!("officework-{uid}")).join("calc.sock")
 }
 
 /// 口を開く。聞き取りの糸を立て、主の糸に泵を付ける。
@@ -48,7 +48,7 @@ pub(crate) fn start(view: gpui::Entity<Calc>, cx: &mut gpui::App) {
         Ok(l) => l,
         Err(e) => {
             // 口が開けなくてもアプリは動く(黙らず標準エラーにだけ言う)
-            eprintln!("jooffice の口が開けません: {e}");
+            eprintln!("officework の口が開けません: {e}");
             return;
         }
     };

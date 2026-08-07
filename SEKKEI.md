@@ -1648,16 +1648,27 @@ pub(crate)**(部屋どうしは兄弟で、私物は見えないため)。トレ
 掛けても閉じない)。
 
 
-## jooffice — 事務所一式の Python 連携(2026-08-08 発注者。旧名 jocalc)
+## 製品名 officework(2026-08-08 発注者確定)
+
+スイートの名前は **officework**(英語の普通の言葉=事務仕事。オフィスワークは
+日本語でも通じる)。リポジトリは aiseed-dev/officework。アプリ名は
+writer / calc のまま(「officework の writer」)。Python パッケージは
+**officework 1本**(旧 jooffice を改名。pysheet の pyo3 束縛の統合は今後)。
+ソケットは `$XDG_RUNTIME_DIR/officework/<app>.sock`。
+**joPivot.xml 等のファイル内部品の名前はそのまま**(過去に保存した
+xlsx の互換が名前の見栄えより重い。jo = officework の内部略号と読む)。
+PyPI officework / crates.io officework とも空きを確認済み(2026-08-08)。
+
+## officework — 事務の道具一式の Python 連携(2026-08-08 発注者。旧名 jocalc → jooffice)
 
 発注者の Qiita 記事(xlwings で Jupyter から Excel を操る)の車線を calc に。
 「xlwings から calc」は xlwings 本体が Excel(COM/AppleScript)に固定なので、
-**同じ使い勝手の互換パッケージ jooffice** を用意した —
-`from jooffice import calc as xw` の1行差し替えで、記事の Book / Range /
+**同じ使い勝手の互換パッケージ officework** を用意した —
+`from officework import calc as xw` の1行差し替えで、記事の Book / Range /
 .value / options(pd.DataFrame, expand='table') / save がそのまま動く。
 **calc 専用にしない**(発注者 2026-08-08)— 共有部(ソケット+JSON)は
-jooffice/__init__.py にあり、アプリごとの口は jo-office/<app>.sock。
-writer の口(文書・記入欄・差し込み)は今後 jooffice.writer として増やす。
+officework/__init__.py にあり、アプリごとの口は officework/<app>.sock。
+writer の口(文書・記入欄・差し込み)は今後 officework.writer として増やす。
 
 - **口**: calc が起動時にユニックスソケットを開く(calc/src/rpc.rs)。
   径路は `$XDG_RUNTIME_DIR/jo-office/calc.sock`、AF_UNIX の 108 字上限を
@@ -1670,7 +1681,7 @@ writer の口(文書・記入欄・差し込み)は今後 jooffice.writer とし
   保護中は断る。new/open は未保存の変更があれば断る(黙って捨てない)
 - **JSON は自前の浅い読み書き**(rpc.rs 内)— 依存を増やさない(crypt と
   同じ流儀)。語彙が浅いので足りる
-- **Python 側**: pysheet/jooffice/(純 Python、依存なし。pandas は使う時だけ)。
-  .venv には jooffice.pth で結線(コピーしない — 常に最新)
+- **Python 側**: pysheet/officework/(純 Python、依存なし。pandas は使う時だけ)。
+  .venv には officework.pth で結線(コピーしない — 常に最新)
 - **未対応と正直に言う物**: @xw.func / @xw.sub / Book.caller()(Excel の
   アドイン機構)— calc では AI タブのマクロ(plugins/*.py)が同じ役目

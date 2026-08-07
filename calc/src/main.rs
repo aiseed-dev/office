@@ -3041,7 +3041,7 @@ fn main() {
             },
             move |window, cx| {
                 let view = cx.new(|cx| Calc::new(arg2.clone(), cx));
-                // Python(jooffice)の口。この機械の中だけのユニックスソケット
+                // Python(officework)の口。この機械の中だけのユニックスソケット
                 crate::rpc::start(view.clone(), cx);
                 window.focus(&view.focus_handle(cx), cx);
                 // 動かす・伸ばすたびに控える — 閉じる経路が何本あっても漏れない。

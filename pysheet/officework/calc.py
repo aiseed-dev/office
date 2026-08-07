@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""jooffice.calc — 動いている calc を Jupyter/Python から操る(xlwings 流)。
+"""officework.calc — 動いている calc を Jupyter/Python から操る(xlwings 流)。
 
 使い方(xlwings の import を1行差し替えるだけ):
 
-    from jooffice import calc as xw
+    from officework import calc as xw
     import pandas as pd
 
     wb = xw.Book()                 # 新しいブック(未保存が無ければ)
@@ -18,9 +18,10 @@
 
 import os
 
-from . import JoofficeError, call as _shared_call
+from . import OfficeworkError, call as _shared_call
 
-JocalcError = JoofficeError  # 旧名との互換
+JoofficeError = OfficeworkError  # 旧名との互換
+JocalcError = OfficeworkError
 
 
 def _call(cmd, **kw):
@@ -112,7 +113,7 @@ class Range:
 
     def expand(self, mode="table"):
         if mode != "table":
-            raise JocalcError("expand は 'table' だけに対応しています")
+            raise OfficeworkError("expand は 'table' だけに対応しています")
         r = _call("expand", **self._kw())
         out = Range(
             "{}{}".format(_col_name(self._c0), self._r0 + 1), sheet=self._sheet
@@ -157,7 +158,7 @@ class Range:
         self.value = v
 
     def __repr__(self):
-        return "<jocalc.Range {}>".format(self._a1())
+        return "<officework.calc Range {}>".format(self._a1())
 
 
 def _to_grid(v):
@@ -214,7 +215,7 @@ class Sheet:
         return self.range(a1)
 
     def __repr__(self):
-        return "<jocalc.Sheet {}>".format(self.name)
+        return "<officework.calc Sheet {}>".format(self.name)
 
 
 class _Sheets:
@@ -225,7 +226,7 @@ class _Sheets:
             return Sheet(names[key])
         if key in names:
             return Sheet(key)
-        raise JocalcError("シート「{}」がありません".format(key))
+        raise OfficeworkError("シート「{}」がありません".format(key))
 
     @property
     def active(self):
@@ -283,7 +284,7 @@ class Book:
             _call("save")
 
     def __repr__(self):
-        return "<jocalc.Book {}>".format(self.name)
+        return "<officework.calc Book {}>".format(self.name)
 
 
 class _Books:

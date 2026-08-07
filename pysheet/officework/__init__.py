@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""jooffice — 事務所一式(calc / writer)を Python から操る橋の共有部。
+"""officework — 事務の道具一式(calc / writer)を Python から操る橋の共有部。
 
-アプリごとの口はユニックスソケット($XDG_RUNTIME_DIR/jo-office/<app>.sock、
-径路が AF_UNIX の 108 字上限を超えるときは /tmp/jo-office-UID/)。
+アプリごとの口はユニックスソケット($XDG_RUNTIME_DIR/officework/<app>.sock、
+径路が AF_UNIX の 108 字上限を超えるときは /tmp/officework-UID/)。
 JSON を1行ずつ。**この機械の中だけ**で、ネットには出ない。
 
-表計算は `from jooffice import calc as xw`(xlwings 流の Book / Range)。
+表計算は `from officework import calc as xw`(xlwings 流の Book / Range)。
 文書(writer)の口は今後ここに増える。
 """
 
@@ -14,22 +14,23 @@ import os
 import socket
 
 
-class JoofficeError(RuntimeError):
+class OfficeworkError(RuntimeError):
     pass
 
 
-# 旧名(jocalc 時代)との互換
-JocalcError = JoofficeError
+# 旧名との互換
+JoofficeError = OfficeworkError
+JocalcError = OfficeworkError
 
 
 def sock_path(app):
     base = os.environ.get("XDG_RUNTIME_DIR")
     if base:
-        p = os.path.join(base, "jo-office", app + ".sock")
+        p = os.path.join(base, "officework", app + ".sock")
         if len(p.encode()) <= 90:
             return p
     return os.path.join(
-        "/tmp", "jo-office-{}".format(os.getuid()), app + ".sock"
+        "/tmp", "officework-{}".format(os.getuid()), app + ".sock"
     )
 
 
@@ -41,7 +42,7 @@ def call(app, cmd, **kw):
         s.settimeout(10.0)
         s.connect(sock_path(app))
     except OSError as e:
-        raise JoofficeError(
+        raise OfficeworkError(
             "{} に繋がりません({}: {})。起動してから使ってください".format(
                 app, sock_path(app), e
             )
@@ -58,5 +59,5 @@ def call(app, cmd, **kw):
         s.close()
     resp = json.loads(buf.decode("utf-8"))
     if "err" in resp:
-        raise JoofficeError(resp["err"])
+        raise OfficeworkError(resp["err"])
     return resp
