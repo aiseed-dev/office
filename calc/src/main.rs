@@ -2596,25 +2596,56 @@ impl Calc {
         });
         // 呑まれるセルの中身は**消す**(書式は残す)。残すと見えない値が
         // SUM などの式に効いて、帳票が静かに嘘をつく(発注者 2026-08-08)。
+        // ただし左上が空白なら、読み順で最初の中身を左上へ**移してから**消す
+        // (「B1 に題があるのに A1 から選んで結合」で題が消えるのを防ぐ)。
+        // 文字列の全連結はしない — 数や式が混ざると合成でデータが化ける。
         // 消すのは Ctrl+Z(この checkpoint)で戻せる — だから確認も出さない。
-        // 横方向は行ごとが1つの結合なので、各行の左端だけ残す
-        for r in a.row..=b.row {
-            for cc in a.col..=b.col {
-                let p = Pos::new(r, cc);
-                let keep = if kind == "横方向" { cc == a.col } else { p == a };
-                if keep {
-                    continue;
+        // 横方向は行ごとが1つの結合なので、行ごとに同じ扱い
+        let bundles: Vec<(Pos, Pos)> = if kind == "横方向" {
+            (a.row..=b.row)
+                .map(|r| (Pos::new(r, a.col), Pos::new(r, b.col)))
+                .collect()
+        } else {
+            vec![(a, b)]
+        };
+        let mut promoted = false;
+        for (ba, bb) in bundles {
+            let empty = |sh: &sheet::Sheet, p: Pos| {
+                sh.get(p)
+                    .map(|c| c.formula.is_none() && c.value.is_empty())
+                    .unwrap_or(true)
+            };
+            if empty(sh, ba) {
+                let first = (ba.row..=bb.row)
+                    .flat_map(|r| (ba.col..=bb.col).map(move |cc| Pos::new(r, cc)))
+                    .find(|p| !empty(sh, *p));
+                if let Some(p) = first {
+                    let src = sh.get(p).cloned().unwrap_or_default();
+                    let mut dst = sh.get(ba).cloned().unwrap_or_default();
+                    dst.formula = src.formula;
+                    dst.value = src.value;
+                    sh.set(ba, dst);
+                    promoted = true;
                 }
-                if let Some(cell) = sh.get(p) {
-                    if cell.formula.is_some() || !cell.value.is_empty() {
-                        let mut cell = cell.clone();
-                        cell.formula = None;
-                        cell.value = sheet::Value::Empty;
-                        sh.set(p, cell);
+            }
+            for r in ba.row..=bb.row {
+                for cc in ba.col..=bb.col {
+                    let p = Pos::new(r, cc);
+                    if p == ba {
+                        continue;
+                    }
+                    if let Some(cell) = sh.get(p) {
+                        if cell.formula.is_some() || !cell.value.is_empty() {
+                            let mut cell = cell.clone();
+                            cell.formula = None;
+                            cell.value = sheet::Value::Empty;
+                            sh.set(p, cell);
+                        }
                     }
                 }
             }
         }
+
         match kind {
             // 横方向: 行ごとに1本ずつ(本家の Merge Across)
             "横方向" => {
@@ -2642,6 +2673,10 @@ impl Calc {
                 self.status =
                     ui::tf!("{}:{} を結合し、中央に揃えました", a.a1(), b.a1()).into();
             }
+        }
+        if promoted {
+            // 空だった左上へ最初の値を移したことを言う(黙って動かさない)
+            self.status = ui::tf!("{}(空だった左上へ最初の値を移しました)", self.status).into();
         }
         self.dirty = true;
     }

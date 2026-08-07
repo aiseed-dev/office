@@ -943,6 +943,34 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn 左上が空の結合は最初の値を左上へ移す(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            // A1 空、B1 に題 — A1:C1 を結合すると題が左上へ移る
+            this.book.sheets[0].set(Pos::new(0, 1), sheet::Cell::input("題"));
+            this.merge_do(Pos::new(0, 0), Pos::new(0, 2), "中央");
+            assert_eq!(
+                this.book.sheets[0].get(Pos::new(0, 0)).unwrap().value.display(),
+                "題", "最初の値が左上へ移らない"
+            );
+            assert!(
+                this.book.sheets[0]
+                    .get(Pos::new(0, 1))
+                    .is_none_or(|c| c.value.is_empty()),
+                "元の場所に残っている"
+            );
+            assert!(this.status.contains("移しました"), "移したことを言わない: {}", this.status);
+            // 横方向: 行ごとに同じ扱い(2行目は C2 の値が左端へ)
+            this.book.sheets[0].set(Pos::new(2, 2), sheet::Cell::input("乙"));
+            this.merge_do(Pos::new(2, 0), Pos::new(2, 2), "横方向");
+            assert_eq!(
+                this.book.sheets[0].get(Pos::new(2, 0)).unwrap().value.display(),
+                "乙", "横方向で行の左端へ移らない"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn 結合は1つのセルとして歩ける(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, _cx| {
