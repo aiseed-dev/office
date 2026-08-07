@@ -2566,9 +2566,9 @@ impl Calc {
             self.dirty = true;
             return;
         }
-        // 確認は出さない(発注者 2026-08-08「どうして警告を出すのか」)。
-        // うちは Excel と違って**値を消さない** — 呑まれたセルの値はモデルに
-        // 残り、解除すればそのまま戻る。消さないのだから止める理由が無い
+        // 確認は出さない(発注者 2026-08-08)。左上以外の値は消す —
+        // 残すと見えない値が式に効く。消しても Ctrl+Z 一発で戻るので、
+        // 警告で手を止めさせる理由が無い
         let filled = (a.row..=b.row)
             .flat_map(|r| (a.col..=b.col).map(move |c| Pos::new(r, c)))
             .filter(|p| {
@@ -2577,9 +2577,9 @@ impl Calc {
             .count();
         self.merge_do(a, b, kind);
         if filled >= 2 {
-            // 見えなくなる値があることだけは言う(黙らない。止めもしない)
+            // 消したことを言う(黙らない。Ctrl+Z 一発で戻るから止めない)
             self.status = ui::tf!(
-                "{}(隠れた値は消していません — 結合の解除でそのまま戻ります)",
+                "{}(左上以外の値は消しました — Ctrl+Z で戻せます)",
                 self.status
             )
             .into();
@@ -2594,6 +2594,27 @@ impl Calc {
             // 重なる結合は先に外す(入れ子の結合は帳票を壊す)
             y.row < a.row || x.row > b.row || y.col < a.col || x.col > b.col
         });
+        // 呑まれるセルの中身は**消す**(書式は残す)。残すと見えない値が
+        // SUM などの式に効いて、帳票が静かに嘘をつく(発注者 2026-08-08)。
+        // 消すのは Ctrl+Z(この checkpoint)で戻せる — だから確認も出さない。
+        // 横方向は行ごとが1つの結合なので、各行の左端だけ残す
+        for r in a.row..=b.row {
+            for cc in a.col..=b.col {
+                let p = Pos::new(r, cc);
+                let keep = if kind == "横方向" { cc == a.col } else { p == a };
+                if keep {
+                    continue;
+                }
+                if let Some(cell) = sh.get(p) {
+                    if cell.formula.is_some() || !cell.value.is_empty() {
+                        let mut cell = cell.clone();
+                        cell.formula = None;
+                        cell.value = sheet::Value::Empty;
+                        sh.set(p, cell);
+                    }
+                }
+            }
+        }
         match kind {
             // 横方向: 行ごとに1本ずつ(本家の Merge Across)
             "横方向" => {

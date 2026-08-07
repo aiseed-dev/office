@@ -1995,7 +1995,7 @@ mod recalc_tests {
     }
 
     #[gpui::test]
-    fn 結合は聞かずに掛かり値も消えない(cx: &mut gpui::TestAppContext) {
+    fn 結合は聞かずに掛かり左上以外の値は消える(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
             for (p, v) in [("A1", "甲"), ("B2", "乙")] {
@@ -2004,20 +2004,42 @@ mod recalc_tests {
                 this.input.insert(v);
                 assert!(this.commit());
             }
-            // 値が2つあっても**聞かずに**結合する(発注者 2026-08-08 —
-            // うちは値を消さないのだから止める理由が無い)。状態行で言うだけ
+            // 聞かずに結合し、左上以外の値は**消す**(発注者 2026-08-08 —
+            // 残すと見えない値が SUM などの式に効く)。Ctrl+Z で戻せる
             this.anchor = Some(Pos::parse("A1").unwrap());
             this.cursor = Pos::parse("B2").unwrap();
             this.run_cmd("merge", cx);
             assert_eq!(this.pick_kind, "merge-pick", "4択が出ない");
             this.apply_pick("結合して中央に配置", cx);
             assert_eq!(this.sheet().merges.len(), 1, "確認を挟まず結合されるべき");
-            assert!(this.status.contains("隠れた値は消していません"), "案内が無い: {}", this.status);
+            assert!(this.status.contains("左上以外の値は消しました"), "案内が無い: {}", this.status);
+            assert!(
+                this.sheet()
+                    .get(Pos::parse("B2").unwrap())
+                    .is_none_or(|c| c.value.is_empty()),
+                "呑まれた値が残っている(式に効いてしまう)"
+            );
+            // SUM が隠れた値を数えない
+            this.cursor = Pos::parse("D5").unwrap();
+            this.sync_input();
+            this.input = Editor::new("=SUM(A1:B2)");
+            assert!(this.commit());
+            assert_eq!(
+                this.sheet().get(Pos::parse("D5").unwrap()).unwrap().value.display(),
+                "0", "隠れた値が SUM に効いている"
+            );
+            // Ctrl+Z で結合前に戻る(乙も戻る)
+            this.undo_sheet(); // SUM の確定ぶん
+            this.undo_sheet(); // 結合ぶん
             assert_eq!(
                 this.sheet().get(Pos::parse("B2").unwrap()).unwrap().editable(),
-                "乙",
-                "結合で値が消えた"
+                "乙", "Ctrl+Z で値が戻らない"
             );
+            // やり直して続きの検査へ
+            this.anchor = Some(Pos::parse("A1").unwrap());
+            this.cursor = Pos::parse("B2").unwrap();
+            this.run_cmd("merge", cx);
+            this.apply_pick("結合して中央に配置", cx);
             // 空の範囲も同じくそのまま
             this.anchor = Some(Pos::parse("D1").unwrap());
             this.cursor = Pos::parse("E2").unwrap();
