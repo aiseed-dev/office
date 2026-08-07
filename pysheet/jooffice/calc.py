@@ -1,74 +1,30 @@
 # -*- coding: utf-8 -*-
-"""jocalc — 動いている calc を Jupyter/Python から操る(xlwings 流の使い勝手)。
+"""jooffice.calc — 動いている calc を Jupyter/Python から操る(xlwings 流)。
 
 使い方(xlwings の import を1行差し替えるだけ):
 
-    import jocalc as xw
+    from jooffice import calc as xw
     import pandas as pd
 
-    wb = xw.Book()                 # いまの calc に付く(未保存が無ければ新規)
+    wb = xw.Book()                 # 新しいブック(未保存が無ければ)
     xw.Range('A1').value = df      # DataFrame をセルへ(見出し・index つき)
     df2 = xw.Range('A1').options(pd.DataFrame, expand='table').value
     wb.sheets['Sheet1'].range('B2').value = [[1, 2], [3, 4]]
     wb.save('集計.xlsx')
 
-土台: calc が開くユニックスソケット($XDG_RUNTIME_DIR/jo-office/calc.sock)に
-JSON を1行ずつ。**この機械の中だけ**で、ネットには出ない。
-
 未対応(正直に): @xw.func / @xw.sub / Book.caller() — Excel のアドイン機構の
 話なので、calc では「AI タブ → マクロを書く」(plugins/*.py)が同じ役目。
 """
 
-import json
 import os
-import socket
 
+from . import JoofficeError, call as _shared_call
 
-class JocalcError(RuntimeError):
-    pass
-
-
-def _sock_path():
-    # calc 側と同じ規則: XDG_RUNTIME_DIR が短ければそこ、
-    # 長すぎる(AF_UNIX の 108 字上限)か無ければ /tmp/jo-office-UID
-    base = os.environ.get("XDG_RUNTIME_DIR")
-    if base:
-        p = os.path.join(base, "jo-office", "calc.sock")
-        if len(p.encode()) <= 90:
-            return p
-    return os.path.join(
-        "/tmp", "jo-office-{}".format(os.getuid()), "calc.sock"
-    )
+JocalcError = JoofficeError  # 旧名との互換
 
 
 def _call(cmd, **kw):
-    req = {"cmd": cmd}
-    req.update(kw)
-    try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(10.0)
-        s.connect(_sock_path())
-    except OSError as e:
-        raise JocalcError(
-            "calc に繋がりません({}: {})。calc を起動してから使ってください".format(
-                _sock_path(), e
-            )
-        ) from None
-    try:
-        s.sendall((json.dumps(req, ensure_ascii=False) + "\n").encode("utf-8"))
-        buf = b""
-        while not buf.endswith(b"\n"):
-            chunk = s.recv(65536)
-            if not chunk:
-                break
-            buf += chunk
-    finally:
-        s.close()
-    resp = json.loads(buf.decode("utf-8"))
-    if "err" in resp:
-        raise JocalcError(resp["err"])
-    return resp
-
+    return _shared_call("calc", cmd, **kw)
 
 def _col_name(n):
     # 0 → A, 25 → Z, 26 → AA

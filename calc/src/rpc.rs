@@ -1,4 +1,4 @@
-//! Python(jocalc)からの遠隔操作の口。
+//! Python(jooffice)からの遠隔操作の口。
 //!
 //! Jupyter の xlwings 流の使い勝手(Book / Range / .value / DataFrame)を
 //! **動いている calc** に向ける(発注者 2026-08-08 — Qiita の記事の車線)。
@@ -48,7 +48,7 @@ pub(crate) fn start(view: gpui::Entity<Calc>, cx: &mut gpui::App) {
         Ok(l) => l,
         Err(e) => {
             // 口が開けなくてもアプリは動く(黙らず標準エラーにだけ言う)
-            eprintln!("jocalc の口が開けません: {e}");
+            eprintln!("jooffice の口が開けません: {e}");
             return;
         }
     };
