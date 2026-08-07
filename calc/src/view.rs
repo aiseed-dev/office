@@ -433,6 +433,32 @@ impl Render for Calc {
         };
         // 1つの釦を組み立てる(名札つきの大釦 / 絵だけ / 文字の小釦)。
         // ホームの対の並びと、他タブの一段の並びの両方から使う
+        // 絵の無い釦の**短い札**(ja)。長い正式名はツールチップと状態行へ。
+        // 場所を食う文字の釦を細くする(発注者 2026-08-07)
+        const SHORT: &[(&str, &str)] = &[
+            ("fillparag", "塗り"), ("text-orient", "向き"),
+            ("clear-filter", "解除"), ("format", "書式"),
+            ("digit-dec", "桁−"), ("digit-inc", "桁+"),
+            ("cell-format", "スタイル"), ("table-tpl", "表↧"),
+            ("inscheckbox", "チェック"), ("insrecommend", "おすすめ"),
+            ("inshyperlink", "リンク"), ("rtl-sheet", "右から"),
+            ("print-gridlines", "枠線"), ("print-headings", "見出し"),
+            ("defname", "名前"), ("trace-prec", "参照元"),
+            ("trace-dep", "参照先"), ("remove-arrows", "矢印消"),
+            ("data-from-text", "テキスト"), ("data-external-links", "外部リンク"),
+            ("ungroup", "解除"), ("show-details", "詳細+"),
+            ("hide-details", "詳細−"), ("pivot-fields", "フィールド"),
+            ("pivot-refresh-all", "全更新"), ("pivot-select", "選択"),
+            ("pivot-layout", "レイアウト"), ("td-band-row", "縞(行)"),
+            ("td-first", "先頭列"), ("td-last", "末尾列"),
+            ("td-band-col", "縞(列)"), ("td-filter", "▼釦"),
+            ("rem-duplicates", "重複"), ("td-torange", "範囲へ"),
+            ("td-resize", "サイズ"), ("sheet-view", "表示"),
+            ("ui-bigger", "字を大"), ("ui-smaller", "字を小"),
+            ("theme", "テーマ"), ("freeze", "固定"),
+            ("show-gridlines", "枠線"), ("show-headings", "見出し"),
+            ("show-zeros", "0表示"),
+        ];
         // 一覧・板・小窓が開く釦(本家は ▼ を添える)。id で見分ける
         const DROP_IDS: &[&str] = &[
             "fontname", "fontsize", "changecase", "format", "cell-format",
@@ -552,9 +578,20 @@ impl Render for Calc {
                     div().text_size(px(us * 8.0)).text_color(th_gray).child("▾")
                 }))
                 .children((!has_icon).then(|| {
+                    // 短い札があればそちら(正式名はツールチップと状態行)。
+                    // 短縮は ja だけ — 他の言語は表の語のまま
+                    let text = if ui::settings::language() == "ja" {
+                        SHORT
+                            .iter()
+                            .find(|(k, _)| *k == cmd.id)
+                            .map(|(_, v)| *v)
+                            .unwrap_or(label)
+                    } else {
+                        label
+                    };
                     div().text_size(px(us * 10.5)).text_color(fg)
                         .flex().flex_row().items_center().gap_0p5()
-                        .child(label)
+                        .child(text)
                         .children(drops.then(|| div()
                             .text_size(px(us * 8.0)).text_color(th_gray)
                             .child("▾")))
