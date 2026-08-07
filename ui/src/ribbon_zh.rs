@@ -175,6 +175,7 @@ pub const CALC: &[Tab] = &[
         c("copy", "复制", "copy"),
         c("cut", "剪切", "cut"),
         c("paste", "粘贴", "paste"),
+        c("copystyle", "格式刷", "copystyle"),
         c("fontname", "字体 ", "fontname"),
         c("fontsize", "字体大小", "fontsize"),
         c("incfont", "增加字体大小", "incfont"),

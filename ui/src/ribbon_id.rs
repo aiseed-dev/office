@@ -175,6 +175,7 @@ pub const CALC: &[Tab] = &[
         c("copy", "Salin", "copy"),
         c("cut", "Potong", "cut"),
         c("paste", "Tempel", "paste"),
+        c("copystyle", "Salin format", "copystyle"),
         c("fontname", "Huruf", "fontname"),
         c("fontsize", "Ukuran Huruf", "fontsize"),
         c("incfont", "Perbesar Ukuran Huruf", "incfont"),

@@ -1658,6 +1658,9 @@ impl Calc {
         self.hf_pend = None; // ヘッダー/フッターの聞き取りも
         self.name_pend = None; // 名前マネージャーの選択も
         self.merge_kind_pend = None; // 結合の確認待ちも
+        if self.brush.take().is_some() {
+            self.status = ui::t!("書式のコピーをやめました").into();
+        }
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる

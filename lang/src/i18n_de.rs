@@ -790,4 +790,7 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} zeilenweise verbunden ({} Zeilen)"),
     ("{}:{} を結合しました(揃えはそのまま)", "{}:{} verbunden (Ausrichtung unberührt)"),
     ("{}:{} を結合し、中央に揃えました", "{}:{} verbunden und zentriert"),
+    ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Format aufgenommen — es wird auf die nächste angeklickte Zelle übertragen (Esc bricht ab)"),
+    ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Format auf {} übertragen (Ctrl+Z macht es rückgängig)"),
+    ("書式のコピーをやめました", "Formatübertragung abgebrochen"),
 ];

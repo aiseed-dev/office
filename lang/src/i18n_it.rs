@@ -790,4 +790,7 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} unito per righe ({} righe)"),
     ("{}:{} を結合しました(揃えはそのまま)", "{}:{} unito (allineamento intatto)"),
     ("{}:{} を結合し、中央に揃えました", "{}:{} unito e centrato"),
+    ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Formato prelevato — verrà applicato alla prossima cella cliccata (Esc per annullare)"),
+    ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Formato applicato a {} (Ctrl+Z annulla)"),
+    ("書式のコピーをやめました", "Copia formato annullata"),
 ];

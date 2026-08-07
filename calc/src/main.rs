@@ -77,6 +77,8 @@ struct Calc {
     name_pend: Option<String>,
     /// 結合の確認待ちの種類(中央/横方向/結合だけ)
     merge_kind_pend: Option<String>,
+    /// 書式のコピー(刷毛)で持っている書式。次のクリックで塗って手放す
+    brush: Option<CellFormat>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
@@ -320,6 +322,7 @@ impl Calc {
             hf_pend: None,
             name_pend: None,
             merge_kind_pend: None,
+            brush: None,
             solver: None,
             sa_cat: 0,
             slicer: None,
@@ -953,6 +956,28 @@ impl Calc {
         }
         if !self.commit() {
             // 入力規則で戻された。移動すると打った文字が黙って消えるので留まる
+            return;
+        }
+        // 刷毛(書式のコピー)を持っていたら、押した先に塗って手放す
+        if let Some(f) = self.brush.take() {
+            self.checkpoint();
+            let (a, b) = if shift && self.anchor.is_some() {
+                self.sel_rect()
+            } else {
+                (p, p)
+            };
+            for r in a.row..=b.row {
+                for cch in a.col..=b.col {
+                    let q = Pos::new(r, cch);
+                    let mut cell = self.sheet().get(q).cloned().unwrap_or_default();
+                    cell.fmt = f.clone();
+                    self.sheet_mut().set(q, cell);
+                }
+            }
+            self.dirty = true;
+            self.cursor = p;
+            self.sync_input();
+            self.status = ui::tf!("{} に書式を塗りました(Ctrl+Z で戻せます)", p.a1()).into();
             return;
         }
         if shift {

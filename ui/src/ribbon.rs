@@ -221,6 +221,7 @@ pub const CALC: &[Tab] = &[
         c("copy", "コピー", "copy"),
         c("cut", "切り取り", "cut"),
         c("paste", "貼り付け", "paste"),
+        c("copystyle", "書式のコピー", "copystyle"),
         c("fontname", "フォント", "fontname"),
         c("fontsize", "フォントのサイズ", "fontsize"),
         c("incfont", "フォントサイズの拡大", "incfont"),

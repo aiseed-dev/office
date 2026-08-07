@@ -793,4 +793,7 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} merged across ({} rows)"),
 ("{}:{} を結合しました(揃えはそのまま)", "{}:{} merged (alignment untouched)"),
 ("{}:{} を結合し、中央に揃えました", "{}:{} merged and centered"),
+("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Format picked up — it will be painted onto the next cell you click (Esc to cancel)"),
+("{} に書式を塗りました(Ctrl+Z で戻せます)", "Format painted onto {} (Ctrl+Z undoes it)"),
+("書式のコピーをやめました", "Format painting cancelled"),
 ];

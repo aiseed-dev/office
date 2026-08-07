@@ -790,4 +790,7 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("{}:{} を横方向に結合しました({} 行ぶん)", "Đã gộp {}:{} theo hàng ({} hàng)"),
     ("{}:{} を結合しました(揃えはそのまま)", "Đã gộp {}:{} (giữ nguyên căn chỉnh)"),
     ("{}:{} を結合し、中央に揃えました", "Đã gộp {}:{} và căn giữa"),
+    ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Đã lấy định dạng — sẽ quét lên ô bấm tiếp theo (Esc để hủy)"),
+    ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Đã quét định dạng lên {} (Ctrl+Z hoàn tác)"),
+    ("書式のコピーをやめました", "Đã hủy sao chép định dạng"),
 ];

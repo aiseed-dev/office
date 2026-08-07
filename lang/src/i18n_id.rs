@@ -790,4 +790,7 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} digabung per baris ({} baris)"),
     ("{}:{} を結合しました(揃えはそのまま)", "{}:{} digabung (perataan tak diubah)"),
     ("{}:{} を結合し、中央に揃えました", "{}:{} digabung dan ditengahkan"),
+    ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Format diambil — akan dioles ke sel berikut yang diklik (Esc membatalkan)"),
+    ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Format dioles ke {} (Ctrl+Z membatalkan)"),
+    ("書式のコピーをやめました", "Salin format dibatalkan"),
 ];

@@ -175,6 +175,7 @@ pub const CALC: &[Tab] = &[
         c("copy", "복사", "copy"),
         c("cut", "잘라 내기", "cut"),
         c("paste", "붙여 넣기", "paste"),
+        c("copystyle", "서식 복사", "copystyle"),
         c("fontname", "글꼴", "fontname"),
         c("fontsize", "글꼴 크기", "fontsize"),
         c("incfont", "글꼴 크기 증가", "incfont"),

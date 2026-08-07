@@ -790,4 +790,7 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} satır satır birleştirildi ({} satır)"),
     ("{}:{} を結合しました(揃えはそのまま)", "{}:{} birleştirildi (hizalama dokunulmadı)"),
     ("{}:{} を結合し、中央に揃えました", "{}:{} birleştirildi ve ortalandı"),
+    ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Biçim alındı — bir sonraki tıklanan hücreye uygulanır (Esc iptal)"),
+    ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Biçim {} hücresine uygulandı (Ctrl+Z geri alır)"),
+    ("書式のコピーをやめました", "Biçim boyama iptal edildi"),
 ];

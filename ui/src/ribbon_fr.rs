@@ -175,6 +175,7 @@ pub const CALC: &[Tab] = &[
         c("copy", "Copier", "copy"),
         c("cut", "Couper", "cut"),
         c("paste", "Coller", "paste"),
+        c("copystyle", "Copier le format", "copystyle"),
         c("fontname", "Police", "fontname"),
         c("fontsize", "Taille de police", "fontsize"),
         c("incfont", "Augmenter la taille de police", "incfont"),

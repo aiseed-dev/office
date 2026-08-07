@@ -9,7 +9,7 @@ impl Calc {
     pub(crate) const HANDLED: &'static [&'static str] = &[
         "open", "save", "undo", "redo", "selectall", "pdf",
         "copy", "cut", "paste",
-        "bold", "italic", "underline", "borders", "fillparag", "fontcolor",
+        "bold", "italic", "underline", "borders", "fillparag", "fontcolor", "copystyle",
         "align-left", "align-center", "align-right",
         "comma", "currency", "percents", "digit-inc", "digit-dec", "clear",
         "strikeout", "top", "middle", "bottom", "wrap", "incfont", "decfont",
@@ -124,6 +124,17 @@ impl Calc {
                 );
                 self.pick_kind = "border-pick";
                 self.pick = Some((items, at));
+            }
+            // 書式のコピー(刷毛)。いまのセルの書式を持ち、次に押した先へ塗る
+            "copystyle" => {
+                self.commit();
+                let f = self
+                    .sheet()
+                    .get(self.cursor)
+                    .map(|c| c.fmt.clone())
+                    .unwrap_or_default();
+                self.brush = Some(f);
+                self.status = ui::t!("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)").into();
             }
             "bold" => self.fmt(|f| f.bold = !f.bold),
             "italic" => self.fmt(|f| f.italic = !f.italic),

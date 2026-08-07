@@ -790,4 +790,7 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} fusionné par lignes ({} lignes)"),
     ("{}:{} を結合しました(揃えはそのまま)", "{}:{} fusionné (alignement intact)"),
     ("{}:{} を結合し、中央に揃えました", "{}:{} fusionné et centré"),
+    ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Format prélevé — il sera appliqué à la prochaine cellule cliquée (Échap pour annuler)"),
+    ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Format appliqué à {} (Ctrl+Z annule)"),
+    ("書式のコピーをやめました", "Copie de format annulée"),
 ];

@@ -615,7 +615,7 @@ impl Render for Calc {
             // コピーの下に貼り付け、書体の下に B I U…、縦揃えの下に横揃え。
             // その対をそのまま書き、組の間に縦の区切り線を引く
             const HOME_PAIRS: &[(&[&str], &[&str])] = &[
-                (&["copy", "cut"], &["paste"]),
+                (&["copy", "cut"], &["paste", "copystyle"]),
                 (&["fontname", "fontsize", "incfont", "decfont", "changecase"],
                  &["bold", "italic", "underline", "strikeout", "subscript",
                    "fontcolor", "fillparag", "borders"]),

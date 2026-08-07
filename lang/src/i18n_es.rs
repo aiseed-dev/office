@@ -790,4 +790,7 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("{}:{} を横方向に結合しました({} 行ぶん)", "{}:{} combinado por filas ({} filas)"),
     ("{}:{} を結合しました(揃えはそのまま)", "{}:{} combinado (alineación intacta)"),
     ("{}:{} を結合し、中央に揃えました", "{}:{} combinado y centrado"),
+    ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Formato tomado — se pintará en la próxima celda que pulse (Esc para cancelar)"),
+    ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Formato pintado en {} (Ctrl+Z lo deshace)"),
+    ("書式のコピーをやめました", "Copia de formato cancelada"),
 ];
