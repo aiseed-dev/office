@@ -1092,6 +1092,11 @@ pub struct PivotDef {
     pub style: String,
     /// 名前(ピボットテーブル1, 2, …)。板の題と状態行で名指しする
     pub name: String,
+    /// 値のフィルター: (比較 ">" ">=" "<" "<=" "=", しきい値)。
+    /// 集計した後の行に掛ける(列に広げていれば行の総計で判定)
+    pub vfilter: Option<(String, f64)>,
+    /// グループ化: (見出し, 単位)。単位は 月/四半期/年/幅:N
+    pub group_by: Vec<(String, String)>,
 }
 
 /// ブックの情報(docProps/core.xml の主な欄)。読んで見せる。

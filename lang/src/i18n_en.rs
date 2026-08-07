@@ -850,4 +850,13 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("データバー", "Data bar"),
 ("カラースケール", "Color scale"),
 ("アイコンセット", "Icon set"),
+("「{}」のグループ化 — 単位を選ぶ", "Group \"{}\" — pick a unit"),
+("条件が空です(例: 含む 東京)", "The condition is empty (e.g. contains Tokyo)"),
+("「> 1000」の形で(比較は > >= < <= =)", "Use the form \"> 1000\" (operators: > >= < <= =)"),
+("しきい値が数として読めません", "The threshold is not a number"),
+("幅が数として読めません(例: 100)", "The width is not a number (e.g. 100)"),
+("幅は 0 より大きい数で", "The width must be greater than 0"),
+("ラベルで絞る — 例: 含む 東京 / で始まる 東 / で終わる 区", "Label filter — e.g. 含む Tokyo / で始まる A / で終わる Z (contains / begins with / ends with)"),
+("値で絞る — 例: > 1000(比較は > >= < <= =。空 Enter = 解除)", "Value filter — e.g. > 1000 (operators > >= < <= =; empty Enter removes it)"),
+("数の幅でグループ化 — 幅を数で(例: 100)", "Group by numeric width — enter the width (e.g. 100)"),
 ];

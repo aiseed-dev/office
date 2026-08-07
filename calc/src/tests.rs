@@ -867,6 +867,8 @@ mod pivot_tests {
             hide: Vec::new(),
             style: String::new(),
             name: String::new(),
+            vfilter: None,
+            group_by: Vec::new(),
         }
     }
 
@@ -904,6 +906,102 @@ mod pivot_tests {
             .unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         Some(parse_pivot_grid(&String::from_utf8_lossy(&o.stdout)))
+    }
+
+    #[gpui::test]
+    fn ラベルと値とグループの指図が板から入る(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            // 元の表
+            for (r, row) in [["区分", "金額"], ["東京", "100"], ["大阪", "50"], ["東村山", "30"]]
+                .iter()
+                .enumerate()
+            {
+                for (cc, v) in row.iter().enumerate() {
+                    this.book.sheets[0].set(Pos::new(r as u32, cc as u32), sheet::Cell::input(v));
+                }
+            }
+            let mut d = def(&["区分"], &[], "金額", "合計");
+            // 試験では polars を飛ばさない: spawn_pivot はシート名で早期に
+            // 止まる(指図の欄が入ることだけを確かめる)
+            d.sheet = "試験では無いシート".into();
+            d.src = (Pos::new(0, 0), Pos::new(3, 1));
+            this.book.pivots.push(d);
+            // ラベルで絞る: 「で始まる 東」→ 大阪だけ hide に落ちる
+            this.pivot_flt = Some((0, "区分".into(), Default::default()));
+            this.prompt = Some(("pivot-label", Editor::new("で始まる 東")));
+            this.finish_prompt(cx);
+            let hide = &this.book.pivots[0].hide;
+            assert_eq!(hide.len(), 1, "hide が入らない: {hide:?}");
+            assert_eq!(hide[0].0, "区分");
+            assert_eq!(hide[0].1, vec!["大阪".to_string()], "落ちる値が違う: {hide:?}");
+            // 値で絞る
+            this.pivot_flt = Some((0, "区分".into(), Default::default()));
+            this.prompt = Some(("pivot-vfilter", Editor::new("> 40")));
+            this.finish_prompt(cx);
+            assert_eq!(this.book.pivots[0].vfilter, Some((">".into(), 40.0)));
+            // 数の幅でグループ化
+            this.pivot_flt = Some((0, "金額".into(), Default::default()));
+            this.prompt = Some(("pivot-group-width", Editor::new("50")));
+            this.finish_prompt(cx);
+            assert_eq!(this.book.pivots[0].group_by, vec![("金額".into(), "幅:50".into())]);
+        });
+    }
+
+    #[test]
+    fn グループ化と値のフィルターがpolarsで回る() {
+        let headers: Vec<String> =
+            ["日付", "区分", "金額"].iter().map(|s| s.to_string()).collect();
+        let rows: Vec<Vec<String>> = [
+            ["2026-01-10", "A", "100"],
+            ["2026-01-25", "A", "50"],
+            ["2026-02-05", "B", "30"],
+            ["2026-04-01", "B", "70"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|s| s.to_string()).collect())
+        .collect();
+        // 日付を月でグループ化して合計
+        let mut d = def(&["日付"], &[], "金額", "合計");
+        d.group_by.push(("日付".into(), "月".into()));
+        let spec = pivot_spec_json(&headers, &rows, &d);
+        let Some((g, _)) = run_py(spec) else { return };
+        assert_eq!(g[1], vec!["2026-01", "150"], "月のグループが効かない: {g:?}");
+        assert_eq!(g[2], vec!["2026-02", "30"]);
+        assert_eq!(g[3], vec!["2026-04", "70"]);
+        // 四半期
+        let mut d = def(&["日付"], &[], "金額", "合計");
+        d.group_by.push(("日付".into(), "四半期".into()));
+        let spec = pivot_spec_json(&headers, &rows, &d);
+        let Some((g, _)) = run_py(spec) else { return };
+        assert_eq!(g[1], vec!["2026年Q1", "180"], "四半期が効かない: {g:?}");
+        assert_eq!(g[2], vec!["2026年Q2", "70"]);
+        // 数の幅(金額を 50 刻みで束ね、区分を数える)
+        let mut d = def(&["金額"], &[], "区分", "個数");
+        d.group_by.push(("金額".into(), "幅:50".into()));
+        let spec = pivot_spec_json(&headers, &rows, &d);
+        let Some((g, _)) = run_py(spec) else { return };
+        assert_eq!(g[1], vec!["  0〜 49", "1"], "幅の帯が違う: {g:?}");
+        assert_eq!(g[2], vec![" 50〜 99", "2"], "帯の並びが数字順でない: {g:?}");
+        assert_eq!(g[3], vec!["100〜149", "1"]);
+        // 値のフィルター(合計 >= 70 の行だけ)+ 総計はフィルター後
+        let mut d = def(&["区分"], &[], "金額", "合計");
+        d.vfilter = Some((">=".into(), 70.0));
+        d.totals = true;
+        let spec = pivot_spec_json(&headers, &rows, &d);
+        let Some((g, k)) = run_py(spec) else { return };
+        // A=150, B=100 → 両方残る。しきい値を上げると片方だけに
+        assert_eq!(g[1], vec!["A", "150"]);
+        assert_eq!(g[2], vec!["B", "100"]);
+        let mut d = def(&["区分"], &[], "金額", "合計");
+        d.vfilter = Some((">".into(), 120.0));
+        d.totals = true;
+        let spec = pivot_spec_json(&headers, &rows, &d);
+        let Some((g, k)) = run_py(spec) else { return };
+        assert_eq!(g[1], vec!["A", "150"], "値のフィルターが効かない: {g:?}");
+        let ti = k.iter().position(|c| *c == 't').expect("総計が無い");
+        assert_eq!(g[ti], vec!["総計", "150"], "総計が絞り込み後になっていない: {g:?}");
+        assert_eq!(g.len(), ti + 1, "余計な行がある: {g:?}");
     }
 
     #[test]
@@ -1608,6 +1706,8 @@ mod recalc_tests {
                 hide: Vec::new(),
                 style: String::new(),
                 name: "ピボットテーブル1".into(),
+                vfilter: None,
+                group_by: Vec::new(),
             });
             // ピボットに乗ると状態行が「タブで操作」と案内する
             this.cursor = Pos::parse("D2").unwrap();

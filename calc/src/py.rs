@@ -339,6 +339,39 @@ df = pl.DataFrame(data)
 for _f, _vs in spec.get("hide", []):
     if _f in df.columns and _vs:
         df = df.filter(~pl.col(_f).is_in(_vs))
+
+# グループ化(第2版)。日付は 月/四半期/年 の札に、数は幅Nの帯に置き換える
+def _grouped(col, unit):
+    if unit.startswith("幅:"):
+        w = float(unit[2:])
+        f = pl.col(col).cast(pl.Float64, strict=False)
+        lo = (f / w).floor() * w
+        def _n(x):
+            return str(int(x)) if float(x).is_integer() else str(x)
+        # 帯の札は数字の幅で右詰め — 文字順でも 0〜49 < 50〜99 < 100〜149 に並ぶ
+        _mx = df[col].cast(pl.Float64, strict=False).max()
+        _wid = len(_n((_mx // w) * w + w - (1 if w.is_integer() else 0))) if _mx is not None else 0
+        return (pl.when(f.is_null()).then(pl.col(col))
+                .otherwise(lo.map_elements(
+                    lambda v: (_n(v).rjust(_wid) + "〜" +
+                               _n(v + w - (1 if w.is_integer() else 0)).rjust(_wid)),
+                    return_dtype=pl.String)))
+    d = pl.col(col).str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+    d2 = pl.col(col).str.strptime(pl.Date, "%Y/%m/%d", strict=False)
+    d = pl.coalesce(d, d2)
+    if unit == "年":
+        out = d.dt.strftime("%Y年")
+    elif unit == "四半期":
+        out = (d.dt.year().cast(pl.String) + "年Q" +
+               ((d.dt.month() + 2) // 3).cast(pl.String))
+    else:  # 月
+        out = d.dt.strftime("%Y-%m")
+    # 日付として読めない値はそのまま残す(黙って落とさない)
+    return pl.when(d.is_null()).then(pl.col(col)).otherwise(out)
+
+for _f, _u in spec.get("group", []):
+    if _f in df.columns:
+        df = df.with_columns(_grouped(_f, _u).alias(_f))
 val, agg = spec["value"], spec["agg"]
 if agg != "個数":
     # 数にならないものは null(集計から外れる)
@@ -368,6 +401,28 @@ def row_total(frame, index):
             for r in frame.group_by(index).agg(agg_expr().alias("_t")).rows()}
 
 main = table(df, idx)
+# 値のフィルター(第2版)。集計した後の行に掛ける — 列に広げていれば
+# 行の総計、そうでなければ値の列そのもの
+vf = spec.get("vfilter")
+if vf:
+    _op, _th = vf
+    _OPS = {">": lambda x: x > _th, ">=": lambda x: x >= _th,
+            "<": lambda x: x < _th, "<=": lambda x: x <= _th,
+            "=": lambda x: x == _th}
+    _keys = row_total(df, idx) if cols else None
+    def _row_ok(r):
+        x = _keys.get(tuple(r[:len(idx)])) if _keys is not None else r[-1]
+        try:
+            return x is not None and _OPS[_op](float(x))
+        except (TypeError, ValueError, KeyError):
+            return False
+    main = pl.DataFrame([list(r) for r in main.rows() if _row_ok(r)],
+                        schema=main.schema, orient="row") if main.height else main
+    # フィルター後の物差しで小計・総計も出す — 見えない行を数えない
+    df = df.filter(
+        pl.concat_str([pl.col(i).cast(pl.String) for i in idx], separator="\x1f")
+        .is_in([chr(31).join(str(v) for v in r[:len(idx)]) for r in main.rows()])
+        if main.height else pl.lit(False))
 tot_col = spec["totals"] and bool(cols)
 tots = row_total(df, idx) if tot_col else {}
 
@@ -409,7 +464,7 @@ for g, rs in groups:
     if spec["blank_rows"] and len(idx) >= 2:
         out.append(("b", [""] * (len(main.columns) + (1 if tot_col else 0))))
 
-if spec["totals"]:
+if spec["totals"] and df.height:
     cells = list(table(stub(df, "総計", idx), idx).rows()[0])
     if tot_col:
         cells.append(df.select(agg_expr()).item())
@@ -591,6 +646,8 @@ impl Calc {
             size: keep.as_ref().map(|d| d.size).unwrap_or((0, 0)),
             hide: keep.as_ref().map(|d| d.hide.clone()).unwrap_or_default(),
             style: keep.as_ref().map(|d| d.style.clone()).unwrap_or_default(),
+            vfilter: keep.as_ref().and_then(|d| d.vfilter.clone()),
+            group_by: keep.as_ref().map(|d| d.group_by.clone()).unwrap_or_default(),
             name: keep.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| {
                 // 新しい名前(ピボットテーブル1, 2, …)。空きの番号を探す
                 let mut n = 1;

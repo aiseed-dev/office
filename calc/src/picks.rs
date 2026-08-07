@@ -378,6 +378,43 @@ impl Calc {
                     }
                     return;
                 }
+                if v == "→ ラベルで絞る…" {
+                    // 含む/で始まる/で終わる 語 — 合う値以外を hide に落とす
+                    self.prompt = Some(("pivot-label", Editor::new("")));
+                    return; // pivot_flt は板の確定まで持つ
+                }
+                if v == "→ 値で絞る…" {
+                    let cur = self
+                        .pivot_flt
+                        .as_ref()
+                        .and_then(|(pi, _, _)| self.book.pivots.get(*pi))
+                        .and_then(|d| d.vfilter.as_ref())
+                        .map(|(op, th)| format!("{op} {th}"))
+                        .unwrap_or_default();
+                    self.prompt = Some(("pivot-vfilter", Editor::new(&cur)));
+                    return;
+                }
+                if v == "→ グループ化…" {
+                    let at = self
+                        .cell_origin_px(self.cursor)
+                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    let field = self.pivot_flt.as_ref().map(|(_, f, _)| f.clone()).unwrap_or_default();
+                    self.pick_note =
+                        Some(ui::tf!("「{}」のグループ化 — 単位を選ぶ", field).into());
+                    self.pick_kind = "pivot-group-pick";
+                    self.pick = Some((
+                        vec![
+                            "月".into(),
+                            "四半期".into(),
+                            "年".into(),
+                            "数の幅…".into(),
+                            "グループ解除".into(),
+                        ],
+                        at,
+                    ));
+                    return;
+                }
                 if v == "→ 決定(絞り込む)" {
                     let Some((pi, field, hidden)) = self.pivot_flt.take() else { return };
                     if let Some(d) = self.book.pivots.get_mut(pi) {
@@ -469,6 +506,21 @@ impl Calc {
                     self.dedup_pick();
                     return;
                 }
+            }
+            "pivot-group-pick" => {
+                let Some((pi, field, _)) = self.pivot_flt.clone() else { return };
+                if v == "数の幅…" {
+                    self.prompt = Some(("pivot-group-width", Editor::new("")));
+                    return;
+                }
+                let Some(d) = self.book.pivots.get_mut(pi) else { return };
+                d.group_by.retain(|(f, _)| *f != field);
+                if v != "グループ解除" {
+                    d.group_by.push((field, v.to_string()));
+                }
+                let nd = d.clone();
+                self.pivot_flt = None;
+                self.spawn_pivot(nd, Some(pi), cx);
             }
             "pivot-rows-pick" => {
                 if v == "→ 決定(列の選択へ)" {
@@ -1398,6 +1450,34 @@ impl Calc {
         cx.notify();
     }
 
+    /// 元の表から、ある見出しの値の候補(重複は畳む。上限は自衛)。
+    pub(crate) fn pivot_field_values(&self, pi: usize, field: &str) -> Vec<String> {
+        let Some(d) = self.book.pivots.get(pi) else { return Vec::new() };
+        let (a, b) = d.src;
+        let Some(fc) = (a.col..=b.col).position(|c| {
+            self.sheet()
+                .get(Pos::new(a.row, c))
+                .map(|x| x.value.display() == field)
+                .unwrap_or(false)
+        }) else { return Vec::new() };
+        let fc = a.col + fc as u32;
+        let mut vals: Vec<String> = Vec::new();
+        for r in a.row + 1..=b.row {
+            let v = self
+                .sheet()
+                .get(Pos::new(r, fc))
+                .map(|x| x.value.display())
+                .unwrap_or_default();
+            if !v.is_empty() && !vals.contains(&v) {
+                vals.push(v);
+            }
+            if vals.len() >= 1000 {
+                break;
+            }
+        }
+        vals
+    }
+
     /// ピボットの絞り込みの一覧(見出しの ▼)。☑ = 表示、☐ = 隠す。
     /// 組み直しては出し直す(クリックのたび)
     pub(crate) fn pivot_filter_pick(&mut self) {
@@ -1438,6 +1518,9 @@ impl Calc {
             .collect();
         items.push("→ 決定(絞り込む)".into());
         items.push("→ すべて表示に戻す".into());
+        items.push("→ ラベルで絞る…".into());
+        items.push("→ 値で絞る…".into());
+        items.push("→ グループ化…".into());
         let at = self
             .cell_origin_px(self.cursor)
             .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
@@ -1960,6 +2043,89 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // ピボット: ラベルで絞る(含む/で始まる/で終わる 語)。
+            // 合う値**以外**を hide に落とす — 既存の絞り込み機構に乗せる
+            "pivot-label" => {
+                let Some((pi, field, _)) = self.pivot_flt.take() else { return };
+                let t = text.trim();
+                if t.is_empty() {
+                    self.status = ui::t!("条件が空です(例: 含む 東京)").into();
+                    return;
+                }
+                let (op, word) = match t.split_once(char::is_whitespace) {
+                    Some((a, b)) if ["含む", "で始まる", "で終わる"].contains(&a) => {
+                        (a.to_string(), b.trim().to_string())
+                    }
+                    _ => ("含む".into(), t.to_string()),
+                };
+                let ok = |v: &str| match op.as_str() {
+                    "で始まる" => v.starts_with(&word),
+                    "で終わる" => v.ends_with(&word),
+                    _ => v.contains(&word),
+                };
+                let vals = self.pivot_field_values(pi, &field);
+                let hidden: Vec<String> = vals.into_iter().filter(|v| !ok(v)).collect();
+                if let Some(d) = self.book.pivots.get_mut(pi) {
+                    d.hide.retain(|(f, _)| *f != field);
+                    if !hidden.is_empty() {
+                        d.hide.push((field, hidden));
+                    }
+                    let nd = d.clone();
+                    self.spawn_pivot(nd, Some(pi), cx);
+                }
+            }
+            // ピボット: 値で絞る(> 1000 の形。空 Enter = 解除)
+            "pivot-vfilter" => {
+                let Some((pi, _, _)) = self.pivot_flt.take() else { return };
+                let t = text.trim();
+                let Some(d) = self.book.pivots.get_mut(pi) else { return };
+                if t.is_empty() {
+                    d.vfilter = None;
+                } else {
+                    let (op, num) = match t.split_once(char::is_whitespace) {
+                        Some((a, b)) if [">", ">=", "<", "<=", "="].contains(&a) => {
+                            (a.to_string(), b.trim())
+                        }
+                        _ => {
+                            self.status =
+                                ui::t!("「> 1000」の形で(比較は > >= < <= =)").into();
+                            self.prompt = Some((kind, Editor::new(t)));
+                            self.pivot_flt = Some((pi, String::new(), Default::default()));
+                            return;
+                        }
+                    };
+                    let Ok(th) = num.parse::<f64>() else {
+                        self.status = ui::t!("しきい値が数として読めません").into();
+                        self.prompt = Some((kind, Editor::new(t)));
+                        self.pivot_flt = Some((pi, String::new(), Default::default()));
+                        return;
+                    };
+                    d.vfilter = Some((op, th));
+                }
+                let nd = d.clone();
+                self.spawn_pivot(nd, Some(pi), cx);
+            }
+            // ピボット: 数の幅でグループ化(例: 100)
+            "pivot-group-width" => {
+                let Some((pi, field, _)) = self.pivot_flt.take() else { return };
+                let Ok(w) = text.trim().parse::<f64>() else {
+                    self.status = ui::t!("幅が数として読めません(例: 100)").into();
+                    self.prompt = Some((kind, Editor::new(text.trim())));
+                    self.pivot_flt = Some((pi, field, Default::default()));
+                    return;
+                };
+                if w <= 0.0 {
+                    self.status = ui::t!("幅は 0 より大きい数で").into();
+                    self.prompt = Some((kind, Editor::new(text.trim())));
+                    self.pivot_flt = Some((pi, field, Default::default()));
+                    return;
+                }
+                let Some(d) = self.book.pivots.get_mut(pi) else { return };
+                d.group_by.retain(|(f, _)| *f != field);
+                d.group_by.push((field, format!("幅:{w}")));
+                let nd = d.clone();
+                self.spawn_pivot(nd, Some(pi), cx);
+            }
             // 列の幅・行の高さの数値指定(選んだ列・行ぶん。空 = 既定に戻す)
             "col-width" | "row-height" => {
                 let is_col = kind == "col-width";

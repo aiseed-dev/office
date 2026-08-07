@@ -568,8 +568,18 @@ pub(crate) fn pivot_spec_json(headers: &[String], rows: &[Vec<String>], d: &shee
         .map(|(f, vs)| format!("[\"{}\",[{}]]", esc(f), strs(vs)))
         .collect::<Vec<_>>()
         .join(",");
+    let vf = match &d.vfilter {
+        Some((op, th)) => format!("[\"{}\",{th}]", esc(op)),
+        None => "null".into(),
+    };
+    let groups = d
+        .group_by
+        .iter()
+        .map(|(f, unit)| format!("[\"{}\",\"{}\"]", esc(f), esc(unit)))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{\"headers\":[{}],\"rows\":[{}],\"index\":[{}],\"columns\":[{}],\"value\":\"{}\",\"agg\":\"{}\",\"totals\":{},\"subtotals\":{},\"blank_rows\":{},\"compact\":{},\"hide\":[{hides}]}}",
+        "{{\"headers\":[{}],\"rows\":[{}],\"index\":[{}],\"columns\":[{}],\"value\":\"{}\",\"agg\":\"{}\",\"totals\":{},\"subtotals\":{},\"blank_rows\":{},\"compact\":{},\"hide\":[{hides}],\"vfilter\":{vf},\"group\":[{groups}]}}",
         strs(headers),
         rows.iter().map(|r| format!("[{}]", strs(r))).collect::<Vec<_>>().join(","),
         strs(&d.rows_sel),

@@ -1466,6 +1466,8 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                                 hide: Vec::new(),
                                 style: attr_un(&e, "style").unwrap_or_default(),
                                 name: attr_un(&e, "name").unwrap_or_default(),
+                                vfilter: None,
+                                group_by: Vec::new(),
                             });
                         }
                     }
@@ -1475,6 +1477,25 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"f" => {
                         if let Some(d) = cur.as_mut() {
                             d.hide.push((attr_un(&e, "name").unwrap_or_default(), Vec::new()));
+                        }
+                    }
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if local(e.name().as_ref()) == b"vf" =>
+                    {
+                        if let Some(d) = cur.as_mut() {
+                            let op = attr_un(&e, "op").unwrap_or_default();
+                            let th = attr(&e, "v").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                            d.vfilter = Some((op, th));
+                        }
+                    }
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if local(e.name().as_ref()) == b"g" =>
+                    {
+                        if let Some(d) = cur.as_mut() {
+                            d.group_by.push((
+                                attr_un(&e, "name").unwrap_or_default(),
+                                attr_un(&e, "unit").unwrap_or_default(),
+                            ));
                         }
                     }
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"v" => field = 3,
@@ -2438,6 +2459,13 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     px.push_str(&format!("<v>{}</v>", esc(v)));
                 }
                 px.push_str("</f>");
+            }
+            // 値のフィルターとグループ化(第2版)
+            if let Some((op, th)) = &d.vfilter {
+                px.push_str(&format!("<vf op=\"{}\" v=\"{}\"/>", esc(op), th));
+            }
+            for (f, unit) in &d.group_by {
+                px.push_str(&format!("<g name=\"{}\" unit=\"{}\"/>", esc(f), esc(unit)));
             }
             px.push_str("</pivot>");
         }
@@ -3709,6 +3737,8 @@ mod validation_roundtrip_tests {
             hide: vec![("区分".into(), vec!["紙製品".into(), "その他".into()])],
             style: String::new(),
             name: String::new(),
+            vfilter: Some((">=".into(), 1000.0)),
+            group_by: vec![("日付".into(), "四半期".into()), ("金額".into(), "幅:100".into())],
         });
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
@@ -3719,6 +3749,19 @@ mod validation_roundtrip_tests {
             back.pivots[0].hide,
             vec![("区分".to_string(), vec!["紙製品".to_string(), "その他".to_string()])],
             "絞り込みが往復しない"
+        );
+        assert_eq!(
+            back.pivots[0].vfilter,
+            Some((">=".to_string(), 1000.0)),
+            "値のフィルターが往復しない"
+        );
+        assert_eq!(
+            back.pivots[0].group_by,
+            vec![
+                ("日付".to_string(), "四半期".to_string()),
+                ("金額".to_string(), "幅:100".to_string())
+            ],
+            "グループ化が往復しない"
         );
     }
 
@@ -4443,6 +4486,8 @@ mod script_roundtrip_tests {
             hide: Vec::new(),
             style: "緑".into(),
             name: "ピボットテーブル1".into(),
+            vfilter: None,
+            group_by: Vec::new(),
         });
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
