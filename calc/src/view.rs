@@ -1275,16 +1275,33 @@ impl Render for Calc {
                     }
                 }
                 // 太い枠は**選択の範囲の外周**に出す(Excel の作法)。
-                // カーソルのセルに出すと、ドラッグ中は枠がマウスに付いて回る
+                // カーソルのセルに出すと、ドラッグ中は枠がマウスに付いて回る。
+                // border_t_2 + border_color は使わない — border_color は div の
+                // **全辺**に効くので、縁のセルの薄い格子線(右・下)まで緑に
+                // 塗り替わり、選択の中に線が走って見える(発注者報告 2026-08-08)。
+                // 辺ごとの帯を重ねて描く(罫線 edge_bars と同じ作法)
                 if self.anchor.is_some() {
                     if in_range {
-                        let mut edge = false;
-                        if r == ra.row { d = d.border_t_2(); edge = true }
-                        if r == rb.row { d = d.border_b_2(); edge = true }
-                        if c == ra.col { d = d.border_l_2(); edge = true }
-                        if c == rb.col { d = d.border_r_2(); edge = true }
-                        if edge {
-                            d = d.border_color(rgb(0x1B6E3C));
+                        let g = rgb(0x1B6E3C);
+                        let mut bars: Vec<gpui::AnyElement> = Vec::new();
+                        if r == ra.row {
+                            bars.push(div().absolute().left(px(0.0)).top(px(0.0))
+                                .w_full().h(px(2.0)).bg(g).into_any_element());
+                        }
+                        if r == rb.row {
+                            bars.push(div().absolute().left(px(0.0)).bottom(px(0.0))
+                                .w_full().h(px(2.0)).bg(g).into_any_element());
+                        }
+                        if c == ra.col {
+                            bars.push(div().absolute().top(px(0.0)).left(px(0.0))
+                                .h_full().w(px(2.0)).bg(g).into_any_element());
+                        }
+                        if c == rb.col {
+                            bars.push(div().absolute().top(px(0.0)).right(px(0.0))
+                                .h_full().w(px(2.0)).bg(g).into_any_element());
+                        }
+                        if !bars.is_empty() {
+                            d = d.relative().children(bars);
                         }
                     }
                 } else if sel {
