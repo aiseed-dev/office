@@ -1859,23 +1859,42 @@ impl Calc {
 
     // ---- 割り当てられた操作 ----
     fn a_backspace(&mut self, _: &ui::Backspace, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(ed) = &mut self.name_edit {
-            ed.backspace();
-        } else if self.fn_args.is_some() {
+        if self.fn_args.is_some() {
             self.editor().backspace();
             self.fn_args_recalc();
         } else if let Some(d) = &mut self.fn_dlg {
             d.search.backspace();
             d.sel = 0;
-        } else if let Some(sv) = &mut self.solver {
-            sv.focused().backspace();
-        } else if let Some((_, ed)) = &mut self.prompt {
-            ed.backspace();
-        } else {
+        } else if self.name_edit.is_some()
+            || self.solver.is_some()
+            || self.filter_panel.is_some()
+            || self.dv_dlg.is_some()
+            || self.prompt.is_some()
+        {
+            // 板・小窓の欄へ(editor() が今の宛先を知っている)
+            self.editor().backspace();
+        } else if self.editing() || self.edit_armed {
             self.input.backspace();
             self.dirty = true;
+        } else {
+            // セルの上での BackSpace = 中身を消す(Excel と同じ。書式は残る)
+            self.clear_selection_now();
         }
         cx.notify();
+    }
+
+    /// セルの上での BackSpace / Delete の実体。選択(無ければいまのセル)の
+    /// 中身を消す。書式は残す。保護中は断る
+    fn clear_selection_now(&mut self) {
+        if self.sheet().protected {
+            self.status =
+                ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
+            return;
+        }
+        self.checkpoint();
+        let n = self.clear_range();
+        self.sync_input();
+        self.status = format!("{n} セルの中身を消しました(書式は残る)").into();
     }
     /// 選んだ範囲の中身を消す(**書式は残す** — 帳票の枠を壊さない)。
     /// 控えを取ってから呼ぶこと。返すのは消したセルの数。
@@ -1902,6 +1921,24 @@ impl Calc {
     }
 
     fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
+        // 板・小窓の欄が開いていれば、その欄の1文字削除(セルに流さない)
+        if self.name_edit.is_some()
+            || self.fn_dlg.is_some()
+            || self.solver.is_some()
+            || self.filter_panel.is_some()
+            || self.dv_dlg.is_some()
+            || self.prompt.is_some()
+        {
+            self.editor().delete();
+            cx.notify();
+            return;
+        }
+        if self.fn_args.is_some() {
+            self.editor().delete();
+            self.fn_args_recalc();
+            cx.notify();
+            return;
+        }
         if self.sheet().protected {
             self.status =
                 ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();
@@ -1918,14 +1955,13 @@ impl Calc {
             cx.notify();
             return;
         }
-        if self.anchor.is_some() {
-            // 範囲を選んでいるときの Delete は、その中身を消す(戻せる)
-            self.checkpoint();
-            let n = self.clear_range();
-            self.status = format!("{n} セルの中身を消しました(書式は残る)").into();
-        } else {
+        if self.editing() || self.edit_armed {
+            // 編集中の Delete は1文字(いつもの文字カーソルの右)
             self.input.delete();
             self.dirty = true;
+        } else {
+            // セルの上での Delete = 中身を消す(選択があれば選択ぶん。Excel と同じ)
+            self.clear_selection_now();
         }
         cx.notify();
     }

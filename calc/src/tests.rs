@@ -1057,6 +1057,32 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn セルの上のbackspaceとdeleteは中身を消す(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            let a1 = Pos::parse("A1").unwrap();
+            this.cursor = a1;
+            this.sync_input();
+            this.input.insert("こんにちは");
+            assert!(this.commit());
+            this.fmt(|f| f.bold = true);
+            this.sync_input();
+            // セルの上(編集していない)= まるごと消す。書式は残る
+            assert!(!this.editing() && !this.edit_armed);
+            this.clear_selection_now();
+            let cell = this.sheet().get(a1).cloned().unwrap_or_default();
+            assert_eq!(cell.editable(), "", "中身が消えない");
+            assert!(cell.fmt.bold, "書式まで消えた");
+            assert_eq!(this.input.text(), "", "数式バーが残っている");
+            // 編集中の1文字削除は従来どおり(こちらは Editor の仕事)
+            this.input.insert("abc");
+            this.edit_armed = true;
+            this.input.backspace();
+            assert_eq!(this.input.text(), "ab");
+        });
+    }
+
+    #[gpui::test]
     fn 値が複数ある範囲の結合は先に聞く(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

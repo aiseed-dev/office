@@ -679,8 +679,12 @@ impl Render for Calc {
                            let text = this.input.text().to_string();
                            let mut acc = 0.0;
                            let mut at = text.len();
+                           // 文字幅は「画面の文字の大きさ」に追従(13px × ui_scale)。
+                           // 倍率を掛け忘れるとクリックとカーソルがずれる(発注者 2026-08-07)
+                           let uscale = this.ui_scale;
                            for (i, ch) in text.char_indices() {
-                               let w = if (ch as u32) < 0x2E80 { 6.8 } else { 13.0 };
+                               let w = uscale
+                                   * if (ch as u32) < 0x2E80 { 6.8 } else { 13.0 };
                                if acc + w / 2.0 > x {
                                    at = i;
                                    break;
