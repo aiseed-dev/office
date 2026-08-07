@@ -225,7 +225,7 @@ pub const CALC: &[Tab] = &[
     Tab { name: "Sisipkan", cmds: &[
         c("pivot-insert", "Sisipkan Tabel Pivot", "add-pivot"),
         c("instable", "Sisipkan Tabel", "instable"),
-        c("insimage", "Sisipkan Gambar", "insimage"),
+        c("insimage", "Sisipkan Gambar", "insimage-c"),
         c("insshape", "Sisipkan Bentuk", "insshape"),
         c("inssmartart", "Sisipkan SmartArt", "inssmartart"),
         c("inscheckbox", "Kotak centang", "inscheckbox"),

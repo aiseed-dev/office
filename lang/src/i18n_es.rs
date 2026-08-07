@@ -730,8 +730,6 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivote 2/4 — encabezados para las columnas (clic alterna, opcional)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivote 3/4 — un encabezado para los valores"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivote 4/4 — cómo agregar «{}»"),
-    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Sobre una tabla dinámica — use la pestaña «Tabla dinámica» (actualizar, totales, subtotales, diseño; las operaciones que rompen la tabla quedan bloqueadas)"),
-    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtro del pivote — «{}» (☑ visible / ☐ oculto)"),
     ("ピボットのスタイル(選ぶと掛け直します)", "Estilo del pivote (al elegir se vuelve a aplicar)"),
     ("自動(黒)", "Automático (negro)"),
     ("罫線 — いまのペン: {}・{}", "Bordes — pluma actual: {}, {}"),
@@ -744,4 +742,7 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("線の色: #{}(罫線の一覧から掛けると効きます)", "Color de línea: #{} (se aplica al trazar bordes desde la lista)"),
     ("色が読めません(RRGGBB の6桁。例: FF0000)", "No se puede leer el color (6 dígitos hex RRGGBB, p. ej. FF0000)"),
     ("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Color de línea — 6 dígitos hex RRGGBB (p. ej. FF0000; vacío + Enter = automático)"),
+    ("{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Sobre {} — use la pestaña «Tabla dinámica» (actualizar, totales, subtotales, diseño; operaciones que rompen la tabla bloqueadas)"),
+    ("ピボット", "Pivote"),
+    ("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtro de {} — «{}» (☑ visible / ☐ oculto)"),
 ];

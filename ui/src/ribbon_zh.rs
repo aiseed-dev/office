@@ -225,7 +225,7 @@ pub const CALC: &[Tab] = &[
     Tab { name: "插入", cmds: &[
         c("pivot-insert", "插入数据透视表", "add-pivot"),
         c("instable", "插入表格", "instable"),
-        c("insimage", "插入图片", "insimage"),
+        c("insimage", "插入图片", "insimage-c"),
         c("insshape", "插入形狀", "insshape"),
         c("inssmartart", "插入智能图形", "inssmartart"),
         c("inscheckbox", "复选框", "inscheckbox"),

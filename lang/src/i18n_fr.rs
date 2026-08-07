@@ -730,8 +730,6 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — en-têtes pour les colonnes (clic pour basculer, facultatif)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — un en-tête pour les valeurs"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — comment agréger « {} »"),
-    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Sur un tableau croisé — utilisez l'onglet « Tableau croisé » (actualiser, totaux, sous-totaux, disposition ; les opérations qui cassent le tableau sont verrouillées)"),
-    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtre du pivot — « {} » (☑ affiché / ☐ masqué)"),
     ("ピボットのスタイル(選ぶと掛け直します)", "Style du pivot (le choix le réapplique)"),
     ("自動(黒)", "Automatique (noir)"),
     ("罫線 — いまのペン: {}・{}", "Bordures — stylo actuel : {}, {}"),
@@ -744,4 +742,7 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("線の色: #{}(罫線の一覧から掛けると効きます)", "Couleur de ligne : #{} (s'applique en traçant depuis la liste des bordures)"),
     ("色が読めません(RRGGBB の6桁。例: FF0000)", "Couleur illisible (6 chiffres hex RRGGBB, ex. FF0000)"),
     ("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Couleur de ligne — 6 chiffres hex RRGGBB (ex. FF0000 ; vide + Entrée = automatique)"),
+    ("{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Sur {} — utilisez l'onglet « Tableau croisé » (actualiser, totaux, sous-totaux, disposition ; opérations cassantes verrouillées)"),
+    ("ピボット", "Pivot"),
+    ("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtre de {} — « {} » (☑ affiché / ☐ masqué)"),
 ];

@@ -730,8 +730,6 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — intestazioni per le colonne (clic per attivare, facoltative)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — un'intestazione per i valori"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — come aggregare «{}»"),
-    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Su una tabella pivot — usa la scheda «Tabella pivot» (aggiorna, totali, subtotali, layout; le operazioni che rompono la tabella sono bloccate)"),
-    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtro pivot — «{}» (☑ visibile / ☐ nascosto)"),
     ("ピボットのスタイル(選ぶと掛け直します)", "Stile pivot (la scelta lo riapplica)"),
     ("自動(黒)", "Automatico (nero)"),
     ("罫線 — いまのペン: {}・{}", "Bordi — penna attuale: {}, {}"),
@@ -744,4 +742,7 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("線の色: #{}(罫線の一覧から掛けると効きます)", "Colore linea: #{} (si applica tracciando dalla lista dei bordi)"),
     ("色が読めません(RRGGBB の6桁。例: FF0000)", "Colore illeggibile (6 cifre esadecimali RRGGBB, es. FF0000)"),
     ("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Colore linea — 6 cifre esadecimali RRGGBB (es. FF0000; vuoto + Invio = automatico)"),
+    ("{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Su {} — usa la scheda «Tabella pivot» (aggiorna, totali, subtotali, layout; operazioni che rompono la tabella bloccate)"),
+    ("ピボット", "Pivot"),
+    ("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filtro di {} — «{}» (☑ visibile / ☐ nascosto)"),
 ];

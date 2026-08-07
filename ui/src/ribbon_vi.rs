@@ -225,7 +225,7 @@ pub const CALC: &[Tab] = &[
     Tab { name: "Chèn", cmds: &[
         c("pivot-insert", "Chèn PivotTable", "add-pivot"),
         c("instable", "Chèn bảng", "instable"),
-        c("insimage", "Chèn hình ảnh", "insimage"),
+        c("insimage", "Chèn hình ảnh", "insimage-c"),
         c("insshape", "Chèn Autoshape", "insshape"),
         c("inssmartart", "Chèn SmartArt", "inssmartart"),
         c("inscheckbox", "Hộp kiểm", "inscheckbox"),

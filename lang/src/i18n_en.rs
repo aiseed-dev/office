@@ -733,8 +733,6 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — headers for the columns (click to toggle, optional)"),
 ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — one header for the values"),
 ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — how to aggregate \"{}\""),
-("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "On a pivot table — use the Pivot Table tab (refresh, grand totals, subtotals, layout; table-breaking operations are locked)"),
-("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Pivot filter — \"{}\" (☑ shown / ☐ hidden)"),
 ("ピボットのスタイル(選ぶと掛け直します)", "Pivot style (choosing reapplies it)"),
 ("自動(黒)", "Automatic (black)"),
 ("罫線 — いまのペン: {}・{}", "Borders — current pen: {}, {}"),
@@ -747,4 +745,7 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("線の色: #{}(罫線の一覧から掛けると効きます)", "Line color: #{} (applies when you draw borders from the list)"),
 ("色が読めません(RRGGBB の6桁。例: FF0000)", "Can't read the color (6 hex digits RRGGBB, e.g. FF0000)"),
 ("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Line color — 6 hex digits RRGGBB (e.g. FF0000; empty Enter = automatic)"),
+("{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "On {} — use the Pivot Table tab (refresh, grand totals, subtotals, layout; table-breaking operations are locked)"),
+("ピボット", "Pivot"),
+("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filter of {} — «{}» (☑ shown / ☐ hidden)"),
 ];

@@ -730,8 +730,6 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — tajuk untuk kolom (klik untuk beralih, opsional)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — satu tajuk untuk nilai"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — cara mengagregasi «{}»"),
-    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Di atas pivot table — gunakan tab «Pivot Table» (perbarui, total, subtotal, tata letak; operasi yang merusak tabel dikunci)"),
-    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filter pivot — «{}» (☑ tampil / ☐ sembunyi)"),
     ("ピボットのスタイル(選ぶと掛け直します)", "Gaya pivot (memilih akan menerapkan ulang)"),
     ("自動(黒)", "Otomatis (hitam)"),
     ("罫線 — いまのペン: {}・{}", "Garis batas — pena saat ini: {}, {}"),
@@ -744,4 +742,7 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("線の色: #{}(罫線の一覧から掛けると効きます)", "Warna garis: #{} (berlaku saat menggambar dari daftar garis batas)"),
     ("色が読めません(RRGGBB の6桁。例: FF0000)", "Warna tak terbaca (6 digit hex RRGGBB, mis. FF0000)"),
     ("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Warna garis — 6 digit hex RRGGBB (mis. FF0000; kosong + Enter = otomatis)"),
+    ("{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Di atas {} — gunakan tab «Pivot Table» (perbarui, total, subtotal, tata letak; operasi perusak tabel dikunci)"),
+    ("ピボット", "Pivot"),
+    ("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filter {} — «{}» (☑ tampil / ☐ sembunyi)"),
 ];

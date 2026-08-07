@@ -1302,6 +1302,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                                 ),
                                 hide: Vec::new(),
                                 style: attr_un(&e, "style").unwrap_or_default(),
+                                name: attr_un(&e, "name").unwrap_or_default(),
                             });
                         }
                     }
@@ -2220,7 +2221,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         );
         for d in &book.pivots {
             px.push_str(&format!(
-                "<pivot sheet=\"{}\" src=\"{}:{}\" dest=\"{}\" h=\"{}\" w=\"{}\" value=\"{}\" agg=\"{}\" totals=\"{}\" subtotals=\"{}\" blank=\"{}\" compact=\"{}\" style=\"{}\">",
+                "<pivot sheet=\"{}\" src=\"{}:{}\" dest=\"{}\" h=\"{}\" w=\"{}\" value=\"{}\" agg=\"{}\" totals=\"{}\" subtotals=\"{}\" blank=\"{}\" compact=\"{}\" style=\"{}\" name=\"{}\">",
                 esc(&d.sheet),
                 d.src.0.a1(),
                 d.src.1.a1(),
@@ -2234,6 +2235,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 d.blank_rows as u8,
                 d.compact as u8,
                 esc(&d.style),
+                esc(&d.name),
             ));
             for r in &d.rows_sel {
                 px.push_str(&format!("<r>{}</r>", esc(r)));
@@ -3317,6 +3319,7 @@ mod validation_roundtrip_tests {
             size: (3, 3),
             hide: vec![("区分".into(), vec!["紙製品".into(), "その他".into()])],
             style: String::new(),
+            name: String::new(),
         });
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
@@ -4044,6 +4047,7 @@ mod script_roundtrip_tests {
             size: (4, 3),
             hide: Vec::new(),
             style: "緑".into(),
+            name: "ピボットテーブル1".into(),
         });
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");

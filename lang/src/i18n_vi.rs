@@ -730,8 +730,6 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — tiêu đề cho cột (bấm để bật/tắt, không bắt buộc)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — một tiêu đề cho giá trị"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — cách tổng hợp «{}»"),
-    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Đang ở trên pivot table — thao tác tại thẻ «Pivot Table» (cập nhật, tổng, tổng phụ, bố cục; các thao tác phá bảng bị khóa)"),
-    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Lọc pivot — «{}» (☑ hiện / ☐ ẩn)"),
     ("ピボットのスタイル(選ぶと掛け直します)", "Kiểu pivot (chọn sẽ áp lại)"),
     ("自動(黒)", "Tự động (đen)"),
     ("罫線 — いまのペン: {}・{}", "Đường kẻ — bút hiện tại: {}, {}"),
@@ -744,4 +742,7 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("線の色: #{}(罫線の一覧から掛けると効きます)", "Màu nét: #{} (có hiệu lực khi kẻ từ danh sách đường kẻ)"),
     ("色が読めません(RRGGBB の6桁。例: FF0000)", "Không đọc được màu (6 chữ số hex RRGGBB, vd: FF0000)"),
     ("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Màu nét — 6 chữ số hex RRGGBB (vd: FF0000; để trống + Enter = tự động)"),
+    ("{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Đang ở trên {} — thao tác tại thẻ «Pivot Table» (cập nhật, tổng, tổng phụ, bố cục; thao tác phá bảng bị khóa)"),
+    ("ピボット", "Pivot"),
+    ("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Bộ lọc của {} — «{}» (☑ hiện / ☐ ẩn)"),
 ];

@@ -271,7 +271,7 @@ pub const CALC: &[Tab] = &[
     Tab { name: "挿入", cmds: &[
         c("pivot-insert", "ピボットテーブルを挿入", "add-pivot"),
         c("instable", "表の挿入", "instable"),
-        c("insimage", "画像を挿入", "insimage"),
+        c("insimage", "画像を挿入", "insimage-c"),
         c("insshape", "図形を挿入", "insshape"),
         c("inssmartart", "SmartArtの挿入", "inssmartart"),
         c("inscheckbox", "チェックボックス", "inscheckbox"),

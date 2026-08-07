@@ -589,6 +589,17 @@ impl Calc {
             size: keep.as_ref().map(|d| d.size).unwrap_or((0, 0)),
             hide: keep.as_ref().map(|d| d.hide.clone()).unwrap_or_default(),
             style: keep.as_ref().map(|d| d.style.clone()).unwrap_or_default(),
+            name: keep.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| {
+                // 新しい名前(ピボットテーブル1, 2, …)。空きの番号を探す
+                let mut n = 1;
+                loop {
+                    let name = format!("ピボットテーブル{n}");
+                    if !self.book.pivots.iter().any(|d| d.name == name) {
+                        break name;
+                    }
+                    n += 1;
+                }
+            }),
         };
         self.spawn_pivot(def, pend.replace, cx);
     }
@@ -781,8 +792,14 @@ impl Calc {
                                         }
                                     }
                                     this.sync_input();
+                                    let pname = this
+                                        .book
+                                        .pivots
+                                        .last()
+                                        .map(|d| d.name.clone())
+                                        .unwrap_or_default();
                                     this.status = format!(
-                                        "ピボット({value} の {agg})を {} に置きました — その時の値。ピボットテーブルのタブが開いています(更新・総計・小計・レイアウトはここ。Ctrl+Z で戻せます)",
+                                        "{pname}({value} の {agg})を {} に置きました — その時の値。ピボットテーブルのタブが開いています(更新・総計・小計・レイアウトはここ。Ctrl+Z で戻せます)",
                                         at.a1()
                                     )
                                     .into();

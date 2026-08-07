@@ -1046,8 +1046,10 @@ impl Calc {
             .cell_origin_px(self.cursor)
             .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
             .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
-        self.pick_note =
-            Some(ui::tf!("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", field).into());
+        let pname = self.book.pivots.get(pi).map(|d| d.name.clone()).unwrap_or_default();
+        self.pick_note = Some(
+            ui::tf!("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", pname, field).into(),
+        );
         self.pick_kind = "pivot-filter-pick";
         self.pick = Some((items, at));
     }

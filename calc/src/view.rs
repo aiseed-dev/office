@@ -395,7 +395,7 @@ impl Render for Calc {
         // 主要な釦は名札つきの大釦、他は絵だけ(乗ると名前が下のステータス
         // バーへ)。絵の無い釦は小さな文字の釦。ホームだけ2段(釦が多い)
         const BIG: &[(&str, &str)] = &[
-            ("instable", "表"), ("insimage", "画像"), ("insshape", "図形"),
+            ("instable", "表"), ("insimage-c", "画像"), ("insshape", "図形"),
             ("inschart", "グラフ"), ("inssmartart", "SmartArt"),
             ("autosum", "オートSUM"), ("recent", "最近使った関数"),
             ("pagemargins", "余白"), ("pageorient", "向き"), ("pagesize", "サイズ"),

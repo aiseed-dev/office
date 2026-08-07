@@ -866,6 +866,7 @@ mod pivot_tests {
             size: (0, 0),
             hide: Vec::new(),
             style: String::new(),
+            name: String::new(),
         }
     }
 
@@ -1189,6 +1190,7 @@ mod recalc_tests {
                 size: (3, 2), // D1:E3 に置いてある体
                 hide: Vec::new(),
                 style: String::new(),
+                name: "ピボットテーブル1".into(),
             });
             // ピボットに乗ると状態行が「タブで操作」と案内する
             this.cursor = Pos::parse("D2").unwrap();

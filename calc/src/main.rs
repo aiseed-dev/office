@@ -415,10 +415,12 @@ impl Calc {
             } else {
                 format!("{t}: {m}").into()
             };
-        } else if self.pivot_at(self.cursor).is_some() {
-            // ピボットの上に乗ったら、どこで操作するかを言う(文脈タブの案内)
-            self.status = ui::t!(
-                "ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)"
+        } else if let Some(i) = self.pivot_at(self.cursor) {
+            // ピボットに乗ったら、名前と操作の場所を言う(文脈タブの案内)
+            let name = self.book.pivots[i].name.clone();
+            self.status = ui::tf!(
+                "{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)",
+                if name.is_empty() { ui::t!("ピボット").to_string() } else { name }
             )
             .into();
         }

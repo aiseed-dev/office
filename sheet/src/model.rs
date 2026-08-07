@@ -870,6 +870,8 @@ pub struct PivotDef {
     pub hide: Vec<(String, Vec<String>)>,
     /// 見た目の組(""=青(既定) / "緑" / "橙" / "灰")。置くときの帯の色
     pub style: String,
+    /// 名前(ピボットテーブル1, 2, …)。板の題と状態行で名指しする
+    pub name: String,
 }
 
 /// ブックの情報(docProps/core.xml の主な欄)。読んで見せる。

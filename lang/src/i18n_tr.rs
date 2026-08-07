@@ -730,8 +730,6 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — sütunlar için başlıklar (tık ile aç/kapat, isteğe bağlı)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — değerler için bir başlık"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — «{}» nasıl toplansın"),
-    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Pivot tablo üzerindesiniz — işlemler «Pivot Tablo» sekmesinde (güncelle, genel toplam, ara toplam, düzen; tabloyu bozan işlemler kilitli)"),
-    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Pivot süzgeci — «{}» (☑ görünür / ☐ gizli)"),
     ("ピボットのスタイル(選ぶと掛け直します)", "Pivot stili (seçince yeniden uygulanır)"),
     ("自動(黒)", "Otomatik (siyah)"),
     ("罫線 — いまのペン: {}・{}", "Kenarlıklar — geçerli kalem: {}, {}"),
@@ -744,4 +742,7 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("線の色: #{}(罫線の一覧から掛けると効きます)", "Çizgi rengi: #{} (kenarlık listesinden çizince uygulanır)"),
     ("色が読めません(RRGGBB の6桁。例: FF0000)", "Renk okunamadı (6 onaltılık basamak RRGGBB, örn. FF0000)"),
     ("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Çizgi rengi — 6 onaltılık basamak RRGGBB (örn. FF0000; boş + Enter = otomatik)"),
+    ("{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "{} üzerindesiniz — işlemler «Pivot Tablo» sekmesinde (güncelle, toplamlar, ara toplam, düzen; tabloyu bozan işlemler kilitli)"),
+    ("ピボット", "Pivot"),
+    ("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "{} süzgeci — «{}» (☑ görünür / ☐ gizli)"),
 ];

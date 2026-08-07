@@ -730,8 +730,6 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("ピボット 2/4 — 列に広げる見出し(クリックで入切・無くてもよい)", "Pivot 2/4 — Überschriften für die Spalten (Klick schaltet um, optional)"),
     ("ピボット 3/4 — 値にする見出しを1つ", "Pivot 3/4 — eine Überschrift für die Werte"),
     ("ピボット 4/4 — 「{}」の集計のしかた", "Pivot 4/4 — wie „{}“ aggregieren?"),
-    ("ピボットの上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Auf einer Pivot-Tabelle — Bedienung über den Tab „Pivot-Tabelle“ (Aktualisieren, Gesamt-/Zwischensummen, Layout; tabellenbrechende Aktionen sind gesperrt)"),
-    ("ピボットの絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Pivot-Filter — „{}“ (☑ sichtbar / ☐ ausgeblendet)"),
     ("ピボットのスタイル(選ぶと掛け直します)", "Pivot-Stil (Auswahl wendet ihn neu an)"),
     ("自動(黒)", "Automatisch (schwarz)"),
     ("罫線 — いまのペン: {}・{}", "Rahmenlinien — aktueller Stift: {}, {}"),
@@ -744,4 +742,7 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("線の色: #{}(罫線の一覧から掛けると効きます)", "Linienfarbe: #{} (wirkt beim Ziehen aus der Rahmenliste)"),
     ("色が読めません(RRGGBB の6桁。例: FF0000)", "Farbe nicht lesbar (6 Hexziffern RRGGBB, z. B. FF0000)"),
     ("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)", "Linienfarbe — 6 Hexziffern RRGGBB (z. B. FF0000; leer + Enter = automatisch)"),
+    ("{} の上です — 操作は「ピボットテーブル」のタブで(更新・総計・小計・レイアウト。表を崩す操作は締まります)", "Auf {} — Bedienung über den Tab „Pivot-Tabelle“ (Aktualisieren, Gesamt-/Zwischensummen, Layout; tabellenbrechende Aktionen sind gesperrt)"),
+    ("ピボット", "Pivot"),
+    ("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", "Filter von {} — „{}“ (☑ sichtbar / ☐ ausgeblendet)"),
 ];

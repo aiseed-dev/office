@@ -225,7 +225,7 @@ pub const CALC: &[Tab] = &[
     Tab { name: "Ekle", cmds: &[
         c("pivot-insert", "Pivot Tablo Ekle", "add-pivot"),
         c("instable", "Tablo ekle", "instable"),
-        c("insimage", "Resim ekle", "insimage"),
+        c("insimage", "Resim ekle", "insimage-c"),
         c("insshape", "Şekil ekle", "insshape"),
         c("inssmartart", "SmartArt ekle", "inssmartart"),
         c("inscheckbox", "Onay kutusu", "inscheckbox"),
