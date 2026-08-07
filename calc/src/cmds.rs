@@ -2183,12 +2183,28 @@ impl Calc {
             }
             "rem-duplicates" => {
                 self.commit();
-                self.checkpoint();
-                let n = self.book.sheets[self.active].remove_duplicate_rows(true);
-                self.dirty = true;
-                recalc_book(&mut self.book, self.active);
-                // 何件消したかを黙らない
-                self.status = ui::tf!("重複した {} 行を削除しました", n).into();
+                // 本家のダイアログと同じく、比べる列と見出しの有無を選んでから消す
+                let (rows, cols) = self.sheet().extent();
+                if rows == 0 {
+                    self.status = ui::t!("表がありません").into();
+                    return;
+                }
+                let mut list: Vec<(u32, String, bool)> = Vec::new();
+                for col in 0..cols.max(1) {
+                    let head = self
+                        .sheet()
+                        .get(sheet::Pos::new(0, col))
+                        .map(|x| x.value.display())
+                        .unwrap_or_default();
+                    let name = if head.is_empty() {
+                        ui::tf!("{} 列", crate::util::col_name(col)).to_string()
+                    } else {
+                        head
+                    };
+                    list.push((col, name, true)); // 既定は「すべて選択」
+                }
+                self.dedup_pend = Some((list, true));
+                self.dedup_pick();
             }
             "currency" => self.fmt(|f| f.number_format = Some("¥#,##0".into())),
             "percents" => self.fmt(|f| f.number_format = Some("0%".into())),

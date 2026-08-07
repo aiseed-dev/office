@@ -809,4 +809,9 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("リンク先({})が場所として読めません", "Link target ({}) is not a valid reference"),
 ("ハイパーリンク — {}(URL か #シート名!B5。空にして Enter で外す)", "Hyperlink — {} (URL or #Sheet!B5; empty Enter removes it)"),
 ("表示テキスト — {} に見せる文字(空 Enter = そのまま)", "Display text — what {} shows (empty Enter = keep as is)"),
+("{} 列", "Column {}"),
+("先頭行は見出し(消さない)", "First row is a header (keep it)"),
+("削除する", "Delete"),
+("比べる列を1つは選んでください", "Pick at least one column to compare"),
+("重複の削除 — 比べる列(クリックで入切)", "Remove duplicates — columns to compare (click to toggle)"),
 ];

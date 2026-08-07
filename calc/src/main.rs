@@ -68,6 +68,8 @@ struct Calc {
     pick_note: Option<SharedString>,
     /// ピボットの絞り込みの聞き取り中: (指図の番号, 見出し, 隠す値の作業用)
     pivot_flt: Option<(usize, String, std::collections::BTreeSet<String>)>,
+    /// 重複の削除の下ごしらえ: (列番号, 見せる名前, 比べるか) の列と「先頭行は見出し」
+    pub(crate) dedup_pend: Option<(Vec<(u32, String, bool)>, bool)>,
     /// 罫線のペン(線種と色)。罫線の一覧から掛けるときに使う
     pen_style: sheet::model::BStyle,
     pen_color: Option<u32>,
@@ -319,6 +321,7 @@ impl Calc {
             sort_pend: None,
             pick_note: None,
             pivot_flt: None,
+            dedup_pend: None,
             pen_style: sheet::model::BStyle::default(),
             pen_color: None,
             hf_pend: None,

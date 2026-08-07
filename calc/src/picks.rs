@@ -399,6 +399,37 @@ impl Calc {
                 self.pivot_filter_pick();
                 return;
             }
+            "dedup-pick" => {
+                let header_label = ui::t!("先頭行は見出し(消さない)").to_string();
+                if v == format!("→ {}", ui::t!("削除する")) {
+                    let Some((list, header)) = self.dedup_pend.take() else { return };
+                    let cols: Vec<u32> =
+                        list.iter().filter(|(_, _, on)| *on).map(|(c, _, _)| *c).collect();
+                    if cols.is_empty() {
+                        self.status = ui::t!("比べる列を1つは選んでください").into();
+                        self.dedup_pend = Some((list, header));
+                        self.dedup_pick();
+                        return;
+                    }
+                    self.checkpoint();
+                    let all = cols.len() == list.len();
+                    let n = self.book.sheets[self.active]
+                        .remove_duplicate_rows_in(header, if all { &[] } else { &cols });
+                    self.dirty = true;
+                    recalc_book(&mut self.book, self.active);
+                    self.sync_input();
+                    // 何件消したかを黙らない
+                    self.status = ui::tf!("重複した {} 行を削除しました", n).into();
+                } else if let Some((list, header)) = &mut self.dedup_pend {
+                    if v == header_label {
+                        *header = !*header;
+                    } else if let Some(item) = list.iter_mut().find(|(_, n, _)| *n == v) {
+                        item.2 = !item.2;
+                    }
+                    self.dedup_pick();
+                    return;
+                }
+            }
             "pivot-rows-pick" => {
                 if v == "→ 決定(列の選択へ)" {
                     let ok = self
@@ -1302,6 +1333,28 @@ impl Calc {
 
     /// ピボットの聞き取りの一覧を(いまの控えから)組み直して開く。
     /// クリックのたびに呼ばれる — ✓ の付け外しはここで反映される
+    /// 重複の削除の板 — 比べる列の入切と「先頭行は見出し」。
+    pub(crate) fn dedup_pick(&mut self) {
+        let Some((list, header)) = &self.dedup_pend else { return };
+        let at = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let mut items: Vec<String> = Vec::new();
+        for (_, name, on) in list {
+            items.push(format!("{} {}", if *on { "☑" } else { "☐" }, name));
+        }
+        items.push(format!(
+            "{} {}",
+            if *header { "☑" } else { "☐" },
+            ui::t!("先頭行は見出し(消さない)")
+        ));
+        items.push(format!("→ {}", ui::t!("削除する")));
+        self.pick_note = Some(ui::t!("重複の削除 — 比べる列(クリックで入切)").into());
+        self.pick_kind = "dedup-pick";
+        self.pick = Some((items, at));
+    }
+
     pub(crate) fn pivot_pick(&mut self, kind: &'static str) {
         let Some(pend) = &self.pivot_pend else { return };
         let at = self
@@ -1690,6 +1743,7 @@ impl Calc {
             self.status = ui::t!("書式のコピーをやめました").into();
         }
         self.menu_head = None; // 見出しメニューの印も畳む
+        self.dedup_pend = None;
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる

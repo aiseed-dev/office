@@ -1136,6 +1136,35 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 重複の削除は列と見出しの有無を選べる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            // 品名は同じでも金額が違う2行 — 品名の列だけで比べれば重複
+            for (r, (name, amt)) in
+                [("品名", "金額"), ("鉛筆", "100"), ("鉛筆", "120"), ("消しゴム", "80")]
+                    .iter()
+                    .enumerate()
+            {
+                this.book.sheets[0].set(Pos::new(r as u32, 0), sheet::Cell::input(name));
+                this.book.sheets[0].set(Pos::new(r as u32, 1), sheet::Cell::input(amt));
+            }
+            this.run_cmd("rem-duplicates", cx);
+            assert_eq!(this.pick_kind, "dedup-pick", "選ぶ板が開かない");
+            assert!(this.dedup_pend.is_some());
+            // 「金額」を外す → 品名だけで比べる
+            this.apply_pick("金額", cx);
+            assert_eq!(this.pick_kind, "dedup-pick", "入切で板が閉じた");
+            this.apply_pick("→ 削除する", cx);
+            let s = &this.book.sheets[0];
+            assert_eq!(s.get(Pos::new(1, 0)).unwrap().value.display(), "鉛筆");
+            assert_eq!(s.get(Pos::new(2, 0)).unwrap().value.display(), "消しゴム");
+            assert!(s.get(Pos::new(3, 0)).is_none(), "重複が消えていない");
+            // 残るのは先に出てきた 100 の行
+            assert_eq!(s.get(Pos::new(1, 1)).unwrap().value.display(), "100");
+        });
+    }
+
+    #[gpui::test]
     fn リンクの後に表示テキストを聞かれてセルに入る(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

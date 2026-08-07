@@ -1990,6 +1990,12 @@ impl Sheet {
     ///
     /// 返すのは落とした行数 — 何件消したかを黙らない。
     pub fn remove_duplicate_rows(&mut self, header: bool) -> usize {
+        self.remove_duplicate_rows_in(header, &[])
+    }
+
+    /// 中身が同じ行を落とす(比べる列を選べる版。空 = 全列で比べる)。
+    /// 行は丸ごと消える — 比べるのが一部の列でも、残すのは先に出てきた行。
+    pub fn remove_duplicate_rows_in(&mut self, header: bool, key_cols: &[u32]) -> usize {
         let (rows, cols) = self.extent();
         if rows == 0 { return 0 }
         let (last_row, last_col) = (rows - 1, cols.saturating_sub(1));
@@ -2002,6 +2008,7 @@ impl Sheet {
                 .filter_map(|c| self.cells.get(&Pos { row: r, col: c }).map(|x| (c, x.clone())))
                 .collect();
             let key: Vec<String> = (0..=last_col)
+                .filter(|c| key_cols.is_empty() || key_cols.contains(c))
                 .map(|c| {
                     cells.iter().find(|(cc, _)| *cc == c)
                         .map(|(_, x)| x.value.display()).unwrap_or_default()
