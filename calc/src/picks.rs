@@ -868,6 +868,8 @@ impl Calc {
                 ));
             }
             // 板の要らない規則はその場で掛ける
+            // 第2版: バー/スケール/アイコン(範囲の最小〜最大が物差し)
+            "cond-bar" | "cond-scale" | "cond-icons" => self.cond_visual(id),
             "cond-dup" | "cond-uniq" | "cond-avg-above" | "cond-avg-below" => {
                 self.commit();
                 self.checkpoint();
@@ -967,6 +969,33 @@ impl Calc {
         cx.notify();
     }
 
+    /// 第2版の条件付き書式: バー/スケール/アイコン(範囲の最小〜最大が物差し)
+    pub(crate) fn cond_visual(&mut self, id: &str) {
+        self.commit();
+        self.checkpoint();
+        let range = self.sel_rect();
+        use sheet::model::{CondKind, CondRule};
+        let (kind, said) = match id {
+            "cond-bar" => (
+                CondKind::Bar("638EC6".into()),
+                ui::t!("データバーを敷きます(最小〜最大が棒の長さ)").to_string(),
+            ),
+            "cond-scale" => (
+                CondKind::Scale("F8696B".into(), Some("FFEB84".into()), "63BE7B".into()),
+                ui::t!("カラースケールを塗ります(小=赤 〜 大=緑)").to_string(),
+            ),
+            _ => (
+                CondKind::Icons("3Arrows".into()),
+                ui::t!("3つの矢印を置きます(下/中/上の三段)").to_string(),
+            ),
+        };
+        self.book.sheets[self.active]
+            .cond
+            .push(CondRule { range, kind, color: None, fill: None });
+        self.dirty = true;
+        self.status = format!("{}:{} — {}", range.0.a1(), range.1.a1(), said).into();
+    }
+
     /// 子メニューの中身 (id, 名前, 押せるか)。
     /// **並びと名前は Euro-Office に合わせ、未実装は灰色**(リボンと同じ方針)。
     pub(crate) fn menu_sub_entries(&self, sub: &str) -> Vec<(&'static str, &'static str, bool)> {
@@ -1033,6 +1062,9 @@ impl Calc {
                 ("cond-bottom", "下位Nを薄赤に…", true),
                 ("cond-avg-above", "平均より上を薄緑に", true),
                 ("cond-avg-below", "平均より下を薄赤に", true),
+                ("cond-bar", "データバー(青の棒)", true),
+                ("cond-scale", "カラースケール(赤→黄→緑)", true),
+                ("cond-icons", "アイコン(3つの矢印)", true),
                 ("cond-clear", "この範囲の条件を消す", true),
             ],
             "numfmt" => vec![

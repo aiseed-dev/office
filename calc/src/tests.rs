@@ -1179,6 +1179,28 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn データバーとスケールとアイコンをメニューから掛けられる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            for (i, v) in ["10", "20", "30"].iter().enumerate() {
+                this.book.sheets[0].set(Pos::new(i as u32, 0), sheet::Cell::input(v));
+            }
+            this.anchor = Some(Pos::new(0, 0));
+            this.cursor = Pos::new(2, 0);
+            this.sync_input();
+            this.cond_visual("cond-bar");
+            this.cond_visual("cond-scale");
+            this.cond_visual("cond-icons");
+            let cond = &this.book.sheets[0].cond;
+            assert_eq!(cond.len(), 3, "3本入らない: {cond:?}");
+            use sheet::model::CondKind;
+            assert!(matches!(cond[0].kind, CondKind::Bar(_)));
+            assert!(matches!(cond[1].kind, CondKind::Scale(..)));
+            assert!(matches!(cond[2].kind, CondKind::Icons(_)));
+        });
+    }
+
+    #[gpui::test]
     fn 合計行の集計のしかたを替えられる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, _cx| {

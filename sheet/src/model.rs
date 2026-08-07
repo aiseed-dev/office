@@ -825,6 +825,12 @@ pub enum CondKind {
     Top(u32, bool),
     /// 平均より上(true = 下)
     Avg(bool),
+    /// データバー(棒の色 RRGGBB)。最小〜最大を棒の長さに
+    Bar(String),
+    /// カラースケール(最小色, 中間色, 最大色)。中間なしは2色
+    Scale(String, Option<String>, String),
+    /// アイコンセット(xlsx の iconSet 名。例 "3Arrows")
+    Icons(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -868,6 +874,9 @@ pub struct CondAux {
     pub avg: f64,
     pub cutoff: f64,
     pub dups: std::collections::HashSet<String>,
+    /// 範囲の最小・最大(バー/スケール/アイコンの物差し)
+    pub min: f64,
+    pub max: f64,
 }
 
 impl CondRule {
@@ -876,6 +885,21 @@ impl CondRule {
         let mut aux = CondAux::default();
         let (a, b) = self.range;
         match &self.kind {
+            CondKind::Bar(_) | CondKind::Scale(..) | CondKind::Icons(_) => {
+                let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        if let Value::Number(x) = s.value(Pos::new(r, c)) {
+                            lo = lo.min(x);
+                            hi = hi.max(x);
+                        }
+                    }
+                }
+                if lo.is_finite() {
+                    aux.min = lo;
+                    aux.max = hi;
+                }
+            }
             CondKind::Avg(_) => {
                 let (mut sum, mut n) = (0.0, 0u32);
                 for r in a.row..=b.row {
@@ -965,7 +989,48 @@ impl CondRule {
                 let Value::Number(n) = v else { return false };
                 if *below { *n < aux.avg } else { *n > aux.avg }
             }
+            // バー/スケール/アイコンは「当たり外れ」ではなく物差し —
+            // scalar() で 0〜1 を取り、描く側が形にする
+            CondKind::Bar(_) | CondKind::Scale(..) | CondKind::Icons(_) => false,
         }
+    }
+
+    /// 範囲の中での位置(0=最小 〜 1=最大)。バー/スケール/アイコン用。
+    /// 全部同じ値なら 1.0(Excel も満杯の棒を描く)
+    pub fn scalar(&self, p: Pos, v: &Value, aux: &CondAux) -> Option<f64> {
+        if !matches!(self.kind, CondKind::Bar(_) | CondKind::Scale(..) | CondKind::Icons(_)) {
+            return None;
+        }
+        let (a, b) = self.range;
+        if !((a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col)) {
+            return None;
+        }
+        let Value::Number(n) = v else { return None };
+        if aux.max <= aux.min {
+            return Some(1.0);
+        }
+        Some(((n - aux.min) / (aux.max - aux.min)).clamp(0.0, 1.0))
+    }
+
+    /// カラースケールの色(0〜1 → RRGGBB)。2色は直線、3色は 0.5 で折り返し
+    pub fn scale_color(&self, t: f64) -> Option<String> {
+        let CondKind::Scale(lo, mid, hi) = &self.kind else { return None };
+        fn ch(s: &str, i: usize) -> f64 {
+            u8::from_str_radix(s.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as f64
+        }
+        let lerp = |x: &str, y: &str, t: f64| -> String {
+            format!(
+                "{:02X}{:02X}{:02X}",
+                (ch(x, 0) + (ch(y, 0) - ch(x, 0)) * t).round() as u8,
+                (ch(x, 2) + (ch(y, 2) - ch(x, 2)) * t).round() as u8,
+                (ch(x, 4) + (ch(y, 4) - ch(x, 4)) * t).round() as u8,
+            )
+        };
+        Some(match mid {
+            None => lerp(lo, hi, t),
+            Some(m) if t < 0.5 => lerp(lo, m, t * 2.0),
+            Some(m) => lerp(m, hi, (t - 0.5) * 2.0),
+        })
     }
 }
 
@@ -2172,6 +2237,36 @@ mod sort_tests {
             formula: None, value: Value::Text("空欄".into()), fmt: Default::default() });
         s.sort_by_column(1, true, false);
         assert_eq!(col0(&s, 0), "甲", "空が先に来た");
+    }
+
+    #[test]
+    fn バーとスケールの物差しが効く() {
+        use crate::model::{CondKind, CondRule};
+        let mut s = Sheet::new("試");
+        for (i, v) in ["10", "20", "30"].iter().enumerate() {
+            s.set(Pos::new(i as u32, 0), Cell::input(v));
+        }
+        let rule = CondRule {
+            range: (Pos::new(0, 0), Pos::new(2, 0)),
+            kind: CondKind::Bar("638EC6".into()),
+            color: None, fill: None,
+        };
+        let aux = rule.aux(&s);
+        assert_eq!(aux.min, 10.0);
+        assert_eq!(aux.max, 30.0);
+        let t = rule.scalar(Pos::new(1, 0), &Value::Number(20.0), &aux).unwrap();
+        assert!((t - 0.5).abs() < 1e-9, "真ん中が 0.5 でない: {t}");
+        // 範囲の外は None
+        assert!(rule.scalar(Pos::new(9, 9), &Value::Number(20.0), &aux).is_none());
+        // スケールの色: 両端は端の色、真ん中は中間色
+        let sc = CondRule {
+            range: (Pos::new(0, 0), Pos::new(2, 0)),
+            kind: CondKind::Scale("FF0000".into(), Some("FFFF00".into()), "00FF00".into()),
+            color: None, fill: None,
+        };
+        assert_eq!(sc.scale_color(0.0).unwrap(), "FF0000");
+        assert_eq!(sc.scale_color(0.5).unwrap(), "FFFF00");
+        assert_eq!(sc.scale_color(1.0).unwrap(), "00FF00");
     }
 
     #[test]

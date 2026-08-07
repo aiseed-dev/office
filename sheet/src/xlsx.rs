@@ -975,6 +975,9 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                         let below = attr(e, "aboveAverage").as_deref() == Some("0");
                         Some((format!("avg:{}", below as u8), dxf))
                     }
+                    "dataBar" => Some(("bar".into(), dxf)),
+                    "colorScale" => Some(("scale".into(), dxf)),
+                    "iconSet" => Some(("icons".into(), dxf)),
                     _ => {
                         rep.note("条件付き書式(読めない種類。保存で失われる)");
                         None
@@ -992,6 +995,8 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                 taken: Option<(String, Option<usize>)>,
                 formula: &str,
                 dxfs: &[(Option<String>, Option<String>)],
+                cf_colors: &[String],
+                icon_name: Option<&str>,
                 rep: &mut Report,
             ) {
 
@@ -1015,6 +1020,25 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                         Some(CondKind::Top(n, bottom))
                     } else if let Some(rest) = tag.strip_prefix("avg:") {
                         Some(CondKind::Avg(rest == "1"))
+                    } else if tag == "bar" {
+                        Some(CondKind::Bar(
+                            cf_colors.first().cloned().unwrap_or_else(|| "638EC6".into()),
+                        ))
+                    } else if tag == "scale" {
+                        match cf_colors {
+                            [lo, hi] => Some(CondKind::Scale(lo.clone(), None, hi.clone())),
+                            [lo, m, hi] => {
+                                Some(CondKind::Scale(lo.clone(), Some(m.clone()), hi.clone()))
+                            }
+                            _ => {
+                                rep.note("条件付き書式(カラースケールの色が読めない。保存で失われる)");
+                                None
+                            }
+                        }
+                    } else if tag == "icons" {
+                        Some(CondKind::Icons(
+                            icon_name.unwrap_or("3TrafficLights1").to_string(),
+                        ))
                     } else {
                         match (crate::model::CondOp::from_xlsx(&tag), nums.as_slice()) {
                             (Some(op), [v, ..]) => Some(CondKind::Cmp(op, *v)),
@@ -1051,6 +1075,9 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
             let mut rule: Option<(String, Option<usize>)> = None; // (operator, dxfId)
             let mut in_formula = false;
             let mut formula = String::new();
+            // バー/スケール/アイコンの中身(cfRule の子から拾う)
+            let mut cf_colors: Vec<String> = Vec::new();
+            let mut icon_name: Option<String> = None;
             loop {
                 match r.read_event_into(&mut buf) {
                     Ok(Event::Eof) | Err(_) => break,
@@ -1070,11 +1097,32 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                     }
                     Ok(Event::Empty(e)) if local(e.name().as_ref()) == b"cfRule" => {
                         parse_cf_start(&e, &mut rule, &mut formula, &mut rep);
+                        cf_colors.clear();
+                        icon_name = None;
                         // 自己閉じは End が来ない — その場で確定
-                        finish_cf(&mut sh, sqref, rule.take(), &formula, &dxfs, &mut rep);
+                        finish_cf(&mut sh, sqref, rule.take(), &formula, &dxfs,
+                            &cf_colors, icon_name.as_deref(), &mut rep);
                     }
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"cfRule" => {
                         parse_cf_start(&e, &mut rule, &mut formula, &mut rep);
+                        cf_colors.clear();
+                        icon_name = None;
+                    }
+                    // cfRule の子: <color rgb>(バー/スケール)と <iconSet iconSet=…>
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if rule.is_some() && local(e.name().as_ref()) == b"color" =>
+                    {
+                        if let Some(rgb) = attr(&e, "rgb") {
+                            // 頭の FF(不透明)は1回だけ剥がす — trim_start_matches は
+                            // 繰り返し剥がすので FFFFEB84(黄)が EB84 に化ける
+                            let c = if rgb.len() == 8 { rgb[2..].to_string() } else { rgb };
+                            cf_colors.push(c);
+                        }
+                    }
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if rule.is_some() && local(e.name().as_ref()) == b"iconSet" =>
+                    {
+                        icon_name = attr(&e, "iconSet").or(Some("3TrafficLights1".into()));
                     }
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"formula" => {
                         in_formula = true;
@@ -1088,7 +1136,8 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             formula.push('\u{1f}'); // 2本目との区切り(between)
                         }
                         b"cfRule" => {
-                            finish_cf(&mut sh, sqref, rule.take(), &formula, &dxfs, &mut rep);
+                            finish_cf(&mut sh, sqref, rule.take(), &formula, &dxfs,
+                                &cf_colors, icon_name.as_deref(), &mut rep);
                         }
                         b"conditionalFormatting" => sqref = None,
                         _ => {}
@@ -2698,6 +2747,45 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                         n + 1,
                         if *below { r#" aboveAverage="0""# } else { "" }
                     ),
+                    // バー/スケール/アイコンは dxf を使わない(色は中身に持つ)
+                    CondKind::Bar(color) => format!(
+                        r#"<cfRule type="dataBar" priority="{}"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF{color}"/></dataBar></cfRule>"#,
+                        n + 1
+                    ),
+                    CondKind::Scale(lo, mid, hi) => {
+                        let (vo, cols) = match mid {
+                            Some(m) => (
+                                r#"<cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/>"#.to_string(),
+                                format!(r#"<color rgb="FF{lo}"/><color rgb="FF{m}"/><color rgb="FF{hi}"/>"#),
+                            ),
+                            None => (
+                                r#"<cfvo type="min"/><cfvo type="max"/>"#.to_string(),
+                                format!(r#"<color rgb="FF{lo}"/><color rgb="FF{hi}"/>"#),
+                            ),
+                        };
+                        format!(
+                            r#"<cfRule type="colorScale" priority="{}"><colorScale>{vo}{cols}</colorScale></cfRule>"#,
+                            n + 1
+                        )
+                    }
+                    CondKind::Icons(name) => {
+                        // 区切りはアイコン数で等分(3つなら 0/33/67%)
+                        let k: u32 = name
+                            .chars()
+                            .next()
+                            .and_then(|c| c.to_digit(10))
+                            .unwrap_or(3)
+                            .max(2);
+                        let vo: String = (0..k)
+                            .map(|i| {
+                                format!(r#"<cfvo type="percent" val="{}"/>"#, i * 100 / k)
+                            })
+                            .collect();
+                        format!(
+                            r#"<cfRule type="iconSet" priority="{}"><iconSet iconSet="{name}">{vo}</iconSet></cfRule>"#,
+                            n + 1
+                        )
+                    }
                 };
                 cf.push_str(&format!(
                     r#"<conditionalFormatting sqref="{sq}">{inner}</conditionalFormatting>"#
@@ -3334,6 +3422,34 @@ mod link_comment_tests {
         let back = roundtrip(&b);
         assert_eq!(back.sheets[0].links.get(&p).map(|s| s.as_str()),
             Some("#集計!B5"), "帳面の中へのリンクが往復しない");
+    }
+
+    #[test]
+    fn バーとスケールとアイコンの条件付き書式が往復する() {
+        use crate::model::{CondKind, CondRule};
+        let mut b = Book::new();
+        for (i, v) in ["10", "20", "30"].iter().enumerate() {
+            b.sheets[0].set(Pos::new(i as u32, 0), Cell::input(v));
+        }
+        let range = (Pos::new(0, 0), Pos::new(2, 0));
+        b.sheets[0].cond.push(CondRule {
+            range, kind: CondKind::Bar("638EC6".into()), color: None, fill: None });
+        b.sheets[0].cond.push(CondRule {
+            range,
+            kind: CondKind::Scale("F8696B".into(), Some("FFEB84".into()), "63BE7B".into()),
+            color: None, fill: None });
+        b.sheets[0].cond.push(CondRule {
+            range, kind: CondKind::Icons("3Arrows".into()), color: None, fill: None });
+        let back = roundtrip(&b);
+        let cond = &back.sheets[0].cond;
+        assert_eq!(cond.len(), 3, "本数が違う: {cond:?}");
+        assert_eq!(cond[0].kind, CondKind::Bar("638EC6".into()), "バーが往復しない");
+        assert_eq!(
+            cond[1].kind,
+            CondKind::Scale("F8696B".into(), Some("FFEB84".into()), "63BE7B".into()),
+            "スケールが往復しない(FF の剥がし過ぎに注意)"
+        );
+        assert_eq!(cond[2].kind, CondKind::Icons("3Arrows".into()), "アイコンが往復しない");
     }
 
     #[test]

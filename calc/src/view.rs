@@ -1088,6 +1088,8 @@ impl Render for Calc {
                 });
                 // 条件付き書式。**付けた条件は画面に出す**(出ないなら飾り)
                 let mut cond_color: Option<gpui::Rgba> = None;
+                let mut cond_bar: Option<(f32, gpui::Rgba)> = None;
+                let mut cond_icon: Option<(&'static str, gpui::Rgba)> = None;
                 for (rule, aux) in &cond_prep {
                     if rule.hits(p, &v, aux) {
                         if let Some(fill) = &rule.fill {
@@ -1097,8 +1099,42 @@ impl Render for Calc {
                             cond_color = Some(hex(c));
                         }
                     }
+                    // バー/スケール/アイコンは 0〜1 の物差しで描く
+                    if let Some(t) = rule.scalar(p, &v, aux) {
+                        use sheet::model::CondKind;
+                        match &rule.kind {
+                            CondKind::Bar(c) => cond_bar = Some((t as f32, hex(c))),
+                            CondKind::Scale(..) => {
+                                if let Some(c) = rule.scale_color(t) {
+                                    base = hex(&c);
+                                }
+                            }
+                            CondKind::Icons(name) => {
+                                // 3段: 下 / 中 / 上。矢印系は ↓→↑、他は ●の信号色
+                                let arrows = name.contains("Arrow");
+                                cond_icon = Some(if t < 1.0 / 3.0 {
+                                    (if arrows { "↓" } else { "●" }, hex("C62828"))
+                                } else if t < 2.0 / 3.0 {
+                                    (if arrows { "→" } else { "●" }, hex("E6A700"))
+                                } else {
+                                    (if arrows { "↑" } else { "●" }, hex("2E7D32"))
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 d = d.bg(base);
+                // データバー(文字の下に敷く。子は後の文字が上に描かれる)
+                if let Some((t, bc)) = cond_bar {
+                    let bw = (self.col_px(c) - 2.0).max(0.0) * t;
+                    d = d.relative().child(
+                        div().absolute().left(px(1.0)).top(px(2.0)).bottom(px(2.0))
+                            .w(px(bw))
+                            .bg(gpui::Rgba { a: 0.65, ..bc })
+                            .rounded_xs(),
+                    );
+                }
                 // 範囲は下地に緑を**混ぜて**見せる(塗りは透けて残る)。
                 // 色を抜くのは**起点のセル**(最初に選んだ方)— ドラッグで
                 // 動くのは反対側の角なので、抜けが動き回らない(Excel の作法)
@@ -1306,6 +1342,14 @@ impl Render for Calc {
                     // ラテン文字の bidi は扱わない — 日本語の右横書きのため
                     let rev: String = shown.chars().rev().collect();
                     row = row.child(d.justify_end().child(SharedString::from(rev)));
+                } else if let Some((glyph, gc)) = cond_icon {
+                    row = row.child(
+                        d.child(
+                            div().text_color(gc).mr_1().flex_none()
+                                .child(SharedString::from(glyph.to_string())),
+                        )
+                        .child(SharedString::from(shown)),
+                    );
                 } else {
                     row = row.child(d.child(SharedString::from(shown)));
                 }

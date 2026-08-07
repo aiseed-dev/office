@@ -829,4 +829,7 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("CSV に書き出しました: {}(いまのシートの値だけ — 式・書式・他のシートは入りません)", "Exported to CSV: {} (values of the current sheet only — formulas, formats and other sheets are not included)"),
 ("CSV に書き出せませんでした: {}", "Could not export to CSV: {}"),
 ("CSV に書き出す", "Export to CSV"),
+("データバーを敷きます(最小〜最大が棒の長さ)", "Data bars added (bar length runs from min to max)"),
+("カラースケールを塗ります(小=赤 〜 大=緑)", "Color scale applied (low = red, high = green)"),
+("3つの矢印を置きます(下/中/上の三段)", "Three arrows added (low / middle / high)"),
 ];
