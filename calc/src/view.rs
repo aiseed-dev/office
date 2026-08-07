@@ -2440,6 +2440,8 @@ impl Render for Calc {
                 "text-angle" => ui::t!("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)").to_string(),
                 "hf-edit" => ui::t!("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)").to_string(),
                 "name-range" => ui::t!("名前の中身 — 場所(B12 か A1:C9 の形)").to_string(),
+                "csv-delim" => ui::t!("区切りの文字を1つ(例: |)").to_string(),
+                "csv-dest" => ui::t!("置き場所 — 左上のセル(B12 の形)").to_string(),
                 "calc-iter" => ui::t!("反復計算 — 最大回数と変化量(例: 100 0.001。空 Enter = 切)").to_string(),
                 "pivot-label" => ui::t!("ラベルで絞る — 例: 含む 東京 / で始まる 東 / で終わる 区").to_string(),
                 "pivot-vfilter" => ui::t!("値で絞る — 例: > 1000(比較は > >= < <= =。空 Enter = 解除)").to_string(),

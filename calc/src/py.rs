@@ -228,26 +228,74 @@ fig.savefig(spec["out"], dpi=100)
 
 /// CSV/TSV 読みの台本。文字コード(UTF-8 → CP932 → Latin-1)と区切りを判定し、
 /// 区切りに使えない印(US=\x1F, RS=\x1E)で吐く — タブや改行入りの欄でも壊れない。
+/// テキスト取り込みウィザードの下ごしらえ。
+pub(crate) struct ImportPend {
+    pub path: std::path::PathBuf,
+    /// IMPORT_ENCS の添字
+    pub enc: usize,
+    /// IMPORT_DELIMS の添字
+    pub delim: usize,
+    /// 「その他」の区切り(1文字)
+    pub custom: String,
+    pub dest: Pos,
+    /// いまの設定で読んだ全行(取り込むときはこれを流し込む)
+    pub grid: Vec<Vec<String>>,
+    /// Python が実際に使った(文字コード, 区切り)— 自動のときの報告
+    pub used: (String, String),
+}
+
+/// 文字コードの選択肢(見せる名前, Python に渡す名前)。
+pub(crate) const IMPORT_ENCS: &[(&str, &str)] = &[
+    ("自動", "auto"),
+    ("UTF-8", "utf-8-sig"),
+    ("Shift_JIS(CP932)", "cp932"),
+    ("Latin-1", "latin-1"),
+];
+
+/// 区切りの選択肢(見せる名前, 実体)。「その他」は板で1文字を聞く。
+pub(crate) const IMPORT_DELIMS: &[(&str, &str)] = &[
+    ("自動", "auto"),
+    ("カンマ", ","),
+    ("タブ", "\t"),
+    ("セミコロン", ";"),
+    ("コロン", ":"),
+    ("スペース", " "),
+    ("その他…", "その他"),
+];
+
 pub(crate) const CSV_PY: &str = r#"
 import csv, sys
 
+# argv: path [文字コード|auto] [区切り|auto]
 path = sys.argv[1]
+want_enc = sys.argv[2] if len(sys.argv) > 2 else "auto"
+want_delim = sys.argv[3] if len(sys.argv) > 3 else "auto"
 raw = open(path, "rb").read()
 text = None
-for enc in ("utf-8-sig", "cp932", "latin-1"):
+used_enc = ""
+encs = ("utf-8-sig", "cp932", "latin-1") if want_enc == "auto" else (want_enc,)
+for enc in encs:
     try:
         text = raw.decode(enc)
+        used_enc = enc
         break
     except UnicodeDecodeError:
         continue
 if text is None:
-    sys.exit("文字コードが判定できません")
-try:
-    dialect = csv.Sniffer().sniff(text[:4096], delimiters=",\t;")
-except csv.Error:
-    dialect = csv.excel_tab if "\t" in text[:4096] else csv.excel
-rows = list(csv.reader(text.splitlines(), dialect))
-out = "\x1e".join("\x1f".join(row) for row in rows)
+    sys.exit("その文字コードでは読めません" if want_enc != "auto" else "文字コードが判定できません")
+if want_delim == "auto":
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",\t;")
+    except csv.Error:
+        dialect = csv.excel_tab if "\t" in text[:4096] else csv.excel
+    used_delim = dialect.delimiter
+    rows = list(csv.reader(text.splitlines(), dialect))
+else:
+    used_delim = want_delim
+    rows = list(csv.reader(text.splitlines(), delimiter=want_delim))
+# 1行目は下ごしらえの報告(使った文字コード・区切り)
+meta = "\x01" + "\x1f".join((used_enc, used_delim))
+out = meta + "\x1e" + "\x1e".join("\x1f".join(row) for row in rows)
 sys.stdout.buffer.write(out.encode("utf-8"))
 "#;
 
@@ -1306,59 +1354,154 @@ calc の隣に置いてください)").to_string()
         .detach();
     }
 
-    /// CSV/TSV を選んで、いまのセルから値として流し込む(裏方 Python)。
-    /// 文字コード(CP932 含む)と区切りは Python 側で判定する。
+    /// CSV/TSV を選んで、ウィザードの板(文字コード・区切り・置き場所・
+    /// プレビュー)を開く。読み直しは Python(CP932 も読める)。
     pub(crate) fn import_text_dialog(&mut self, cx: &mut Context<Self>) {
-        let ask = cx.background_executor().spawn(async {
-            let p = rfd::FileDialog::new()
-                .add_filter("テキストのデータ", &["csv", "tsv", "txt"])
-                .pick_file()?;
+        let ask = cx
+            .background_executor()
+            .spawn(async {
+                rfd::FileDialog::new()
+                    .add_filter("テキストのデータ", &["csv", "tsv", "txt"])
+                    .pick_file()
+            });
+        cx.spawn(async move |this, cx| {
+            let Some(p) = ask.await else { return };
+            let _ = this.update(cx, |this, cx| {
+                this.import_pend = Some(ImportPend {
+                    path: p,
+                    enc: 0,
+                    delim: 0,
+                    custom: String::new(),
+                    dest: this.cursor,
+                    grid: Vec::new(),
+                    used: (String::new(), String::new()),
+                });
+                this.import_reparse(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// いまの設定(文字コード・区切り)でファイルを読み直し、板を出し直す。
+    pub(crate) fn import_reparse(&mut self, cx: &mut Context<Self>) {
+        let Some(pend) = &self.import_pend else { return };
+        let (path, enc, delim) = (
+            pend.path.clone(),
+            IMPORT_ENCS[pend.enc].1.to_string(),
+            match IMPORT_DELIMS[pend.delim].1 {
+                "その他" => {
+                    if pend.custom.is_empty() { ",".into() } else { pend.custom.clone() }
+                }
+                d => d.to_string(),
+            },
+        );
+        let job = cx.background_executor().spawn(async move {
             let dir = std::env::temp_dir().join(format!("jo-csv-{}", std::process::id()));
             let _ = std::fs::create_dir_all(&dir);
             // csv.py という名前は標準ライブラリの csv を隠してしまう(踏んだ)
             let py_path = dir.join("jo_csv.py");
             if std::fs::write(&py_path, CSV_PY).is_err() {
-                return Some(Err(ui::t!("一時ファイルが書けません").to_string()));
+                return Err(ui::t!("一時ファイルが書けません").to_string());
             }
             let o = std::process::Command::new(find_python())
                 .arg(&py_path)
-                .arg(&p)
+                .arg(&path)
+                .arg(&enc)
+                .arg(&delim)
                 .output();
-            Some(match o {
-                Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).to_string()),
+            match o {
+                Ok(o) if o.status.success() => {
+                    Ok(String::from_utf8_lossy(&o.stdout).to_string())
+                }
                 Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
                 Err(e) => Err(format!("Python が起動できません: {e}")),
-            })
+            }
         });
         cx.spawn(async move |this, cx| {
-            let r = ask.await;
+            let r = job.await;
             let _ = this.update(cx, |this, cx| {
                 match r {
-                    None => {}
-                    Some(Ok(data)) => {
-                        let grid: Vec<Vec<String>> = data
-                            .split('\u{1e}')
+                    Ok(data) => {
+                        let mut rows = data.split('\u{1e}');
+                        // 1行目は下ごしらえの報告(\x01 文字コード \x1f 区切り)
+                        let meta = rows.next().unwrap_or_default();
+                        let used = meta
+                            .strip_prefix('\u{01}')
+                            .and_then(|m| m.split_once('\u{1f}'))
+                            .map(|(e, d)| (e.to_string(), d.to_string()))
+                            .unwrap_or_default();
+                        let grid: Vec<Vec<String>> = rows
                             .map(|row| row.split('\u{1f}').map(|f| f.to_string()).collect())
                             .collect();
-                        let n_rows = grid.len();
-                        this.checkpoint();
-                        let at = this.cursor;
-                        let n = paste_values_text(&mut this.book.sheets[this.active], at, &grid);
-                        recalc_book(&mut this.book, this.active);
-                        this.dirty = true;
-                        this.sync_input();
-                        this.status = format!(
-                            "{n_rows} 行 {n} 欄を {} から流し込みました(値として)",
-                            at.a1()
-                        )
-                        .into();
+                        if let Some(pend) = &mut this.import_pend {
+                            pend.grid = grid;
+                            pend.used = used;
+                        }
+                        this.import_pick();
                     }
-                    Some(Err(e)) => this.status = format!("読み込めません: {e}").into(),
+                    Err(e) => {
+                        this.status = ui::tf!("読み込めません: {}", e).into();
+                        this.import_pick(); // 板は残す(設定を替えて再挑戦できる)
+                    }
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// 取り込みウィザードの板を(いまの下ごしらえから)組む。
+    pub(crate) fn import_pick(&mut self) {
+        let Some(pend) = &self.import_pend else { return };
+        let mut items: Vec<String> = Vec::new();
+        let enc_label = if pend.enc == 0 && !pend.used.0.is_empty() {
+            format!("{}({})", IMPORT_ENCS[0].0, pend.used.0)
+        } else {
+            IMPORT_ENCS[pend.enc].0.to_string()
+        };
+        let delim_name = |d: &str| match d {
+            "," => "カンマ".to_string(),
+            "\t" => "タブ".to_string(),
+            ";" => "セミコロン".to_string(),
+            ":" => "コロン".to_string(),
+            " " => "スペース".to_string(),
+            other => format!("「{other}」"),
+        };
+        let delim_label = if pend.delim == 0 && !pend.used.1.is_empty() {
+            format!("{}({})", IMPORT_DELIMS[0].0, delim_name(&pend.used.1))
+        } else if IMPORT_DELIMS[pend.delim].1 == "その他" && !pend.custom.is_empty() {
+            format!("{}{}", IMPORT_DELIMS[pend.delim].0, delim_name(&pend.custom))
+        } else {
+            IMPORT_DELIMS[pend.delim].0.to_string()
+        };
+        items.push(format!("{}: {}", ui::t!("文字コード"), enc_label));
+        items.push(format!("{}: {}", ui::t!("区切り"), delim_label));
+        items.push(format!("{}: {}", ui::t!("置き場所"), pend.dest.a1()));
+        // プレビュー(先頭3行。長ければ詰める)
+        for (i, row) in pend.grid.iter().take(3).enumerate() {
+            let mut line = row.join(" | ");
+            if line.chars().count() > 42 {
+                line = line.chars().take(42).collect::<String>() + "…";
+            }
+            items.push(format!("{} {}: {}", "·", i + 1, line));
+        }
+        items.push(format!(
+            "→ {}",
+            ui::tf!("取り込む({} 行)", pend.grid.len())
+        ));
+        let at = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let name = pend
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.pick_note =
+            Some(ui::tf!("テキストの取り込み — {}(クリックで切替)", name).into());
+        self.pick_kind = "csv-import-pick";
+        self.pick = Some((items, at));
     }
 
     /// 板の文字を Python の台本で絵にして、画像としてシートに浮かべる。

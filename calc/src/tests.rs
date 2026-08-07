@@ -909,6 +909,80 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn テキスト取り込みの板は置き場所と取り込みが効く(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.import_pend = Some(crate::py::ImportPend {
+                path: std::path::PathBuf::from("試.csv"),
+                enc: 0,
+                delim: 0,
+                custom: String::new(),
+                dest: Pos::new(0, 0),
+                grid: vec![
+                    vec!["品名".into(), "金額".into()],
+                    vec!["鉛筆".into(), "100".into()],
+                ],
+                used: ("utf-8-sig".into(), ",".into()),
+            });
+            this.import_pick();
+            assert_eq!(this.pick_kind, "csv-import-pick");
+            // 置き場所を B3 に
+            this.prompt = Some(("csv-dest", Editor::new("B3")));
+            this.finish_prompt(cx);
+            assert_eq!(this.import_pend.as_ref().unwrap().dest, Pos::new(2, 1));
+            // 取り込む
+            this.apply_pick("→ 取り込む(2 行)", cx);
+            assert!(this.import_pend.is_none(), "板が閉じない");
+            let got = this.book.sheets[0].get(Pos::new(3, 1)).unwrap().value.display();
+            assert_eq!(got, "鉛筆", "置き場所に流し込まれていない");
+            let got = this.book.sheets[0].get(Pos::new(3, 2)).unwrap().value.display();
+            assert_eq!(got, "100");
+        });
+    }
+
+    #[test]
+    fn csvの台本は文字コードと区切りの指定が効く() {
+        // .venv が無い機械では黙って飛ぶ(HIKITSUGI の作法)
+        let Some(py) = ["../.venv/bin/python", ".venv/bin/python"]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .find(|p| p.exists())
+        else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("jo-csvwiz-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let py_path = dir.join("jo_csv.py");
+        std::fs::write(&py_path, crate::py::CSV_PY).unwrap();
+        // CP932 のセミコロン区切り(自動では , を想定しがちな中身)
+        let csv_path = dir.join("試.csv");
+        let sjis: Vec<u8> = [
+            0x95i32, 0x69, 0x96, 0xbc, 0x3b, 0x8b, 0xe0, 0x8a, 0x7a, 0x0a, // 品名;金額
+            0x89, 0x94, 0x95, 0x4d, 0x3b, 0x31, 0x30, 0x30, // 鉛筆;100
+        ]
+        .iter()
+        .map(|b| *b as u8)
+        .collect();
+        std::fs::write(&csv_path, sjis).unwrap();
+        let o = std::process::Command::new(&py)
+            .arg(&py_path)
+            .arg(&csv_path)
+            .arg("cp932")
+            .arg(";")
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let out = String::from_utf8_lossy(&o.stdout).to_string();
+        let mut rows = out.split('\u{1e}');
+        let meta = rows.next().unwrap();
+        assert!(meta.starts_with('\u{01}'), "下ごしらえの報告が無い: {meta:?}");
+        assert!(meta.contains("cp932"), "使った文字コードの報告が無い: {meta:?}");
+        let first: Vec<&str> = rows.next().unwrap().split('\u{1f}').collect();
+        assert_eq!(first, vec!["品名", "金額"], "CP932+セミコロンで読めない: {first:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[gpui::test]
     fn スパークラインは3種を選んで置ける(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, _cx| {

@@ -476,6 +476,70 @@ impl Calc {
                     .into();
                 }
             }
+            "csv-import-pick" => {
+                if v.starts_with("→ ") {
+                    // 取り込む(下ごしらえ済みの grid を流し込む)
+                    let Some(pend) = self.import_pend.take() else { return };
+                    if pend.grid.is_empty() {
+                        self.status = ui::t!("読めた行がありません(設定を見直してください)").into();
+                        self.import_pend = Some(pend);
+                        self.import_pick();
+                        return;
+                    }
+                    self.checkpoint();
+                    let n_rows = pend.grid.len();
+                    let n = crate::util::paste_values_text(
+                        &mut self.book.sheets[self.active],
+                        pend.dest,
+                        &pend.grid,
+                    );
+                    recalc_book(&mut self.book, self.active);
+                    self.dirty = true;
+                    self.sync_input();
+                    self.status = ui::tf!(
+                        "{} 行 {} 欄を {} から流し込みました(値として)",
+                        n_rows, n, pend.dest.a1()
+                    )
+                    .into();
+                    return;
+                }
+                let enc_head = format!("{}: ", ui::t!("文字コード"));
+                let delim_head = format!("{}: ", ui::t!("区切り"));
+                let dest_head = format!("{}: ", ui::t!("置き場所"));
+                if v.starts_with(&enc_head) {
+                    if let Some(pend) = &mut self.import_pend {
+                        pend.enc = (pend.enc + 1) % crate::py::IMPORT_ENCS.len();
+                    }
+                    self.import_reparse(cx);
+                    return;
+                }
+                if v.starts_with(&delim_head) {
+                    let mut ask_custom = false;
+                    if let Some(pend) = &mut self.import_pend {
+                        pend.delim = (pend.delim + 1) % crate::py::IMPORT_DELIMS.len();
+                        ask_custom =
+                            crate::py::IMPORT_DELIMS[pend.delim].1 == "その他";
+                    }
+                    if ask_custom {
+                        self.prompt = Some(("csv-delim", Editor::new("")));
+                    } else {
+                        self.import_reparse(cx);
+                    }
+                    return;
+                }
+                if v.starts_with(&dest_head) {
+                    let cur = self
+                        .import_pend
+                        .as_ref()
+                        .map(|p| p.dest.a1())
+                        .unwrap_or_default();
+                    self.prompt = Some(("csv-dest", Editor::new(&cur)));
+                    return;
+                }
+                // プレビューの行は何もしない(板は開いたまま)
+                self.import_pick();
+                return;
+            }
             "spark-kind-pick" => {
                 let kind = match v {
                     "縦棒(カラム)" => "spark-col",
@@ -2103,6 +2167,7 @@ impl Calc {
         self.menu_head = None; // 見出しメニューの印も畳む
         self.dedup_pend = None;
         self.cond_pend = None;
+        self.import_pend = None;
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる
@@ -2155,6 +2220,31 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // テキスト取り込み: その他の区切り(1文字)
+            "csv-delim" => {
+                let t = text.trim();
+                let Some(c0) = t.chars().next() else {
+                    self.status = ui::t!("区切りの文字を1つ打ってください(例: |)").into();
+                    self.prompt = Some((kind, Editor::new("")));
+                    return;
+                };
+                if let Some(pend) = &mut self.import_pend {
+                    pend.custom = c0.to_string();
+                }
+                self.import_reparse(cx);
+            }
+            // テキスト取り込み: 置き場所(A1 の形)
+            "csv-dest" => {
+                let Some(p2) = Pos::parse(text.trim()) else {
+                    self.status = ui::t!("場所が読めません(B12 の形で)").into();
+                    self.prompt = Some((kind, Editor::new(text.trim())));
+                    return;
+                };
+                if let Some(pend) = &mut self.import_pend {
+                    pend.dest = p2;
+                }
+                self.import_pick();
+            }
             // 反復計算の入切(回数 変化量。空 Enter = 切)
             "calc-iter" => {
                 let t = text.trim();
