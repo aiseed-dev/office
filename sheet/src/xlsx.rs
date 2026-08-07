@@ -2781,7 +2781,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
 
 #[cfg(test)]
 mod fmt_round {
-    use crate::model::{Borders, Cell, CellFormat, HAlign, Pos, Value};
+    use crate::model::{Borders, Cell, CellFormat, Edge, HAlign, Pos, Value};
     use crate::{Book, Sheet};
 
     fn book(fmt: CellFormat) -> Book {
@@ -2814,7 +2814,7 @@ mod fmt_round {
             bold: true,
             fill: Some("FFFF00".into()),
             align: HAlign::Center,
-            borders: Borders { bottom: true, ..Borders::NONE },
+            borders: Borders { bottom: Edge::THIN, ..Borders::NONE },
             ..Default::default()
         };
         let back = roundtrip(&book(f.clone()));
@@ -3277,6 +3277,26 @@ mod validation_roundtrip_tests {
         // 2026-08-06 改訂: list 以外も落とさず、種類ごと持ち越す
         assert_eq!(back.sheets[0].validations.len(), 1, "規則が消えた");
         assert_eq!(back.sheets[0].validations[0].kind, "whole", "種類が持ち越せない");
+    }
+
+    #[test]
+    fn 罫線の線種と色が往復する() {
+        use crate::model::{BStyle, Edge};
+        let mut b = Book::new();
+        let mut cell = Cell::input("x");
+        cell.fmt.borders.bottom = Edge::line(BStyle::MediumDashed, Some(0x00B050));
+        cell.fmt.borders.top = Edge::line(BStyle::Double, None);
+        b.sheets[0].set(Pos::parse("B2").unwrap(), cell);
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let bd = back.sheets[0].get(Pos::parse("B2").unwrap()).unwrap().fmt.borders;
+        assert_eq!(bd.bottom.style, BStyle::MediumDashed, "線種が往復しない");
+        assert_eq!(bd.bottom.color, Some(0x00B050), "線の色が往復しない");
+        assert_eq!(bd.top.style, BStyle::Double);
+        assert_eq!(bd.top.color, None, "自動(黒)が色付きに化けた");
+        assert!(!bd.left.on);
     }
 
     #[test]

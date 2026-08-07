@@ -646,20 +646,20 @@ impl Calc {
                     }
                     't' => {
                         cell.fmt.bold = true;
-                        cell.fmt.borders.top = true;
+                        cell.fmt.borders.top = sheet::model::Edge::THIN;
                     }
                     _ => {}
                 }
                 // 総計の列(右端)も太字+仕切り線
                 if tot_col && c == w - 1 && *k != 'h' {
                     cell.fmt.bold = true;
-                    cell.fmt.borders.left = true;
+                    cell.fmt.borders.left = sheet::model::Edge::THIN;
                 }
                 // 塊の外周に薄い線(印刷でも塊が分かる)
-                if i == 0 { cell.fmt.borders.top = true; }
-                if i == last { cell.fmt.borders.bottom = true; }
-                if c == 0 { cell.fmt.borders.left = true; }
-                if c == w - 1 { cell.fmt.borders.right = true; }
+                if i == 0 { cell.fmt.borders.top = sheet::model::Edge::THIN; }
+                if i == last { cell.fmt.borders.bottom = sheet::model::Edge::THIN; }
+                if c == 0 { cell.fmt.borders.left = sheet::model::Edge::THIN; }
+                if c == w - 1 { cell.fmt.borders.right = sheet::model::Edge::THIN; }
                 self.book.sheets[si].set(p, cell);
             }
         }

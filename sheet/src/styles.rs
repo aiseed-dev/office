@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use crate::model::{Borders, CellFormat, HAlign, VAlign};
+use crate::model::{BStyle, Borders, CellFormat, Edge, HAlign, VAlign};
 
 /// styles.xml の <font> 1つぶん。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -126,6 +126,23 @@ pub fn parse(xml: &str, theme: &[String]) -> Vec<CellFormat> {
                     .and_then(|v| v.parse::<f32>().ok())
                     .map(|pt| (pt * 100.0) as u32);
             }
+            b"color" if in_borders => {
+                // 罫線の色(<left style="thin"><color rgb="FF00B050"/></left>)。
+                // rgb は FFRRGGBB — 先頭の透過は捨てて RRGGBB で持つ
+                if let (Some(sd), Some(c)) = (&side, rgb(&e)) {
+                    if let Ok(v) = u32::from_str_radix(&c, 16) {
+                        let edge = match sd.as_slice() {
+                            b"left" => &mut bd.left,
+                            b"right" => &mut bd.right,
+                            b"top" => &mut bd.top,
+                            _ => &mut bd.bottom,
+                        };
+                        if edge.on {
+                            edge.color = Some(v);
+                        }
+                    }
+                }
+            }
             b"color" if in_fonts => {
                 font.color = rgb(&e).or_else(|| indexed(&e));
                 font.color_theme = theme_ref(&e);
@@ -164,13 +181,19 @@ pub fn parse(xml: &str, theme: &[String]) -> Vec<CellFormat> {
                 }
             }
             b"left" | b"right" | b"top" | b"bottom" if in_borders => {
-                // style 属性が無い/none のときは引かれていない
-                let drawn = attr(&e, "style").map_or(false, |s| s != "none");
+                // style 属性が無い/none のときは引かれていない。
+                // 線種は from_xlsx(知らない線種は細実線)。色は子の <color rgb>
+                let edge = match attr(&e, "style") {
+                    Some(st) if st != "none" => {
+                        Edge::line(BStyle::from_xlsx(&st), None)
+                    }
+                    _ => Edge::OFF,
+                };
                 match n.as_slice() {
-                    b"left" => bd.left = drawn,
-                    b"right" => bd.right = drawn,
-                    b"top" => bd.top = drawn,
-                    _ => bd.bottom = drawn,
+                    b"left" => bd.left = edge,
+                    b"right" => bd.right = edge,
+                    b"top" => bd.top = edge,
+                    _ => bd.bottom = edge,
                 }
                 side = Some(n.clone());
             }
@@ -520,9 +543,13 @@ fn fill_xml(f: &Option<String>, gray125: bool) -> String {
 
 fn border_xml(b: &Borders) -> String {
     let mut s = String::from("<border>");
-    for (on, tag) in [(b.left, "left"), (b.right, "right"), (b.top, "top"), (b.bottom, "bottom")] {
-        if on {
-            s.push_str(&format!("<{tag} style=\"thin\"><color indexed=\"64\"/></{tag}>"));
+    for (e, tag) in [(b.left, "left"), (b.right, "right"), (b.top, "top"), (b.bottom, "bottom")] {
+        if e.on {
+            let color = match e.color {
+                Some(v) => format!("<color rgb=\"FF{v:06X}\"/>"),
+                None => "<color indexed=\"64\"/>".into(),
+            };
+            s.push_str(&format!("<{tag} style=\"{}\">{color}</{tag}>", e.style.xlsx()));
         } else {
             s.push_str(&format!("<{tag}/>"));
         }
@@ -817,13 +844,13 @@ mod build_tests {
     fn 一部だけの罫線も往復する() {
         // 表の下線だけ、という帳票は多い
         let f = CellFormat {
-            borders: Borders { bottom: true, ..Borders::NONE },
+            borders: Borders { bottom: Edge::THIN, ..Borders::NONE },
             ..Default::default()
         };
         let (xml, map) = build(&[f.clone()]);
         let back = &parse(&xml, &[])[map[&f]];
-        assert!(back.borders.bottom, "下線が消えた");
-        assert!(!back.borders.top, "無い罫線が増えた");
+        assert!(back.borders.bottom.on, "下線が消えた");
+        assert!(!back.borders.top.on, "無い罫線が増えた");
     }
 }
 

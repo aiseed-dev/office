@@ -3526,396 +3526,451 @@
  },
  {
   "i": 705,
+  "ja": "自動(黒)",
+  "en": "Automatic (black)"
+ },
+ {
+  "i": 706,
+  "ja": "罫線 — いまのペン: {}・{}",
+  "en": "Borders — current pen: {}, {}"
+ },
+ {
+  "i": 707,
+  "ja": "線のスタイル(選ぶとペンに入ります — 次の罫線から効く)",
+  "en": "Line style (goes into the pen; takes effect from the next borders)"
+ },
+ {
+  "i": 708,
+  "ja": "線の色(選ぶとペンに入ります)",
+  "en": "Line color (goes into the pen)"
+ },
+ {
+  "i": 709,
+  "ja": "線のスタイル: {}(罫線の一覧から掛けると効きます)",
+  "en": "Line style: {} (applies when you draw borders from the list)"
+ },
+ {
+  "i": 710,
+  "ja": "線の色: {}(罫線の一覧から掛けると効きます)",
+  "en": "Line color: {} (applies when you draw borders from the list)"
+ },
+ {
+  "i": 711,
+  "ja": "罫線: {} を {}:{} に掛けました(Ctrl+Z で1手)",
+  "en": "Borders: {} applied to {}:{} (Ctrl+Z undoes it)"
+ },
+ {
+  "i": 712,
+  "ja": "線の色: 自動(黒)",
+  "en": "Line color: automatic (black)"
+ },
+ {
+  "i": 713,
+  "ja": "線の色: #{}(罫線の一覧から掛けると効きます)",
+  "en": "Line color: #{} (applies when you draw borders from the list)"
+ },
+ {
+  "i": 714,
+  "ja": "色が読めません(RRGGBB の6桁。例: FF0000)",
+  "en": "Can't read the color (6 hex digits RRGGBB, e.g. FF0000)"
+ },
+ {
+  "i": 715,
+  "ja": "線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)",
+  "en": "Line color — 6 hex digits RRGGBB (e.g. FF0000; empty Enter = automatic)"
+ },
+ {
+  "i": 716,
   "ja": "スタイル",
   "en": "Style"
  },
  {
-  "i": 706,
+  "i": 717,
   "ja": "フィールドリスト",
   "en": "Field list"
  },
  {
-  "i": 707,
+  "i": 718,
   "ja": "画面の文字を大きく",
   "en": "Bigger UI text"
  },
  {
-  "i": 708,
+  "i": 719,
   "ja": "画面の文字を小さく",
   "en": "Smaller UI text"
  },
  {
-  "i": 709,
+  "i": 720,
   "ja": "AI",
   "en": "AI"
  },
  {
-  "i": 710,
+  "i": 721,
   "ja": "印刷",
   "en": "Print"
  },
  {
-  "i": 711,
+  "i": 722,
   "ja": "宛先",
   "en": "Destination"
  },
  {
-  "i": 712,
+  "i": 723,
   "ja": "要約",
   "en": "Summarize"
  },
  {
-  "i": 713,
+  "i": 724,
   "ja": "書き直す",
   "en": "Rewrite"
  },
  {
-  "i": 714,
+  "i": 725,
   "ja": "敬語にする",
   "en": "Politer"
  },
  {
-  "i": 715,
+  "i": 726,
   "ja": "やさしく",
   "en": "Plainer"
  },
  {
-  "i": 716,
+  "i": 727,
   "ja": "翻訳",
   "en": "Translate"
  },
  {
-  "i": 717,
+  "i": 728,
   "ja": "ふりがな",
   "en": "Furigana"
  },
  {
-  "i": 718,
+  "i": 729,
   "ja": "続きを書く",
   "en": "Continue"
  },
  {
-  "i": 719,
+  "i": 730,
   "ja": "表にする",
   "en": "To table"
  },
  {
-  "i": 720,
+  "i": 731,
   "ja": "頼む",
   "en": "Ask"
  },
  {
-  "i": 721,
+  "i": 732,
   "ja": "ルビ",
   "en": "Ruby"
  },
  {
-  "i": 722,
+  "i": 733,
   "ja": "縦書き",
   "en": "Vertical text"
  },
  {
-  "i": 723,
+  "i": 734,
   "ja": "テキスト方向",
   "en": "Text direction"
  },
  {
-  "i": 724,
+  "i": 735,
   "ja": "均等割付",
   "en": "Distributed"
  },
  {
-  "i": 725,
+  "i": 736,
   "ja": "図表番号の挿入",
   "en": "Insert caption"
  },
  {
-  "i": 726,
+  "i": 737,
   "ja": "URL を開く",
   "en": "Open URL"
  },
  {
-  "i": 727,
+  "i": 738,
   "ja": "洋子さんの索引",
   "en": "Index"
  },
  {
-  "i": 728,
+  "i": 739,
   "ja": "青空文庫の注記",
   "en": "Aozora notes"
  },
  {
-  "i": 729,
+  "i": 740,
   "ja": "でんでん記法",
   "en": "Denden markup"
  },
  {
-  "i": 730,
+  "i": 741,
   "ja": "履歴の記録",
   "en": "Track changes"
  },
  {
-  "i": 731,
+  "i": 742,
   "ja": "変更履歴の表示",
   "en": "Show changes"
  },
  {
-  "i": 732,
+  "i": 743,
   "ja": "校正",
   "en": "Proofread"
  },
  {
-  "i": 733,
+  "i": 744,
   "ja": "文字数",
   "en": "Character count"
  },
  {
-  "i": 734,
+  "i": 745,
   "ja": "スペルチェック",
   "en": "Spell check"
  },
  {
-  "i": 735,
+  "i": 746,
   "ja": "類語辞典",
   "en": "Thesaurus"
  },
  {
-  "i": 736,
+  "i": 747,
   "ja": "誤変換",
   "en": "Misconversion"
  },
  {
-  "i": 737,
+  "i": 748,
   "ja": "表記ゆれ",
   "en": "Inconsistency"
  },
  {
-  "i": 738,
+  "i": 749,
   "ja": "小計",
   "en": "Subtotal"
  },
  {
-  "i": 739,
+  "i": 750,
   "ja": "計算方法",
   "en": "Calculation"
  },
  {
-  "i": 740,
+  "i": 751,
   "ja": "右横書き",
   "en": "Right-to-left text"
  },
  {
-  "i": 741,
+  "i": 752,
   "ja": "シートの方向",
   "en": "Sheet direction"
  },
  {
-  "i": 742,
+  "i": 753,
   "ja": "Python",
   "en": "Python"
  },
  {
-  "i": 743,
+  "i": 754,
   "ja": "チェックボックス",
   "en": "Checkbox"
  },
  {
-  "i": 744,
+  "i": 755,
   "ja": "外部リンク",
   "en": "External links"
  },
  {
-  "i": 745,
+  "i": 756,
   "ja": "推奨チャート",
   "en": "Recommended chart"
  },
  {
-  "i": 746,
+  "i": 757,
   "ja": "共同編集モード",
   "en": "Co-editing mode"
  },
  {
-  "i": 747,
+  "i": 758,
   "ja": "バージョン履歴",
   "en": "Version history"
  },
  {
-  "i": 748,
+  "i": 759,
   "ja": "チャット",
   "en": "Chat"
  },
  {
-  "i": 749,
+  "i": 760,
   "ja": "保護する",
   "en": "Protect"
  },
  {
-  "i": 750,
+  "i": 761,
   "ja": "暗号化する",
   "en": "Encrypt"
  },
  {
-  "i": 751,
+  "i": 762,
   "ja": "デジタル署名を追加",
   "en": "Add digital signature"
  },
  {
-  "i": 752,
+  "i": 763,
   "ja": "マクロ",
   "en": "Macros"
  },
  {
-  "i": 753,
+  "i": 764,
   "ja": "プラグインの管理",
   "en": "Manage plugins"
  },
  {
-  "i": 754,
+  "i": 765,
   "ja": "0を表示する",
   "en": "Show zeros"
  },
  {
-  "i": 755,
+  "i": 766,
   "ja": "100%に拡大する",
   "en": "Zoom to 100%"
  },
  {
-  "i": 756,
+  "i": 767,
   "ja": "インターフェイステーマ",
   "en": "Interface theme"
  },
  {
-  "i": 757,
+  "i": 768,
   "ja": "ウォッチウィンドウ",
   "en": "Watch window"
  },
  {
-  "i": 758,
+  "i": 769,
   "ja": "オートSUM",
   "en": "AutoSum"
  },
  {
-  "i": 759,
+  "i": 770,
   "ja": "コメントを削除",
   "en": "Delete comment"
  },
  {
-  "i": 760,
+  "i": 771,
   "ja": "ソルバー",
   "en": "Solver"
  },
  {
-  "i": 761,
+  "i": 772,
   "ja": "テキストからデータ",
   "en": "Text to data"
  },
  {
-  "i": 762,
+  "i": 773,
   "ja": "トレース矢印の削除",
   "en": "Remove arrows"
  },
  {
-  "i": 763,
+  "i": 774,
   "ja": "フィル",
   "en": "Fill"
  },
  {
-  "i": 764,
+  "i": 775,
   "ja": "フィルターを解除",
   "en": "Clear filter"
  },
  {
-  "i": 765,
+  "i": 776,
   "ja": "マクロを書く",
   "en": "Write macro"
  },
  {
-  "i": 766,
+  "i": 777,
   "ja": "区切り位置",
   "en": "Text to columns"
  },
  {
-  "i": 767,
+  "i": 778,
   "ja": "図表番号",
   "en": "Caption"
  },
  {
-  "i": 768,
+  "i": 779,
   "ja": "図表目次",
   "en": "Table of figures"
  },
  {
-  "i": 769,
+  "i": 780,
   "ja": "図表目次の更新",
   "en": "Update table of figures"
  },
  {
-  "i": 770,
+  "i": 781,
   "ja": "外部リンク(値で取り込む)",
   "en": "External links (import as values)"
  },
  {
-  "i": 771,
+  "i": 782,
   "ja": "数学/三角",
   "en": "Math & Trig"
  },
  {
-  "i": 772,
+  "i": 783,
   "ja": "数式の表示",
   "en": "Show formulas"
  },
  {
-  "i": 773,
+  "i": 784,
   "ja": "文字の向き(右横書き)",
   "en": "Right-to-left text"
  },
  {
-  "i": 774,
+  "i": 785,
   "ja": "文字列操作",
   "en": "Text"
  },
  {
-  "i": 775,
+  "i": 786,
   "ja": "日付/時刻",
   "en": "Date & Time"
  },
  {
-  "i": 776,
+  "i": 787,
   "ja": "最近使った関数",
   "en": "Recently used"
  },
  {
-  "i": 777,
+  "i": 788,
   "ja": "枠線も印刷",
   "en": "Print gridlines"
  },
  {
-  "i": 778,
+  "i": 789,
   "ja": "目次の更新",
   "en": "Update table of contents"
  },
  {
-  "i": 779,
+  "i": 790,
   "ja": "縞模様の列",
   "en": "Banded columns"
  },
  {
-  "i": 780,
+  "i": 791,
   "ja": "見出しも印刷",
   "en": "Print headings"
  },
  {
-  "i": 781,
+  "i": 792,
   "ja": "詳細の非表示",
   "en": "Hide detail"
  },
  {
-  "i": 782,
+  "i": 793,
   "ja": "重複の削除",
   "en": "Remove duplicates"
  },
  {
-  "i": 783,
+  "i": 794,
   "ja": "関数の挿入",
   "en": "Insert function"
  }

@@ -626,7 +626,7 @@ pub(crate) fn add_total_row(s: &mut sheet::Sheet, a: Pos, b: Pos) -> usize {
         };
         cell.fmt = fmt0;
         cell.fmt.bold = true;
-        cell.fmt.borders.top = true;
+        cell.fmt.borders.top = sheet::model::Edge::THIN;
         s.set(p, cell);
         n += 1;
     }
@@ -664,7 +664,7 @@ pub(crate) fn apply_subtotals(s: &mut sheet::Sheet, a: Pos, b: Pos, by: u32, val
         let mut cell = Cell::input(text);
         cell.fmt = fmt0;
         cell.fmt.bold = true;
-        cell.fmt.borders.top = true;
+        cell.fmt.borders.top = sheet::model::Edge::THIN;
         s.set(p, cell);
     };
     let mut sub_rows = Vec::new();
@@ -897,6 +897,22 @@ pub(crate) fn change_case(t: &str, mode: &str) -> String {
 /// どれも Ctrl+Z の1手で戻る
 #[allow(clippy::type_complexity)]
 /// フォントの色のパレット(本家の標準の色に寄せる。「自動」= 色なし)
+/// 罫線の線種の一覧(本家のドロップダウンの12種)。名前 → BStyle
+pub(crate) const BORDER_STYLES: [(&str, sheet::model::BStyle); 12] = [
+    ("細い実線(既定)", sheet::model::BStyle::Thin),
+    ("極細", sheet::model::BStyle::Hair),
+    ("点線", sheet::model::BStyle::Dotted),
+    ("破線", sheet::model::BStyle::Dashed),
+    ("一点鎖線", sheet::model::BStyle::DashDot),
+    ("二点鎖線", sheet::model::BStyle::DashDotDot),
+    ("中太の実線", sheet::model::BStyle::Medium),
+    ("中太の破線", sheet::model::BStyle::MediumDashed),
+    ("中太の一点鎖線", sheet::model::BStyle::MediumDashDot),
+    ("中太の二点鎖線", sheet::model::BStyle::MediumDashDotDot),
+    ("太い実線", sheet::model::BStyle::Thick),
+    ("二重線", sheet::model::BStyle::Double),
+];
+
 pub(crate) const FONT_COLORS: &[(&str, Option<&str>)] = &[
     ("自動", None),
     ("黒", Some("1B1B1B")),
@@ -931,7 +947,7 @@ pub(crate) const CELL_STYLES: &[(&str, fn(&mut CellFormat))] = &[
     ("見出し", |f| {
         f.bold = true;
         f.fill = Some("D5E8DC".into());
-        f.borders.bottom = true;
+        f.borders.bottom = sheet::model::Edge::THIN;
     }),
     ("表題", |f| {
         f.bold = true;

@@ -95,10 +95,36 @@ impl Calc {
             "copy" => self.copy_now(cx),
             "cut" => self.cut_now(cx),
             "paste" => self.paste_now(cx),
-            // 罫線 — **日本の帳票の本体**
-            "borders" => self.fmt(|f| {
-                f.borders = if f.borders.any() { Borders::NONE } else { Borders::ALL }
-            }),
+            // 罫線 — **日本の帳票の本体**。一覧から辺とペン(線種・色)を選ぶ
+            "borders" => {
+                self.commit();
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let items: Vec<String> = [
+                    "下罫線", "上罫線", "左罫線", "右罫線",
+                    "外枠", "すべての罫線(格子)", "罫線を消す",
+                    "→ 線のスタイル…", "→ 線の色…",
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+                let style_name = BORDER_STYLES
+                    .iter()
+                    .find(|(_, b)| *b == self.pen_style)
+                    .map(|(n, _)| *n)
+                    .unwrap_or("細い実線(既定)");
+                let color_name = match self.pen_color {
+                    Some(v) => format!("#{v:06X}"),
+                    None => ui::t!("自動(黒)").to_string(),
+                };
+                self.pick_note = Some(
+                    ui::tf!("罫線 — いまのペン: {}・{}", style_name, color_name).into(),
+                );
+                self.pick_kind = "border-pick";
+                self.pick = Some((items, at));
+            }
             "bold" => self.fmt(|f| f.bold = !f.bold),
             "italic" => self.fmt(|f| f.italic = !f.italic),
             "underline" => self.fmt(|f| f.underline = !f.underline),
@@ -1538,7 +1564,7 @@ impl Calc {
                                 "td-header" if r == a.row => {
                                     cell.fmt.bold = true;
                                     cell.fmt.fill = Some("D5E8DC".into());
-                                    cell.fmt.borders.top = true;
+                                    cell.fmt.borders.top = sheet::model::Edge::THIN;
                                     true
                                 }
                                 "td-band-row" if r > a.row && (r - a.row) % 2 == 0 => {
@@ -1633,16 +1659,16 @@ impl Calc {
                                 cell.fmt.fill = Some("F1F6F3".into());
                             }
                             if r == a.row {
-                                cell.fmt.borders.top = true;
+                                cell.fmt.borders.top = sheet::model::Edge::THIN;
                             }
                             if r == b.row {
-                                cell.fmt.borders.bottom = true;
+                                cell.fmt.borders.bottom = sheet::model::Edge::THIN;
                             }
                             if c == a.col {
-                                cell.fmt.borders.left = true;
+                                cell.fmt.borders.left = sheet::model::Edge::THIN;
                             }
                             if c == b.col {
-                                cell.fmt.borders.right = true;
+                                cell.fmt.borders.right = sheet::model::Edge::THIN;
                             }
                             self.book.sheets[self.active].set(p, cell);
                         }

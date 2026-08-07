@@ -587,7 +587,7 @@ mod table_design_tests {
         recalc(&mut s);
         let label = s.get(Pos::new(3, 0)).unwrap();
         assert_eq!(label.value.display(), "合計", "文字の列の先頭は札");
-        assert!(label.fmt.bold && label.fmt.borders.top, "合計行の書式が付かない");
+        assert!(label.fmt.bold && label.fmt.borders.top.on, "合計行の書式が付かない");
         let sum = s.get(Pos::new(3, 1)).unwrap();
         assert_eq!(
             sum.formula.as_deref(),
@@ -1053,6 +1053,58 @@ mod recalc_tests {
             this.run_cmd("freeze", cx);
             this.apply_pick("✓ 固定した枠に影を付ける", cx);
             assert!(!this.freeze_shadow, "影が切れない");
+        });
+    }
+
+    #[gpui::test]
+    fn 罫線はペンの線種と色で掛かる(cx: &mut gpui::TestAppContext) {
+        use sheet::model::BStyle;
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            // 一覧が開き、ペンを 中太の実線・赤 にする
+            this.anchor = Some(Pos::parse("B2").unwrap());
+            this.cursor = Pos::parse("C3").unwrap();
+            this.sync_input();
+            this.run_cmd("borders", cx);
+            assert_eq!(this.pick_kind, "border-pick", "罫線の一覧が開かない");
+            this.apply_pick("→ 線のスタイル…", cx);
+            assert_eq!(this.pick_kind, "border-style-pick");
+            this.apply_pick("中太の実線", cx);
+            assert_eq!(this.pen_style, BStyle::Medium);
+            this.run_cmd("borders", cx);
+            this.apply_pick("→ 線の色…", cx);
+            this.apply_pick("その他(RRGGBB を打つ)…", cx);
+            this.prompt = Some(("border-color-rgb", Editor::new("FF0000")));
+            this.finish_prompt(cx);
+            assert_eq!(this.pen_color, Some(0xFF0000), "RGB 直指定が効かない");
+            // 外枠を掛ける
+            this.run_cmd("borders", cx);
+            assert_eq!(this.pick_kind, "border-pick", "2度目の一覧が開かない: {}", this.status);
+            this.apply_pick("外枠", cx);
+            let bd = |this: &Calc, p: &str| {
+                this.sheet().get(Pos::parse(p).unwrap()).unwrap().fmt.borders
+            };
+            let b2 = bd(this, "B2");
+            assert!(b2.top.on && b2.left.on, "外枠の左上が付かない");
+            assert!(!b2.bottom.on && !b2.right.on, "外枠なのに内側に付いた");
+            assert_eq!(b2.top.style, BStyle::Medium);
+            assert_eq!(b2.top.color, Some(0xFF0000));
+            let c3 = bd(this, "C3");
+            assert!(c3.bottom.on && c3.right.on && !c3.top.on);
+            // 格子 → 全辺。消す → 全部消える
+            this.run_cmd("borders", cx);
+            this.apply_pick("すべての罫線(格子)", cx);
+            assert!(bd(this, "B2").right.on && bd(this, "C3").top.on);
+            this.run_cmd("borders", cx);
+            this.apply_pick("罫線を消す", cx);
+            // 素に戻ったセルは片づけられる(get は None)— どちらでも「無い」
+            let off = |this: &Calc, p: &str| {
+                this.sheet()
+                    .get(Pos::parse(p).unwrap())
+                    .map(|c| c.fmt.borders.any())
+                    .unwrap_or(false)
+            };
+            assert!(!off(this, "B2") && !off(this, "C3"), "罫線が消えない");
         });
     }
 

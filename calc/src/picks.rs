@@ -185,6 +185,62 @@ impl Calc {
             }
             // ピボットの聞き取り(クリックで入切 → 決定で次へ)。
             // 行 → 列 → 値 → 集計の4段。Esc でいつでもやめられる
+            // 罫線: 辺の選択(ペンの線種・色で掛ける)
+            "border-pick" => {
+                match v {
+                    "→ 線のスタイル…" => {
+                        let at = self
+                            .cell_origin_px(self.cursor)
+                            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                        let items: Vec<String> = BORDER_STYLES
+                            .iter()
+                            .map(|(n, b)| {
+                                if *b == self.pen_style {
+                                    format!("✓ {n}")
+                                } else {
+                                    n.to_string()
+                                }
+                            })
+                            .collect();
+                        self.pick_note = Some(ui::t!("線のスタイル(選ぶとペンに入ります — 次の罫線から効く)").into());
+                        self.pick_kind = "border-style-pick";
+                        self.pick = Some((items, at));
+                        return;
+                    }
+                    "→ 線の色…" => {
+                        let at = self
+                            .cell_origin_px(self.cursor)
+                            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                        let mut items: Vec<String> =
+                            FONT_COLORS.iter().map(|(n, _)| n.to_string()).collect();
+                        items.push("その他(RRGGBB を打つ)…".into());
+                        self.pick_note = Some(ui::t!("線の色(選ぶとペンに入ります)").into());
+                        self.pick_kind = "border-color-pick";
+                        self.pick = Some((items, at));
+                        return;
+                    }
+                    _ => self.apply_borders(v),
+                }
+            }
+            "border-style-pick" => {
+                if let Some((_, b)) = BORDER_STYLES.iter().find(|(n, _)| *n == v) {
+                    self.pen_style = *b;
+                    self.status = ui::tf!("線のスタイル: {}(罫線の一覧から掛けると効きます)", v).into();
+                }
+            }
+            "border-color-pick" => {
+                if v.starts_with("その他") {
+                    self.prompt = Some(("border-color-rgb", Editor::new("")));
+                    return; // 板の確定まで pick_kind を戻さない
+                }
+                if let Some((_, hx)) = FONT_COLORS.iter().find(|(n, _)| *n == v) {
+                    self.pen_color =
+                        hx.and_then(|h| u32::from_str_radix(h, 16).ok());
+                    self.status = ui::tf!("線の色: {}(罫線の一覧から掛けると効きます)", v).into();
+                }
+            }
             "pivot-style-pick" => {
                 if let Some(i) = self.pivot_at(self.cursor) {
                     let style = match v {
@@ -1046,6 +1102,50 @@ impl Calc {
         self.pick = Some((items, at));
     }
 
+    /// 罫線を選択に掛ける(ペンの線種・色で)。which は一覧の項目名
+    pub(crate) fn apply_borders(&mut self, which: &str) {
+        let (a, b) = self.sel_rect();
+        let e = sheet::model::Edge::line(self.pen_style, self.pen_color);
+        self.checkpoint();
+        let sh = &mut self.book.sheets[self.active];
+        for r in a.row..=b.row {
+            for c in a.col..=b.col {
+                let p = Pos::new(r, c);
+                let mut cell = sh.get(p).cloned().unwrap_or_default();
+                let bd = &mut cell.fmt.borders;
+                match which {
+                    "下罫線" => {
+                        if r == b.row { bd.bottom = e }
+                    }
+                    "上罫線" => {
+                        if r == a.row { bd.top = e }
+                    }
+                    "左罫線" => {
+                        if c == a.col { bd.left = e }
+                    }
+                    "右罫線" => {
+                        if c == b.col { bd.right = e }
+                    }
+                    "外枠" => {
+                        if r == a.row { bd.top = e }
+                        if r == b.row { bd.bottom = e }
+                        if c == a.col { bd.left = e }
+                        if c == b.col { bd.right = e }
+                    }
+                    "すべての罫線(格子)" => {
+                        *bd = sheet::model::Borders {
+                            top: e, bottom: e, left: e, right: e,
+                        };
+                    }
+                    _ => *bd = sheet::model::Borders::NONE, // 罫線を消す
+                }
+                sh.set(p, cell);
+            }
+        }
+        self.dirty = true;
+        self.status = ui::tf!("罫線: {} を {}:{} に掛けました(Ctrl+Z で1手)", which, a.a1(), b.a1()).into();
+    }
+
     /// 「データの入力規則」の板を開く(いまの規則を下敷きに)
     pub(crate) fn dv_open(&mut self) {
         let v = self.sheet().validation_at(self.cursor).cloned();
@@ -1377,6 +1477,25 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // 罫線の色の直指定(RRGGBB)。空 Enter = 自動(黒)
+            "border-color-rgb" => {
+                let t = text.trim().trim_start_matches('#').to_string();
+                if t.is_empty() {
+                    self.pen_color = None;
+                    self.status = ui::t!("線の色: 自動(黒)").into();
+                } else if t.len() == 6 {
+                    if let Ok(v) = u32::from_str_radix(&t, 16) {
+                        self.pen_color = Some(v);
+                        self.status = ui::tf!("線の色: #{}(罫線の一覧から掛けると効きます)", t.to_uppercase()).into();
+                    } else {
+                        self.status = ui::t!("色が読めません(RRGGBB の6桁。例: FF0000)").into();
+                        self.prompt = Some(("border-color-rgb", Editor::new(&t)));
+                    }
+                } else {
+                    self.status = ui::t!("色が読めません(RRGGBB の6桁。例: FF0000)").into();
+                    self.prompt = Some(("border-color-rgb", Editor::new(&t)));
+                }
+            }
             // カスタムの数値書式(xlsx のコードをそのまま)。空 Enter = 一般に戻す
             "numfmt-custom" => {
                 if text.is_empty() {
@@ -1998,10 +2117,10 @@ impl Calc {
             for c in a.col..=b.col {
                 let p = Pos::new(r, c);
                 let mut cell = self.sheet().get(p).cloned().unwrap_or_default();
-                if r == a.row { cell.fmt.borders.top = true }
-                if r == b.row { cell.fmt.borders.bottom = true }
-                if c == a.col { cell.fmt.borders.left = true }
-                if c == b.col { cell.fmt.borders.right = true }
+                if r == a.row { cell.fmt.borders.top = sheet::model::Edge::THIN }
+                if r == b.row { cell.fmt.borders.bottom = sheet::model::Edge::THIN }
+                if c == a.col { cell.fmt.borders.left = sheet::model::Edge::THIN }
+                if c == b.col { cell.fmt.borders.right = sheet::model::Edge::THIN }
                 self.book.sheets[self.active].set(p, cell);
             }
         }

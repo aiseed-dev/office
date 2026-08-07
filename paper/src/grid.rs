@@ -186,15 +186,28 @@ pub fn sheet_to_pdf<W: Write>(
                 l.set_fill_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
             }
 
-            // 罫線。引いてある辺だけ
+            // 罫線。引いてある辺だけ — 線種の太さと色まで写す
+            // (破線の刻みは紙では実線に落とす。太さと色が形を保つ)
             let b = cell.fmt.borders;
-            for (on, (x1, y1, x2, y2)) in [
+            for (e, (x1, y1, x2, y2)) in [
                 (b.top, (x, y_top, x + cw, y_top)),
                 (b.bottom, (x, y_top - rh, x + cw, y_top - rh)),
                 (b.left, (x, y_top, x, y_top - rh)),
                 (b.right, (x + cw, y_top, x + cw, y_top - rh)),
             ] {
-                if on {
+                if e.on {
+                    let (cr, cg, cb) = match e.color {
+                        Some(v) => (
+                            ((v >> 16) & 255) as f32 / 255.0,
+                            ((v >> 8) & 255) as f32 / 255.0,
+                            (v & 255) as f32 / 255.0,
+                        ),
+                        None => (0.0, 0.0, 0.0),
+                    };
+                    l.set_outline_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));
+                    // px → pt(1px ≒ 0.75pt)。二重線は2本に開くほどの幅が
+                    // 無いので太めの1本で
+                    l.set_outline_thickness(e.style.px() * 0.75);
                     l.add_line(Line {
                         points: vec![
                             (Point::new(Mm(x1), Mm(y1)), false),
@@ -202,6 +215,8 @@ pub fn sheet_to_pdf<W: Write>(
                         ],
                         is_closed: false,
                     });
+                    l.set_outline_thickness(0.0);
+                    l.set_outline_color(Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)));
                 }
             }
 

@@ -68,6 +68,9 @@ struct Calc {
     pick_note: Option<SharedString>,
     /// ピボットの絞り込みの聞き取り中: (指図の番号, 見出し, 隠す値の作業用)
     pivot_flt: Option<(usize, String, std::collections::BTreeSet<String>)>,
+    /// 罫線のペン(線種と色)。罫線の一覧から掛けるときに使う
+    pen_style: sheet::model::BStyle,
+    pen_color: Option<u32>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
@@ -303,6 +306,8 @@ impl Calc {
             sort_pend: None,
             pick_note: None,
             pivot_flt: None,
+            pen_style: sheet::model::BStyle::default(),
+            pen_color: None,
             solver: None,
             sa_cat: 0,
             slicer: None,

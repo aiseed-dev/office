@@ -91,21 +91,116 @@ impl Value {
     }
 }
 
+/// 罫線の線種(xlsx の style 属性と対)。並びは細→太のおおよそ。
+/// 知らない線種は Thin に落とすが、**書きでは読んだ線種を返す**(往復で保つ)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BStyle {
+    Hair,
+    Dotted,
+    DashDotDot,
+    DashDot,
+    Dashed,
+    #[default]
+    Thin,
+    MediumDashDotDot,
+    MediumDashDot,
+    MediumDashed,
+    Medium,
+    Thick,
+    Double,
+    SlantDashDot,
+}
+
+impl BStyle {
+    pub fn xlsx(self) -> &'static str {
+        match self {
+            BStyle::Hair => "hair",
+            BStyle::Dotted => "dotted",
+            BStyle::DashDotDot => "dashDotDot",
+            BStyle::DashDot => "dashDot",
+            BStyle::Dashed => "dashed",
+            BStyle::Thin => "thin",
+            BStyle::MediumDashDotDot => "mediumDashDotDot",
+            BStyle::MediumDashDot => "mediumDashDot",
+            BStyle::MediumDashed => "mediumDashed",
+            BStyle::Medium => "medium",
+            BStyle::Thick => "thick",
+            BStyle::Double => "double",
+            BStyle::SlantDashDot => "slantDashDot",
+        }
+    }
+    pub fn from_xlsx(s: &str) -> BStyle {
+        match s {
+            "hair" => BStyle::Hair,
+            "dotted" => BStyle::Dotted,
+            "dashDotDot" => BStyle::DashDotDot,
+            "dashDot" => BStyle::DashDot,
+            "dashed" => BStyle::Dashed,
+            "mediumDashDotDot" => BStyle::MediumDashDotDot,
+            "mediumDashDot" => BStyle::MediumDashDot,
+            "mediumDashed" => BStyle::MediumDashed,
+            "medium" => BStyle::Medium,
+            "thick" => BStyle::Thick,
+            "double" => BStyle::Double,
+            "slantDashDot" => BStyle::SlantDashDot,
+            _ => BStyle::Thin, // 知らない線種は細実線で描く(消しはしない)
+        }
+    }
+    /// 画面と PDF の線の太さ(px)。二重線は2本描きの合計ではなく1本ぶん
+    pub fn px(self) -> f32 {
+        match self {
+            BStyle::Hair => 0.5,
+            BStyle::Medium | BStyle::MediumDashed | BStyle::MediumDashDot
+            | BStyle::MediumDashDotDot | BStyle::SlantDashDot => 2.0,
+            BStyle::Thick => 3.0,
+            _ => 1.0,
+        }
+    }
+    /// 破線系か(画面では dashed 近似で描く。点線の刻みまでは分けない)
+    pub fn dashed(self) -> bool {
+        matches!(
+            self,
+            BStyle::Dotted | BStyle::Dashed | BStyle::DashDot | BStyle::DashDotDot
+                | BStyle::MediumDashed | BStyle::MediumDashDot | BStyle::MediumDashDotDot
+                | BStyle::SlantDashDot
+        )
+    }
+}
+
+/// 罫線1辺 — 有無・線種・色(RRGGBB。None=自動の黒)。
+/// 2026-08-07 拡張: 前は有無(bool)だけだった
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Edge {
+    pub on: bool,
+    pub style: BStyle,
+    pub color: Option<u32>,
+}
+
+impl Edge {
+    pub const THIN: Edge = Edge { on: true, style: BStyle::Thin, color: None };
+    pub const OFF: Edge = Edge { on: false, style: BStyle::Thin, color: None };
+    pub fn line(style: BStyle, color: Option<u32>) -> Edge {
+        Edge { on: true, style, color }
+    }
+}
+
 /// 罫線の引き方。**日本の帳票は罫線で出来ている**ので、ここは飾りではない。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Borders {
-    pub top: bool,
-    pub bottom: bool,
-    pub left: bool,
-    pub right: bool,
+    pub top: Edge,
+    pub bottom: Edge,
+    pub left: Edge,
+    pub right: Edge,
 }
 
 impl Borders {
-    pub const ALL: Borders = Borders { top: true, bottom: true, left: true, right: true };
-    pub const NONE: Borders = Borders { top: false, bottom: false, left: false, right: false };
+    pub const ALL: Borders =
+        Borders { top: Edge::THIN, bottom: Edge::THIN, left: Edge::THIN, right: Edge::THIN };
+    pub const NONE: Borders =
+        Borders { top: Edge::OFF, bottom: Edge::OFF, left: Edge::OFF, right: Edge::OFF };
 
     pub fn any(self) -> bool {
-        self.top || self.bottom || self.left || self.right
+        self.top.on || self.bottom.on || self.left.on || self.right.on
     }
 }
 

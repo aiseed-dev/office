@@ -1048,23 +1048,58 @@ impl Render for Calc {
                 // 黒くなり、外枠が格子に化ける(発注者報告)。
                 // 辺ごとに細い帯を重ねて描く
                 let ink = rgb(0x1B1B1B);
-                if f.borders.top || f.borders.bottom || f.borders.left || f.borders.right {
+                if f.borders.any() {
                     d = d.relative();
-                    if f.borders.top {
-                        d = d.child(div().absolute().left(px(0.0)).top(px(0.0))
-                            .w_full().h(px(1.0)).bg(ink));
-                    }
-                    if f.borders.bottom {
-                        d = d.child(div().absolute().left(px(0.0)).bottom(px(0.0))
-                            .w_full().h(px(1.0)).bg(ink));
-                    }
-                    if f.borders.left {
-                        d = d.child(div().absolute().left(px(0.0)).top(px(0.0))
-                            .w(px(1.0)).h_full().bg(ink));
-                    }
-                    if f.borders.right {
-                        d = d.child(div().absolute().right(px(0.0)).top(px(0.0))
-                            .w(px(1.0)).h_full().bg(ink));
+                    // 1辺を線種どおりに描く。破線系は gpui の破線、
+                    // 二重線は1px2本(間1px)。太さは線種から(hair=細実線)
+                    let edge_bars = |e: sheet::model::Edge, horiz: bool, start: bool|
+                        -> Vec<gpui::AnyElement> {
+                        if !e.on {
+                            return Vec::new();
+                        }
+                        let col = e.color.map(|v| rgb(v)).unwrap_or(ink);
+                        let w = e.style.px().max(1.0);
+                        let place = |b: gpui::Div, off: f32| -> gpui::Div {
+                            match (horiz, start) {
+                                (true, true) => b.left(px(0.0)).top(px(off)).w_full(),
+                                (true, false) => b.left(px(0.0)).bottom(px(off)).w_full(),
+                                (false, true) => b.top(px(0.0)).left(px(off)).h_full(),
+                                (false, false) => b.top(px(0.0)).right(px(off)).h_full(),
+                            }
+                        };
+                        let solid = |off: f32, t: f32| -> gpui::AnyElement {
+                            let b = div().absolute();
+                            let b = place(b, off);
+                            if horiz { b.h(px(t)) } else { b.w(px(t)) }
+                                .bg(col).into_any_element()
+                        };
+                        if e.style == sheet::model::BStyle::Double {
+                            return vec![solid(0.0, 1.0), solid(2.0, 1.0)];
+                        }
+                        if e.style.dashed() {
+                            // 破線: 1px の破線の帯を太さぶん重ねる
+                            return (0..w.round() as i32)
+                                .map(|i| {
+                                    let b = div().absolute();
+                                    let b = place(b, i as f32);
+                                    let b = if horiz {
+                                        b.h(px(1.0)).border_t_1()
+                                    } else {
+                                        b.w(px(1.0)).border_l_1()
+                                    };
+                                    b.border_dashed().border_color(col).into_any_element()
+                                })
+                                .collect();
+                        }
+                        vec![solid(0.0, w)]
+                    };
+                    for bar in edge_bars(f.borders.top, true, true)
+                        .into_iter()
+                        .chain(edge_bars(f.borders.bottom, true, false))
+                        .chain(edge_bars(f.borders.left, false, true))
+                        .chain(edge_bars(f.borders.right, false, false))
+                    {
+                        d = d.child(bar);
                     }
                 }
                 // 太い枠は**選択の範囲の外周**に出す(Excel の作法)。
@@ -2185,6 +2220,7 @@ impl Render for Calc {
                 "sheet-rename" => ui::t!("シートの名前の変更").to_string(),
                 "sort-by" => ui::t!("並べ替え — 基準を左から強い順に(例: 金額 降順, 品名)").to_string(),
                 "numfmt-custom" => ui::t!("数値の書式コード(例: #,##0.00 / yyyy/m/d。空 Enter = 一般)").to_string(),
+                "border-color-rgb" => ui::t!("線の色 — RRGGBB の6桁(例: FF0000。空 Enter = 自動)").to_string(),
                 "subtotal-by" => ui::t!("小計 1/2 — 何の区切りで集めるか(見出しを1つ)").to_string(),
                 "subtotal-vals" => ui::t!("小計 2/2 — 合計する見出し").to_string(),
                 _ => String::new(),
