@@ -3685,8 +3685,12 @@ impl Render for Calc {
         let border_palette = self.border_pal.map(|(vx, vy)| {
             let pen = self.pen_color.map(|v| rgb(v)).unwrap_or(rgb(0x1B1B1B));
             let faint = rgb(0xD5DBE0);
-            // 1コマのアイコン(24×24)。dark = 型の線、faint = セルの気配
-            let icon = |kind: &'static str| -> gpui::AnyElement {
+            // ペンの見た目をそのまま絵に映す(太さと二重線。破線の刻みまでは
+            // 描かない — 絵は場所の案内、線種の正確な見本はスタイルの一覧)
+            let pw = self.pen_style.px().clamp(1.0, 4.0);
+            let double = self.pen_style == sheet::model::BStyle::Double;
+            // 1コマのアイコン(24×24)。濃い線 = ペン、薄い線 = セルの気配
+            let icon = move |kind: &'static str| -> gpui::AnyElement {
                 let base = div().relative().w(px(us * 24.0)).h(px(us * 24.0));
                 let bar = move |edge: u8, t: f32, on: bool, inset: f32| -> gpui::AnyElement {
                     let c = if on { pen } else { faint };
@@ -3699,63 +3703,60 @@ impl Render for Calc {
                     };
                     b.bg(c).into_any_element()
                 };
-                let mid_h = |t: f32| div().absolute()
-                    .left(px(3.0)).right(px(3.0)).top(px(us * 12.0 - t / 2.0)).h(px(t))
-                    .bg(pen).into_any_element();
-                let mid_v = |t: f32| div().absolute()
-                    .top(px(3.0)).bottom(px(3.0)).left(px(us * 12.0 - t / 2.0)).w(px(t))
-                    .bg(pen).into_any_element();
+                // ペンの線で1辺(二重線は細い2本)
+                let pen_edge = move |edge: u8| -> Vec<gpui::AnyElement> {
+                    if double {
+                        vec![bar(edge, 1.0, true, 3.0), bar(edge, 1.0, true, 6.0)]
+                    } else {
+                        vec![bar(edge, pw, true, 3.0)]
+                    }
+                };
+                let mid_h = move || -> Vec<gpui::AnyElement> {
+                    let one = |off: f32, t: f32| div().absolute()
+                        .left(px(3.0)).right(px(3.0)).top(px(us * 12.0 - t / 2.0 + off)).h(px(t))
+                        .bg(pen).into_any_element();
+                    if double { vec![one(-1.5, 1.0), one(1.5, 1.0)] } else { vec![one(0.0, pw)] }
+                };
+                let mid_v = move || -> Vec<gpui::AnyElement> {
+                    let one = |off: f32, t: f32| div().absolute()
+                        .top(px(3.0)).bottom(px(3.0)).left(px(us * 12.0 - t / 2.0 + off)).w(px(t))
+                        .bg(pen).into_any_element();
+                    if double { vec![one(-1.5, 1.0), one(1.5, 1.0)] } else { vec![one(0.0, pw)] }
+                };
                 let mut kids: Vec<gpui::AnyElement> = Vec::new();
                 // セルの気配(薄い枠)はいつも敷く
                 for e in 0..4u8 {
                     kids.push(bar(e, 1.0, false, 3.0));
                 }
                 match kind {
-                    "下罫線" => kids.push(bar(1, 2.0, true, 3.0)),
-                    "上罫線" => kids.push(bar(0, 2.0, true, 3.0)),
-                    "左罫線" => kids.push(bar(2, 2.0, true, 3.0)),
-                    "右罫線" => kids.push(bar(3, 2.0, true, 3.0)),
-                    "太い下罫線" => kids.push(bar(1, 4.0, true, 3.0)),
-                    "下二重罫線" => {
-                        kids.push(bar(1, 1.5, true, 3.0));
-                        kids.push(div().absolute()
-                            .left(px(3.0)).right(px(3.0)).bottom(px(6.0)).h(px(1.5))
-                            .bg(pen).into_any_element());
-                    }
+                    "下罫線" => kids.extend(pen_edge(1)),
+                    "上罫線" => kids.extend(pen_edge(0)),
+                    "左罫線" => kids.extend(pen_edge(2)),
+                    "右罫線" => kids.extend(pen_edge(3)),
                     "外枠" => {
                         for e in 0..4u8 {
-                            kids.push(bar(e, 2.0, true, 3.0));
-                        }
-                    }
-                    "太い外枠" => {
-                        for e in 0..4u8 {
-                            kids.push(bar(e, 3.5, true, 3.0));
+                            kids.extend(pen_edge(e));
                         }
                     }
                     "すべての罫線(格子)" => {
                         for e in 0..4u8 {
-                            kids.push(bar(e, 2.0, true, 3.0));
+                            kids.extend(pen_edge(e));
                         }
-                        kids.push(mid_h(2.0));
-                        kids.push(mid_v(2.0));
+                        kids.extend(mid_h());
+                        kids.extend(mid_v());
                     }
-                    "表の形(太い外枠+格子)" => {
-                        for e in 0..4u8 {
-                            kids.push(bar(e, 3.5, true, 3.0));
-                        }
-                        kids.push(mid_h(1.5));
-                        kids.push(mid_v(1.5));
-                    }
-                    "内側の縦線" => kids.push(mid_v(2.0)),
-                    "内側の横線" => kids.push(mid_h(2.0)),
+                    "内側の縦線" => kids.extend(mid_v()),
+                    "内側の横線" => kids.extend(mid_h()),
                     _ => {} // 罫線を消す = 薄い枠だけ
                 }
                 base.children(kids).into_any_element()
             };
+            // 場所だけを選ぶ9種。太さ・線種・色は**ペンだけ**が決める —
+            // 「太い下罫線」のような太さ焼き込みの型は持たない
+            // (発注者 2026-08-08「Microsoft 方式はやめて」)
             const KINDS: &[&str] = &[
                 "下罫線", "上罫線", "左罫線", "右罫線",
-                "太い下罫線", "下二重罫線", "外枠", "太い外枠",
-                "すべての罫線(格子)", "表の形(太い外枠+格子)",
+                "外枠", "すべての罫線(格子)",
                 "内側の縦線", "内側の横線",
                 "罫線を消す",
             ];

@@ -918,23 +918,24 @@ mod pivot_tests {
             this.sync_input();
             this.run_cmd("borders", cx);
             assert!(this.border_pal.is_some(), "パレットが開かない");
-            // 型を1押し → 掛かって、パレットは開いたまま(apply_borders は
-            // パレットを触らない = 連打できる)
-            this.apply_borders("表の形(太い外枠+格子)");
-            assert!(this.border_pal.is_some(), "パレットが閉じた(連打できない)");
             fn bd(this: &Calc, r: u32, c2: u32) -> sheet::model::Borders {
                 this.book.sheets[0].get(Pos::new(r, c2)).unwrap().fmt.borders
             }
-            // 左上: 外周は太く、内側は細い
+            // 場所×ペンの直交モデル(Microsoft の型スタンプは持たない —
+            // 発注者確定 2026-08-08)。帳票の枠はペンを替えながら連打で組む:
+            // 細で格子 → ペンを中太にして外枠 → ペンを二重にして下罫線
+            this.apply_borders("すべての罫線(格子)");
+            assert!(this.border_pal.is_some(), "パレットが閉じた(連打できない)");
+            this.pen_style = BStyle::Medium;
+            this.apply_borders("外枠");
             assert_eq!(bd(this, 0, 0).top.style, BStyle::Medium);
             assert_eq!(bd(this, 0, 0).left.style, BStyle::Medium);
-            assert_eq!(bd(this, 0, 0).bottom.style, BStyle::Thin);
+            assert_eq!(bd(this, 0, 0).bottom.style, BStyle::Thin, "格子の内側が外枠で潰れた");
             assert_eq!(bd(this, 0, 0).right.style, BStyle::Thin);
-            // 右下: 外周は太く
             assert_eq!(bd(this, 1, 1).bottom.style, BStyle::Medium);
             assert_eq!(bd(this, 1, 1).right.style, BStyle::Medium);
-            // 下二重罫線
-            this.apply_borders("下二重罫線");
+            this.pen_style = BStyle::Double;
+            this.apply_borders("下罫線");
             let _ = cx;
             assert_eq!(bd(this, 1, 0).bottom.style, BStyle::Double);
             assert_eq!(bd(this, 1, 1).bottom.style, BStyle::Double);
