@@ -3642,6 +3642,164 @@ impl Render for Calc {
         });
 
         // ---- ドロップダウンリスト(同じ列の値の一覧) ----
+        // ---- 罫線のアイコンの格子パレット(発注者 2026-08-08) ----
+        // 型を絵で選ぶ。掛けても閉じない(連打で帳票の枠を組み立てる)。
+        // アイコンは div の重ね棒 — SVG 資産が要らず、ペンの色にも追従する
+        let border_palette = self.border_pal.map(|(vx, vy)| {
+            let pen = self.pen_color.map(|v| rgb(v)).unwrap_or(rgb(0x1B1B1B));
+            let faint = rgb(0xD5DBE0);
+            // 1コマのアイコン(24×24)。dark = 型の線、faint = セルの気配
+            let icon = |kind: &'static str| -> gpui::AnyElement {
+                let base = div().relative().w(px(us * 24.0)).h(px(us * 24.0));
+                let bar = move |edge: u8, t: f32, on: bool, inset: f32| -> gpui::AnyElement {
+                    let c = if on { pen } else { faint };
+                    let b = div().absolute();
+                    let b = match edge {
+                        0 => b.left(px(inset)).right(px(inset)).top(px(inset)).h(px(t)),
+                        1 => b.left(px(inset)).right(px(inset)).bottom(px(inset)).h(px(t)),
+                        2 => b.top(px(inset)).bottom(px(inset)).left(px(inset)).w(px(t)),
+                        _ => b.top(px(inset)).bottom(px(inset)).right(px(inset)).w(px(t)),
+                    };
+                    b.bg(c).into_any_element()
+                };
+                let mid_h = |t: f32| div().absolute()
+                    .left(px(3.0)).right(px(3.0)).top(px(us * 12.0 - t / 2.0)).h(px(t))
+                    .bg(pen).into_any_element();
+                let mid_v = |t: f32| div().absolute()
+                    .top(px(3.0)).bottom(px(3.0)).left(px(us * 12.0 - t / 2.0)).w(px(t))
+                    .bg(pen).into_any_element();
+                let mut kids: Vec<gpui::AnyElement> = Vec::new();
+                // セルの気配(薄い枠)はいつも敷く
+                for e in 0..4u8 {
+                    kids.push(bar(e, 1.0, false, 3.0));
+                }
+                match kind {
+                    "下罫線" => kids.push(bar(1, 2.0, true, 3.0)),
+                    "上罫線" => kids.push(bar(0, 2.0, true, 3.0)),
+                    "左罫線" => kids.push(bar(2, 2.0, true, 3.0)),
+                    "右罫線" => kids.push(bar(3, 2.0, true, 3.0)),
+                    "太い下罫線" => kids.push(bar(1, 4.0, true, 3.0)),
+                    "下二重罫線" => {
+                        kids.push(bar(1, 1.5, true, 3.0));
+                        kids.push(div().absolute()
+                            .left(px(3.0)).right(px(3.0)).bottom(px(6.0)).h(px(1.5))
+                            .bg(pen).into_any_element());
+                    }
+                    "外枠" => {
+                        for e in 0..4u8 {
+                            kids.push(bar(e, 2.0, true, 3.0));
+                        }
+                    }
+                    "太い外枠" => {
+                        for e in 0..4u8 {
+                            kids.push(bar(e, 3.5, true, 3.0));
+                        }
+                    }
+                    "すべての罫線(格子)" => {
+                        for e in 0..4u8 {
+                            kids.push(bar(e, 2.0, true, 3.0));
+                        }
+                        kids.push(mid_h(2.0));
+                        kids.push(mid_v(2.0));
+                    }
+                    "表の形(太い外枠+格子)" => {
+                        for e in 0..4u8 {
+                            kids.push(bar(e, 3.5, true, 3.0));
+                        }
+                        kids.push(mid_h(1.5));
+                        kids.push(mid_v(1.5));
+                    }
+                    "内側の縦線" => kids.push(mid_v(2.0)),
+                    "内側の横線" => kids.push(mid_h(2.0)),
+                    _ => {} // 罫線を消す = 薄い枠だけ
+                }
+                base.children(kids).into_any_element()
+            };
+            const KINDS: &[&str] = &[
+                "下罫線", "上罫線", "左罫線", "右罫線",
+                "太い下罫線", "下二重罫線", "外枠", "太い外枠",
+                "すべての罫線(格子)", "表の形(太い外枠+格子)",
+                "内側の縦線", "内側の横線",
+                "罫線を消す",
+            ];
+            let style_name = crate::util::BORDER_STYLES
+                .iter()
+                .find(|(_, b)| *b == self.pen_style)
+                .map(|(n, _)| *n)
+                .unwrap_or("細い実線(既定)");
+            let color_name = match self.pen_color {
+                Some(v) => format!("#{v:06X}"),
+                None => ui::t!("自動(黒)").to_string(),
+            };
+            let mut pal = div().id("border-pal").absolute().left(px(vx)).top(px(vy))
+                .w(px(us * 176.0))
+                .p_1().rounded_md().bg(rgb(0xFFFFFF))
+                .border_1().border_color(rgb(0xC6CDD3)).shadow_lg()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().px_1().py_0p5().mb_0p5()
+                    .border_b_1().border_color(rgb(0xE1E6EA))
+                    .text_size(px(us * 10.5)).font_weight(gpui::FontWeight::BOLD)
+                    .text_color(rgb(0x1B6E3C))
+                    .whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(ui::t!("罫線(連続で押せます。Esc で閉じる)").to_string())));
+            for row_kinds in KINDS.chunks(4) {
+                let mut r = div().flex().flex_row().gap_0p5();
+                for kind in row_kinds {
+                    let k: &'static str = kind;
+                    r = r.child(div()
+                        .id(SharedString::from(format!("bp-{k}")))
+                        .p_0p5().rounded_sm().cursor_pointer()
+                        .hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .tooltip({
+                            let k2 = k;
+                            move |_, cx| cx.new(|_| Tip(k2.into(), us)).into()
+                        })
+                        .child(icon(k))
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                            move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.apply_borders(k);
+                                cx.notify();
+                            })));
+                }
+                pal = pal.child(r);
+            }
+            // 下段: ペン(スタイル・色)。今の値を見せる
+            pal = pal.child(div().mt_0p5().pt_0p5()
+                .border_t_1().border_color(rgb(0xE1E6EA))
+                .child(div()
+                    .id("bp-style")
+                    .px_1().py_0p5().rounded_sm().cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .text_size(px(us * 11.5)).text_color(rgb(0x1B1B1B))
+                    .whitespace_nowrap().overflow_hidden()
+                    .child(SharedString::from(ui::tf!("線のスタイル: {}…", style_name).to_string()))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                        |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.border_pal = None;
+                            this.open_border_style_pick();
+                            cx.notify();
+                        })))
+                .child(div()
+                    .id("bp-color")
+                    .px_1().py_0p5().rounded_sm().cursor_pointer()
+                    .hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .flex().flex_row().items_center().gap_1()
+                    .text_size(px(us * 11.5)).text_color(rgb(0x1B1B1B))
+                    .child(div().w(px(10.0)).h(px(10.0)).rounded_xs().bg(pen)
+                        .border_1().border_color(rgb(0xC6CDD3)))
+                    .child(SharedString::from(ui::tf!("線の色: {}…", color_name).to_string()))
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(
+                        |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.border_pal = None;
+                            this.open_border_color_pick();
+                            cx.notify();
+                        }))));
+            pal
+        });
+
         let pick_panel = self.pick.clone().map(|(vals, (vx, vy))| {
             // 色の一覧(文字の色・塗り)は名前の左に色見本の四角を添える
             let swatch_of = |name: &str| -> Option<Option<&'static str>> {
@@ -3898,6 +4056,7 @@ impl Render for Calc {
                    .children(fmt_panel)
                    .children(menu)
                    .children(filepage)
+                   .children(border_palette)
                    .children(pick_panel)
                    .children(prompt_panel)
                    .children(dv_panel)

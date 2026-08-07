@@ -77,6 +77,8 @@ struct Calc {
     /// 既定の書体(実在する家族に解決済み)。「Noto Sans JP」の名指しは
     /// 入っていない機械で**素通りして太字も効かなくなる**(発注者報告)
     pub(crate) font_name: gpui::SharedString,
+    /// 罫線のアイコンの格子パレット(開いている位置)。掛けても閉じない
+    pub(crate) border_pal: Option<(f32, f32)>,
     /// 罫線のペン(線種と色)。罫線の一覧から掛けるときに使う
     pen_style: sheet::model::BStyle,
     pen_color: Option<u32>,
@@ -331,6 +333,7 @@ impl Calc {
             dedup_pend: None,
             cond_pend: None,
             import_pend: None,
+            border_pal: None,
             font_name: kumihan::font::for_document(None)
                 .map(|(fam, _)| gpui::SharedString::from(fam.name.clone()))
                 .unwrap_or_else(|_| "Noto Sans JP".into()),
@@ -812,6 +815,7 @@ impl Calc {
     fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool, ctrl: bool, clicks: usize) {
         self.menu_at = None;
         self.pick = None;
+        self.border_pal = None;
         // mouse-up を取り逃していても、新しい押下で必ず仕切り直す(自癒)
         self.size_drag = None;
         self.drag = None;

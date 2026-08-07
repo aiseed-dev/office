@@ -1832,6 +1832,41 @@ impl Calc {
     }
 
     /// 罫線を選択に掛ける(ペンの線種・色で)。which は一覧の項目名
+    /// 線のスタイルの板(ペンに入る)。罫線パレットからも来る
+    pub(crate) fn open_border_style_pick(&mut self) {
+        let at = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let items: Vec<String> = BORDER_STYLES
+            .iter()
+            .map(|(n, b)| {
+                if *b == self.pen_style {
+                    format!("✓ {n}")
+                } else {
+                    n.to_string()
+                }
+            })
+            .collect();
+        self.pick_note = Some(ui::t!("線のスタイル(選ぶとペンに入ります — 次の罫線から効く)").into());
+        self.pick_kind = "border-style-pick";
+        self.pick = Some((items, at));
+    }
+
+    /// 線の色の板(ペンに入る)。罫線パレットからも来る
+    pub(crate) fn open_border_color_pick(&mut self) {
+        let at = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let mut items: Vec<String> =
+            FONT_COLORS.iter().map(|(n, _)| n.to_string()).collect();
+        items.push("その他(RRGGBB を打つ)…".into());
+        self.pick_note = Some(ui::t!("線の色(選ぶとペンに入ります)").into());
+        self.pick_kind = "border-color-pick";
+        self.pick = Some((items, at));
+    }
+
     pub(crate) fn apply_borders(&mut self, which: &str) {
         let (a, b) = self.sel_rect();
         let e = sheet::model::Edge::line(self.pen_style, self.pen_color);
@@ -2209,6 +2244,7 @@ impl Calc {
         self.dedup_pend = None;
         self.cond_pend = None;
         self.import_pend = None;
+        self.border_pal = None;
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる

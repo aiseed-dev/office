@@ -888,4 +888,7 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("区切りの文字を1つ(例: |)", "One delimiter character (e.g. |)"),
 ("置き場所 — 左上のセル(B12 の形)", "Destination — top-left cell (B12 form)"),
 ("罫線 — いまのペン: {}・{}(連続で押せます。Esc で閉じる)", "Borders — current pen: {}, {} (keep clicking; Esc closes)"),
+("罫線(連続で押せます。Esc で閉じる)", "Borders (keep clicking; Esc closes)"),
+("線のスタイル: {}…", "Line style: {}…"),
+("線の色: {}…", "Line color: {}…"),
 ];

@@ -917,11 +917,11 @@ mod pivot_tests {
             this.cursor = Pos::new(1, 1);
             this.sync_input();
             this.run_cmd("borders", cx);
-            assert_eq!(this.pick_kind, "border-pick");
-            // 型を1押し → 掛かって、板は開いたまま
-            this.apply_pick("表の形(太い外枠+格子)", cx);
-            assert_eq!(this.pick_kind, "border-pick", "板が閉じた(連打できない)");
-            assert!(this.pick.is_some());
+            assert!(this.border_pal.is_some(), "パレットが開かない");
+            // 型を1押し → 掛かって、パレットは開いたまま(apply_borders は
+            // パレットを触らない = 連打できる)
+            this.apply_borders("表の形(太い外枠+格子)");
+            assert!(this.border_pal.is_some(), "パレットが閉じた(連打できない)");
             fn bd(this: &Calc, r: u32, c2: u32) -> sheet::model::Borders {
                 this.book.sheets[0].get(Pos::new(r, c2)).unwrap().fmt.borders
             }
@@ -934,7 +934,8 @@ mod pivot_tests {
             assert_eq!(bd(this, 1, 1).bottom.style, BStyle::Medium);
             assert_eq!(bd(this, 1, 1).right.style, BStyle::Medium);
             // 下二重罫線
-            this.apply_pick("下二重罫線", cx);
+            this.apply_borders("下二重罫線");
+            let _ = cx;
             assert_eq!(bd(this, 1, 0).bottom.style, BStyle::Double);
             assert_eq!(bd(this, 1, 1).bottom.style, BStyle::Double);
         });
@@ -1027,12 +1028,15 @@ mod pivot_tests {
                 this.fn_dlg = None;
                 this.fmt_panel = None;
             };
+            this.run_cmd("borders", cx);
+            assert!(this.border_pal.is_some(), "罫線のパレットが開かない");
+            this.border_pal = None;
             for (id, kind) in [
                 ("changecase", "changecase"),
                 ("fontname", "font"),
                 ("fontcolor", "font-color"),
                 ("fillparag", "fill-color"),
-                ("borders", "border-pick"),
+
                 ("text-orient", "orient-pick"),
                 ("merge", "merge-pick"), // 結合は範囲が要る(下で anchor を張る)
                 ("format", "numfmt-pick"),
@@ -1926,21 +1930,18 @@ mod recalc_tests {
             this.cursor = Pos::parse("C3").unwrap();
             this.sync_input();
             this.run_cmd("borders", cx);
-            assert_eq!(this.pick_kind, "border-pick", "罫線の一覧が開かない");
-            this.apply_pick("→ 線のスタイル…", cx);
+            assert!(this.border_pal.is_some(), "罫線のパレットが開かない");
+            this.open_border_style_pick();
             assert_eq!(this.pick_kind, "border-style-pick");
             this.apply_pick("中太の実線", cx);
             assert_eq!(this.pen_style, BStyle::Medium);
-            this.run_cmd("borders", cx);
-            this.apply_pick("→ 線の色…", cx);
+            this.open_border_color_pick();
             this.apply_pick("その他(RRGGBB を打つ)…", cx);
             this.prompt = Some(("border-color-rgb", Editor::new("FF0000")));
             this.finish_prompt(cx);
             assert_eq!(this.pen_color, Some(0xFF0000), "RGB 直指定が効かない");
-            // 外枠を掛ける
-            this.run_cmd("borders", cx);
-            assert_eq!(this.pick_kind, "border-pick", "2度目の一覧が開かない: {}", this.status);
-            this.apply_pick("外枠", cx);
+            // 外枠を掛ける(パレットの1押しと同じ実体)
+            this.apply_borders("外枠");
             let bd = |this: &Calc, p: &str| {
                 this.sheet().get(Pos::parse(p).unwrap()).unwrap().fmt.borders
             };
@@ -1952,11 +1953,9 @@ mod recalc_tests {
             let c3 = bd(this, "C3");
             assert!(c3.bottom.on && c3.right.on && !c3.top.on);
             // 格子 → 全辺。消す → 全部消える
-            this.run_cmd("borders", cx);
-            this.apply_pick("すべての罫線(格子)", cx);
+            this.apply_borders("すべての罫線(格子)");
             assert!(bd(this, "B2").right.on && bd(this, "C3").top.on);
-            this.run_cmd("borders", cx);
-            this.apply_pick("罫線を消す", cx);
+            this.apply_borders("罫線を消す");
             // 素に戻ったセルは片づけられる(get は None)— どちらでも「無い」
             let off = |this: &Calc, p: &str| {
                 this.sheet()

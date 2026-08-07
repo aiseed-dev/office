@@ -102,32 +102,8 @@ impl Calc {
                     .cell_origin_px(self.cursor)
                     .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
                     .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
-                let items: Vec<String> = [
-                    "下罫線", "上罫線", "左罫線", "右罫線",
-                    "太い下罫線", "下二重罫線",
-                    "外枠", "太い外枠", "すべての罫線(格子)",
-                    "表の形(太い外枠+格子)",
-                    "内側の縦線", "内側の横線",
-                    "罫線を消す",
-                    "→ 線のスタイル…", "→ 線の色…",
-                ]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-                let style_name = BORDER_STYLES
-                    .iter()
-                    .find(|(_, b)| *b == self.pen_style)
-                    .map(|(n, _)| *n)
-                    .unwrap_or("細い実線(既定)");
-                let color_name = match self.pen_color {
-                    Some(v) => format!("#{v:06X}"),
-                    None => ui::t!("自動(黒)").to_string(),
-                };
-                self.pick_note = Some(
-                    ui::tf!("罫線 — いまのペン: {}・{}(連続で押せます。Esc で閉じる)", style_name, color_name).into(),
-                );
-                self.pick_kind = "border-pick";
-                self.pick = Some((items, at));
+                // アイコンの格子パレット(発注者 2026-08-08)。掛けても閉じない
+                self.border_pal = Some(at);
             }
             // 書式のコピー(刷毛)。いまのセルの書式を持ち、次に押した先へ塗る
             "copystyle" => {
