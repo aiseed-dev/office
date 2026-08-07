@@ -429,7 +429,10 @@ impl Calc {
     /// 名前を付けて保存(いつでもダイアログ。別の糸 — rfd は同期)
     pub(crate) fn save_as(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
-            rfd::FileDialog::new().add_filter("Excelブック", &["xlsx"]).save_file()
+            rfd::FileDialog::new()
+                .add_filter("Excelブック", &["xlsx"])
+                .add_filter("CSV(いまのシートの値だけ)", &["csv"])
+                .save_file()
         });
         cx.spawn(async move |this, cx| {
             let r = ask.await;
@@ -438,12 +441,75 @@ impl Calc {
                     if p.extension().is_none() {
                         p.set_extension("xlsx");
                     }
-                    this.save_to(p);
+                    if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("csv")) {
+                        this.write_csv(&p);
+                    } else {
+                        this.save_to(p);
+                    }
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// いまのシートを CSV に書き出す(値だけ。UTF-8 BOM+CRLF — Excel が
+    /// 文字化けせずに開ける形)。**self.path は動かさない** — CSV は式も
+    /// 書式も他のシートも持てないので、「保存先」にはしない。
+    pub(crate) fn export_csv_dialog(&mut self, cx: &mut Context<Self>) {
+        self.commit();
+        let name = format!("{}.csv", self.book.sheets[self.active].name);
+        let ask = cx.background_executor().spawn(async move {
+            rfd::FileDialog::new()
+                .add_filter("CSV", &["csv"])
+                .set_file_name(&name)
+                .save_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    this.write_csv(&p);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn write_csv(&mut self, p: &std::path::Path) {
+        let s = &self.book.sheets[self.active];
+        let (rows, cols) = s.extent();
+        let mut out = String::from("\u{feff}"); // BOM — Excel の既定の読みに合わせる
+        for r in 0..rows {
+            let mut line: Vec<String> = Vec::new();
+            for c in 0..cols.max(1) {
+                let v = s
+                    .get(sheet::Pos::new(r, c))
+                    .map(|x| x.value.display())
+                    .unwrap_or_default();
+                if v.contains(',') || v.contains('"') || v.contains('\n') || v.contains('\r') {
+                    line.push(format!("\"{}\"", v.replace('"', "\"\"")));
+                } else {
+                    line.push(v);
+                }
+            }
+            out.push_str(&line.join(","));
+            out.push_str("\r\n");
+        }
+        match std::fs::write(p, out) {
+            Ok(()) => {
+                // 何が入らないかを黙らない(CSV は値だけの形式)
+                self.status = ui::tf!(
+                    "CSV に書き出しました: {}(いまのシートの値だけ — 式・書式・他のシートは入りません)",
+                    p.display()
+                )
+                .into();
+            }
+            Err(e) => {
+                self.status = ui::tf!("CSV に書き出せませんでした: {}", e).into();
+            }
+        }
     }
 
     pub(crate) fn a_save(&mut self, _: &ui::Save, _: &mut Window, cx: &mut Context<Self>) {

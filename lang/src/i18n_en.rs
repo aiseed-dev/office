@@ -826,4 +826,7 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("分散", "Variance"),
 ("合計", "Sum"),
 ("{} を {} の{}に替えました(絞り込み中の行は数えません)", "Changed {} over {} to: {} (filtered-out rows are skipped)"),
+("CSV に書き出しました: {}(いまのシートの値だけ — 式・書式・他のシートは入りません)", "Exported to CSV: {} (values of the current sheet only — formulas, formats and other sheets are not included)"),
+("CSV に書き出せませんでした: {}", "Could not export to CSV: {}"),
+("CSV に書き出す", "Export to CSV"),
 ];

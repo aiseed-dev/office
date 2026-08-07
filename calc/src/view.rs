@@ -2985,6 +2985,11 @@ impl Render for Calc {
                     this.run_cmd("pdf", cx);
                     cx.notify()
                 })))
+                .child(mk("f-csv", ui::t!("CSV に書き出す"), true).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.export_csv_dialog(cx);
+                        cx.notify()
+                    })))
                 .child(mk("f-protect", ui::t!("保護する"), true).on_click(cx.listener(
                     |this, _, _, cx| {
                         if let Some(i) =

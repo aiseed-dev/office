@@ -1136,6 +1136,27 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 値だけをcsvに書き出せる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            this.book.sheets[0].set(Pos::new(0, 0), sheet::Cell::input("品名"));
+            this.book.sheets[0].set(Pos::new(0, 1), sheet::Cell::input("値,段"));
+            this.book.sheets[0].set(Pos::new(1, 0), sheet::Cell::input("鉛筆"));
+            this.book.sheets[0].set(Pos::new(1, 1), sheet::Cell::input("=1+2"));
+            recalc_book(&mut this.book, 0);
+            let dir = std::env::temp_dir().join("calc-csv-test");
+            std::fs::create_dir_all(&dir).unwrap();
+            let p = dir.join("out.csv");
+            this.write_csv(&p);
+            let got = std::fs::read_to_string(&p).unwrap();
+            assert!(got.starts_with('\u{feff}'), "BOM が無い");
+            assert!(got.contains("品名,\"値,段\""), "区切りを含む欄が囲われていない: {got}");
+            assert!(got.contains("鉛筆,3"), "式が計算値になっていない: {got}");
+            std::fs::remove_dir_all(&dir).ok();
+        });
+    }
+
+    #[gpui::test]
     fn 合計行の集計のしかたを替えられる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, _cx| {

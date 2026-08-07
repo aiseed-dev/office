@@ -10,7 +10,7 @@ calc と突き合わせた結果の**全量**。要約と消し込みの順番�
 
 ### 基本操作(2件)
 
-- **[中] 保存形式の選択肢(XLSX, XLTX, ODS, OTS, CSV, PDF, PDFA)**(OpenCreateNew.aspx)
+- ✔(第1版 2026-08-07: CSV 書き出し=ファイル頁の釦と「名前を付けて保存」の絞り(UTF-8 BOM+CRLF・値だけ・入らない物は文言で言う)。PDF は従来から印刷で。ODS/OTS/XLTX/PDF-A は控え — 別の書式系を1から書く大物で、xlsx と PDF と CSV で実務は回るため後回し)**[中] 保存形式の選択肢(XLSX, XLTX, ODS, OTS, CSV, PDF, PDFA)**(OpenCreateNew.aspx)
   - 本家: 「名前を付けて保存」やダウンロード時にXLSX・XLTX・ODS・OTS・CSV・PDF・PDFAの中から形式を選べる。
   - calc: calc/src/io.rs:416-419のsave_asはadd_filter("Excelブック", ["xlsx"])のみ。PDF書き出しは別コマンドとして存在する(io.rs:494-496)。ODS/OTS/XLTX/CSV/PDFAでの保存はio.rs・cmds.rsをgrepしても見当たらず、SEKKEI.mdにも当該形式への言及は無い。
 - **[小] 数式入力中に別ワークブックのセルをクリックして外部参照式(=[Book1.xlsx]Sheet1!A1 形式)を作る**(AddExternalLinks.aspx)
