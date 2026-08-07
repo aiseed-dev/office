@@ -785,4 +785,8 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Image selected (drag to move / corner to resize / Del to delete)"),
 ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Images loaded from the file can't be moved (their original form is preserved on save; re-insert to make them editable)"),
 ("画像を削除しました(Ctrl+Z で戻せます)", "Image deleted (Ctrl+Z undoes it)"),
+("画面の明暗(テーマ)", "Interface theme (light/dark)"),
+("暗い", "Dark"),
+("明るい", "Light"),
+("画面の文字の大きさ", "UI text size"),
 ];

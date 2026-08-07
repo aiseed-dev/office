@@ -782,4 +782,8 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Gambar dipilih (seret = pindah / sudut = ukuran / Del = hapus)"),
     ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Gambar yang dimuat dari berkas tidak bisa dipindah (bentuk aslinya dijaga saat menyimpan; sisipkan ulang agar bisa diedit)"),
     ("画像を削除しました(Ctrl+Z で戻せます)", "Gambar dihapus (Ctrl+Z membatalkan)"),
+    ("画面の明暗(テーマ)", "Tema antarmuka (terang/gelap)"),
+    ("暗い", "Gelap"),
+    ("明るい", "Terang"),
+    ("画面の文字の大きさ", "Ukuran teks layar"),
 ];

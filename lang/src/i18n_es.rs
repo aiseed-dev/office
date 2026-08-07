@@ -782,4 +782,8 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Imagen seleccionada (arrastrar = mover / esquina = tamaño / Supr = borrar)"),
     ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Las imágenes cargadas del archivo no se pueden mover (su forma original se conserva al guardar; reinsértelas para editarlas)"),
     ("画像を削除しました(Ctrl+Z で戻せます)", "Imagen borrada (Ctrl+Z lo deshace)"),
+    ("画面の明暗(テーマ)", "Tema de la interfaz (claro/oscuro)"),
+    ("暗い", "Oscuro"),
+    ("明るい", "Claro"),
+    ("画面の文字の大きさ", "Tamaño del texto de la pantalla"),
 ];

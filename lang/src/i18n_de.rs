@@ -782,4 +782,8 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Bild gewählt (ziehen = verschieben / Ecke = Größe / Entf = löschen)"),
     ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Aus der Datei geladene Bilder sind nicht beweglich (ihre Originalform bleibt beim Speichern erhalten; neu einfügen macht sie bearbeitbar)"),
     ("画像を削除しました(Ctrl+Z で戻せます)", "Bild gelöscht (Ctrl+Z macht es rückgängig)"),
+    ("画面の明暗(テーマ)", "Oberflächenthema (hell/dunkel)"),
+    ("暗い", "Dunkel"),
+    ("明るい", "Hell"),
+    ("画面の文字の大きさ", "Textgröße der Oberfläche"),
 ];

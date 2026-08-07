@@ -380,7 +380,7 @@ impl Calc {
             show_formula_bar: true,
             show_headers: true,
             show_zeros: true,
-            dark: false,
+            dark: ui::settings::get("theme").as_deref() == Some("dark"),
             auto_calc: true,
             watch: Vec::new(),
             ai_busy: false,

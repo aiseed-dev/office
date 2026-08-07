@@ -782,4 +782,8 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Immagine selezionata (trascina = sposta / angolo = dimensioni / Canc = elimina)"),
     ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Le immagini caricate dal file non si possono spostare (la forma originale è preservata al salvataggio; reinseriscile per modificarle)"),
     ("画像を削除しました(Ctrl+Z で戻せます)", "Immagine eliminata (Ctrl+Z annulla)"),
+    ("画面の明暗(テーマ)", "Tema dell'interfaccia (chiaro/scuro)"),
+    ("暗い", "Scuro"),
+    ("明るい", "Chiaro"),
+    ("画面の文字の大きさ", "Dimensione del testo dello schermo"),
 ];

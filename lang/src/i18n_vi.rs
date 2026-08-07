@@ -782,4 +782,8 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Đã chọn ảnh (kéo = di chuyển / góc = cỡ / Del = xóa)"),
     ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Ảnh đọc từ tệp không di chuyển được (giữ nguyên bản khi lưu; chèn lại để chỉnh sửa)"),
     ("画像を削除しました(Ctrl+Z で戻せます)", "Đã xóa ảnh (Ctrl+Z hoàn tác)"),
+    ("画面の明暗(テーマ)", "Chủ đề giao diện (sáng/tối)"),
+    ("暗い", "Tối"),
+    ("明るい", "Sáng"),
+    ("画面の文字の大きさ", "Cỡ chữ màn hình"),
 ];

@@ -782,4 +782,8 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Görsel seçildi (sürükle = taşı / köşe = boyut / Del = sil)"),
     ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Dosyadan yüklenen görseller taşınamaz (kayıtta özgün hali korunur; yeniden ekleyince düzenlenebilir)"),
     ("画像を削除しました(Ctrl+Z で戻せます)", "Görsel silindi (Ctrl+Z geri alır)"),
+    ("画面の明暗(テーマ)", "Arayüz teması (açık/koyu)"),
+    ("暗い", "Koyu"),
+    ("明るい", "Açık"),
+    ("画面の文字の大きさ", "Ekran yazı boyutu"),
 ];

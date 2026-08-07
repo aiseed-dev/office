@@ -3048,6 +3048,36 @@ impl Render for Calc {
                                 this.status = ui::t!("言語を控えました(次の起動から効きます。環境変数 OFFICE_LANG があればそちらが優先)").into();
                                 cx.notify()
                             }))))
+                    .child(div().flex().flex_row().items_center().gap_2()
+                        .child(div().w(px(us * 200.0)).text_color(dim)
+                            .child(ui::t!("画面の明暗(テーマ)")))
+                        .child(div().id("set-theme")
+                            .px_3().py_1().rounded_sm().cursor_pointer()
+                            .bg(item_bg)
+                            .child(if self.dark { ui::t!("暗い") } else { ui::t!("明るい") })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_cmd("theme", cx);
+                                cx.notify()
+                            }))))
+                    .child(div().flex().flex_row().items_center().gap_2()
+                        .child(div().w(px(us * 200.0)).text_color(dim)
+                            .child(ui::t!("画面の文字の大きさ")))
+                        .child(div().id("set-ui-minus")
+                            .px_3().py_1().rounded_sm().cursor_pointer().bg(item_bg)
+                            .child("−")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_cmd("ui-smaller", cx);
+                                cx.notify()
+                            })))
+                        .child(div().child(SharedString::from(
+                            format!("{}%", (self.ui_scale * 100.0).round() as i32))))
+                        .child(div().id("set-ui-plus")
+                            .px_3().py_1().rounded_sm().cursor_pointer().bg(item_bg)
+                            .child("+")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_cmd("ui-bigger", cx);
+                                cx.notify()
+                            }))))
                     .child(div().h(px(10.0)))
                     .child(row(ui::t!("書体(OFFICE_FONT)"),
                         std::env::var("OFFICE_FONT")

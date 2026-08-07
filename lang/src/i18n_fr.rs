@@ -782,4 +782,8 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("画像を選びました(ドラッグで移動 / 右下で大きさ / Del で削除)", "Image sélectionnée (glisser = déplacer / coin = taille / Suppr = supprimer)"),
     ("読み込んだ画像は動かせません(保存で元の姿を守るため。挿し直せばこのアプリの画像になります)", "Les images chargées du fichier ne peuvent pas être déplacées (leur forme d'origine est préservée à l'enregistrement ; réinsérez-les pour les modifier)"),
     ("画像を削除しました(Ctrl+Z で戻せます)", "Image supprimée (Ctrl+Z annule)"),
+    ("画面の明暗(テーマ)", "Thème de l'interface (clair/sombre)"),
+    ("暗い", "Sombre"),
+    ("明るい", "Clair"),
+    ("画面の文字の大きさ", "Taille du texte de l'écran"),
 ];

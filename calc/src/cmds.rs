@@ -1103,6 +1103,10 @@ impl Calc {
             // インターフェイステーマ(画面の明暗)。**セルは白のまま**
             "theme" => {
                 self.dark = !self.dark;
+                // 次の起動も同じ明暗で(設定に覚える)
+                if !cfg!(test) {
+                    ui::settings::set("theme", if self.dark { "dark" } else { "light" });
+                }
                 self.status = if self.dark {
                     ui::t!("画面を暗くしました(セルは白のまま — 画面と紙の一致を守る)").into()
                 } else {
