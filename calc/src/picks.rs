@@ -887,6 +887,25 @@ impl Calc {
                 self.dirty = true;
                 self.status = ui::tf!("{} 本の条件を消しました", n).into();
             }
+            // 見出しの右クリック: 幅・高さの数値指定(選んだ列・行ぶん)
+            "colw" => {
+                let cur = self
+                    .sheet()
+                    .col_width
+                    .get(&self.cursor.col)
+                    .map(|w| format!("{w:.2}"))
+                    .unwrap_or_default();
+                self.prompt = Some(("col-width", Editor::new(&cur)));
+            }
+            "rowh" => {
+                let cur = self
+                    .sheet()
+                    .row_height
+                    .get(&self.cursor.row)
+                    .map(|h| format!("{h:.1}"))
+                    .unwrap_or_default();
+                self.prompt = Some(("row-height", Editor::new(&cur)));
+            }
             "picklist" => self.open_pick_list(),
             "defname" => {
                 self.commit();
@@ -1670,6 +1689,7 @@ impl Calc {
         if self.brush.take().is_some() {
             self.status = ui::t!("書式のコピーをやめました").into();
         }
+        self.menu_head = None; // 見出しメニューの印も畳む
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
         // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる
@@ -1722,6 +1742,55 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // 列の幅・行の高さの数値指定(選んだ列・行ぶん。空 = 既定に戻す)
+            "col-width" | "row-height" => {
+                let is_col = kind == "col-width";
+                let (a, b) = self.sel_rect();
+                let t = text.trim();
+                if t.is_empty() {
+                    self.checkpoint();
+                    if is_col {
+                        for c in a.col..=b.col {
+                            self.sheet_mut().col_width.remove(&c);
+                        }
+                    } else {
+                        for r in a.row..=b.row {
+                            self.sheet_mut().row_height.remove(&r);
+                        }
+                    }
+                    self.dirty = true;
+                    self.status = ui::t!("既定の大きさに戻しました").into();
+                    return;
+                }
+                let Ok(v) = t.parse::<f32>() else {
+                    self.status = ui::t!("半角の数で(例: 12.5)").into();
+                    self.prompt = Some((kind, Editor::new(t)));
+                    return;
+                };
+                let ok = if is_col { (0.0..=255.0).contains(&v) } else { (0.0..=409.0).contains(&v) };
+                if !ok {
+                    self.status = if is_col {
+                        ui::t!("列の幅は 0〜255 で").into()
+                    } else {
+                        ui::t!("行の高さは 0〜409 で").into()
+                    };
+                    self.prompt = Some((kind, Editor::new(t)));
+                    return;
+                }
+                self.checkpoint();
+                if is_col {
+                    for c in a.col..=b.col {
+                        self.sheet_mut().col_width.insert(c, v);
+                    }
+                    self.status = ui::tf!("列の幅を {} にしました({} 列)", v, b.col - a.col + 1).into();
+                } else {
+                    for r in a.row..=b.row {
+                        self.sheet_mut().row_height.insert(r, v);
+                    }
+                    self.status = ui::tf!("行の高さを {} pt にしました({} 行)", v, b.row - a.row + 1).into();
+                }
+                self.dirty = true;
+            }
             // 名前の中身の打ち直し(A1 か A1:C9 の形)
             "name-range" => {
                 let Some(name) = self.name_pend.take() else { return };

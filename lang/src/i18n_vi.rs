@@ -793,4 +793,12 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Đã lấy định dạng — sẽ quét lên ô bấm tiếp theo (Esc để hủy)"),
     ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Đã quét định dạng lên {} (Ctrl+Z hoàn tác)"),
     ("書式のコピーをやめました", "Đã hủy sao chép định dạng"),
+    ("既定の大きさに戻しました", "Đã trả về cỡ mặc định"),
+    ("半角の数で(例: 12.5)", "Dùng chữ số ASCII (vd: 12.5)"),
+    ("列の幅は 0〜255 で", "Độ rộng cột phải 0–255"),
+    ("行の高さは 0〜409 で", "Chiều cao hàng phải 0–409"),
+    ("列の幅を {} にしました({} 列)", "Độ rộng cột đặt {} ({} cột)"),
+    ("行の高さを {} pt にしました({} 行)", "Chiều cao hàng đặt {} pt ({} hàng)"),
+    ("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)", "Độ rộng cột — 0–255 (theo số chữ «0» của phông chuẩn; để trống + Enter = mặc định)"),
+    ("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)", "Chiều cao hàng — 0–409 pt (để trống + Enter = mặc định)"),
 ];

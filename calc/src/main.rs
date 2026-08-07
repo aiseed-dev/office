@@ -79,6 +79,8 @@ struct Calc {
     merge_kind_pend: Option<String>,
     /// 書式のコピー(刷毛)で持っている書式。次のクリックで塗って手放す
     brush: Option<CellFormat>,
+    /// 右クリックメニューの出どころ(Some(true)=列見出し / Some(false)=行見出し)
+    menu_head: Option<bool>,
     /// ソルバーの小窓(開いている間、打鍵は選んだ欄へ)
     solver: Option<Solver>,
     /// SmartArt の選択中の分類(2段の pick の1段目の答え)
@@ -323,6 +325,7 @@ impl Calc {
             name_pend: None,
             merge_kind_pend: None,
             brush: None,
+            menu_head: None,
             solver: None,
             sa_cat: 0,
             slicer: None,
@@ -1143,6 +1146,7 @@ impl Calc {
                 }
                 self.menu_at = Some((x, y));
                 self.menu_sub = None;
+                self.menu_head = Some(true);
             }
             return;
         }
@@ -1157,6 +1161,7 @@ impl Calc {
                 }
                 self.menu_at = Some((x, y));
                 self.menu_sub = None;
+                self.menu_head = Some(false);
             }
             return;
         }
@@ -1176,6 +1181,7 @@ impl Calc {
             }
         }
         self.menu_at = Some((x, y));
+        self.menu_head = None;
         self.menu_sub = None;
     }
 

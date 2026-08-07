@@ -793,4 +793,12 @@ calc の隣に置いてください)", "office_sheet.so est absent (compilez ave
     ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Format prélevé — il sera appliqué à la prochaine cellule cliquée (Échap pour annuler)"),
     ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Format appliqué à {} (Ctrl+Z annule)"),
     ("書式のコピーをやめました", "Copie de format annulée"),
+    ("既定の大きさに戻しました", "Taille par défaut rétablie"),
+    ("半角の数で(例: 12.5)", "Chiffres ASCII (ex. 12.5)"),
+    ("列の幅は 0〜255 で", "Largeur de colonne : 0–255"),
+    ("行の高さは 0〜409 で", "Hauteur de ligne : 0–409"),
+    ("列の幅を {} にしました({} 列)", "Largeur de colonne {} ({} colonnes)"),
+    ("行の高さを {} pt にしました({} 行)", "Hauteur de ligne {} pt ({} lignes)"),
+    ("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)", "Largeur de colonne — 0–255 (en zéros de la police standard ; vide + Entrée = défaut)"),
+    ("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)", "Hauteur de ligne — 0–409 pt (vide + Entrée = défaut)"),
 ];

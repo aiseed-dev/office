@@ -1655,7 +1655,7 @@ impl Render for Calc {
         let menu = self.menu_at.map(|(mx, my)| {
             // (id, 名前, 付記, 押せるか, 子メニューか)
             #[allow(clippy::type_complexity)]
-            let entries: Vec<(&'static str, &'static str, &'static str, bool, bool)> = vec![
+            let mut entries: Vec<(&'static str, &'static str, &'static str, bool, bool)> = vec![
                 ("cut", "切り取り", "Ctrl+X", true, false),
                 ("copy", "コピー", "Ctrl+C", true, false),
                 ("paste", "貼り付け", "Ctrl+V", true, false),
@@ -1683,6 +1683,18 @@ impl Render for Calc {
                 ("", "", "", false, false),
                 ("freeze", "枠の固定", "", true, false),
             ];
+            // 見出しからのメニューには 幅/高さ の数値指定を頭に(Excel の作法)
+            match self.menu_head {
+                Some(true) => {
+                    entries.insert(0, ("colw", "列の幅…", "", true, false));
+                    entries.insert(1, ("", "", "", false, false));
+                }
+                Some(false) => {
+                    entries.insert(0, ("rowh", "行の高さ…", "", true, false));
+                    entries.insert(1, ("", "", "", false, false));
+                }
+                None => {}
+            }
             // 画面の右・下で切れないように少し戻す
             // 文字の大きさに追従(子メニューの位置合わせにも使う)
             let item_h: f32 = us * 25.0;
@@ -2352,6 +2364,8 @@ impl Render for Calc {
                 "text-angle" => ui::t!("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)").to_string(),
                 "hf-edit" => ui::t!("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)").to_string(),
                 "name-range" => ui::t!("名前の中身 — 場所(B12 か A1:C9 の形)").to_string(),
+                "col-width" => ui::t!("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)").to_string(),
+                "row-height" => ui::t!("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)").to_string(),
                 "subtotal-by" => ui::t!("小計 1/2 — 何の区切りで集めるか(見出しを1つ)").to_string(),
                 "subtotal-vals" => ui::t!("小計 2/2 — 合計する見出し").to_string(),
                 _ => String::new(),

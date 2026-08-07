@@ -793,4 +793,12 @@ calc の隣に置いてください)", "office_sheet.so fehlt (mit cargo build -
     ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Format aufgenommen — es wird auf die nächste angeklickte Zelle übertragen (Esc bricht ab)"),
     ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Format auf {} übertragen (Ctrl+Z macht es rückgängig)"),
     ("書式のコピーをやめました", "Formatübertragung abgebrochen"),
+    ("既定の大きさに戻しました", "Auf Standardgröße zurückgesetzt"),
+    ("半角の数で(例: 12.5)", "ASCII-Ziffern verwenden (z. B. 12.5)"),
+    ("列の幅は 0〜255 で", "Spaltenbreite: 0–255"),
+    ("行の高さは 0〜409 で", "Zeilenhöhe: 0–409"),
+    ("列の幅を {} にしました({} 列)", "Spaltenbreite auf {} gesetzt ({} Spalten)"),
+    ("行の高さを {} pt にしました({} 行)", "Zeilenhöhe auf {} pt gesetzt ({} Zeilen)"),
+    ("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)", "Spaltenbreite — 0–255 (in Nullen der Standardschrift; leer + Enter = Standard)"),
+    ("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)", "Zeilenhöhe — 0–409 pt (leer + Enter = Standard)"),
 ];

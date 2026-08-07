@@ -793,4 +793,12 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Formato tomado — se pintará en la próxima celda que pulse (Esc para cancelar)"),
     ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Formato pintado en {} (Ctrl+Z lo deshace)"),
     ("書式のコピーをやめました", "Copia de formato cancelada"),
+    ("既定の大きさに戻しました", "Restablecido al tamaño predeterminado"),
+    ("半角の数で(例: 12.5)", "Use dígitos ASCII (p. ej. 12.5)"),
+    ("列の幅は 0〜255 で", "El ancho de columna debe ser 0–255"),
+    ("行の高さは 0〜409 で", "La altura de fila debe ser 0–409"),
+    ("列の幅を {} にしました({} 列)", "Ancho de columna {} ({} columnas)"),
+    ("行の高さを {} pt にしました({} 行)", "Altura de fila {} pt ({} filas)"),
+    ("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)", "Ancho de columna — 0–255 (en ceros de la fuente estándar; vacío + Enter = predeterminado)"),
+    ("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)", "Altura de fila — 0–409 pt (vacío + Enter = predeterminado)"),
 ];

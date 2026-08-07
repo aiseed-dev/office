@@ -796,4 +796,12 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Format picked up — it will be painted onto the next cell you click (Esc to cancel)"),
 ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Format painted onto {} (Ctrl+Z undoes it)"),
 ("書式のコピーをやめました", "Format painting cancelled"),
+("既定の大きさに戻しました", "Reset to the default size"),
+("半角の数で(例: 12.5)", "Use ASCII digits (e.g. 12.5)"),
+("列の幅は 0〜255 で", "Column width must be 0–255"),
+("行の高さは 0〜409 で", "Row height must be 0–409"),
+("列の幅を {} にしました({} 列)", "Column width set to {} ({} columns)"),
+("行の高さを {} pt にしました({} 行)", "Row height set to {} pt ({} rows)"),
+("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)", "Column width — 0–255 (in zeros of the standard font; empty Enter = default)"),
+("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)", "Row height — 0–409 pt (empty Enter = default)"),
 ];

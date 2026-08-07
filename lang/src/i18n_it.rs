@@ -793,4 +793,12 @@ calc の隣に置いてください)", "office_sheet.so manca (compilare con car
     ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Formato prelevato — verrà applicato alla prossima cella cliccata (Esc per annullare)"),
     ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Formato applicato a {} (Ctrl+Z annulla)"),
     ("書式のコピーをやめました", "Copia formato annullata"),
+    ("既定の大きさに戻しました", "Ripristinata la dimensione predefinita"),
+    ("半角の数で(例: 12.5)", "Cifre ASCII (es. 12.5)"),
+    ("列の幅は 0〜255 で", "Larghezza colonna: 0–255"),
+    ("行の高さは 0〜409 で", "Altezza riga: 0–409"),
+    ("列の幅を {} にしました({} 列)", "Larghezza colonna {} ({} colonne)"),
+    ("行の高さを {} pt にしました({} 行)", "Altezza riga {} pt ({} righe)"),
+    ("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)", "Larghezza colonna — 0–255 (in zeri del carattere standard; vuoto + Invio = predefinita)"),
+    ("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)", "Altezza riga — 0–409 pt (vuoto + Invio = predefinita)"),
 ];

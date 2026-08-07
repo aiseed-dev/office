@@ -793,4 +793,12 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("書式を持ちました — 次に押したセル(選択)に塗ります(Esc でやめる)", "Biçim alındı — bir sonraki tıklanan hücreye uygulanır (Esc iptal)"),
     ("{} に書式を塗りました(Ctrl+Z で戻せます)", "Biçim {} hücresine uygulandı (Ctrl+Z geri alır)"),
     ("書式のコピーをやめました", "Biçim boyama iptal edildi"),
+    ("既定の大きさに戻しました", "Varsayılan boyuta döndürüldü"),
+    ("半角の数で(例: 12.5)", "ASCII rakam kullanın (örn. 12.5)"),
+    ("列の幅は 0〜255 で", "Sütun genişliği 0–255 olmalı"),
+    ("行の高さは 0〜409 で", "Satır yüksekliği 0–409 olmalı"),
+    ("列の幅を {} にしました({} 列)", "Sütun genişliği {} yapıldı ({} sütun)"),
+    ("行の高さを {} pt にしました({} 行)", "Satır yüksekliği {} pt yapıldı ({} satır)"),
+    ("列の幅 — 0〜255(「0」何個ぶんか。空 Enter = 既定に戻す)", "Sütun genişliği — 0–255 (standart yazı tipinin sıfırları cinsinden; boş + Enter = varsayılan)"),
+    ("行の高さ — 0〜409 pt(空 Enter = 既定に戻す)", "Satır yüksekliği — 0–409 pt (boş + Enter = varsayılan)"),
 ];

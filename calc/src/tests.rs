@@ -1136,6 +1136,40 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 列の幅と行の高さを数で指定して既定にも戻せる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            // B〜C 列に 12.5
+            this.anchor = Some(Pos::new(0, 1));
+            this.cursor = Pos::new(0, 2);
+            this.sync_input();
+            this.prompt = Some(("col-width", Editor::new("12.5")));
+            this.finish_prompt(cx);
+            assert_eq!(this.sheet().col_width.get(&1), Some(&12.5));
+            assert_eq!(this.sheet().col_width.get(&2), Some(&12.5));
+            // 範囲外は言い返す
+            this.prompt = Some(("col-width", Editor::new("999")));
+            this.finish_prompt(cx);
+            assert!(this.prompt.is_some(), "範囲外の幅が通った");
+            this.prompt = None;
+            // 行の高さ
+            this.anchor = None;
+            this.cursor = Pos::new(3, 0);
+            this.sync_input();
+            this.prompt = Some(("row-height", Editor::new("30")));
+            this.finish_prompt(cx);
+            assert_eq!(this.sheet().row_height.get(&3), Some(&30.0));
+            // 空 Enter = 既定に戻す
+            this.anchor = Some(Pos::new(0, 1));
+            this.cursor = Pos::new(0, 2);
+            this.sync_input();
+            this.prompt = Some(("col-width", Editor::new("")));
+            this.finish_prompt(cx);
+            assert!(this.sheet().col_width.get(&1).is_none(), "既定に戻らない");
+        });
+    }
+
+    #[gpui::test]
     fn 名前マネージャーで移動と打ち直しと削除(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
