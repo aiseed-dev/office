@@ -6,7 +6,7 @@
 //! 「開いて・直して・刷る」を試すための普通の帳票。中身はすべて架空。
 //! サンプルは生成物 — 直すのはこのファイル。
 
-use sheet::model::{Borders, CondOp, CondRule, HAlign, VAlign, Validation};
+use sheet::model::{Borders, CondKind, CondOp, CondRule, HAlign, VAlign, Validation};
 use sheet::{recalc, Book, Cell, Pos};
 
 /// 品番マスタ(品番・品名・単価)。カタログ(gen_catalog.py の同梱データ)と
@@ -197,8 +197,7 @@ fn suitou() -> Book {
     // 残高が 1 万円を割ったら塗って知らせる(条件付き書式)
     s.cond.push(CondRule {
         range: (Pos::new(1, 4), Pos::new(30, 4)),
-        op: CondOp::Lt,
-        value: 10000.0,
+        kind: CondKind::Cmp(CondOp::Lt, 10000.0),
         color: None,
         fill: Some("FCE4D6".into()),
     });
@@ -260,8 +259,7 @@ fn seiseki() -> Book {
     // 80 点以上を塗る(整数の点なので >79 = >=80)
     s.cond.push(CondRule {
         range: (Pos::new(1, 1), Pos::new(5, 3)),
-        op: CondOp::Gt,
-        value: 79.0,
+        kind: CondKind::Cmp(CondOp::Gt, 79.0),
         color: None,
         fill: Some("E2EFDA".into()),
     });

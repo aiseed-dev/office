@@ -789,8 +789,7 @@ impl Calc {
                 let range = self.sel_rect();
                 self.book.sheets[self.active].cond.push(sheet::model::CondRule {
                     range,
-                    op: sheet::model::CondOp::Lt,
-                    value: 0.0,
+                    kind: sheet::model::CondKind::Cmp(sheet::model::CondOp::Lt, 0.0),
                     color: Some("C00000".into()),
                     fill: None,
                 });
@@ -804,6 +803,61 @@ impl Calc {
             "cond-lt" => {
                 self.commit();
                 self.prompt = Some(("cond-lt", Editor::new("")));
+            }
+            "cond-between" => {
+                self.commit();
+                self.prompt = Some(("cond-between", Editor::new("")));
+            }
+            "cond-text" => {
+                self.commit();
+                self.prompt = Some(("cond-text", Editor::new("")));
+            }
+            "cond-top" | "cond-bottom" => {
+                let bottom = id == "cond-bottom";
+                self.commit();
+                self.prompt = Some((
+                    if bottom { "cond-bottom" } else { "cond-top" },
+                    Editor::new("10"),
+                ));
+            }
+            // 板の要らない規則はその場で掛ける
+            "cond-dup" | "cond-uniq" | "cond-avg-above" | "cond-avg-below" => {
+                self.commit();
+                self.checkpoint();
+                let range = self.sel_rect();
+                use sheet::model::{CondKind, CondRule};
+                let (kind, color, fill, said) = match id {
+                    "cond-dup" => (
+                        CondKind::Dup(false),
+                        Some("9C0006".to_string()),
+                        Some("FFC7CE".to_string()),
+                        ui::t!("重複する値を赤くします").to_string(),
+                    ),
+                    "cond-uniq" => (
+                        CondKind::Dup(true),
+                        None,
+                        Some("E2EFDA".to_string()),
+                        ui::t!("一意の値を塗ります").to_string(),
+                    ),
+                    "cond-avg-above" => (
+                        CondKind::Avg(false),
+                        None,
+                        Some("E2EFDA".to_string()),
+                        ui::t!("平均より上を塗ります").to_string(),
+                    ),
+                    _ => (
+                        CondKind::Avg(true),
+                        None,
+                        Some("FCE4D6".to_string()),
+                        ui::t!("平均より下を塗ります").to_string(),
+                    ),
+                };
+                self.book.sheets[self.active]
+                    .cond
+                    .push(CondRule { range, kind, color, fill });
+                self.dirty = true;
+                self.status =
+                    format!("{}:{} — {}", range.0.a1(), range.1.a1(), said).into();
             }
             "cond-clear" => {
                 self.commit();
@@ -889,6 +943,14 @@ impl Calc {
                 ("cond-neg", "0未満を赤字にする", true),
                 ("cond-gt", "値より大きいと薄緑の塗り…", true),
                 ("cond-lt", "値より小さいと薄赤の塗り…", true),
+                ("cond-between", "値の間なら薄黄の塗り…", true),
+                ("cond-text", "文字を含むと薄黄の塗り…", true),
+                ("cond-dup", "重複する値を赤く", true),
+                ("cond-uniq", "一意の値を薄緑に", true),
+                ("cond-top", "上位Nを薄青に…", true),
+                ("cond-bottom", "下位Nを薄赤に…", true),
+                ("cond-avg-above", "平均より上を薄緑に", true),
+                ("cond-avg-below", "平均より下を薄赤に", true),
                 ("cond-clear", "この範囲の条件を消す", true),
             ],
             "numfmt" => vec![
@@ -1937,13 +1999,74 @@ impl Calc {
                 let gt = kind == "cond-gt";
                 self.book.sheets[self.active].cond.push(sheet::model::CondRule {
                     range,
-                    op: if gt { sheet::model::CondOp::Gt } else { sheet::model::CondOp::Lt },
-                    value,
+                    kind: sheet::model::CondKind::Cmp(
+                        if gt { sheet::model::CondOp::Gt } else { sheet::model::CondOp::Lt },
+                        value,
+                    ),
                     color: None,
                     fill: Some(if gt { "E2EFDA".into() } else { "FCE4D6".into() }),
                 });
                 self.dirty = true;
                 self.status = ui::tf!("{}:{} — {} より{}を塗ります", range.0.a1(), range.1.a1(), value, if gt { "大きい値" } else { "小さい値" }).into();
+            }
+            // 条件付き書式の板(間・文字・上位/下位N)
+            "cond-between" => {
+                let t = text.replace('~', "〜");
+                let Some((a1, b1)) = t.split_once('〜') else {
+                    self.status = ui::t!("「8〜15」の形で(半角の数)").into();
+                    self.prompt = Some(("cond-between", Editor::new(&text)));
+                    return;
+                };
+                let (Ok(lo), Ok(hi)) = (a1.trim().parse::<f64>(), b1.trim().parse::<f64>())
+                else {
+                    self.status = ui::t!("「8〜15」の形で(半角の数)").into();
+                    self.prompt = Some(("cond-between", Editor::new(&text)));
+                    return;
+                };
+                self.checkpoint();
+                let range = self.sel_rect();
+                self.book.sheets[self.active].cond.push(sheet::model::CondRule {
+                    range,
+                    kind: sheet::model::CondKind::Between(lo.min(hi), lo.max(hi), false),
+                    color: None,
+                    fill: Some("FFF2CC".into()),
+                });
+                self.dirty = true;
+                self.status = ui::tf!("{}:{} — {} から {} の間を塗ります", range.0.a1(), range.1.a1(), lo.min(hi), lo.max(hi)).into();
+            }
+            "cond-text" => {
+                if text.is_empty() {
+                    self.status = ui::t!("含む文字を入れてください").into();
+                    return;
+                }
+                self.checkpoint();
+                let range = self.sel_rect();
+                self.book.sheets[self.active].cond.push(sheet::model::CondRule {
+                    range,
+                    kind: sheet::model::CondKind::Text(text.clone()),
+                    color: None,
+                    fill: Some("FFF2CC".into()),
+                });
+                self.dirty = true;
+                self.status = ui::tf!("{}:{} — 「{}」を含むセルを塗ります", range.0.a1(), range.1.a1(), text).into();
+            }
+            "cond-top" | "cond-bottom" => {
+                let Ok(n) = text.trim().parse::<u32>() else {
+                    self.status = ui::t!("個数を半角の数で(例: 10)").into();
+                    self.prompt = Some((kind, Editor::new(&text)));
+                    return;
+                };
+                let bottom = kind == "cond-bottom";
+                self.checkpoint();
+                let range = self.sel_rect();
+                self.book.sheets[self.active].cond.push(sheet::model::CondRule {
+                    range,
+                    kind: sheet::model::CondKind::Top(n.max(1), bottom),
+                    color: None,
+                    fill: Some(if bottom { "FCE4D6".into() } else { "D9E1F2".into() }),
+                });
+                self.dirty = true;
+                self.status = ui::tf!("{}:{} — {}{} を塗ります", range.0.a1(), range.1.a1(), if bottom { "下位" } else { "上位" }, n.max(1)).into();
             }
             "py" => {
                 let t = text.trim().to_string();

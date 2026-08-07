@@ -789,6 +789,14 @@ impl Render for Calc {
         // 隣が空(値も式も無い)なら、そのセルの上にも描く(発注者 2026-08-06)。
         // 描くのは格子の後の重ね描き(spill_texts)で、セル側は文字を出さない
         let vis_cols: Vec<u32> = self.visible_cols();
+        // 条件付き書式の下ごしらえ(重複・上位N・平均は範囲の統計が要る —
+        // セルごとに範囲を歩かない)
+        let cond_prep: Vec<(sheet::model::CondRule, sheet::model::CondAux)> = self
+            .sheet()
+            .cond
+            .iter()
+            .map(|r| (r.clone(), r.aux(self.sheet())))
+            .collect();
         let mut spill_from: std::collections::HashSet<Pos> = Default::default();
         let mut spill_texts: Vec<gpui::Div> = Vec::new();
         if !self.show_formulas {
@@ -1077,8 +1085,8 @@ impl Render for Calc {
                 });
                 // 条件付き書式。**付けた条件は画面に出す**(出ないなら飾り)
                 let mut cond_color: Option<gpui::Rgba> = None;
-                for rule in &self.sheet().cond {
-                    if rule.hits(p, &v) {
+                for (rule, aux) in &cond_prep {
+                    if rule.hits(p, &v, aux) {
                         if let Some(fill) = &rule.fill {
                             base = hex(fill);
                         }
@@ -2282,6 +2290,10 @@ impl Render for Calc {
                 "link" => ui::tf!("ハイパーリンク — {}(空にして Enter で外す)", self.cursor.a1()),
                 "cond-gt" => ui::tf!("条件付き書式 — {} で、いくつより大きい値を塗る?", range),
                 "cond-lt" => ui::tf!("条件付き書式 — {} で、いくつより小さい値を塗る?", range),
+                "cond-between" => ui::tf!("条件付き書式 — {} で、間なら塗る(8〜15 の形)", range),
+                "cond-text" => ui::tf!("条件付き書式 — {} で、含む文字は?", range),
+                "cond-top" => ui::tf!("条件付き書式 — {} で、上位いくつを塗る?", range),
+                "cond-bottom" => ui::tf!("条件付き書式 — {} で、下位いくつを塗る?", range),
                 "find" => ui::t!("検索と置換 — 探す言葉").to_string(),
                 "split-delim" => ui::tf!("区切り位置 — {} を何で割る?(空 Enter = カンマ)", range),
                 "shape-text" => ui::t!("図形の文字(空にして Enter で消す)").to_string(),

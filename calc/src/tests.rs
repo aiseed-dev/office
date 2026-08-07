@@ -1058,6 +1058,43 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 条件付き書式の板の規則が掛かる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            for (a1, v) in [("A1", "10"), ("A2", "20"), ("A3", "20"), ("A4", "5")] {
+                this.cursor = Pos::parse(a1).unwrap();
+                this.sync_input();
+                this.input.insert(v);
+                assert!(this.commit());
+            }
+            this.anchor = Some(Pos::parse("A1").unwrap());
+            this.cursor = Pos::parse("A4").unwrap();
+            this.sync_input();
+            // 間(板)
+            this.prompt = Some(("cond-between", Editor::new("8〜15")));
+            this.finish_prompt(cx);
+            // 上位N(板)
+            this.prompt = Some(("cond-top", Editor::new("2")));
+            this.finish_prompt(cx);
+            let rules = &this.sheet().cond;
+            assert_eq!(rules.len(), 2, "{}", this.status);
+            assert_eq!(
+                rules[0].kind,
+                sheet::model::CondKind::Between(8.0, 15.0, false)
+            );
+            assert_eq!(rules[1].kind, sheet::model::CondKind::Top(2, false));
+            // 効き方(下ごしらえ込み)
+            let aux = rules[1].aux(this.sheet());
+            assert!(rules[1].hits(Pos::parse("A2").unwrap(), &sheet::Value::Number(20.0), &aux));
+            assert!(!rules[1].hits(Pos::parse("A4").unwrap(), &sheet::Value::Number(5.0), &aux));
+            // 読めない入力は言い返す
+            this.prompt = Some(("cond-between", Editor::new("abc")));
+            this.finish_prompt(cx);
+            assert!(this.prompt.is_some(), "読めない間の形が通った");
+        });
+    }
+
+    #[gpui::test]
     fn 名前マネージャーで移動と打ち直しと削除(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

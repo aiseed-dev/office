@@ -799,12 +799,29 @@ impl Validation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CondRule {
     pub range: (Pos, Pos),
-    pub op: CondOp,
-    pub value: f64,
+    pub kind: CondKind,
     /// 文字色 RRGGBB
     pub color: Option<String>,
     /// 塗り RRGGBB
     pub fill: Option<String>,
+}
+
+/// 規則の種類(第1版 2026-08-07 で拡張 — 前は数の比較だけ)。
+/// データバー・カラースケール・アイコン・日付・数式は控え(読みで報告)
+#[derive(Debug, Clone, PartialEq)]
+pub enum CondKind {
+    /// 数の比較(cellIs)
+    Cmp(CondOp, f64),
+    /// 間(小さい方, 大きい方, true=外側)
+    Between(f64, f64, bool),
+    /// 文字を含む(containsText)
+    Text(String),
+    /// 重複する値(true = 一意のほう)
+    Dup(bool),
+    /// 上位N(true = 下位)
+    Top(u32, bool),
+    /// 平均より上(true = 下)
+    Avg(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -812,6 +829,9 @@ pub enum CondOp {
     Gt,
     Lt,
     Eq,
+    Ge,
+    Le,
+    Ne,
 }
 
 impl CondOp {
@@ -820,6 +840,9 @@ impl CondOp {
             CondOp::Gt => "greaterThan",
             CondOp::Lt => "lessThan",
             CondOp::Eq => "equal",
+            CondOp::Ge => "greaterThanOrEqual",
+            CondOp::Le => "lessThanOrEqual",
+            CondOp::Ne => "notEqual",
         }
     }
     pub fn from_xlsx(s: &str) -> Option<CondOp> {
@@ -827,23 +850,118 @@ impl CondOp {
             "greaterThan" => Some(CondOp::Gt),
             "lessThan" => Some(CondOp::Lt),
             "equal" => Some(CondOp::Eq),
+            "greaterThanOrEqual" => Some(CondOp::Ge),
+            "lessThanOrEqual" => Some(CondOp::Le),
+            "notEqual" => Some(CondOp::Ne),
             _ => None,
         }
     }
 }
 
+/// 範囲ぐるみの規則(重複・上位N・平均)の下ごしらえ。
+/// 描画の前に1回だけ作り、セルごとの判定はこれを見る(毎セル走査しない)
+#[derive(Debug, Clone, Default)]
+pub struct CondAux {
+    pub avg: f64,
+    pub cutoff: f64,
+    pub dups: std::collections::HashSet<String>,
+}
+
 impl CondRule {
-    /// この位置のこの値に効くか。数の値だけを見る(文字は対象にしない)。
-    pub fn hits(&self, p: Pos, v: &Value) -> bool {
+    /// 下ごしらえ(必要な種類のときだけ範囲を歩く)
+    pub fn aux(&self, s: &Sheet) -> CondAux {
+        let mut aux = CondAux::default();
+        let (a, b) = self.range;
+        match &self.kind {
+            CondKind::Avg(_) => {
+                let (mut sum, mut n) = (0.0, 0u32);
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        if let Value::Number(x) = s.value(Pos::new(r, c)) {
+                            sum += x;
+                            n += 1;
+                        }
+                    }
+                }
+                aux.avg = if n > 0 { sum / n as f64 } else { 0.0 };
+            }
+            CondKind::Top(n, bottom) => {
+                let mut xs: Vec<f64> = Vec::new();
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        if let Value::Number(x) = s.value(Pos::new(r, c)) {
+                            xs.push(x);
+                        }
+                    }
+                }
+                xs.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                if *bottom {
+                    xs.reverse();
+                }
+                // 上位N の足切り(N個に満たなければ全部)
+                let i = xs.len().saturating_sub(*n as usize);
+                aux.cutoff = xs.get(i).copied().unwrap_or(f64::NEG_INFINITY);
+                if *bottom && !xs.is_empty() {
+                    // 下位: 逆順で「上位N」を取ったのと同じ — 足切りは N 番目に小さい値
+                    aux.cutoff = xs.get(i).copied().unwrap_or(f64::INFINITY);
+                }
+            }
+            CondKind::Dup(_) => {
+                let mut seen: std::collections::HashMap<String, u32> = Default::default();
+                for r in a.row..=b.row {
+                    for c in a.col..=b.col {
+                        let v = s.value(Pos::new(r, c)).display();
+                        if !v.is_empty() {
+                            *seen.entry(v).or_insert(0) += 1;
+                        }
+                    }
+                }
+                aux.dups = seen.into_iter().filter(|(_, n)| *n >= 2).map(|(k, _)| k).collect();
+            }
+            _ => {}
+        }
+        aux
+    }
+
+    /// この位置のこの値に効くか(aux は同じ規則の下ごしらえ)
+    pub fn hits(&self, p: Pos, v: &Value, aux: &CondAux) -> bool {
         let (a, b) = self.range;
         if !((a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col)) {
             return false;
         }
-        let Value::Number(n) = v else { return false };
-        match self.op {
-            CondOp::Gt => *n > self.value,
-            CondOp::Lt => *n < self.value,
-            CondOp::Eq => (*n - self.value).abs() < f64::EPSILON,
+        match &self.kind {
+            CondKind::Cmp(op, value) => {
+                let Value::Number(n) = v else { return false };
+                match op {
+                    CondOp::Gt => *n > *value,
+                    CondOp::Lt => *n < *value,
+                    CondOp::Eq => (*n - *value).abs() < f64::EPSILON,
+                    CondOp::Ge => *n >= *value,
+                    CondOp::Le => *n <= *value,
+                    CondOp::Ne => (*n - *value).abs() >= f64::EPSILON,
+                }
+            }
+            CondKind::Between(lo, hi, out) => {
+                let Value::Number(n) = v else { return false };
+                let inside = *n >= *lo && *n <= *hi;
+                inside != *out
+            }
+            CondKind::Text(t) => !t.is_empty() && v.display().contains(t.as_str()),
+            CondKind::Dup(unique) => {
+                let d = v.display();
+                if d.is_empty() {
+                    return false;
+                }
+                aux.dups.contains(&d) != *unique
+            }
+            CondKind::Top(_, bottom) => {
+                let Value::Number(n) = v else { return false };
+                if *bottom { *n <= aux.cutoff } else { *n >= aux.cutoff }
+            }
+            CondKind::Avg(below) => {
+                let Value::Number(n) = v else { return false };
+                if *below { *n < aux.avg } else { *n > aux.avg }
+            }
         }
     }
 }

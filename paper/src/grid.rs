@@ -104,6 +104,10 @@ pub fn sheet_to_pdf<W: Write>(
     };
     let usable = paper.height_mm - mt - mb;
 
+    // 条件付き書式の下ごしらえ(重複・上位N・平均は範囲の統計が要る)
+    let cond_prep: Vec<(sheet::model::CondRule, sheet::model::CondAux)> =
+        grid.cond.iter().map(|r| (r.clone(), r.aux(grid))).collect();
+
     // 各ページの頭で繰り返すタイトル行(自分のいる範囲の外は繰り返さない)
     let title_rows: Vec<u32> = grid
         .print_title_rows
@@ -125,6 +129,7 @@ pub fn sheet_to_pdf<W: Write>(
         col_x: &[f32],
         col_mm: &[f32],
         scale: f32,
+        cond_prep: &[(sheet::model::CondRule, sheet::model::CondAux)],
     ) {
         // 印刷の枠線(printOptions gridLines)。薄い灰で先に敷く
         if grid.print_gridlines {
@@ -171,8 +176,8 @@ pub fn sheet_to_pdf<W: Write>(
             // 塗りと文字色。条件付き書式は画面と同じ規則で上書きする
             let mut fill = cell.fmt.fill.clone();
             let mut ink = cell.fmt.color.clone();
-            for rule in &grid.cond {
-                if rule.hits(p, &cell.value) {
+            for (rule, aux) in cond_prep {
+                if rule.hits(p, &cell.value, aux) {
                     if let Some(f) = &rule.fill {
                         fill = Some(f.clone());
                     }
@@ -344,14 +349,14 @@ pub fn sheet_to_pdf<W: Write>(
                 for tr in &title_rows {
                     let th = row_mm(*tr);
                     let y_top = paper.height_mm - mt - y_used;
-                    draw_row(grid, &l, &font, *tr, y_top, th, ml, c0, ncols, &col_x, &col_mm, scale);
+                    draw_row(grid, &l, &font, *tr, y_top, th, ml, c0, ncols, &col_x, &col_mm, scale, &cond_prep);
                     y_used += th;
                 }
             }
         }
         let y_top = paper.height_mm - mt - y_used;
         y_used += rh;
-        draw_row(grid, &l, &font, r, y_top, rh, ml, c0, ncols, &col_x, &col_mm, scale);
+        draw_row(grid, &l, &font, r, y_top, rh, ml, c0, ncols, &col_x, &col_mm, scale, &cond_prep);
     }
     // 図形(挿した分も読んだ分も)。**輪郭だけ**を紙に出す(塗りはまだ —
     // printpdf の多角形塗りを持ち込むまで。黙って出したことにしない)
@@ -584,8 +589,7 @@ mod tests {
         let mut s = grid(); // B2 = 1200(塗りの指定なし)
         s.cond.push(sheet::model::CondRule {
             range: (Pos::parse("B2").unwrap(), Pos::parse("B2").unwrap()),
-            op: sheet::model::CondOp::Gt,
-            value: 1000.0,
+            kind: sheet::model::CondKind::Cmp(sheet::model::CondOp::Gt, 1000.0),
             color: None,
             fill: Some("E2EFDA".into()),
         });

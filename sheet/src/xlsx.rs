@@ -183,10 +183,15 @@ fn parse_dxfs(xml: &str) -> Vec<(Option<String>, Option<String>)> {
                 b"font" if in_dxf => in_font = true,
                 b"fill" if in_dxf => in_fill = true,
                 b"color" if in_font => {
-                    cur.0 = attr(&e, "rgb").map(|v| v.trim_start_matches("FF").to_string());
+                    cur.0 = attr(&e, "rgb").map(|v| {
+                        // 先頭の FF は 8桁(AARRGGBB)のときだけ透過(FFF2CC を壊さない)
+                        if v.len() == 8 { v[2..].to_string() } else { v }
+                    });
                 }
                 b"bgColor" if in_fill => {
-                    cur.1 = attr(&e, "rgb").map(|v| v.trim_start_matches("FF").to_string());
+                    cur.1 = attr(&e, "rgb").map(|v| {
+                        if v.len() == 8 { v[2..].to_string() } else { v }
+                    });
                 }
                 _ => {}
             },
@@ -934,6 +939,108 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
             let _ = f.read_to_string(&mut rs);
             rels = parse_rels(&rs);
         }
+
+            // cfRule の頭を読む(種類ごと。第1版 2026-08-07 で拡張)。
+            // 読めない種類は今までどおり報告して落とす
+            fn parse_cf_start(
+                e: &quick_xml::events::BytesStart,
+                rule: &mut Option<(String, Option<usize>)>,
+                formula: &mut String,
+                rep: &mut Report,
+            ) {
+                let ty = attr(e, "type").unwrap_or_default();
+                let dxf: Option<usize> = attr(e, "dxfId").and_then(|v| v.parse().ok());
+                *rule = match ty.as_str() {
+                    "cellIs" => Some((attr(e, "operator").unwrap_or_default(), dxf)),
+                    "containsText" => {
+                        Some((format!("text:{}", attr(e, "text").unwrap_or_default()), dxf))
+                    }
+                    "duplicateValues" => Some(("dup".into(), dxf)),
+                    "uniqueValues" => Some(("uniq".into(), dxf)),
+                    "top10" => {
+                        if attr(e, "percent").as_deref() == Some("1") {
+                            rep.note("条件付き書式(上位/下位のパーセント。保存で失われる)");
+                            None
+                        } else {
+                            let n = attr(e, "rank")
+                                .and_then(|v| v.parse::<u32>().ok())
+                                .unwrap_or(10);
+                            let bottom = attr(e, "bottom").as_deref() == Some("1");
+                            Some((format!("top:{n}:{}", bottom as u8), dxf))
+                        }
+                    }
+                    "aboveAverage" => {
+                        let below = attr(e, "aboveAverage").as_deref() == Some("0");
+                        Some((format!("avg:{}", below as u8), dxf))
+                    }
+                    _ => {
+                        rep.note("条件付き書式(読めない種類。保存で失われる)");
+                        None
+                    }
+                };
+                formula.clear();
+            }
+
+            // 1本の cfRule を確定して sh に積む(<cfRule …/> の自己閉じは
+            // End が来ない — Empty のその場でもここを通す)
+            #[allow(clippy::too_many_arguments)]
+            fn finish_cf(
+                sh: &mut Sheet,
+                sqref: Option<(Pos, Pos)>,
+                taken: Option<(String, Option<usize>)>,
+                formula: &str,
+                dxfs: &[(Option<String>, Option<String>)],
+                rep: &mut Report,
+            ) {
+
+                if let (Some(range), Some((tag, dxf))) = (sqref, taken) {
+                    use crate::model::CondKind;
+                    // formula は 1〜2 本(between は改行区切りで貯まる)
+                    let nums: Vec<f64> = formula
+                        .split('\u{1f}')
+                        .filter_map(|t| t.trim().parse::<f64>().ok())
+                        .collect();
+                    let kind: Option<CondKind> = if let Some(t) = tag.strip_prefix("text:") {
+                        Some(CondKind::Text(t.to_string()))
+                    } else if tag == "dup" {
+                        Some(CondKind::Dup(false))
+                    } else if tag == "uniq" {
+                        Some(CondKind::Dup(true))
+                    } else if let Some(rest) = tag.strip_prefix("top:") {
+                        let mut it = rest.split(':');
+                        let n = it.next().and_then(|v| v.parse().ok()).unwrap_or(10);
+                        let bottom = it.next() == Some("1");
+                        Some(CondKind::Top(n, bottom))
+                    } else if let Some(rest) = tag.strip_prefix("avg:") {
+                        Some(CondKind::Avg(rest == "1"))
+                    } else {
+                        match (crate::model::CondOp::from_xlsx(&tag), nums.as_slice()) {
+                            (Some(op), [v, ..]) => Some(CondKind::Cmp(op, *v)),
+                            (None, [lo, hi]) if tag == "between" => {
+                                Some(CondKind::Between(*lo, *hi, false))
+                            }
+                            (None, [lo, hi]) if tag == "notBetween" => {
+                                Some(CondKind::Between(*lo, *hi, true))
+                            }
+                            _ => None,
+                        }
+                    };
+                    match kind {
+                        Some(kind) => {
+                            let (color, fill) = dxf
+                                .and_then(|i| dxfs.get(i).cloned())
+                                .unwrap_or((None, None));
+                            sh.cond.push(crate::model::CondRule {
+                                range, kind, color, fill,
+                            });
+                        }
+                        None => rep.note(
+                            "条件付き書式(読めない条件。保存で失われる)",
+                        ),
+                    }
+                }
+                        
+            }
         // 条件付き書式。cellIs(値との比較)だけ理解し、他は報告
         {
             let mut r = Reader::from_str(&s);
@@ -959,17 +1066,13 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             }
                         });
                     }
+                    Ok(Event::Empty(e)) if local(e.name().as_ref()) == b"cfRule" => {
+                        parse_cf_start(&e, &mut rule, &mut formula, &mut rep);
+                        // 自己閉じは End が来ない — その場で確定
+                        finish_cf(&mut sh, sqref, rule.take(), &formula, &dxfs, &mut rep);
+                    }
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"cfRule" => {
-                        if attr(&e, "type").as_deref() == Some("cellIs") {
-                            rule = Some((
-                                attr(&e, "operator").unwrap_or_default(),
-                                attr(&e, "dxfId").and_then(|v| v.parse().ok()),
-                            ));
-                        } else {
-                            rep.note("条件付き書式(cellIs 以外。保存で失われる)");
-                            rule = None;
-                        }
-                        formula.clear();
+                        parse_cf_start(&e, &mut rule, &mut formula, &mut rep);
                     }
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"formula" => {
                         in_formula = true;
@@ -978,26 +1081,12 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                         formula.push_str(&t.unescape().unwrap_or_default());
                     }
                     Ok(Event::End(e)) => match local(e.name().as_ref()) {
-                        b"formula" => in_formula = false,
+                        b"formula" => {
+                            in_formula = false;
+                            formula.push('\u{1f}'); // 2本目との区切り(between)
+                        }
                         b"cfRule" => {
-                            if let (Some(range), Some((op_s, dxf))) = (sqref, rule.take()) {
-                                match (
-                                    crate::model::CondOp::from_xlsx(&op_s),
-                                    formula.trim().parse::<f64>(),
-                                ) {
-                                    (Some(op), Ok(value)) => {
-                                        let (color, fill) = dxf
-                                            .and_then(|i| dxfs.get(i).cloned())
-                                            .unwrap_or((None, None));
-                                        sh.cond.push(crate::model::CondRule {
-                                            range, op, value, color, fill,
-                                        });
-                                    }
-                                    _ => rep.note(
-                                        "条件付き書式(値との比較以外。保存で失われる)",
-                                    ),
-                                }
-                            }
+                            finish_cf(&mut sh, sqref, rule.take(), &formula, &dxfs, &mut rep);
                         }
                         b"conditionalFormatting" => sqref = None,
                         _ => {}
@@ -2554,11 +2643,42 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                 } else {
                     format!("{}:{}", a.a1(), b.a1())
                 };
+                use crate::model::CondKind;
+                let inner = match &r.kind {
+                    CondKind::Cmp(op, v) => format!(
+                        r#"<cfRule type="cellIs" dxfId="{dxf}" priority="{}" operator="{}"><formula>{v}</formula></cfRule>"#,
+                        n + 1, op.as_xlsx()
+                    ),
+                    CondKind::Between(lo, hi, out) => format!(
+                        r#"<cfRule type="cellIs" dxfId="{dxf}" priority="{}" operator="{}"><formula>{lo}</formula><formula>{hi}</formula></cfRule>"#,
+                        n + 1, if *out { "notBetween" } else { "between" }
+                    ),
+                    CondKind::Text(t) => format!(
+                        r#"<cfRule type="containsText" dxfId="{dxf}" priority="{}" operator="containsText" text="{}"/>"#,
+                        n + 1,
+                        t.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;")
+                    ),
+                    CondKind::Dup(false) => format!(
+                        r#"<cfRule type="duplicateValues" dxfId="{dxf}" priority="{}"/>"#,
+                        n + 1
+                    ),
+                    CondKind::Dup(true) => format!(
+                        r#"<cfRule type="uniqueValues" dxfId="{dxf}" priority="{}"/>"#,
+                        n + 1
+                    ),
+                    CondKind::Top(k, bottom) => format!(
+                        r#"<cfRule type="top10" dxfId="{dxf}" priority="{}" rank="{k}"{}/>"#,
+                        n + 1,
+                        if *bottom { r#" bottom="1""# } else { "" }
+                    ),
+                    CondKind::Avg(below) => format!(
+                        r#"<cfRule type="aboveAverage" dxfId="{dxf}" priority="{}"{}/>"#,
+                        n + 1,
+                        if *below { r#" aboveAverage="0""# } else { "" }
+                    ),
+                };
                 cf.push_str(&format!(
-                    r#"<conditionalFormatting sqref="{sq}"><cfRule type="cellIs" dxfId="{dxf}" priority="{}" operator="{}"><formula>{}</formula></cfRule></conditionalFormatting>"#,
-                    n + 1,
-                    r.op.as_xlsx(),
-                    r.value
+                    r#"<conditionalFormatting sqref="{sq}">{inner}</conditionalFormatting>"#
                 ));
             }
             if let Some(pos) = body.rfind("</worksheet>") {
@@ -3213,7 +3333,7 @@ mod link_comment_tests {
 #[cfg(test)]
 mod cond_tests {
     use super::*;
-    use crate::model::{Cell, CondOp, CondRule};
+    use crate::model::{Cell, CondAux, CondKind, CondOp, CondRule};
 
     #[test]
     fn 条件付き書式が往復する() {
@@ -3221,8 +3341,7 @@ mod cond_tests {
         b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("-5"));
         b.sheets[0].cond.push(CondRule {
             range: (Pos::parse("A1").unwrap(), Pos::parse("A9").unwrap()),
-            op: CondOp::Lt,
-            value: 0.0,
+            kind: CondKind::Cmp(CondOp::Lt, 0.0),
             color: Some("C00000".into()),
             fill: None,
         });
@@ -3232,13 +3351,58 @@ mod cond_tests {
         let (back, _) = read(buf).expect("読めない");
         let r = &back.sheets[0].cond;
         assert_eq!(r.len(), 1, "規則が往復しない");
-        assert_eq!(r[0].op, CondOp::Lt);
-        assert_eq!(r[0].value, 0.0);
+        assert_eq!(r[0].kind, CondKind::Cmp(CondOp::Lt, 0.0));
         assert_eq!(r[0].color.as_deref(), Some("C00000"), "見た目(dxf)が往復しない");
         // 効き方
-        assert!(r[0].hits(Pos::parse("A1").unwrap(), &Value::Number(-5.0)));
-        assert!(!r[0].hits(Pos::parse("A1").unwrap(), &Value::Number(5.0)));
-        assert!(!r[0].hits(Pos::parse("B1").unwrap(), &Value::Number(-5.0)), "範囲の外に効いた");
+        let aux = CondAux::default();
+        assert!(r[0].hits(Pos::parse("A1").unwrap(), &Value::Number(-5.0), &aux));
+        assert!(!r[0].hits(Pos::parse("A1").unwrap(), &Value::Number(5.0), &aux));
+        assert!(
+            !r[0].hits(Pos::parse("B1").unwrap(), &Value::Number(-5.0), &aux),
+            "範囲の外に効いた"
+        );
+    }
+
+    #[test]
+    fn 新しい規則の種類も往復して効く() {
+        let mut b = Book::new();
+        let s = &mut b.sheets[0];
+        for (i, v) in ["10", "20", "20", "5"].iter().enumerate() {
+            s.set(Pos::new(i as u32, 0), Cell::input(v));
+        }
+        let range = (Pos::new(0, 0), Pos::new(3, 0));
+        s.cond.push(CondRule { range, kind: CondKind::Between(8.0, 15.0, false), color: None, fill: Some("FFF2CC".into()) });
+        s.cond.push(CondRule { range, kind: CondKind::Text("2".into()), color: None, fill: Some("E2EFDA".into()) });
+        s.cond.push(CondRule { range, kind: CondKind::Dup(false), color: Some("9C0006".into()), fill: None });
+        s.cond.push(CondRule { range, kind: CondKind::Top(2, false), color: None, fill: Some("D9E1F2".into()) });
+        s.cond.push(CondRule { range, kind: CondKind::Avg(false), color: None, fill: None });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let sh = &back.sheets[0];
+        let r = &sh.cond;
+        assert_eq!(r.len(), 5, "規則が往復しない: {r:?}");
+        assert_eq!(r[0].kind, CondKind::Between(8.0, 15.0, false));
+        assert_eq!(r[1].kind, CondKind::Text("2".into()));
+        assert_eq!(r[2].kind, CondKind::Dup(false));
+        assert_eq!(r[3].kind, CondKind::Top(2, false));
+        assert_eq!(r[4].kind, CondKind::Avg(false));
+        // 効き方(下ごしらえ込み)
+        let p0 = Pos::new(0, 0);
+        let aux = r[2].aux(sh);
+        assert!(r[2].hits(Pos::new(1, 0), &Value::Number(20.0), &aux), "重複が効かない");
+        assert!(!r[2].hits(p0, &Value::Number(10.0), &aux), "重複でない値に効いた");
+        let aux = r[3].aux(sh);
+        assert!(r[3].hits(Pos::new(1, 0), &Value::Number(20.0), &aux), "上位2が効かない");
+        assert!(!r[3].hits(Pos::new(3, 0), &Value::Number(5.0), &aux));
+        let aux = r[4].aux(sh);
+        // 平均 = 13.75 → 20 は上
+        assert!(r[4].hits(Pos::new(1, 0), &Value::Number(20.0), &aux));
+        assert!(!r[4].hits(p0, &Value::Number(10.0), &aux));
+        let aux = CondAux::default();
+        assert!(r[0].hits(p0, &Value::Number(10.0), &aux), "間が効かない");
+        assert!(r[1].hits(Pos::new(1, 0), &Value::Number(20.0), &aux), "文字を含むが効かない");
     }
 }
 
