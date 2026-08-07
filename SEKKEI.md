@@ -1646,3 +1646,28 @@ pub(crate)**(部屋どうしは兄弟で、私物は見えないため)。トレ
 パレットの絵はペンの太さ・二重をそのまま映す(色も追従)。
 帳票の枠は「細で格子 → ペンを中太で外枠」の連打で組む(パレットは
 掛けても閉じない)。
+
+
+## jocalc — xlwings 流の Python 連携(2026-08-08 発注者)
+
+発注者の Qiita 記事(xlwings で Jupyter から Excel を操る)の車線を calc に。
+「xlwings から calc」は xlwings 本体が Excel(COM/AppleScript)に固定なので、
+**同じ使い勝手の互換モジュール jocalc** を用意した — `import jocalc as xw` の
+1行差し替えで、記事の Book / Range / .value / options(pd.DataFrame,
+expand='table') / save がそのまま動く。
+
+- **口**: calc が起動時にユニックスソケットを開く(calc/src/rpc.rs)。
+  径路は `$XDG_RUNTIME_DIR/jo-office/calc.sock`、AF_UNIX の 108 字上限を
+  超えるときは `/tmp/jo-office-UID/`(Python 側と同じ規則)。**この機械の
+  中だけ** — TCP は開かない(ネイティブファースト)
+- **糸の作法**: ソケットの糸は状態に触らない。要求を溜め、GPUI の泵が
+  30ms ごとに主の糸で捌く(答えは要求ごとの mpsc で返す。5秒で諦める)
+- **語彙**(JSON 1行ずつ): ping / book_info / new / open / save / get /
+  get_formula / set / expand。set は 1回=1手(Ctrl+Z)・書式は据え置き・
+  保護中は断る。new/open は未保存の変更があれば断る(黙って捨てない)
+- **JSON は自前の浅い読み書き**(rpc.rs 内)— 依存を増やさない(crypt と
+  同じ流儀)。語彙が浅いので足りる
+- **Python 側**: pysheet/jocalc.py(純 Python、依存なし。pandas は使う時だけ)。
+  .venv には jocalc.pth で結線(コピーしない — 常に最新)
+- **未対応と正直に言う物**: @xw.func / @xw.sub / Book.caller()(Excel の
+  アドイン機構)— calc では AI タブのマクロ(plugins/*.py)が同じ役目

@@ -943,6 +943,46 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn jocalcの口は読み書きと展開ができる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            // 書く: 数・文字・式(= から始まる)
+            let r = crate::rpc::handle(
+                this,
+                r#"{"cmd":"set","a1":"A1","values":[["品名","金額"],["鉛筆",100],["ノート",250],["合計","=SUM(B2:B3)"]]}"#,
+                cx,
+            );
+            assert!(r.contains("\"ok\":true"), "set が通らない: {r}");
+            // 読む: 式は計算済みの値、数は数のまま
+            let r = crate::rpc::handle(this, r#"{"cmd":"get","a1":"B4"}"#, cx);
+            assert!(r.contains("[[350]]"), "式が計算されていない: {r}");
+            let r = crate::rpc::handle(this, r#"{"cmd":"get","a1":"A1:B2"}"#, cx);
+            assert!(r.contains("\"品名\""), "文字が読めない: {r}");
+            assert!(r.contains("100"), "数が読めない: {r}");
+            // 式そのもの
+            let r = crate::rpc::handle(this, r#"{"cmd":"get_formula","a1":"B4"}"#, cx);
+            assert!(r.contains("=SUM(B2:B3)"), "式が読めない: {r}");
+            // 表の広がり(expand='table')
+            let r = crate::rpc::handle(this, r#"{"cmd":"expand","a1":"A1"}"#, cx);
+            assert!(r.contains("\"rows\":4") && r.contains("\"cols\":2"), "広がりが違う: {r}");
+            // ブックの情報
+            let r = crate::rpc::handle(this, r#"{"cmd":"book_info"}"#, cx);
+            assert!(r.contains("Sheet1"), "シート名が出ない: {r}");
+            // 無いシートは正しく断る
+            let r = crate::rpc::handle(this, r#"{"cmd":"get","a1":"A1","sheet":"無い"}"#, cx);
+            assert!(r.contains("err"), "無いシートを断らない: {r}");
+            // 保護中は書かせない
+            this.book.sheets[0].protected = true;
+            let r = crate::rpc::handle(this, r#"{"cmd":"set","a1":"A9","values":[[1]]}"#, cx);
+            assert!(r.contains("保護"), "保護を破って書けてしまう: {r}");
+            this.book.sheets[0].protected = false;
+            // 未保存の変更がある間は new/open を断る(黙って捨てない)
+            let r = crate::rpc::handle(this, r#"{"cmd":"new"}"#, cx);
+            assert!(r.contains("err"), "未保存で new が通った: {r}");
+        });
+    }
+
+    #[gpui::test]
     fn 左上が空の結合は最初の値を左上へ移す(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, _cx| {

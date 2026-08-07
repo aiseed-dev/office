@@ -32,6 +32,7 @@ pub(crate) use py::*;
 mod io;
 pub(crate) use io::*;
 mod picks;
+mod rpc;
 mod cmds;
 mod view;
 #[cfg(test)]
@@ -3040,6 +3041,8 @@ fn main() {
             },
             move |window, cx| {
                 let view = cx.new(|cx| Calc::new(arg2.clone(), cx));
+                // Python(jocalc)の口。この機械の中だけのユニックスソケット
+                crate::rpc::start(view.clone(), cx);
                 window.focus(&view.focus_handle(cx), cx);
                 // 動かす・伸ばすたびに控える — 閉じる経路が何本あっても漏れない。
                 // 全画面は控えない(次も全画面で開くと出口が分かりにくい)

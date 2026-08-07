@@ -894,4 +894,5 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("{}(隠れた値は消していません — 結合の解除でそのまま戻ります)", "{} (hidden values are not deleted — unmerge brings them right back)"),
 ("{}(左上以外の値は消しました — Ctrl+Z で戻せます)", "{} (values outside the top-left cell were cleared — Ctrl+Z restores them)"),
 ("{}(空だった左上へ最初の値を移しました)", "{} (the top-left was empty, so the first value was moved there)"),
+("Python から {} セルを書き込みました", "Python wrote {} cells"),
 ];
