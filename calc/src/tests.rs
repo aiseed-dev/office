@@ -909,6 +909,36 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn r1c1では見せ方が変わり中身はa1のまま(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.book.sheets[0].set(Pos::new(0, 0), sheet::Cell::input("10"));
+            this.book.sheets[0].set(Pos::new(4, 4), sheet::Cell::input("=A1*2"));
+            recalc_book(&mut this.book, 0);
+            this.run_cmd("ref-style", cx);
+            assert!(this.book.r1c1);
+            // 数式バーは R1C1 で見える
+            this.cursor = Pos::new(4, 4);
+            this.sync_input();
+            assert_eq!(this.input.text(), "=R[-4]C[-4]*2", "見せ方が変わらない");
+            // R1C1 で打っても中身は A1 で仕舞われる
+            this.input = Editor::new("=R[-4]C[-4]+RC[-1]");
+            this.commit();
+            let f = this.book.sheets[0].get(Pos::new(4, 4)).unwrap().formula.clone();
+            assert_eq!(f.as_deref(), Some("A1+D5"), "中身が A1 になっていない: {f:?}");
+            // 動かず確定しても値が壊れない(往復の対称性)
+            this.sync_input();
+            assert!(this.commit(), "対称でない(見せた式が別物として書き戻る)");
+            let f2 = this.book.sheets[0].get(Pos::new(4, 4)).unwrap().formula.clone();
+            assert_eq!(f2.as_deref(), Some("A1+D5"));
+            // 切り替えれば A1 に戻る
+            this.run_cmd("ref-style", cx);
+            this.sync_input();
+            assert_eq!(this.input.text(), "=A1+D5");
+        });
+    }
+
+    #[gpui::test]
     fn ラベルと値とグループの指図が板から入る(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

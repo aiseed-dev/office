@@ -728,7 +728,11 @@ impl Render for Calc {
                     .into();
                     cx.notify();
                 }))
-                .child(SharedString::from(self.cursor.a1()))
+                .child(SharedString::from(if self.book.r1c1 {
+                    format!("R{}C{}", self.cursor.row + 1, self.cursor.col + 1)
+                } else {
+                    self.cursor.a1()
+                }))
         };
         let formula_bar = div()
             .flex().flex_row().items_center().gap_2()
@@ -941,7 +945,11 @@ impl Render for Calc {
                 .flex().items_center().justify_center()
                 .text_size(px(us * 11.5))
                 .text_color(if on { rgb(0x1B6E3C) } else if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) })
-                .child(SharedString::from(col_name(c)))
+                .child(SharedString::from(if self.book.r1c1 {
+                    (c + 1).to_string()
+                } else {
+                    col_name(c)
+                }))
                 // 右端の帯は幅を変える取っ手(カーソル形状の誘いだけ。
                 // 当たり判定は InputSink の窓レベルで size_grip_at がやる)
                 .relative().children((std::env::var_os("JO_NO_STRIPS").is_none()).then(|| {
@@ -1038,7 +1046,11 @@ impl Render for Calc {
                 let shown = if self.show_formulas {
                     // 数式の表示。式が無いセルは値のまま
                     cell.and_then(|x| x.formula.clone())
-                        .map(|f| format!("={f}"))
+                        .map(|f| if self.book.r1c1 {
+                            format!("={}", sheet::model::formula_to_r1c1(&f, p))
+                        } else {
+                            format!("={f}")
+                        })
                         .unwrap_or_else(|| sheet::model::format_value(&v,
                             cell.and_then(|x| x.fmt.number_format.as_deref())))
                 } else {
@@ -3176,6 +3188,16 @@ impl Render for Calc {
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.run_cmd("calc-iter", cx);
+                                cx.notify()
+                            }))))
+                    .child(div().flex().flex_row().items_center().gap_2()
+                        .child(div().w(px(us * 200.0)).text_color(dim)
+                            .child(ui::t!("参照の形式")))
+                        .child(div().id("set-refstyle")
+                            .px_3().py_1().rounded_sm().cursor_pointer().bg(item_bg)
+                            .child(if self.book.r1c1 { "R1C1" } else { "A1" })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_cmd("ref-style", cx);
                                 cx.notify()
                             }))))
                     .child(div().h(px(10.0)))

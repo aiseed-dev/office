@@ -948,6 +948,18 @@ impl Calc {
                     ui::t!("計算方法: 手動(F9 で計算します — 大きな表で待たされない)").into()
                 };
             }
+            // 参照の形式(A1 ⇔ R1C1)。式の中身は A1 のまま、見せ方と打ち方が変わる
+            "ref-style" => {
+                self.commit();
+                self.book.r1c1 = !self.book.r1c1;
+                self.dirty = true;
+                self.sync_input(); // 数式バーの見せ方も切り替える
+                self.status = if self.book.r1c1 {
+                    ui::t!("参照の形式: R1C1(R[行]C[列] — 列見出しも数字になります)").into()
+                } else {
+                    ui::t!("参照の形式: A1(いつもの B2 の形)").into()
+                };
+            }
             // 反復計算(循環参照の反復解決)。入なら板で回数と変化量を聞く
             "calc-iter" => {
                 let cur = self

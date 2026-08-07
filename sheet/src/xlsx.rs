@@ -823,6 +823,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     let mut defined_raw: Vec<String> = Vec::new();
     let mut calc_manual = false;
     let mut calc_iter: Option<(u32, f64)> = None;
+    let mut r1c1 = false;
     if let Ok(mut f) = zip.by_name("xl/workbook.xml") {
         let mut s = String::new();
         let _ = f.read_to_string(&mut s);
@@ -860,6 +861,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                     if local(e.name().as_ref()) == b"calcPr" =>
                 {
                     calc_manual = attr(&e, "calcMode").as_deref() == Some("manual");
+                    r1c1 = attr(&e, "refMode").as_deref() == Some("R1C1");
                     if attr(&e, "iterate").as_deref() == Some("1") {
                         let n = attr(&e, "iterateCount")
                             .and_then(|v| v.parse().ok())
@@ -910,6 +912,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
         theme: theme_colors.clone(),
         calc_manual,
         calc_iter,
+        r1c1,
         ..Default::default()
     };
     // ブックの情報(docProps/core.xml)。読んで見せる。保存は原文持ち越し
@@ -1704,10 +1707,31 @@ fn calc_pr_xml(book: &Book) -> String {
     if let Some((n, d)) = book.calc_iter {
         attrs.push_str(&format!(r#" iterate="1" iterateCount="{n}" iterateDelta="{d}""#));
     }
+    if book.r1c1 {
+        attrs.push_str(r#" refMode="R1C1""#);
+    }
     if attrs.is_empty() { String::new() } else { format!("<calcPr{attrs}/>") }
 }
 
 /// calcPr の iterate 系3属性を差し替える(付ける/外す)。
+/// calcPr の refMode 属性を差し替える(付ける/外す)。
+fn patch_refmode(tag: &str, r1c1: bool) -> String {
+    let mut t = tag.to_string();
+    while let Some(a) = t.find(" refMode=\"") {
+        let vstart = a + " refMode=\"".len();
+        let Some(vend) = t[vstart..].find('"') else { break };
+        t.replace_range(a..vstart + vend + 1, "");
+    }
+    if r1c1 {
+        if let Some(stripped) = t.strip_suffix("/>") {
+            t = format!("{stripped} refMode=\"R1C1\"/>");
+        } else if let Some(stripped) = t.strip_suffix('>') {
+            t = format!("{stripped} refMode=\"R1C1\">");
+        }
+    }
+    t
+}
+
 fn patch_iterate(tag: &str, iter: Option<(u32, f64)>) -> String {
     let mut t = tag.to_string();
     for name in ["iterate", "iterateCount", "iterateDelta"] {
@@ -2112,13 +2136,13 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                                 format!(
                                     "{}{}{}",
                                     &patched[..start],
-                                    patch_iterate(tag, book.calc_iter),
+                                    patch_refmode(&patch_iterate(tag, book.calc_iter), book.r1c1),
                                     &patched[start + len + 1..]
                                 )
                             }
                             None => patched,
                         }
-                    } else if book.calc_iter.is_some() {
+                    } else if book.calc_iter.is_some() || book.r1c1 {
                         // calcPr が無い原本に反復だけ足す(manual と同じ差し込み場所)
                         let ins = calc_pr_xml(book);
                         if let Some(p) = patched.find("</definedNames>") {
@@ -3859,6 +3883,13 @@ mod validation_roundtrip_tests {
         let (back, _) = read(buf).expect("読めない");
         assert!(back.calc_manual, "手動計算が往復しない");
         assert_eq!(back.calc_iter, Some((50, 0.01)), "反復計算が往復しない");
+        let mut b2 = Book::new();
+        b2.r1c1 = true;
+        let mut buf = Cursor::new(Vec::new());
+        write(&b2, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back2, _) = read(buf).expect("読めない");
+        assert!(back2.r1c1, "R1C1 が往復しない");
         // 自動(既定)は calcPr を書かない → 読みも false
         let b2 = Book::new();
         let mut buf2 = Cursor::new(Vec::new());

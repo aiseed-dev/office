@@ -866,4 +866,7 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("反復計算(循環参照)", "Iterative calculation (circular references)"),
 ("入(最大 {} 回・変化 {} まで)", "On (max {} passes, change ≤ {})"),
 ("切", "Off"),
+("参照の形式: R1C1(R[行]C[列] — 列見出しも数字になります)", "Reference style: R1C1 (R[row]C[col] — column headers turn numeric)"),
+("参照の形式: A1(いつもの B2 の形)", "Reference style: A1 (the usual B2 form)"),
+("参照の形式", "Reference style"),
 ];

@@ -421,8 +421,23 @@ impl Calc {
         &mut self.book.sheets[a]
     }
 
+    /// 参照の見せ方(R1C1 のときはカーソル基準の R[..]C[..] に)
+    pub(crate) fn ref_disp(&self, p: Pos) -> String {
+        if self.book.r1c1 {
+            sheet::model::formula_to_r1c1(&p.a1(), self.cursor)
+        } else {
+            p.a1()
+        }
+    }
+
     fn sync_input(&mut self) {
-        let s = self.sheet().get(self.cursor).map(|c| c.editable()).unwrap_or_default();
+        let mut s = self.sheet().get(self.cursor).map(|c| c.editable()).unwrap_or_default();
+        // R1C1: 見せるときだけ変換(中身は A1 のまま)
+        if self.book.r1c1 {
+            if let Some(body) = s.strip_prefix('=') {
+                s = format!("={}", sheet::model::formula_to_r1c1(body, self.cursor));
+            }
+        }
         self.input = Editor::new(&s);
         self.edit_armed = false; // セルを移った=編集は仕切り直し
         if self.pick_kind == "fn-complete" {
@@ -948,7 +963,7 @@ impl Calc {
                 prev,
                 Some('=' | '(' | ',' | '+' | '-' | '*' | '/' | ':' | '^' | '&' | '<' | '>' | '%')
             ) {
-                let a1 = p.a1();
+                let a1 = self.ref_disp(p);
                 self.input.insert(&a1);
                 let end = self.input.cursor();
                 self.ref_pick = Some((p, end - a1.len()..end));
@@ -1044,9 +1059,13 @@ impl Calc {
             let (ra, rb) = (from.row.min(p.row), from.row.max(p.row));
             let (ca, cb) = (from.col.min(p.col), from.col.max(p.col));
             let text = if from == p {
-                p.a1()
+                self.ref_disp(p)
             } else {
-                format!("{}:{}", Pos::new(ra, ca).a1(), Pos::new(rb, cb).a1())
+                format!(
+                    "{}:{}",
+                    self.ref_disp(Pos::new(ra, ca)),
+                    self.ref_disp(Pos::new(rb, cb))
+                )
             };
             let mut t = self.input.text().to_string();
             if range.end <= t.len() {
@@ -1825,7 +1844,13 @@ impl Calc {
     }
 
     fn commit(&mut self) -> bool {
-        let (cur, text) = (self.cursor, self.input.text().to_string());
+        let (cur, mut text) = (self.cursor, self.input.text().to_string());
+        // R1C1 で打った式は A1 に戻して仕舞う(中身はいつも A1)
+        if self.book.r1c1 {
+            if let Some(body) = text.strip_prefix('=') {
+                text = format!("={}", sheet::model::formula_from_r1c1(body, cur));
+            }
+        }
         // 変わっていなければ何もしない(移動のたびに履歴が積まれるのを防ぐ)
         let now = self.sheet().get(cur).map(|c| c.editable()).unwrap_or_default();
         if now == text {
