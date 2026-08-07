@@ -1178,6 +1178,9 @@ pub struct Book {
     /// 計算方法が手動(xlsx の calcPr calcMode="manual")。
     /// F9 で手回し。ファイルに残す — 開き直して勝手に自動へ戻さない
     pub calc_manual: bool,
+    /// 反復計算(循環参照の反復解決)。Some((最大反復回数, 最大変化量))。
+    /// xlsx の calcPr iterate/iterateCount/iterateDelta と往復
+    pub calc_iter: Option<(u32, f64)>,
 }
 
 impl Book {

@@ -822,6 +822,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
     // 理解できなかった definedName の原文(hidden 属性つき等)。捨てない
     let mut defined_raw: Vec<String> = Vec::new();
     let mut calc_manual = false;
+    let mut calc_iter: Option<(u32, f64)> = None;
     if let Ok(mut f) = zip.by_name("xl/workbook.xml") {
         let mut s = String::new();
         let _ = f.read_to_string(&mut s);
@@ -846,10 +847,28 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                     ));
                 }
                 // 計算方法(calcPr)。manual を落とすと開き直しで勝手に自動へ戻る
+                // 1904年の日付系(古い Mac の Excel)。保存は原文持ち越しで
+                // 守られるが、表示は 1900 系のまま=4年ずれる。黙らない
+                Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                    if local(e.name().as_ref()) == b"workbookPr" =>
+                {
+                    if matches!(attr(&e, "date1904").as_deref(), Some("1") | Some("true")) {
+                        rep.note("1904年の日付系(このブックの日付表示は4年ずれます。保存では保たれます)");
+                    }
+                }
                 Ok(Event::Start(e)) | Ok(Event::Empty(e))
                     if local(e.name().as_ref()) == b"calcPr" =>
                 {
                     calc_manual = attr(&e, "calcMode").as_deref() == Some("manual");
+                    if attr(&e, "iterate").as_deref() == Some("1") {
+                        let n = attr(&e, "iterateCount")
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(100);
+                        let d = attr(&e, "iterateDelta")
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(0.001);
+                        calc_iter = Some((n, d));
+                    }
                 }
                 Ok(Event::Start(e)) if local(e.name().as_ref()) == b"definedName" => {
                     // name= 以外の属性(hidden 等)が付いていたら「単純ではない」
@@ -890,6 +909,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
         names_raw: defined_raw,
         theme: theme_colors.clone(),
         calc_manual,
+        calc_iter,
         ..Default::default()
     };
     // ブックの情報(docProps/core.xml)。読んで見せる。保存は原文持ち越し
@@ -1675,6 +1695,39 @@ fn dollars(r: &str) -> String {
 /// 原本の workbook.xml の計算方法(calcPr calcMode)をこちらのモデルに合わせる。
 /// 他の属性(calcId 等)は据え置く。calcPr が無い原本に手動を書くときは
 /// definedNames の後(スキーマの順)に差し込む
+/// calcPr の1本(新規保存)。手動と反復のどちらも無ければ空
+fn calc_pr_xml(book: &Book) -> String {
+    let mut attrs = String::new();
+    if book.calc_manual {
+        attrs.push_str(r#" calcMode="manual""#);
+    }
+    if let Some((n, d)) = book.calc_iter {
+        attrs.push_str(&format!(r#" iterate="1" iterateCount="{n}" iterateDelta="{d}""#));
+    }
+    if attrs.is_empty() { String::new() } else { format!("<calcPr{attrs}/>") }
+}
+
+/// calcPr の iterate 系3属性を差し替える(付ける/外す)。
+fn patch_iterate(tag: &str, iter: Option<(u32, f64)>) -> String {
+    let mut t = tag.to_string();
+    for name in ["iterate", "iterateCount", "iterateDelta"] {
+        while let Some(a) = t.find(&format!(" {name}=\"")) {
+            let vstart = a + name.len() + 3;
+            let Some(vend) = t[vstart..].find('"') else { break };
+            t.replace_range(a..vstart + vend + 1, "");
+        }
+    }
+    if let Some((n, d)) = iter {
+        let ins = format!(r#" iterate="1" iterateCount="{n}" iterateDelta="{d}""#);
+        if let Some(stripped) = t.strip_suffix("/>") {
+            t = format!("{stripped}{ins}/>");
+        } else if let Some(stripped) = t.strip_suffix('>') {
+            t = format!("{stripped}{ins}>");
+        }
+    }
+    t
+}
+
 fn patch_calc_pr(workbook: &str, manual: bool) -> String {
     let mode = if manual { "manual" } else { "auto" };
     if let Some(start) = workbook.find("<calcPr") {
@@ -2051,6 +2104,35 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
                     let patched = patch_sheet_states(&patched, book);
                     // 計算方法もこちらが正(F9 で手動にしたら残す)
                     let patched = patch_calc_pr(&patched, book.calc_manual);
+                    // 反復計算も原本の calcPr に織り込む(無ければ足し、切っていれば外す)
+                    let patched = if let Some(start) = patched.find("<calcPr") {
+                        match patched[start..].find('>') {
+                            Some(len) => {
+                                let tag = &patched[start..start + len + 1];
+                                format!(
+                                    "{}{}{}",
+                                    &patched[..start],
+                                    patch_iterate(tag, book.calc_iter),
+                                    &patched[start + len + 1..]
+                                )
+                            }
+                            None => patched,
+                        }
+                    } else if book.calc_iter.is_some() {
+                        // calcPr が無い原本に反復だけ足す(manual と同じ差し込み場所)
+                        let ins = calc_pr_xml(book);
+                        if let Some(p) = patched.find("</definedNames>") {
+                            let at = p + "</definedNames>".len();
+                            format!("{}{}{}", &patched[..at], ins, &patched[at..])
+                        } else if let Some(p) = patched.find("</sheets>") {
+                            let at = p + "</sheets>".len();
+                            format!("{}{}{}", &patched[..at], ins, &patched[at..])
+                        } else {
+                            patched
+                        }
+                    } else {
+                        patched
+                    };
                     carried.push((name, patched.into_bytes()));
                     continue;
                 }
@@ -2511,7 +2593,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
 <workbook xmlns="{NS}" xmlns:r="{RNS}"><sheets>{sheets_xml}</sheets>{}{}</workbook>"#,
         defined_names_xml(book),
         // 手動計算をファイルに残す(自動は既定なので書かない)
-        if book.calc_manual { r#"<calcPr calcMode="manual"/>"# } else { "" }))?;
+        calc_pr_xml(book).as_str()))?;
 
     let wrels: String = (1..=book.sheets.len())
         .map(|i| format!(r#"<Relationship Id="rId{i}" Type="{RNS}/worksheet" Target="worksheets/sheet{i}.xml"/>"#))
@@ -3770,11 +3852,13 @@ mod validation_roundtrip_tests {
         // 手動(calcPr calcMode="manual")を落とすと、開き直しで勝手に自動へ戻る
         let mut b = Book::new();
         b.calc_manual = true;
+        b.calc_iter = Some((50, 0.01));
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
         buf.set_position(0);
         let (back, _) = read(buf).expect("読めない");
         assert!(back.calc_manual, "手動計算が往復しない");
+        assert_eq!(back.calc_iter, Some((50, 0.01)), "反復計算が往復しない");
         // 自動(既定)は calcPr を書かない → 読みも false
         let b2 = Book::new();
         let mut buf2 = Cursor::new(Vec::new());

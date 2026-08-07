@@ -859,4 +859,11 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("ラベルで絞る — 例: 含む 東京 / で始まる 東 / で終わる 区", "Label filter — e.g. 含む Tokyo / で始まる A / で終わる Z (contains / begins with / ends with)"),
 ("値で絞る — 例: > 1000(比較は > >= < <= =。空 Enter = 解除)", "Value filter — e.g. > 1000 (operators > >= < <= =; empty Enter removes it)"),
 ("数の幅でグループ化 — 幅を数で(例: 100)", "Group by numeric width — enter the width (e.g. 100)"),
+("反復計算を切りました(循環参照は #CIRC! に戻ります)", "Iterative calculation off (circular references show #CIRC! again)"),
+("反復計算: 入(最大 {} 回、変化 {} まで) — 循環参照を回して解きます", "Iterative calculation on (max {} passes, until change ≤ {}) — circular references are solved by iteration"),
+("「100 0.001」の形で(回数は1以上)", "Use the form \"100 0.001\" (count must be ≥ 1)"),
+("反復計算 — 最大回数と変化量(例: 100 0.001。空 Enter = 切)", "Iterative calculation — max passes and max change (e.g. 100 0.001; empty Enter turns it off)"),
+("反復計算(循環参照)", "Iterative calculation (circular references)"),
+("入(最大 {} 回・変化 {} まで)", "On (max {} passes, change ≤ {})"),
+("切", "Off"),
 ];

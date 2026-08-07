@@ -948,6 +948,15 @@ impl Calc {
                     ui::t!("計算方法: 手動(F9 で計算します — 大きな表で待たされない)").into()
                 };
             }
+            // 反復計算(循環参照の反復解決)。入なら板で回数と変化量を聞く
+            "calc-iter" => {
+                let cur = self
+                    .book
+                    .calc_iter
+                    .map(|(n, d)| format!("{n} {d}"))
+                    .unwrap_or_else(|| "100 0.001".into());
+                self.prompt = Some(("calc-iter", Editor::new(&cur)));
+            }
             // 関数の挿入 = 本家と同じ小窓(検索・分類・一覧・説明)。
             // 数式バーの fx と同じ実体
             "insert-function" => {

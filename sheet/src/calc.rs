@@ -2488,10 +2488,23 @@ pub fn recalc_book(book: &mut crate::Book, target: usize) {
     if target >= book.sheets.len() {
         return;
     }
+    let iter = book.calc_iter;
     let (left, rest) = book.sheets.split_at_mut(target);
     let (tgt, right) = rest.split_first_mut().expect("上で確かめた");
     let others: Vec<&Sheet> = left.iter().map(|s| &*s).chain(right.iter().map(|s| &*s)).collect();
-    recalc_impl(tgt, &others);
+    match iter {
+        Some((count, delta)) => {
+            // 反復計算: 循環は前回の値で埋めて、変化が delta 以下に
+            // 落ち着くまで(上限 count 回)回す — Excel と同じ枠組み
+            for _ in 0..count.max(1) {
+                let (changed, maxd) = recalc_pass_iter(tgt, &others, true);
+                if !changed || maxd <= delta {
+                    break;
+                }
+            }
+        }
+        None => recalc_impl(tgt, &others),
+    }
 }
 
 /// 全シートの再計算。別のシートへの間接参照があるときは、
@@ -2540,6 +2553,12 @@ fn recalc_impl(sheet: &mut Sheet, others: &[&Sheet]) {
 
 /// 再計算の1周。値が動いたら true(まだ安定していないかもしれない)
 fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
+    recalc_pass_iter(sheet, others, false).0
+}
+
+/// 再計算の1周(反復モードつき)。反復モードでは循環参照を #CIRC! に
+/// せず**前回の値**で埋める。返りは (動いたか, 数の最大変化量)
+fn recalc_pass_iter(sheet: &mut Sheet, others: &[&Sheet], iter_mode: bool) -> (bool, f64) {
     // PY セルはここでは計算しない(最後に計算した値を保つ)。
     // まだ一度も計算していなければ「#PY?」の印を置く(空白で誤魔化さない)
     let py_cells: Vec<Pos> = sheet
@@ -2605,6 +2624,7 @@ fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
         others: &[&Sheet],
         resolved: &mut HashMap<Pos, Value>,
         visiting: &mut HashSet<Pos>,
+        iter_mode: bool,
     ) -> Value {
         if let Some(v) = resolved.get(&p) {
             return v.clone();
@@ -2613,12 +2633,20 @@ fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
             return sheet.value(p);
         };
         if !visiting.insert(p) {
+            if iter_mode {
+                // 反復計算: 循環は**前回の値**で埋める。初回(空や #CIRC! の
+                // 残骸)は 0 から始める — Excel と同じ起点
+                return match sheet.value(p) {
+                    Value::Number(n) => Value::Number(n),
+                    _ => Value::Number(0.0),
+                };
+            }
             return Value::Error("#CIRC!".into());
         }
         // 先に依存を解く
         for d in deps(f) {
             if map.contains_key(&d) && !resolved.contains_key(&d) {
-                let v = eval_at(d, map, sheet, others, resolved, visiting);
+                let v = eval_at(d, map, sheet, others, resolved, visiting, iter_mode);
                 resolved.insert(d, v);
             }
         }
@@ -2640,14 +2668,20 @@ fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
 
     let map: HashMap<Pos, String> = formulas.iter().cloned().collect();
     for (p, _) in &formulas {
-        let v = eval_at(*p, &map, sheet, others, &mut resolved, &mut visiting);
+        let v = eval_at(*p, &map, sheet, others, &mut resolved, &mut visiting, iter_mode);
         resolved.insert(*p, v);
     }
+    let mut max_delta = 0.0f64;
     for (p, v) in resolved {
         if let Some(c) = sheet.cells.get_mut(&p) {
             if c.formula.is_some() {
                 if c.value != v && !volatile.contains(&p) {
                     changed = true;
+                    if let (Value::Number(a), Value::Number(b)) = (&c.value, &v) {
+                        max_delta = max_delta.max((a - b).abs());
+                    } else {
+                        max_delta = f64::INFINITY; // 数でない変化は「まだ大きい」
+                    }
                 }
                 c.value = v;
             }
@@ -2769,7 +2803,7 @@ fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
         changed = true;
         sheet.spills = new_spills;
     }
-    changed
+    (changed, max_delta)
 }
 
 /// 配列数式か — あふれる関数(FILTER 等)が式のどこかに入っているか。
@@ -3017,6 +3051,29 @@ mod tests {
     fn ゼロ除算はエラーになる() {
         let sh = s(&[("A1", "0"), ("B1", "=10/A1")]);
         assert_eq!(v(&sh, "B1"), "#DIV/0!", "黙って0を返さない");
+    }
+
+    #[test]
+    fn 反復計算は循環を収束させる() {
+        // A1 = A1/2 + 1 の不動点は 2。反復なしなら #CIRC!
+        let mut b = crate::Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("=A1/2+1"));
+        recalc_book(&mut b, 0);
+        assert_eq!(
+            b.sheets[0].value(Pos::parse("A1").unwrap()).display(),
+            "#CIRC!",
+            "反復なしで循環が通った"
+        );
+        b.calc_iter = Some((100, 1e-9));
+        recalc_book(&mut b, 0);
+        let got = b.sheets[0].value(Pos::parse("A1").unwrap()).as_number();
+        assert!((got - 2.0).abs() < 1e-6, "不動点に収束しない: {got}");
+        // 相互参照(A2=B2+1, B2=A2 は発散 — 上限で止まりエラーにならない)
+        b.sheets[0].set(Pos::parse("A2").unwrap(), Cell::input("=B2+1"));
+        b.sheets[0].set(Pos::parse("B2").unwrap(), Cell::input("=A2"));
+        recalc_book(&mut b, 0);
+        let a2 = b.sheets[0].value(Pos::parse("A2").unwrap());
+        assert!(matches!(a2, Value::Number(_)), "上限で止まらずエラー: {a2:?}");
     }
 
     #[test]

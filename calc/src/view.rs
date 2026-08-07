@@ -2428,6 +2428,7 @@ impl Render for Calc {
                 "text-angle" => ui::t!("文字の角度 — -90〜90 の数(上向きが正。空 Enter = 0)").to_string(),
                 "hf-edit" => ui::t!("ヘッダー/フッター — この区分の文字(&P=頁 &N=総頁。空 Enter = 消す)").to_string(),
                 "name-range" => ui::t!("名前の中身 — 場所(B12 か A1:C9 の形)").to_string(),
+                "calc-iter" => ui::t!("反復計算 — 最大回数と変化量(例: 100 0.001。空 Enter = 切)").to_string(),
                 "pivot-label" => ui::t!("ラベルで絞る — 例: 含む 東京 / で始まる 東 / で終わる 区").to_string(),
                 "pivot-vfilter" => ui::t!("値で絞る — 例: > 1000(比較は > >= < <= =。空 Enter = 解除)").to_string(),
                 "pivot-group-width" => ui::t!("数の幅でグループ化 — 幅を数で(例: 100)").to_string(),
@@ -3162,6 +3163,19 @@ impl Render for Calc {
                             .child("+")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.run_cmd("ui-bigger", cx);
+                                cx.notify()
+                            }))))
+                    .child(div().flex().flex_row().items_center().gap_2()
+                        .child(div().w(px(us * 200.0)).text_color(dim)
+                            .child(ui::t!("反復計算(循環参照)")))
+                        .child(div().id("set-iter")
+                            .px_3().py_1().rounded_sm().cursor_pointer().bg(item_bg)
+                            .child(match self.book.calc_iter {
+                                Some((n, d)) => ui::tf!("入(最大 {} 回・変化 {} まで)", n, d),
+                                None => ui::t!("切").into(),
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_cmd("calc-iter", cx);
                                 cx.notify()
                             }))))
                     .child(div().h(px(10.0)))

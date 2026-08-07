@@ -2043,6 +2043,39 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // 反復計算の入切(回数 変化量。空 Enter = 切)
+            "calc-iter" => {
+                let t = text.trim();
+                if t.is_empty() {
+                    self.book.calc_iter = None;
+                    self.dirty = true;
+                    self.status = ui::t!("反復計算を切りました(循環参照は #CIRC! に戻ります)").into();
+                    return;
+                }
+                let mut it = t.split_whitespace();
+                let n: Option<u32> = it.next().and_then(|v| v.parse().ok());
+                let d: Option<f64> = match it.next() {
+                    Some(v) => v.parse().ok(),
+                    None => Some(0.001),
+                };
+                match (n, d) {
+                    (Some(n), Some(d)) if n >= 1 && d >= 0.0 => {
+                        self.book.calc_iter = Some((n, d));
+                        self.dirty = true;
+                        recalc_book(&mut self.book, self.active);
+                        self.sync_input();
+                        self.status = ui::tf!(
+                            "反復計算: 入(最大 {} 回、変化 {} まで) — 循環参照を回して解きます",
+                            n, d
+                        )
+                        .into();
+                    }
+                    _ => {
+                        self.status = ui::t!("「100 0.001」の形で(回数は1以上)").into();
+                        self.prompt = Some((kind, Editor::new(t)));
+                    }
+                }
+            }
             // ピボット: ラベルで絞る(含む/で始まる/で終わる 語)。
             // 合う値**以外**を hide に落とす — 既存の絞り込み機構に乗せる
             "pivot-label" => {
