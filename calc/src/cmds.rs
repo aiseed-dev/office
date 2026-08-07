@@ -104,7 +104,10 @@ impl Calc {
                     .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
                 let items: Vec<String> = [
                     "下罫線", "上罫線", "左罫線", "右罫線",
-                    "外枠", "すべての罫線(格子)", "内側の縦線", "内側の横線",
+                    "太い下罫線", "下二重罫線",
+                    "外枠", "太い外枠", "すべての罫線(格子)",
+                    "表の形(太い外枠+格子)",
+                    "内側の縦線", "内側の横線",
                     "罫線を消す",
                     "→ 線のスタイル…", "→ 線の色…",
                 ]
@@ -121,7 +124,7 @@ impl Calc {
                     None => ui::t!("自動(黒)").to_string(),
                 };
                 self.pick_note = Some(
-                    ui::tf!("罫線 — いまのペン: {}・{}", style_name, color_name).into(),
+                    ui::tf!("罫線 — いまのペン: {}・{}(連続で押せます。Esc で閉じる)", style_name, color_name).into(),
                 );
                 self.pick_kind = "border-pick";
                 self.pick = Some((items, at));

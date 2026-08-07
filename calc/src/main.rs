@@ -945,6 +945,9 @@ impl Calc {
             return;
         }
         let Some(p) = self.cell_at(x, y) else { return };
+        // 結合の中はどこを押しても左上(Excel と同じ)。呑まれた見えない
+        // セルにカーソルが立つと、そこへ書けてしまう — 帳票の事故
+        let p = self.merge_of(p).map(|(a, _)| a).unwrap_or(p);
         // 関数の引数の画面が開いている間は、セルのクリックで
         // **いまの欄に参照が入る**。そのままドラッグすると範囲(A1:C9)になる
         if self.fn_args.is_some() {
@@ -2013,15 +2016,52 @@ impl Calc {
         }
     }
 
+    /// p を呑んでいる結合(あれば (左上, 右下))。
+    pub(crate) fn merge_of(&self, p: Pos) -> Option<(Pos, Pos)> {
+        self.sheet()
+            .merges
+            .iter()
+            .copied()
+            .find(|(a, b)| {
+                (a.row..=b.row).contains(&p.row) && (a.col..=b.col).contains(&p.col)
+            })
+    }
+
     fn move_cursor(&mut self, dr: i32, dc: i32) {
         // 普通の移動は選択を解く
         self.anchor = None;
         if !self.commit() {
             return; // 入力規則で戻された(status に候補が出ている)
         }
+        let from = self.cursor;
         let r = (self.cursor.row as i32 + dr).max(0) as u32;
         let c = (self.cursor.col as i32 + dc).max(0) as u32;
-        self.cursor = Pos::new(r.min(9999), c.min(255));
+        let mut np = Pos::new(r.min(9999), c.min(255));
+        // 結合は1つのセルとして歩く(Excel と同じ):
+        // 外から入ったら左上に立ち、左上から同じ向きへ動いたら反対側の外へ抜ける
+        if let Some((a, b)) = self.merge_of(np) {
+            let inside_from = self.merge_of(from) == Some((a, b));
+            np = if inside_from {
+                match (dr.signum(), dc.signum()) {
+                    (1, _) => Pos::new((b.row + 1).min(9999), np.col),
+                    (-1, _) => {
+                        if a.row == 0 { a } else { Pos::new(a.row - 1, np.col) }
+                    }
+                    (_, 1) => Pos::new(np.row, (b.col + 1).min(255)),
+                    (_, -1) => {
+                        if a.col == 0 { a } else { Pos::new(np.row, a.col - 1) }
+                    }
+                    _ => a,
+                }
+            } else {
+                a
+            };
+            // 抜けた先も別の結合なら、その左上へ
+            if let Some((a2, _)) = self.merge_of(np) {
+                np = a2;
+            }
+        }
+        self.cursor = np;
         self.follow();
         self.sync_input();
     }

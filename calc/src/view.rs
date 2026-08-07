@@ -2274,6 +2274,100 @@ impl Render for Calc {
             bands
         };
 
+        // ---- 結合の重ね描き ----
+        // 結合はモデル(merges)と保存が正しくても、格子のセル割りでは
+        // 「左上のセル1コマに切れた値+残る格子線」にしか見えない(発注者
+        // 報告 2026-08-08)。範囲全体を不透明で覆い、値・書式・選択の枠を
+        // ここで描く — マウスは受けない(InputSink が上で受ける)
+        let merge_overlays: Vec<gpui::AnyElement> = {
+            let mut out = Vec::new();
+            let merges = self.sheet().merges.clone();
+            for (a, b) in merges {
+                let Some((x0, y0, x1, y1)) = self.range_px(a, b) else { continue };
+                let cell = self.sheet().get(a);
+                let f = cell.map(|x| x.fmt.clone()).unwrap_or_default();
+                let v = cell.map(|x| x.value.clone()).unwrap_or(Value::Empty);
+                let mut shown = sheet::model::format_value(&v, f.number_format.as_deref());
+                // 結合の上で編集中は、打ちかけを結合の枠の中に見せる(セルと同じ)
+                if self.cursor == a {
+                    shown = self.input.text().to_string();
+                }
+                // 下地: 塗り > 白。選択に入っていれば緑を混ぜる(セルと同じ)
+                let mut base = f.fill.as_deref().map(hex).unwrap_or(gpui::Rgba {
+                    r: 1.0, g: 1.0, b: 1.0, a: 1.0,
+                });
+                let sel_on = self.anchor.is_some() && {
+                    let (sa, sb) = self.sel_rect();
+                    sa.row <= a.row && b.row <= sb.row && sa.col <= a.col && b.col <= sb.col
+                };
+                if sel_on && Some(a) != Some(self.anchor.unwrap_or(self.cursor)) {
+                    base = tint(base, 0.20);
+                }
+                let mut d = div().absolute()
+                    .left(px(x0)).top(px(y0))
+                    .w(px((x1 - x0).max(2.0))).h(px((y1 - y0).max(2.0)))
+                    .bg(base)
+                    .px_1p5().flex().overflow_hidden()
+                    .font_family(self.font_name.clone())
+                    .text_size(px(self.zoom * f.size_c
+                        .map(|c| c as f32 / 100.0 * 24.0 / 15.0 * 0.8)
+                        .unwrap_or(12.5)));
+                match f.valign {
+                    sheet::model::VAlign::Top => d = d.items_start(),
+                    sheet::model::VAlign::Middle => d = d.items_center(),
+                    sheet::model::VAlign::Bottom => d = d.items_end(),
+                }
+                let is_num = matches!(v, Value::Number(_));
+                d = match f.align {
+                    HAlign::Left => d.justify_start(),
+                    HAlign::Center => d.justify_center(),
+                    HAlign::Right => d.justify_end(),
+                    HAlign::Justify => d.justify_between(),
+                    HAlign::General if is_num => d.justify_end(),
+                    HAlign::General => d.justify_start(),
+                };
+                if f.bold { d = d.font_weight(gpui::FontWeight::BOLD); }
+                if f.italic { d = d.italic(); }
+                if f.underline { d = d.underline(); }
+                if f.strike { d = d.line_through(); }
+                d = d.text_color(f.color.as_deref().map(hex).unwrap_or(hex("1B1B1B")));
+                if let Some(name) = &f.font {
+                    if let Ok((fam, _)) = kumihan::font::for_document(Some(name)) {
+                        d = d.font_family(SharedString::from(fam.name.clone()));
+                    }
+                }
+                // カーソルが結合の上なら選択の枠(セルと同じ緑)
+                if self.cursor == a && self.anchor.is_none() {
+                    d = d.border_2().border_color(rgb(0x1B6E3C));
+                } else {
+                    // 引いてある罫線の辺を外周に(実線で。細部の線種はセル側と同じ
+                    // 描き分けまではしない — 結合の見た目の要は「1つに見える」こと)
+                    let bs = &f.borders;
+                    d = d.relative();
+                    let bar = |horiz: bool, start: bool, e: sheet::model::Edge| {
+                        let col = e.color.map(rgb).unwrap_or(rgb(0x1B1B1B));
+                        let t = e.style.px().max(1.0);
+                        let b = div().absolute();
+                        let b = match (horiz, start) {
+                            (true, true) => b.left(px(0.0)).top(px(0.0)).w_full().h(px(t)),
+                            (true, false) => b.left(px(0.0)).bottom(px(0.0)).w_full().h(px(t)),
+                            (false, true) => b.top(px(0.0)).left(px(0.0)).h_full().w(px(t)),
+                            (false, false) => b.top(px(0.0)).right(px(0.0)).h_full().w(px(t)),
+                        };
+                        b.bg(col)
+                    };
+                    let mut kids: Vec<gpui::AnyElement> = Vec::new();
+                    if bs.top.on { kids.push(bar(true, true, bs.top).into_any_element()); }
+                    if bs.bottom.on { kids.push(bar(true, false, bs.bottom).into_any_element()); }
+                    if bs.left.on { kids.push(bar(false, true, bs.left).into_any_element()); }
+                    if bs.right.on { kids.push(bar(false, false, bs.right).into_any_element()); }
+                    d = d.children(kids);
+                }
+                out.push(d.child(SharedString::from(shown)).into_any_element());
+            }
+            out
+        };
+
         // ---- ピボットの塊の枠 ----
         // 集計はただのセルに見えて紛らわしい(発注者 2026-08-07)。いつも薄い
         // 枠で「特別な塊」だと見せ、カーソルが載ったら濃く+「ピボット」の札。
@@ -3692,6 +3786,7 @@ impl Render for Calc {
                        }
                    }))
                    .child(grid)
+                   .children(merge_overlays)
                    .children(pivot_frames)
                    .children(freeze_shadow)
                    .children(ink_preview)

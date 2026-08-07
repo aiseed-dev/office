@@ -334,7 +334,13 @@ impl Calc {
                         self.pick = Some((items, at));
                         return;
                     }
-                    _ => self.apply_borders(v),
+                    _ => {
+                        self.apply_borders(v);
+                        // 板は開いたまま — 外枠→内側…と連打で組み立てる
+                        // (閉じるのは Esc か板の外。発注者報告 2026-08-08)
+                        self.run_cmd("borders", cx);
+                        return;
+                    }
                 }
             }
             "border-style-pick" => {
@@ -1839,6 +1845,41 @@ impl Calc {
                 match which {
                     "下罫線" => {
                         if r == b.row { bd.bottom = e }
+                    }
+                    // Excel の定番の型。ペンの色は使い、太さ・線種は型が決める
+                    "太い下罫線" => {
+                        if r == b.row {
+                            bd.bottom = sheet::model::Edge::line(
+                                sheet::model::BStyle::Medium, self.pen_color);
+                        }
+                    }
+                    "下二重罫線" => {
+                        if r == b.row {
+                            bd.bottom = sheet::model::Edge::line(
+                                sheet::model::BStyle::Double, self.pen_color);
+                        }
+                    }
+                    "太い外枠" => {
+                        let m = sheet::model::Edge::line(
+                            sheet::model::BStyle::Medium, self.pen_color);
+                        if r == a.row { bd.top = m }
+                        if r == b.row { bd.bottom = m }
+                        if c == a.col { bd.left = m }
+                        if c == b.col { bd.right = m }
+                    }
+                    // 表の形 = 太い外枠+中は細い格子。1押しで帳票の枠
+                    "表の形(太い外枠+格子)" => {
+                        let m = sheet::model::Edge::line(
+                            sheet::model::BStyle::Medium, self.pen_color);
+                        let t = sheet::model::Edge::line(
+                            sheet::model::BStyle::Thin, self.pen_color);
+                        *bd = sheet::model::Borders {
+                            top: t, bottom: t, left: t, right: t,
+                        };
+                        if r == a.row { bd.top = m }
+                        if r == b.row { bd.bottom = m }
+                        if c == a.col { bd.left = m }
+                        if c == b.col { bd.right = m }
                     }
                     "上罫線" => {
                         if r == a.row { bd.top = e }

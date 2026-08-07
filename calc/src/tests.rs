@@ -909,6 +909,69 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn 罫線の板は連打でき表の形が1押しで掛かる(cx: &mut gpui::TestAppContext) {
+        use sheet::model::BStyle;
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.anchor = Some(Pos::new(0, 0));
+            this.cursor = Pos::new(1, 1);
+            this.sync_input();
+            this.run_cmd("borders", cx);
+            assert_eq!(this.pick_kind, "border-pick");
+            // 型を1押し → 掛かって、板は開いたまま
+            this.apply_pick("表の形(太い外枠+格子)", cx);
+            assert_eq!(this.pick_kind, "border-pick", "板が閉じた(連打できない)");
+            assert!(this.pick.is_some());
+            fn bd(this: &Calc, r: u32, c2: u32) -> sheet::model::Borders {
+                this.book.sheets[0].get(Pos::new(r, c2)).unwrap().fmt.borders
+            }
+            // 左上: 外周は太く、内側は細い
+            assert_eq!(bd(this, 0, 0).top.style, BStyle::Medium);
+            assert_eq!(bd(this, 0, 0).left.style, BStyle::Medium);
+            assert_eq!(bd(this, 0, 0).bottom.style, BStyle::Thin);
+            assert_eq!(bd(this, 0, 0).right.style, BStyle::Thin);
+            // 右下: 外周は太く
+            assert_eq!(bd(this, 1, 1).bottom.style, BStyle::Medium);
+            assert_eq!(bd(this, 1, 1).right.style, BStyle::Medium);
+            // 下二重罫線
+            this.apply_pick("下二重罫線", cx);
+            assert_eq!(bd(this, 1, 0).bottom.style, BStyle::Double);
+            assert_eq!(bd(this, 1, 1).bottom.style, BStyle::Double);
+        });
+    }
+
+    #[gpui::test]
+    fn 結合は1つのセルとして歩ける(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            // B1:C2 を結合
+            this.merge_do(Pos::new(0, 1), Pos::new(1, 2), "中央");
+            // 右へ: A1 → B1(左上)→ D1(結合を飛び越す)
+            this.cursor = Pos::new(0, 0);
+            this.sync_input();
+            this.move_cursor(0, 1);
+            assert_eq!(this.cursor, Pos::new(0, 1), "結合に入ると左上に立つ");
+            this.move_cursor(0, 1);
+            assert_eq!(this.cursor, Pos::new(0, 3), "結合を1つとして飛び越す");
+            // 左へ戻る: D1 → B1(左上)→ A1
+            this.move_cursor(0, -1);
+            assert_eq!(this.cursor, Pos::new(0, 1));
+            this.move_cursor(0, -1);
+            assert_eq!(this.cursor, Pos::new(0, 0));
+            // 下から入っても左上へ(C3 の上=C2 は呑まれている)
+            this.cursor = Pos::new(2, 2);
+            this.sync_input();
+            this.move_cursor(-1, 0);
+            assert_eq!(this.cursor, Pos::new(0, 1), "下から入っても左上に立つ");
+            // merge_of がクリックの吸い付け先を返す
+            assert_eq!(
+                this.merge_of(Pos::new(1, 2)),
+                Some((Pos::new(0, 1), Pos::new(1, 2)))
+            );
+        });
+    }
+
+    #[gpui::test]
     fn ホームの全釦を一巡り点検(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

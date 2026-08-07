@@ -887,4 +887,5 @@ calc の隣に置いてください)", "office_sheet.so is missing (build with c
 ("テキストの取り込み — {}(クリックで切替)", "Text import — {} (click a line to change it)"),
 ("区切りの文字を1つ(例: |)", "One delimiter character (e.g. |)"),
 ("置き場所 — 左上のセル(B12 の形)", "Destination — top-left cell (B12 form)"),
+("罫線 — いまのペン: {}・{}(連続で押せます。Esc で閉じる)", "Borders — current pen: {}, {} (keep clicking; Esc closes)"),
 ];
