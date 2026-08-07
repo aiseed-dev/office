@@ -422,7 +422,41 @@ impl Calc {
                     self.status = ui::tf!("{} セルの大文字小文字を変えました", n).into();
                 }
             }
+            "orient-pick" => {
+                let deg: Option<i32> = match v {
+                    "角度なし" => Some(0),
+                    "左上がり 45度" => Some(45),
+                    "右下がり 45度" => Some(135),
+                    "上向き 90度" => Some(90),
+                    "下向き 90度" => Some(180),
+                    "縦書き(1字ずつ積む)" => Some(255),
+                    _ => None,
+                };
+                match deg {
+                    Some(0) => {
+                        self.fmt(|f| f.rotation = None);
+                        self.status = ui::t!("文字の向きを戻しました").into();
+                    }
+                    Some(d) => {
+                        self.fmt(move |f| f.rotation = Some(d));
+                        self.status = if d == 255 {
+                            ui::t!("文字を縦に積みました").into()
+                        } else {
+                            ui::tf!("文字を {} にしました", v).into()
+                        };
+                    }
+                    None => {
+                        // その他 = 任意の角度(-90〜90)
+                        self.prompt = Some(("text-angle", Editor::new("")));
+                        return; // 板の確定まで
+                    }
+                }
+            }
             "font-color" => {
+                if v.starts_with("その他") {
+                    self.prompt = Some(("font-color-rgb", Editor::new("")));
+                    return; // 板の確定まで
+                }
                 if let Some((_, hx)) = FONT_COLORS.iter().find(|(n, _)| *n == v) {
                     let c = hx.map(|h| h.to_string());
                     self.fmt(move |f| f.color = c.clone());
@@ -434,6 +468,10 @@ impl Calc {
                 }
             }
             "fill-color" => {
+                if v.starts_with("その他") {
+                    self.prompt = Some(("fill-color-rgb", Editor::new("")));
+                    return; // 板の確定まで
+                }
                 if let Some((_, hx)) = FILL_COLORS.iter().find(|(n, _)| *n == v) {
                     let c = hx.map(|h| h.to_string());
                     self.fmt(move |f| f.fill = c.clone());
@@ -1479,6 +1517,58 @@ impl Calc {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
         match kind {
+            // 文字の色・塗りの直指定(RRGGBB)。空 Enter = 自動/塗りなし
+            "font-color-rgb" | "fill-color-rgb" => {
+                let is_font = kind == "font-color-rgb";
+                let t = text.trim().trim_start_matches('#').to_uppercase();
+                if t.is_empty() {
+                    if is_font {
+                        self.fmt(|f| f.color = None);
+                        self.status = ui::t!("文字の色を自動に戻しました").into();
+                    } else {
+                        self.fmt(|f| f.fill = None);
+                        self.status = ui::t!("塗りを消しました").into();
+                    }
+                } else if t.len() == 6 && u32::from_str_radix(&t, 16).is_ok() {
+                    let c = Some(t.clone());
+                    if is_font {
+                        self.fmt(move |f| f.color = c.clone());
+                        self.status = ui::tf!("文字の色を{}にしました", format!("#{t}")).into();
+                    } else {
+                        self.fmt(move |f| f.fill = c.clone());
+                        self.status = ui::tf!("塗りを{}にしました", format!("#{t}")).into();
+                    }
+                } else {
+                    self.status = ui::t!("色が読めません(RRGGBB の6桁。例: FF0000)").into();
+                    self.prompt = Some((kind, Editor::new(&t)));
+                }
+            }
+            // 文字の角度の直指定(-90〜90。xlsx の encode は負を 90+|d| で)
+            "text-angle" => {
+                let t = text.trim().replace('°', "");
+                match t.parse::<i32>() {
+                    Ok(d) if (-90..=90).contains(&d) => {
+                        let enc: Option<i32> = if d == 0 {
+                            None
+                        } else if d > 0 {
+                            Some(d)
+                        } else {
+                            Some(90 - d) // -30 → 120(xlsx の encode)
+                        };
+                        self.fmt(move |f| f.rotation = enc);
+                        self.status = if d == 0 {
+                            ui::t!("文字の向きを戻しました").into()
+                        } else {
+                            ui::tf!("文字を {} 度にしました(上向きが正)", d).into()
+                        };
+                    }
+                    _ => {
+                        self.status =
+                            ui::t!("角度が読めません(-90〜90 の数。縦書きは一覧から)").into();
+                        self.prompt = Some(("text-angle", Editor::new(&t)));
+                    }
+                }
+            }
             // 罫線の色の直指定(RRGGBB)。空 Enter = 自動(黒)
             "border-color-rgb" => {
                 let t = text.trim().trim_start_matches('#').to_string();

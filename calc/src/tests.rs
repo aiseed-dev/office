@@ -1058,6 +1058,57 @@ mod recalc_tests {
     }
 
     #[gpui::test]
+    fn 色のその他と文字の角度の直指定(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            let a1 = Pos::parse("A1").unwrap();
+            this.cursor = a1;
+            this.sync_input();
+            this.input.insert("x");
+            assert!(this.commit());
+            // 文字の色: その他 → RRGGBB
+            this.run_cmd("fontcolor", cx);
+            this.apply_pick("その他(RRGGBB を打つ)…", cx);
+            this.prompt = Some(("font-color-rgb", Editor::new("00B050")));
+            this.finish_prompt(cx);
+            assert_eq!(
+                this.sheet().get(a1).unwrap().fmt.color.as_deref(),
+                Some("00B050"),
+                "文字の色の直指定が効かない"
+            );
+            // 塗り: その他 → RRGGBB
+            this.run_cmd("fillparag", cx);
+            this.apply_pick("その他(RRGGBB を打つ)…", cx);
+            this.prompt = Some(("fill-color-rgb", Editor::new("FFF2CC")));
+            this.finish_prompt(cx);
+            assert_eq!(
+                this.sheet().get(a1).unwrap().fmt.fill.as_deref(),
+                Some("FFF2CC")
+            );
+            // 角度: 一覧のプリセット
+            this.run_cmd("text-orient", cx);
+            assert_eq!(this.pick_kind, "orient-pick");
+            this.apply_pick("左上がり 45度", cx);
+            assert_eq!(this.sheet().get(a1).unwrap().fmt.rotation, Some(45));
+            // 任意の角度(負は xlsx の encode で 90+|d|)
+            this.run_cmd("text-orient", cx);
+            this.apply_pick("その他(角度を打つ)…", cx);
+            this.prompt = Some(("text-angle", Editor::new("-30")));
+            this.finish_prompt(cx);
+            assert_eq!(
+                this.sheet().get(a1).unwrap().fmt.rotation,
+                Some(120),
+                "負の角度の encode が違う"
+            );
+            // 範囲外は言い返す
+            this.prompt = Some(("text-angle", Editor::new("200")));
+            this.finish_prompt(cx);
+            assert!(this.prompt.is_some(), "範囲外の角度が通った");
+            assert!(this.status.contains("角度が読めません"));
+        });
+    }
+
+    #[gpui::test]
     fn 罫線はペンの線種と色で掛かる(cx: &mut gpui::TestAppContext) {
         use sheet::model::BStyle;
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));

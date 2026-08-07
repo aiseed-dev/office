@@ -874,22 +874,34 @@ impl Calc {
                 self.status = ui::t!("両端揃えにしました(折り返して全体を表示も入れます)").into();
             }
             // 文字の回転(縦書きのセル。90度ずつ回る)
+            // 文字の向き: 本家のプリセット+任意の角度(第2便3段)
             "text-orient" => {
-                self.fmt(|f| {
-                    f.rotation = match f.rotation {
-                        None | Some(0) => Some(90),
-                        Some(90) => Some(180),
-                        Some(180) => Some(255), // 255 = 縦に積む(xlsx の作法)
-                        _ => None,
-                    };
-                });
-                let r = self.sheet().get(self.cursor).map(|c| c.fmt.rotation).unwrap_or(None);
-                self.status = match r {
-                    Some(90) => ui::t!("文字を 90 度回しました").into(),
-                    Some(180) => ui::t!("文字を 180 度回しました").into(),
-                    Some(255) => ui::t!("文字を縦に積みました").into(),
-                    _ => ui::t!("文字の向きを戻しました").into(),
-                };
+                let at = self
+                    .cell_origin_px(self.cursor)
+                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let cur = self
+                    .sheet()
+                    .get(self.cursor)
+                    .and_then(|c| c.fmt.rotation)
+                    .unwrap_or(0);
+                let items: Vec<String> = [
+                    ("角度なし", 0i32),
+                    ("左上がり 45度", 45),
+                    ("右下がり 45度", 135),
+                    ("上向き 90度", 90),
+                    ("下向き 90度", 180),
+                    ("縦書き(1字ずつ積む)", 255),
+                ]
+                .iter()
+                .map(|(n, deg)| {
+                    if *deg == cur as i32 { format!("✓ {n}") } else { n.to_string() }
+                })
+                .chain(std::iter::once("その他(角度を打つ)…".to_string()))
+                .collect();
+                self.pick_note = Some(ui::t!("文字の向き(xlsx と同じ数え方 — 上向きが正)").into());
+                self.pick_kind = "orient-pick";
+                self.pick = Some((items, at));
             }
             // 計算方法(自動 ⇔ 手動)。手動のときは F9 で計算する
             "calc-mode" => {
@@ -2045,10 +2057,10 @@ impl Calc {
                     .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
                     .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
                 self.pick_kind = "fill-color";
-                self.pick = Some((
-                    FILL_COLORS.iter().map(|(n, _)| n.to_string()).collect(),
-                    at,
-                ));
+                let mut items: Vec<String> =
+                    FILL_COLORS.iter().map(|(n, _)| n.to_string()).collect();
+                items.push("その他(RRGGBB を打つ)…".into());
+                self.pick = Some((items, at));
             }
             // フォントの色。同じくパレット
             "fontcolor" => {
@@ -2057,10 +2069,10 @@ impl Calc {
                     .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
                     .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
                 self.pick_kind = "font-color";
-                self.pick = Some((
-                    FONT_COLORS.iter().map(|(n, _)| n.to_string()).collect(),
-                    at,
-                ));
+                let mut items: Vec<String> =
+                    FONT_COLORS.iter().map(|(n, _)| n.to_string()).collect();
+                items.push("その他(RRGGBB を打つ)…".into());
+                self.pick = Some((items, at));
             }
             // 並べ替えは**見出しを据え置き、行はまるごと動かす**
             // ユーザー設定の並べ替え。本家は複数基準のダイアログ —
