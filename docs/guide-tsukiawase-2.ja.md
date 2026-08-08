@@ -593,7 +593,7 @@ from-excel(乗り換えの手引き)の起草で、Excel の課題の並びと�
   うちの名前は**範囲しか持てない**(Sheet.names は (名前, 範囲))。
   LAMBDA を活かすには名前が任意の式を持てるようにする改造(xlsx の往復にも
   波及)が先。即時呼び出し `=LAMBDA(x,x*2)(5)` だけ通しても実用が薄い
-- [中] TEXTSPLIT・TEXTBEFORE・TEXTAFTER
+- ✔(2026-08-08 実装: TEXTSPLIT は ARRAY_FNS に足してスピルする(列と行の区切り・空を飛ばす)。TEXTBEFORE/TEXTAFTER は何番目・負で後ろから・見つからない時の値まで。区切りが空・0番目は #VALUE!。試験3本)**[中] TEXTSPLIT・TEXTBEFORE・TEXTAFTER**
 - [小] REPLACE(位置指定の置換)
 - [小] XMATCH・SORTBY・RANDARRAY・VSTACK/HSTACK・TAKE/DROP・TOCOL などの拡張スピル
 - [小] データベース関数(DSUM・DAVERAGE・DGET など D 系)

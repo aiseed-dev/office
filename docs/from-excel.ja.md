@@ -274,7 +274,7 @@ Excel の答えは Power Query と Copilot コネクタ(基幹のデータをク
 | RANDARRAY・VSTACK/HSTACK・TAKE/DROP・TOCOL 等の拡張スピル | ない | (在庫候補) |
 | LET | ある | `=LET(x, SUM(A1:A9), x/COUNT(A1:A9))` — 途中結果に名前を付けて二度計算しない(**2026-08-08 実装**)。入れ子も可、名前は LET の中だけ |
 | LAMBDA | ない | 本家は「名前の定義」に式を入れて呼ぶが、うちの名前は**範囲しか持てない**ので見送り(台帳に理由つきで控え)。同じ役目は =PY の Python 関数([Python の手引き](python-manual.ja.md)) |
-| TEXTSPLIT・TEXTBEFORE・TEXTAFTER | ない | FIND+MID の古典か =PY の split。ファイル丸ごとなら取り込みウィザード(在庫候補) |
+| TEXTSPLIT・TEXTBEFORE・TEXTAFTER | ある | **2026-08-08 実装**。TEXTSPLIT は横(と行の区切りを渡せば縦にも)スピル。TEXTBEFORE/TEXTAFTER は何番目・負で後ろから・見つからない時の値も受ける。区切りが空なら #VALUE!(黙って全部を返さない) |
 | DSUM・DAVERAGE・DGET(D 系) | ない | SUMIFS・AVERAGEIFS・FILTER で — 本家でも今は IFS 系が推奨の道(在庫候補) |
 | PMT・PV・FV・NPER・NPV・IRR・RATE | ある | IRR・RATE は本家と同じく反復解 |
 | SUBTOTAL・AGGREGATE | ある | **101〜111 は手で隠した行(グループの畳みを含む)を飛ばす**(2026-08-08 実装。1〜11 は全部数える — Excel と同じ)。ただし**絞り込みで隠れた行はまだ数に入る**(絞り込みは画面側の状態で、式の評価器から見えない — 台帳に控え)。見えている行だけの合計・平均・個数は、下のステータスバーの統計が絞り込みを尊重する |

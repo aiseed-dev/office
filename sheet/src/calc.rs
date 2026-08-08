@@ -2071,6 +2071,32 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
                 .collect();
             Value::Text(parts.join(&delim))
         }
+        "TEXTBEFORE" | "TEXTAFTER" => {
+            // TEXTBEFORE(文字, 区切り, [何番目], [見つからない時の値])
+            // 何番目が負なら**後ろから**数える(Excel と同じ)。
+            // 見つからなければ #N/A(4つ目を渡していればその値)
+            let s = a.first().map(|v| v.display()).unwrap_or_default();
+            let d = a.get(1).map(|v| v.display()).unwrap_or_default();
+            let nth = a.get(2).map(|v| v.as_number() as i64).unwrap_or(1);
+            let not_found = a.get(3).cloned();
+            if d.is_empty() || nth == 0 {
+                return Ok(Value::Error("#VALUE!".into()));
+            }
+            let hits: Vec<usize> = s.match_indices(d.as_str()).map(|(i, _)| i).collect();
+            let idx = if nth > 0 {
+                hits.get(nth as usize - 1).copied()
+            } else {
+                hits.iter().rev().nth((-nth) as usize - 1).copied()
+            };
+            match idx {
+                Some(i) => Value::Text(if name == "TEXTBEFORE" {
+                    s[..i].to_string()
+                } else {
+                    s[i + d.len()..].to_string()
+                }),
+                None => not_found.unwrap_or(Value::Error("#N/A".into())),
+            }
+        }
         "REPT" => {
             let s = a.first().map(|v| v.display()).unwrap_or_default();
             let n = a.get(1).map(|v| v.as_number()).unwrap_or(0.0);
@@ -2743,7 +2769,8 @@ pub fn is_py_formula(f: &str) -> bool {
 
 /// 並びを返す関数(スピルする関数)。セル単独でも、四則・比較・& と
 /// 組み合わせた配列数式でも使える。答えが2次元なら隣へあふれる
-const ARRAY_FNS: &[&str] = &["FILTER", "SORT", "UNIQUE", "SEQUENCE", "TRANSPOSE"];
+const ARRAY_FNS: &[&str] =
+    &["FILTER", "SORT", "UNIQUE", "SEQUENCE", "TRANSPOSE", "TEXTSPLIT"];
 
 pub fn recalc(sheet: &mut Sheet) {
     recalc_impl(sheet, &[]);
@@ -3181,6 +3208,42 @@ fn array_call(name: &str, args: Vec<Arg>) -> Result<Vec<Vec<Value>>, Value> {
                 if desc { o.reverse() } else { o }
             });
             Ok(rows)
+        }
+        "TEXTSPLIT" => {
+            // TEXTSPLIT(文字, 列の区切り, [行の区切り], [空を飛ばす])
+            // 区切りが空なら #VALUE!(黙って1個の塊を返さない)
+            let s = args.first().ok_or(err("#VALUE!"))?.first().display();
+            let col_d = args.get(1).map(|a| a.first().display()).unwrap_or_default();
+            let row_d = args.get(2).map(|a| a.first().display()).unwrap_or_default();
+            let skip_empty = args.get(3).is_some_and(|a| a.first().as_number() != 0.0);
+            if col_d.is_empty() && row_d.is_empty() {
+                return Err(err("#VALUE!"));
+            }
+            let lines: Vec<&str> = if row_d.is_empty() {
+                vec![s.as_str()]
+            } else {
+                s.split(row_d.as_str()).collect()
+            };
+            let mut out: Vec<Vec<Value>> = Vec::new();
+            for line in lines {
+                let cells: Vec<&str> = if col_d.is_empty() {
+                    vec![line]
+                } else {
+                    line.split(col_d.as_str()).collect()
+                };
+                let row: Vec<Value> = cells
+                    .into_iter()
+                    .filter(|c| !(skip_empty && c.is_empty()))
+                    .map(|c| Value::Text(c.to_string()))
+                    .collect();
+                if !(skip_empty && row.is_empty()) {
+                    out.push(row);
+                }
+            }
+            if out.is_empty() {
+                out.push(vec![Value::Text(String::new())]);
+            }
+            Ok(out)
         }
         "TRANSPOSE" => {
             let rows = rows_of(args.first().ok_or(err("#VALUE!"))?);
@@ -4875,5 +4938,66 @@ mod let_tests {
         // 和文の知らない名前は字句で落ちて #ERROR!(LET の前からこう。
         // どちらもエラーで黙って計算はしない — 印の揃え方は在庫)
         assert_eq!(v("=しらない名前+1"), Value::Error("#ERROR!".into()));
+    }
+}
+
+/// TEXTSPLIT / TEXTBEFORE / TEXTAFTER(2026-08-08 実装。台帳 第3便 [中])
+#[cfg(test)]
+mod text_split_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn v(f: &str) -> Value {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::parse("E1").unwrap(), Cell::input(f));
+        recalc(&mut s);
+        s.value(Pos::parse("E1").unwrap())
+    }
+
+    #[test]
+    fn 区切りの前と後ろを取れる() {
+        assert_eq!(v("=TEXTBEFORE(\"甲-乙-丙\",\"-\")"), Value::Text("甲".into()));
+        assert_eq!(v("=TEXTAFTER(\"甲-乙-丙\",\"-\")"), Value::Text("乙-丙".into()));
+        // 何番目か(2つ目の区切り)
+        assert_eq!(v("=TEXTBEFORE(\"甲-乙-丙\",\"-\",2)"), Value::Text("甲-乙".into()));
+        assert_eq!(v("=TEXTAFTER(\"甲-乙-丙\",\"-\",2)"), Value::Text("丙".into()));
+        // 負は後ろから
+        assert_eq!(v("=TEXTAFTER(\"甲-乙-丙\",\"-\",-1)"), Value::Text("丙".into()));
+        assert_eq!(v("=TEXTBEFORE(\"甲-乙-丙\",\"-\",-1)"), Value::Text("甲-乙".into()));
+        // 見つからなければ #N/A、4つ目を渡せばその値
+        assert_eq!(v("=TEXTBEFORE(\"甲乙\",\"-\")"), Value::Error("#N/A".into()));
+        assert_eq!(v("=TEXTBEFORE(\"甲乙\",\"-\",1,\"無\")"), Value::Text("無".into()));
+        // 区切りが空・0番目は #VALUE!(黙って全部を返さない)
+        assert_eq!(v("=TEXTBEFORE(\"甲乙\",\"\")"), Value::Error("#VALUE!".into()));
+        assert_eq!(v("=TEXTAFTER(\"甲-乙\",\"-\",0)"), Value::Error("#VALUE!".into()));
+    }
+
+    #[test]
+    fn textsplitは横へ広がる() {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::parse("A1").unwrap(), Cell::input("=TEXTSPLIT(\"甲,乙,丙\",\",\")"));
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("A1").unwrap()), Value::Text("甲".into()));
+        assert_eq!(s.value(Pos::parse("B1").unwrap()), Value::Text("乙".into()));
+        assert_eq!(s.value(Pos::parse("C1").unwrap()), Value::Text("丙".into()));
+    }
+
+    #[test]
+    fn 行の区切りで縦にも割れる() {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        s.set(
+            Pos::parse("A1").unwrap(),
+            Cell::input("=TEXTSPLIT(\"甲,乙;丙,丁\",\",\",\";\")"),
+        );
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("A1").unwrap()), Value::Text("甲".into()));
+        assert_eq!(s.value(Pos::parse("B1").unwrap()), Value::Text("乙".into()));
+        assert_eq!(s.value(Pos::parse("A2").unwrap()), Value::Text("丙".into()));
+        assert_eq!(s.value(Pos::parse("B2").unwrap()), Value::Text("丁".into()));
+        // 区切りが両方とも空なら #VALUE!
+        let mut s2 = Sheet { name: "表".into(), ..Default::default() };
+        s2.set(Pos::parse("A1").unwrap(), Cell::input("=TEXTSPLIT(\"甲乙\",\"\")"));
+        recalc(&mut s2);
+        assert_eq!(s2.value(Pos::parse("A1").unwrap()), Value::Error("#VALUE!".into()));
     }
 }
