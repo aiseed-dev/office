@@ -240,6 +240,9 @@ struct P<'a> {
     /// 範囲を読むとき、**手で隠した行(row_hidden)を飛ばす**。
     /// SUBTOTAL/AGGREGATE の 101〜111 の間だけ立つ(Excel の約束)
     skip_hidden: std::cell::Cell<bool>,
+    /// LET が束ねた名前(大文字で持つ)。**後ろが勝ち**= 入れ子や
+    /// 同じ名前の付け直しで内側が外側を隠す
+    lets: Vec<(String, Value)>,
 }
 
 /// 参照を計算する関数(OFFSET/INDIRECT)の答え。
@@ -442,6 +445,37 @@ impl<'a> P<'a> {
         }
     }
 
+    /// LET の中身。`(` の次から読み、閉じ括弧まで。
+    /// 「名前 , 値」の組が続く限り束ね、組でなくなった所が本体の式
+    fn let_body(&mut self) -> Result<Value, String> {
+        loop {
+            // 束縛の名前か? — **次が `,` のときだけ**名前として取る。
+            // 本体が名前1つだけ(LET(x,1,x))なら次は `)` なので本体に回る
+            let pair = matches!(
+                (self.t.get(self.i), self.t.get(self.i + 1)),
+                (Some(Tok::Name(_)), Some(Tok::Comma))
+            );
+            if pair {
+                let Some(Tok::Name(n)) = self.t.get(self.i).cloned() else {
+                    unreachable!("上で確かめた")
+                };
+                self.i += 2; // 名前と `,` を飛ばす
+                let v = self.expr()?;
+                self.lets.push((n, v));
+                match self.next() {
+                    Some(Tok::Comma) => continue,
+                    // 名前と値で終わった = 本体の式が無い
+                    _ => return Ok(Value::Error("#VALUE!".into())),
+                }
+            }
+            let body = self.expr()?;
+            return match self.next() {
+                Some(Tok::RParen) => Ok(body),
+                _ => Err("引数の括弧が閉じていません".into()),
+            };
+        }
+    }
+
     /// 構造化参照を範囲に直す。表の名前(省いたらいまのセルが入っている表)と
     /// **見出しの字**で列を引く。見出し行の無い表からは引けない(None)
     fn table_range(&self, tbl: Option<&str>, col: &str, this_row: bool) -> Option<(Pos, Pos)> {
@@ -640,6 +674,15 @@ impl<'a> P<'a> {
                             }
                             return Ok(Value::Text(out));
                         }
+                        // LET(名前, 値, [名前, 値]…, 式) — 名前を束ねてから
+                        // 最後の式を計算する。値は**先に計算して**束ねるので、
+                        // 後の束縛や本体から前の名前が見える(Excel と同じ)
+                        if name == "LET" {
+                            let depth = self.lets.len();
+                            let r = self.let_body();
+                            self.lets.truncate(depth); // 束縛は LET の中だけ
+                            return r;
+                        }
                         // SUBTOTAL/AGGREGATE の 101〜111 は「手で隠した行を
                         // 飛ばす」。番号は最初の引数なので、**読んでみてから**
                         // 100 超なら隠れ行を飛ばして読み直す(字句は残って
@@ -663,7 +706,11 @@ impl<'a> P<'a> {
                     _ => match name.as_str() {
                         "TRUE" => Ok(Value::Bool(true)),
                         "FALSE" => Ok(Value::Bool(false)),
-                        _ => Ok(Value::Error("#NAME?".into())),
+                        // LET が束ねた名前(後ろが勝ち = 内側が外側を隠す)
+                        _ => match self.lets.iter().rev().find(|(n, _)| *n == name) {
+                            Some((_, v)) => Ok(v.clone()),
+                            None => Ok(Value::Error("#NAME?".into())),
+                        },
                     },
                 }
             }
@@ -2568,7 +2615,7 @@ pub fn eval_py_call(sheet: &Sheet, formula: &str) -> Option<(String, Vec<PyArg>)
     // PY ( の中の引数を、通常の引数解析(範囲は形つき)で読む
     let resolved = HashMap::new();
     // PY セルの引数評価では ROW()/COLUMN() の「いまのセル」は分からない — 原点で代える
-    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at: Pos::new(0, 0), others: &[], skip_hidden: Default::default() };
+    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at: Pos::new(0, 0), others: &[], skip_hidden: Default::default(), lets: Vec::new() };
     match (p.next(), p.next()) {
         (Some(Tok::Name(n)), Some(Tok::LParen)) if n == "PY" => {}
         _ => return None,
@@ -2876,7 +2923,7 @@ fn recalc_pass_iter(sheet: &mut Sheet, others: &[&Sheet], iter_mode: bool) -> (b
         }
         let v = match lex(f) {
             Ok(toks) => {
-                let mut p2 = P { t: &toks, i: 0, sheet, resolved, at: p, others, skip_hidden: Default::default() };
+                let mut p2 = P { t: &toks, i: 0, sheet, resolved, at: p, others, skip_hidden: Default::default(), lets: Vec::new() };
                 match p2.expr() {
                     Ok(v) if p2.i == toks.len() => v,
                     Ok(_) => Value::Error("#ERROR!".into()),
@@ -3052,7 +3099,7 @@ fn eval_array(
     let err = |s: &str| Value::Error(s.into());
     let toks = lex(f).map_err(|_| err("#ERROR!"))?;
     let resolved = HashMap::new();
-    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at, others, skip_hidden: Default::default() };
+    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at, others, skip_hidden: Default::default(), lets: Vec::new() };
     let v = {
         let mut ap = AP { p: &mut p };
         ap.expr().map_err(|_| err("#ERROR!"))?
@@ -4776,5 +4823,57 @@ mod table_ref_tests {
         s.set(Pos::parse("A1").unwrap(), Cell::input("=SUM(無い表[金額])"));
         recalc(&mut s);
         assert_eq!(s.value(Pos::parse("A1").unwrap()), Value::Error("#REF!".into()));
+    }
+}
+
+/// LET(2026-08-08 実装。台帳 第3便 [中])。
+/// 長い式の途中結果に名前を付けて、読みやすく・二度計算しない
+#[cfg(test)]
+mod let_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn v(f: &str) -> Value {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        for (a1, x) in [("A1", "10"), ("A2", "20"), ("A3", "30")] {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(x));
+        }
+        s.set(Pos::parse("E1").unwrap(), Cell::input(f));
+        recalc(&mut s);
+        s.value(Pos::parse("E1").unwrap())
+    }
+
+    #[test]
+    fn 名前を束ねて式に使える() {
+        assert_eq!(v("=LET(x,5,x*2)"), Value::Number(10.0));
+        // 複数の束縛。後の束縛から前の名前が見える
+        assert_eq!(v("=LET(x,5,y,x+1,x*y)"), Value::Number(30.0));
+        // セルや関数の結果も束ねられる(二度計算しないのが本来の狙い)
+        assert_eq!(v("=LET(s,SUM(A1:A3),s/3)"), Value::Number(20.0));
+        // 本体が名前1つだけ(次が `)` なので束縛と取り違えない)
+        assert_eq!(v("=LET(x,7,x)"), Value::Number(7.0));
+        // 入れ子。内側の同じ名前が外側を隠す
+        assert_eq!(v("=LET(x,1,LET(x,2,x))"), Value::Number(2.0));
+        // 内側を抜けたら外側の名前に戻る
+        assert_eq!(v("=LET(x,1,LET(y,2,y)+x)"), Value::Number(3.0));
+    }
+
+    #[test]
+    fn 文字と論理値も束ねられる() {
+        assert_eq!(v("=LET(t,\"あ\",t&\"い\")"), Value::Text("あい".into()));
+        assert_eq!(v("=LET(b,A1>5,IF(b,\"大\",\"小\"))"), Value::Text("大".into()));
+    }
+
+    #[test]
+    fn 形が違えば正直に断る() {
+        // 名前と値だけで本体が無い
+        assert_eq!(v("=LET(x,5)"), Value::Error("#VALUE!".into()));
+        // LET の外へ名前は漏れない
+        assert_eq!(v("=LET(x,5,x)+x"), Value::Error("#NAME?".into()));
+        // 知らない名前は今までどおり #NAME?
+        assert_eq!(v("=UNKNOWNNAME+1"), Value::Error("#NAME?".into()));
+        // 和文の知らない名前は字句で落ちて #ERROR!(LET の前からこう。
+        // どちらもエラーで黙って計算はしない — 印の揃え方は在庫)
+        assert_eq!(v("=しらない名前+1"), Value::Error("#ERROR!".into()));
     }
 }
