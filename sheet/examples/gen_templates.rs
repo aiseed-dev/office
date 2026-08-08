@@ -2,7 +2,9 @@
 //!
 //!   cargo run -p sheet --example gen_templates
 //!
-//! 帳票+コード(檻つき)+運用を1つの xlsx に詰めて templates/ に吐く。
+//! 帳票+関数(=PY の UDF)+運用を xlsx に詰めて templates/ に吐く。
+//! 手続きはブックに載せない(2026-08-08 発注者確定: ファイルを実行の
+//! 起点にしない)— 隣の .py として吐き、plugins への据え付けは README が案内。
 //! テンプレートは生成物 — 直すのはこのファイル。
 
 use sheet::model::{Borders, Validation};
@@ -57,10 +59,18 @@ fn inquiries() -> Book {
     return [[k, n] for k, n in sorted(c.items())] or [["(まだ無い)", 0]]
 "#.into(),
     ));
-    b.scripts.push((
-        "取り込み".into(),
-        r#"# フォームの受信箱(CSV を返す URL)から新着を台帳へ追記する。
-# 実行は「@取り込み net」(網あり檻 — 許可はその場の操作だけ)。
+    b
+}
+
+/// 問い合わせ台帳の手続き。ブックには載せず、隣の .py として配る
+/// (据え付けは README — 中身を確かめて plugins へ、が取り込みの門)。
+const INQUIRIES_TORIKOMI: &str = r#"# 問い合わせ台帳.xlsx の手続き「取り込み」—
+# フォームの受信箱(CSV を返す URL)から新着を台帳へ追記する。
+#
+# 据え付け(1機械1回): 中身を確かめてから
+#   ~/.config/office/plugins/取り込み.py
+# へ写す。以後、台帳を開いて データ > Python の板で「@取り込み net」
+# (網あり檻 — 許可はその場の操作だけで、ブックには保存されない)。
 # URL を自分のフォームのものに書き換えて使う。
 URL = "http://127.0.0.1:8000/inbox.csv"
 
@@ -76,10 +86,7 @@ for i, r in enumerate(rows):
     s[f"D{n}"] = r.get("body", "")
     s[f"E{n}"] = "未対応"
 print(f"{len(rows)} 件を取り込みました")
-"#.into(),
-    ));
-    b
-}
+"#;
 
 fn inventory() -> Book {
     let mut b = Book::new();
@@ -155,11 +162,17 @@ fn main() {
     save(&inquiries(), "templates/問い合わせ台帳.xlsx");
     save(&inventory(), "templates/在庫台帳.xlsx");
     save(&timesheet(), "templates/勤怠表.xlsx");
+    std::fs::write("templates/取り込み.py", INQUIRIES_TORIKOMI).expect("書けない");
+    println!("書いた: templates/取り込み.py");
     // 読み戻して壊れていないことを確かめる(黙って配らない)
     for p in ["templates/問い合わせ台帳.xlsx", "templates/在庫台帳.xlsx", "templates/勤怠表.xlsx"] {
         let f = std::fs::File::open(p).expect("開けない");
         let (back, rep) = sheet::xlsx::read(f).expect("読めない");
-        assert!(!back.scripts.is_empty(), "{p}: 同梱コードが消えた");
+        assert!(!back.scripts.is_empty(), "{p}: 同梱の関数が消えた");
+        assert!(
+            back.scripts.iter().all(|(n, _)| n.starts_with("関数")),
+            "{p}: 手続きがブックに残った(実行の起点になってしまう)"
+        );
         assert!(rep.unsupported.is_empty(), "{p}: 読めないもの {:?}", rep.unsupported);
         println!("検め OK: {p}({} スクリプト同梱)", back.scripts.len());
     }
