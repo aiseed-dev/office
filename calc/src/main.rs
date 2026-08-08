@@ -11,6 +11,8 @@
 
 pub(crate) use std::ops::Range;
 pub(crate) use std::path::PathBuf;
+pub(crate) use std::collections::HashMap;
+pub(crate) use std::rc::Rc;
 
 pub(crate) use gpui::{
     div, prelude::*, px, rgb, size, App, Bounds, Context, ElementInputHandler, Entity,
@@ -86,6 +88,13 @@ struct Calc {
     /// **いま開こうとしている一覧を出す場所。** リボンのボタンを押した
     /// ときだけ入り、run_cmd を抜けたら消える。None ならセルの下に出す
     pub(crate) pop_at: Option<(f32, f32)>,
+    /// リボンのボタンの場所(命令の名前 → 窓の中の x, y, 幅, 高さ)。
+    /// 描くたびに書く。一覧を**押したボタンの真下**に出すのに要る
+    pub(crate) btn_box: Rc<std::cell::RefCell<HashMap<&'static str, (f32, f32, f32, f32)>>>,
+    /// いま開いている一覧を開いたリボンのボタンの幅。**幅の決め方が変わる** —
+    /// セルから開いた一覧(0.0)は列の幅に合わせるが、リボンからのものは
+    /// 中身に合わせ、ボタンの幅を下限・POP_W を上限にする
+    pub(crate) pop_btn_w: std::cell::Cell<f32>,
     /// 罫線のペン(線種と色)。罫線の一覧から掛けるときに使う
     pen_style: sheet::model::BStyle,
     pen_color: Option<u32>,
@@ -356,6 +365,8 @@ impl Calc {
             border_pal: None,
             pane_box: std::cell::Cell::new((0.0, 0.0, 0.0, 0.0)),
             pop_at: None,
+            btn_box: Rc::new(std::cell::RefCell::new(HashMap::new())),
+            pop_btn_w: std::cell::Cell::new(0.0),
             font_name: kumihan::font::for_document(None)
                 .map(|(fam, _)| gpui::SharedString::from(fam.name.clone()))
                 .unwrap_or_else(|_| "Noto Sans JP".into()),
@@ -480,7 +491,8 @@ impl Calc {
         self.input = Editor::new(&s);
         self.edit_armed = false; // セルを移った=編集は仕切り直し
         if self.pick_kind == "fn-complete" {
-            self.pick = None; // 補完の一覧も畳む
+            self.pick = None;
+                self.pick_note = None; // 補完の一覧も畳む
         }
         // 入力メッセージ付きの規則のセルに乗ったら、その説明を出す
         if let Some((t, m)) = self
@@ -842,6 +854,7 @@ impl Calc {
     fn mouse_down_at(&mut self, x: f32, y: f32, shift: bool, ctrl: bool, clicks: usize) {
         self.menu_at = None;
         self.pick = None;
+        self.pick_note = None;
         self.border_pal = None;
         // mouse-up を取り逃していても、新しい押下で必ず仕切り直す(自癒)
         self.size_drag = None;
@@ -1375,6 +1388,10 @@ impl Calc {
     /// (発注者報告 2026-08-08)。**一覧は押した場所の近くに出す。**
     ///
     pub(crate) fn pop_anchor(&self) -> (f32, f32) {
+        // 開くたびに取り直す。リボンから来ていなければ 0(セルに合わせる)
+        if self.pop_at.is_none() {
+            self.pop_btn_w.set(0.0);
+        }
         if let Some(at) = self.pop_at {
             return at;
         }
@@ -1383,12 +1400,24 @@ impl Calc {
             .unwrap_or((self.head_w() + 16.0, self.head_h() + 16.0))
     }
 
-    /// リボンのボタンから命令を出す。**押した場所を控えてから** run_cmd に
-    /// 渡すので、開いた一覧はボタンの真下に出る([`Self::pop_anchor`])。
-    /// 格子の面はリボンより下から始まるので、縦はその一番上に置くしかない。
-    pub(crate) fn run_from_ribbon(&mut self, id: &str, at_x: f32, cx: &mut Context<Self>) {
-        let (pane_x, _, pane_w, _) = self.pane_box.get();
-        self.pop_at = Some((pop_x(at_x, pane_x, pane_w), 2.0));
+    /// リボンのボタンから命令を出す。**押したボタンの場所を控えてから**
+    /// run_cmd に渡すので、開いた一覧はそのボタンの真下に出る
+    /// ([`Self::pop_anchor`] / [`pop_under`])。
+    pub(crate) fn run_from_ribbon(
+        &mut self, id: &'static str, at_x: f32, window: &mut Window, cx: &mut Context<Self>,
+    ) {
+        // **格子に焦点を戻す。** リボンを押すと焦点がそちらへ移り、開いた
+        // 一覧を Esc で閉じられず、キーも一切効かなくなっていた
+        // (2026-08-08 実機で見つけた)
+        window.focus(&self.focus, cx);
+        let pane = self.pane_box.get();
+        let btn = self.btn_box.borrow().get(id).copied();
+        // 描く前に鍵から呼ばれた等でボタンの場所が無ければ押した点を使う
+        self.pop_btn_w.set(btn.map(|b| b.2).unwrap_or(0.0));
+        self.pop_at = Some(match btn {
+            Some(b) => pop_under(b, pane),
+            None => pop_at_click(at_x, pane),
+        });
         self.run_cmd(id, cx);
         self.pop_at = None;
     }

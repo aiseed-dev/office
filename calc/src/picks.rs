@@ -1411,6 +1411,7 @@ impl Calc {
         if !t.starts_with('=') {
             if self.pick_kind == "fn-complete" {
                 self.pick = None;
+                self.pick_note = None;
             }
             return;
         }
@@ -1444,6 +1445,7 @@ impl Calc {
         }
         if !showed && self.pick_kind == "fn-complete" {
             self.pick = None;
+            self.pick_note = None;
         }
         // --- 引数のヒント: いちばん内側の閉じていない関数と、何番目の引数か ---
         let mut stack: Vec<(String, usize)> = Vec::new();

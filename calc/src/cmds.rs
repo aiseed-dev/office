@@ -67,6 +67,10 @@ impl Calc {
     ];
 
     pub(crate) fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
+        // 前に開いていた一覧の注記を落とす。**注記を出す一覧を鍵で閉じると
+        // 残り、次に開いた一覧の見出しに前の説明が出ていた**(書体の一覧に
+        // 「ピボット 1/4 …」が出た。2026-08-08 実機で見つけた)
+        self.pick_note = None;
         if self.sheet().protected && !Self::PROTECTED_OK.contains(&id) {
             self.status =
                 ui::t!("シートが保護されています(保護タブの「シートを保護する」で解除)").into();

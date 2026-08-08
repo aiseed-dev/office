@@ -483,6 +483,18 @@ impl Render for Calc {
             "fn-logical", "fn-datetime", "fn-lookup", "fn-financial", "fn-more",
             "fn-recent", "sheet-view", "cell-styles",
         ];
+        // 一覧が開くボタンは、描くときに**自分の場所を控える**。
+        // 一覧をそのボタンの真下に出すのに要る(pop_under)
+        let boxes = self.btn_box.clone();
+        let mark = move |id: &'static str| {
+            let rec = boxes.clone();
+            gpui::canvas(move |b: gpui::Bounds<gpui::Pixels>, _, _| {
+                rec.borrow_mut().insert(id, (
+                    f32::from(b.origin.x), f32::from(b.origin.y),
+                    f32::from(b.size.width), f32::from(b.size.height),
+                ));
+            }, |_, _: (), _, _| {}).absolute().size_full()
+        };
         let mk_btn = |cmd: &ribbon::Cmd, cx: &mut Context<Self>| -> gpui::AnyElement {
             let label = cmd.label;
             let icon = cmd.icon;
@@ -504,6 +516,7 @@ impl Render for Calc {
                     cx.notify()
                 });
                 return div().id(SharedString::from(format!("h-{icon}")))
+                    .relative().child(mark(cid))
                     .w(px(us * w)).h(px(us * 22.0)).px_1p5().rounded_sm()
                     .border_1().border_color(th_line)
                     .flex().items_center()
@@ -513,8 +526,8 @@ impl Render for Calc {
                     .tooltip(move |_, cx| cx.new(|_| Tip(label.into(), us)).into())
                     .cursor_pointer().hover(move |st| st.bg(th_btn_hover))
                     .child(val)
-                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
-                        this.run_from_ribbon(cid, f32::from(ev.position().x), cx);
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
+                        this.run_from_ribbon(cid, f32::from(ev.position().x), window, cx);
                         cx.notify()
                     }))
                     .into_any_element();
@@ -561,9 +574,12 @@ impl Render for Calc {
                             .child("▾"))));
                 if cmd.ready {
                     let cid = cmd.id;
+                    if drops {
+                        b = b.relative().child(mark(cid));
+                    }
                     b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
-                        .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
-                            this.run_from_ribbon(cid, f32::from(ev.position().x), cx);
+                        .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
+                            this.run_from_ribbon(cid, f32::from(ev.position().x), window, cx);
                             cx.notify()
                         }));
                 }
@@ -610,9 +626,12 @@ impl Render for Calc {
                 }));
             if cmd.ready {
                 let cid = cmd.id;
+                if drops {
+                    b = b.relative().child(mark(cid));
+                }
                 b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
-                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
-                        this.run_from_ribbon(cid, f32::from(ev.position().x), cx);
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, window, cx| {
+                        this.run_from_ribbon(cid, f32::from(ev.position().x), window, cx);
                         cx.notify()
                     }));
             }
@@ -4138,9 +4157,20 @@ impl Render for Calc {
                     _ => None,
                 }
             };
+            // 幅: セルから開いた一覧(入力規則など)は**その列に合わせる**。
+            // リボンから開いたものは列と関係がないので**中身に合わせ**、
+            // 押したボタンの幅を下限・POP_W を上限にする(書体名は長いので
+            // 狭いと読めず、大きさの一覧は広いと間が抜ける)
+            let btn_w = self.pop_btn_w.get();
+            let note_w = if self.pick_note.is_some() { 300.0 } else { 120.0 };
             // 長い一覧(書体など)はパネルの中でスクロール — 数で切り捨てない
-            let mut p = div().id("pick-list").absolute().left(px(vx)).top(px(vy))
-                .w(px(self.col_px(self.cursor.col).max(if self.pick_note.is_some() { 300.0 } else { 120.0 })))
+            let mut p = div().id("pick-list").absolute().left(px(vx)).top(px(vy));
+            p = if btn_w > 0.0 {
+                p.min_w(px(btn_w.max(note_w))).max_w(px(POP_W.max(note_w)))
+            } else {
+                p.w(px(self.col_px(self.cursor.col).max(note_w)))
+            };
+            let mut p = p
                 .max_h(px((self.view_h_px - 160.0).max(160.0)))
                 .overflow_y_scroll()
                 .p_1().rounded_md().bg(rgb(0xFFFFFF))
