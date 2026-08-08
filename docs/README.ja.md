@@ -21,6 +21,7 @@
 | [writer-manual.ja.md](writer-manual.ja.md) / [.md](writer-manual.md) | writer を使う人 |
 | [python-manual.ja.md](python-manual.ja.md) / [.md](python-manual.md) | コードを書く人(範囲⇄配列・AI との共働) |
 | [writer-macro-manual.ja.md](writer-macro-manual.ja.md) / [.md](writer-macro-manual.md) | writer のマクロ(記入欄・雛形) |
+| [from-excel.ja.md](from-excel.ja.md) | **Excel から乗り換える人**(課題→ここでの道。英語版は追随待ち) |
 | [templates/](../templates/README.md)・[sample/](../sample/README.md) | 実例で覚える人 |
 
 言語は**英語版が正本(primary)、日本語版が副** — 各冊子の頭にそう
@@ -40,6 +41,10 @@
    日本語は追随待ちに載せる — どちらか一方だけが直っている状態を
    規則の外に置かない
 5. 実測で書く(python-manual の流儀 — 「全部この機械で実測してある」を守る)
+6. **蒸留の作法**(2026-08-08 発注者「Excel のマニュアルを蒸留して」):
+   本家(Excel)のヘルプは**課題の並びの教師** — 使う人が知っている仕事の
+   一覧として構成だけ借り、**文章は写さない**(vendor を挙動の教師にした
+   台帳と同じ流儀)。成果物は from-excel(課題→ここでの道/やらない理由)
 
 ## 追随待ち(直したら消す)
 
@@ -50,4 +55,6 @@
   2026-08-08 に追随済み)
 - templates/sample の**ブック実体**: 手続きが旧形式(joPython)のまま
   同梱されている。@export の門で使えるが、次に触るとき plugins 配布の形
-  (ブックは関数だけ+隣に .py)へ作り直す
+  (ブックは関数だけ+隣に .py)へ作り直す(別セッションで着手済み)
+- from-excel: 第一稿は蒸留の骨組み。⏳ の節(ショートカット・関数対応表
+  など)と、本家ヘルプ全節との突き合わせ(第2便の型)が残り。英語版も未着手
