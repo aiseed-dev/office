@@ -58,4 +58,6 @@ modules:
     sources:
       - type: dir
         path: ../..
-      # - cargo-sources.json
+      # cargo の荷物(1,615件)。flatpak-cargo-generator で Cargo.lock から作る —
+      # ビルド中は網が無いので、これが無いと --offline が通らない
+      - cargo-sources.json
