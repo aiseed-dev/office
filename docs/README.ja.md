@@ -21,7 +21,7 @@
 | [writer-manual.ja.md](writer-manual.ja.md) / [.md](writer-manual.md) | writer を使う人 |
 | [python-manual.ja.md](python-manual.ja.md) / [.md](python-manual.md) | コードを書く人(範囲⇄配列・AI との共働) |
 | [writer-macro-manual.ja.md](writer-macro-manual.ja.md) / [.md](writer-macro-manual.md) | writer のマクロ(記入欄・雛形) |
-| [from-excel.ja.md](from-excel.ja.md) | **Excel から乗り換える人**(課題→ここでの道。英語版は追随待ち) |
+| [from-excel.ja.md](from-excel.ja.md) / [.md](from-excel.md) | **Excel から乗り換える人**(課題→ここでの道) |
 | [templates/](../templates/README.md)・[sample/](../sample/README.md) | 実例で覚える人 |
 
 言語は**英語版が正本(primary)、日本語版が副** — 各冊子の頭にそう
@@ -53,5 +53,5 @@
   グループ化、スパークライン3種、テキスト取り込みウィザード、R1C1、
   反復計算などが「挿入」「データ」節にまだ薄い(図形と @コマンドは
   2026-08-08 に追随済み)
-- from-excel: 第3稿(2026-08-08 — 本家ヘルプの領域を一巡。課題は計 471 件)。
-  残りは英語版と、本文の「在庫候補」印を台帳へ移す整理
+- from-excel: 第3稿+英語版(2026-08-08 — 本家ヘルプの領域を一巡。課題は計 471 件)。
+  残りは本文の「在庫候補」印を台帳へ移す整理だけ
