@@ -2801,6 +2801,17 @@ impl Calc {
         true
     }
 
+    /// 選択中の図形に手を入れる(undo 1手ぶんを刻んで)。設定パネルが使う
+    pub(crate) fn shape_edit(&mut self, f: impl FnOnce(&mut sheet::model::SheetShape)) {
+        let Some(i) = self.shape_sel else { return };
+        if self.sheet().shapes_new.len() <= i {
+            return;
+        }
+        self.checkpoint();
+        f(&mut self.sheet_mut().shapes_new[i]);
+        self.dirty = true;
+    }
+
     /// 図形のドラッグ(移動 or 右下の掴みで大きさ変更)。
     fn shape_drag_at(&mut self, x: f32, y: f32) {
         let Some((i, (gx, gy), (ox, oy), resize)) = self.shape_drag else { return };

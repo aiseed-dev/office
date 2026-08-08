@@ -2888,6 +2888,64 @@ impl Calc {
                     ui::t!("図形に文字を入れました(保存で xlsx に入ります)").into()
                 };
             }
+            // 図形の塗り・線の色の直指定(RRGGBB)。空 Enter = なし
+            "shape-fill-rgb" | "shape-line-rgb" => {
+                let is_fill = kind == "shape-fill-rgb";
+                let t = text.trim().trim_start_matches('#').to_uppercase();
+                if t.is_empty() {
+                    self.shape_edit(|sp| {
+                        if is_fill {
+                            sp.fill = None;
+                        } else {
+                            sp.line = None;
+                        }
+                    });
+                    self.status = if is_fill {
+                        ui::t!("塗りを消しました").into()
+                    } else {
+                        ui::t!("線を消しました").into()
+                    };
+                } else if t.len() == 6 && u32::from_str_radix(&t, 16).is_ok() {
+                    let c = t.clone();
+                    self.shape_edit(move |sp| {
+                        if is_fill {
+                            sp.fill = Some(c);
+                        } else {
+                            sp.line = Some(c);
+                        }
+                    });
+                    self.status = if is_fill {
+                        ui::tf!("塗りを{}にしました", format!("#{t}")).into()
+                    } else {
+                        ui::tf!("線の色を{}にしました", format!("#{t}")).into()
+                    };
+                } else {
+                    self.status = ui::t!("色が読めません(RRGGBB の6桁。例: FF0000)").into();
+                    self.prompt = Some((kind, Editor::new(&t)));
+                }
+            }
+            // 図形の回転の直指定(度・時計回り)。空 Enter = 0 に戻す
+            "shape-rot" => {
+                let t = text.trim().replace('°', "");
+                if t.is_empty() {
+                    self.shape_edit(|sp| sp.rot = 0.0);
+                    self.status = ui::t!("回転を戻しました").into();
+                } else {
+                    match t.parse::<f32>() {
+                        Ok(d) if d.is_finite() => {
+                            let d = d.rem_euclid(360.0);
+                            self.shape_edit(move |sp| sp.rot = d);
+                            self.status =
+                                ui::tf!("{}度回しました(時計回り)", format!("{d:.0}")).into();
+                        }
+                        _ => {
+                            self.status =
+                                ui::t!("角度が読めません(数を1つ。例: 45 / -30)").into();
+                            self.prompt = Some(("shape-rot", Editor::new(&t)));
+                        }
+                    }
+                }
+            }
             "split-delim" => {
                 let delim = if text.is_empty() { ",".to_string() } else { text };
                 let (a, b) = self.sel_rect();

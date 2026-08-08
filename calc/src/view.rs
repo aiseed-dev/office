@@ -2557,6 +2557,9 @@ impl Render for Calc {
                 "find" => ui::t!("検索と置換 — 探す言葉").to_string(),
                 "split-delim" => ui::tf!("区切り位置 — {} を何で割る?(空 Enter = カンマ)", range),
                 "shape-text" => ui::t!("図形の文字(空にして Enter で消す)").to_string(),
+                "shape-fill-rgb" => ui::t!("図形の塗り — RRGGBB の6桁(例: FFF2CC。空 Enter = 塗りなし)").to_string(),
+                "shape-line-rgb" => ui::t!("図形の線 — RRGGBB の6桁(例: 1B6E3C。空 Enter = 線なし)").to_string(),
+                "shape-rot" => ui::t!("図形の回転 — 度の数(時計回り。例: 45 / -30。空 Enter = 0)").to_string(),
                 "py" => ui::t!("Python — 一行のコード(空 Enter = .py ファイルを選ぶ)").to_string(),
                 "goal-target" => ui::t!("ゴールシーク — 目標(セル=値。例: D6=800000)").to_string(),
                 "goal-var" => ui::tf!("{} をいくつにするか探します — 変えるセルは?(例: B2)", self.goal.map(|(p, v)| format!("{}={v}", p.a1())).unwrap_or_default()),
@@ -3573,6 +3576,205 @@ impl Render for Calc {
             p
         });
 
+        // ---- 図形の設定(選ぶと右に出る) ----
+        // 塗り・線・太さ・不透明度・回転/反転・影。どの釦も shape_edit を
+        // 通る=1手ずつ戻せる。折れ線もの(スパークライン・ペン)は色と太さだけ
+        let shape_panel = self.shape_sel.and_then(|si| {
+            let sp = self.sheet().shapes_new.get(si)?;
+            let poly = matches!(
+                sp.kind.as_str(),
+                "spark" | "spark-col" | "spark-wl" | "ink" | "marker"
+            );
+            let (has_fill, has_line) = (sp.fill.is_some(), sp.line.is_some());
+            let cur_fill = sp.fill.clone().unwrap_or_default();
+            let cur_line = sp.line.clone().unwrap_or_default();
+            let (cur_w, cur_a, cur_rot, shadow_on) = (sp.line_w, sp.alpha, sp.rot, sp.shadow);
+            let lab = |t: String| {
+                div().text_size(px(us * 10.5)).text_color(rgb(0x66707A))
+                    .w(px(us * 52.0)).flex_none()
+                    .child(SharedString::from(t))
+            };
+            let chip = |id: String, t: String, on: bool| {
+                div().id(SharedString::from(id))
+                    .px_1p5().py_0p5().rounded_sm().border_1()
+                    .border_color(if on { rgb(0x1B6E3C) } else { rgb(0xC6CDD3) })
+                    .bg(if on { rgb(0xCFE6D8) } else { rgb(0xFFFFFF) })
+                    .text_size(px(us * 11.0)).text_color(rgb(0x1B1B1B))
+                    .cursor_pointer().hover(|s| s.bg(rgb(0xEAF5EE)))
+                    .child(SharedString::from(t))
+            };
+            let swatch = |id: String, c: Option<gpui::Rgba>| {
+                let mut s = div().id(SharedString::from(id))
+                    .w(px(16.0)).h(px(16.0)).rounded_sm().flex_none()
+                    .border_1().border_color(rgb(0xC6CDD3));
+                s = match c {
+                    Some(v) => s.bg(v),
+                    None => s.bg(rgb(0xFFFFFF)).child(
+                        div().text_size(px(us * 9.0)).text_color(rgb(0xC6CDD3)).child("╱"),
+                    ),
+                };
+                s
+            };
+            let mut p = div().absolute().right(px(24.0)).top(px(ROW_H + 16.0)).w(px(us * 235.0))
+                .p_2().rounded_md().bg(gpui::white())
+                .border_1().border_color(rgb(0x1B6E3C)).shadow_lg()
+                .flex().flex_col().gap_1p5()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().flex().flex_row().items_center()
+                    .child(div().text_size(px(us * 12.0)).font_weight(gpui::FontWeight::BOLD)
+                        .text_color(rgb(0x1B6E3C))
+                        .child(SharedString::from(ui::t!("図形の設定").to_string())))
+                    .child(div().flex_1())
+                    .child(div().id("shp-close").px_1p5().rounded_sm().cursor_pointer()
+                        .text_size(px(us * 12.0)).hover(|s| s.bg(rgb(0xEAF5EE)))
+                        .child("✕")
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.shape_sel = None;
+                            cx.notify();
+                        }))));
+            // 塗りと線の色(RGB 直指定の板を開く / なし)
+            if !poly {
+                let cf = cur_fill.clone();
+                p = p.child(div().flex().flex_row().items_center().gap_1()
+                    .child(lab(ui::t!("塗り").to_string()))
+                    .child(swatch("shp-fill-sw".into(),
+                        has_fill.then(|| hex(&cur_fill))))
+                    .child(chip("shp-fill-set".into(), ui::t!("色…").to_string(), false)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.prompt = Some(("shape-fill-rgb", Editor::new(&cf)));
+                            cx.notify();
+                        })))
+                    .child(chip("shp-fill-no".into(), ui::t!("なし").to_string(), !has_fill)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.shape_edit(|sp| sp.fill = None);
+                            this.status = ui::t!("塗りを消しました").into();
+                            cx.notify();
+                        }))));
+            }
+            {
+                let cl = cur_line.clone();
+                p = p.child(div().flex().flex_row().items_center().gap_1()
+                    .child(lab(ui::t!("線").to_string()))
+                    .child(swatch("shp-line-sw".into(),
+                        has_line.then(|| hex(&cur_line))))
+                    .child(chip("shp-line-set".into(), ui::t!("色…").to_string(), false)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.prompt = Some(("shape-line-rgb", Editor::new(&cl)));
+                            cx.notify();
+                        })))
+                    .child(chip("shp-line-no".into(), ui::t!("なし").to_string(), !has_line)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.shape_edit(|sp| sp.line = None);
+                            this.status = ui::t!("線を消しました").into();
+                            cx.notify();
+                        }))));
+            }
+            // 線の太さ(pt)。押したとき線が無ければ既定の緑で引く
+            {
+                let mut row = div().flex().flex_row().items_center().gap_1().flex_wrap()
+                    .child(lab(ui::t!("太さ").to_string()));
+                for v in [0.5f32, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0] {
+                    let on = (cur_w - v).abs() < 0.05;
+                    let t = if v.fract() == 0.0 {
+                        format!("{v:.0}")
+                    } else {
+                        format!("{v}")
+                    };
+                    row = row.child(chip(format!("shp-w{}", (v * 100.0) as i32), t, on)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.shape_edit(move |sp| {
+                                sp.line_w = v;
+                                if sp.line.is_none() {
+                                    sp.line = Some("1B6E3C".into());
+                                }
+                            });
+                            this.status = ui::tf!("線の太さ: {} pt", format!("{v}")).into();
+                            cx.notify();
+                        })));
+                }
+                p = p.child(row);
+            }
+            // 不透明度(%)
+            {
+                let mut row = div().flex().flex_row().items_center().gap_1()
+                    .child(lab(ui::t!("不透明度").to_string()));
+                for v in [100i32, 75, 50, 25] {
+                    let a = v as f32 / 100.0;
+                    let on = (cur_a - a).abs() < 0.03;
+                    row = row.child(chip(format!("shp-a{v}"), format!("{v}%"), on)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.shape_edit(move |sp| sp.alpha = a);
+                            this.status = ui::tf!("不透明度: {}%", v).into();
+                            cx.notify();
+                        })));
+                }
+                p = p.child(row);
+            }
+            // 回転・反転と影(折れ線ものには効かないので出さない)
+            if !poly {
+                let mut row = div().flex().flex_row().items_center().gap_1().flex_wrap()
+                    .child(lab(ui::t!("回転").to_string()));
+                for (id, t, d) in [("shp-rl", "↺90", -90.0f32), ("shp-rr", "↻90", 90.0)] {
+                    row = row.child(chip(id.into(), t.into(), false)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.shape_edit(move |sp| sp.rot = (sp.rot + d).rem_euclid(360.0));
+                            this.status = ui::t!("90度回しました").into();
+                            cx.notify();
+                        })));
+                }
+                row = row.child(chip("shp-fh".into(), ui::t!("左右反転").to_string(), false)
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.shape_edit(|sp| sp.flip_h = !sp.flip_h);
+                        this.status = ui::t!("左右に反転しました").into();
+                        cx.notify();
+                    })));
+                row = row.child(chip("shp-fv".into(), ui::t!("上下反転").to_string(), false)
+                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.shape_edit(|sp| sp.flip_v = !sp.flip_v);
+                        this.status = ui::t!("上下に反転しました").into();
+                        cx.notify();
+                    })));
+                {
+                    let cr = format!("{cur_rot:.0}");
+                    row = row.child(chip("shp-deg".into(), ui::tf!("角度…({}°)", cr.clone()), false)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.prompt = Some(("shape-rot",
+                                Editor::new(if cr == "0" { "" } else { &cr })));
+                            cx.notify();
+                        })));
+                }
+                p = p.child(row);
+                p = p.child(div().flex().flex_row().items_center().gap_1()
+                    .child(lab(ui::t!("影").to_string()))
+                    .child(chip("shp-shadow".into(),
+                        if shadow_on { ui::t!("あり").to_string() } else { ui::t!("なし").to_string() },
+                        shadow_on)
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            let mut now = false;
+                            this.shape_edit(|sp| { sp.shadow = !sp.shadow; now = sp.shadow; });
+                            this.status = if now {
+                                ui::t!("影を付けました").into()
+                            } else {
+                                ui::t!("影を消しました").into()
+                            };
+                            cx.notify();
+                        }))));
+            }
+            Some(p)
+        });
+
         // ---- 書式の小窓(セルをフォーマットする) ----
         // モーダルにしない: 範囲を選び直しながら続けて使える道具箱。
         // どの釦も既存の書式の道(fmt / run_cmd)を通り、1手ずつ戻せる
@@ -4104,6 +4306,7 @@ impl Render for Calc {
                    .children(fn_panel)
                    .children(fn_args_panel)
                    .children(quit_panel)
+                   .children(shape_panel)
                    .children(slicer_panel))
             .children(watch_bar)
             .child(sheets_bar)

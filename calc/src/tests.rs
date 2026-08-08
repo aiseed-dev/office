@@ -1329,6 +1329,61 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn 図形の設定パネルの経路で性質が変わる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.book.sheets[0].shapes_new.push(sheet::model::SheetShape {
+                at: Pos::new(0, 0),
+                width_px: 100.0,
+                height_px: 60.0,
+                kind: "rect".into(),
+                line: Some("1B6E3C".into()),
+                ..Default::default()
+            });
+            this.shape_sel = Some(0);
+            // 塗りの直指定(小文字でも通る)
+            this.prompt = Some(("shape-fill-rgb", Editor::new("ff0000")));
+            this.finish_prompt(cx);
+            assert_eq!(
+                this.book.sheets[0].shapes_new[0].fill.as_deref(),
+                Some("FF0000"),
+                "塗りの直指定が効かない"
+            );
+            // 回転の直指定(負は 360 に折り返す)
+            this.prompt = Some(("shape-rot", Editor::new("-30")));
+            this.finish_prompt(cx);
+            assert!(
+                (this.book.sheets[0].shapes_new[0].rot - 330.0).abs() < 0.01,
+                "回転の直指定が効かない: {}",
+                this.book.sheets[0].shapes_new[0].rot
+            );
+            // 太さ・不透明度・影・反転(パネルの釦の実体は shape_edit)
+            this.shape_edit(|sp| {
+                sp.line_w = 3.0;
+                sp.alpha = 0.5;
+                sp.shadow = true;
+                sp.flip_h = true;
+            });
+            let sp = &this.book.sheets[0].shapes_new[0];
+            assert!(sp.shadow && sp.flip_h);
+            assert!((sp.line_w - 3.0).abs() < 0.01 && (sp.alpha - 0.5).abs() < 0.01);
+            // 空 Enter = 塗りなし
+            this.prompt = Some(("shape-fill-rgb", Editor::new("")));
+            this.finish_prompt(cx);
+            assert!(this.book.sheets[0].shapes_new[0].fill.is_none());
+            // 読めない色は板が残る(黙って捨てない)
+            this.prompt = Some(("shape-line-rgb", Editor::new("赤")));
+            this.finish_prompt(cx);
+            assert!(this.prompt.is_some(), "読めない色で板が閉じた");
+            this.prompt = None;
+            // 選択が無ければ何も起きない(shape_edit の守り)
+            this.shape_sel = None;
+            this.shape_edit(|sp| sp.rot = 10.0);
+            assert!((this.book.sheets[0].shapes_new[0].rot - 330.0).abs() < 0.01);
+        });
+    }
+
+    #[gpui::test]
     fn r1c1では見せ方が変わり中身はa1のまま(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
