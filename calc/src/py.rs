@@ -167,6 +167,120 @@ pub(crate) fn apply_py_results(
     (spills, applied, conflicts)
 }
 
+/// 檻の種類。**Flatpak の中では bwrap の入れ子が動かない**(ユーザー名前空間の
+/// 入れ子が塞がれている)ので、そこでは公式の入れ子口 flatpak-spawn --sandbox
+/// を使う。どちらも組めなければ None — 他所から来たかもしれないコードは
+/// 檻の外では実行しない(そう言う)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Cage {
+    /// 素の Linux: /usr/bin/bwrap
+    Bwrap,
+    /// Flatpak の中: flatpak-spawn --sandbox(実機での実証はまだ —
+    /// packaging/flatpak/README.md の実証項目を参照)
+    Flatpak,
+    /// 檻が組めない
+    None,
+}
+
+/// いまの環境で組める檻。Flatpak の中かは /.flatpak-info で見分ける(公式の印)
+pub(crate) fn cage_kind() -> Cage {
+    if std::path::Path::new("/.flatpak-info").exists() {
+        // flatpak-spawn は flatpak-xdg-utils の道具。Flatpak の runtime には居る
+        if std::path::Path::new("/usr/bin/flatpak-spawn").exists() {
+            Cage::Flatpak
+        } else {
+            Cage::None
+        }
+    } else if std::path::Path::new("/usr/bin/bwrap").exists() {
+        Cage::Bwrap
+    } else {
+        Cage::None
+    }
+}
+
+/// 檻つき実行の作業場(交換用の読み書き領域)。Flatpak の --sandbox-expose は
+/// **~/.var/app/$ID/sandbox の下しか見せられない**ので、置き場が檻で変わる
+pub(crate) fn cage_work_dir(tag: &str) -> PathBuf {
+    match cage_kind() {
+        Cage::Flatpak => {
+            // XDG_DATA_HOME = ~/.var/app/$ID/data(Flatpak が設定する)。
+            // その親の sandbox/ が flatpak-spawn に見せられる場所
+            let app = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .and_then(|d| d.parent().map(|p| p.to_path_buf()))
+                .unwrap_or_else(std::env::temp_dir);
+            app.join("sandbox").join(format!("{tag}-{}", std::process::id()))
+        }
+        _ => std::env::temp_dir().join(format!("{tag}-{}", std::process::id())),
+    }
+}
+
+/// 檻の中で Python を回す Command を組む。dir = cage_work_dir の作業場。
+/// ro_binds = 読み取り専用で見せたい場所(.venv や .so の隣 — bwrap だけが使う。
+/// Flatpak では /app と runtime が最初から見えている)。None = 檻が組めない
+pub(crate) fn caged_python(
+    py: &std::path::Path,
+    dir: &std::path::Path,
+    ro_binds: &[PathBuf],
+    allow_net: bool,
+) -> Option<std::process::Command> {
+    caged_python_with(cage_kind(), py, dir, ro_binds, allow_net)
+}
+
+/// 檻の種類を外から差せる形(試験が引数の組みを確かめる)
+pub(crate) fn caged_python_with(
+    kind: Cage,
+    py: &std::path::Path,
+    dir: &std::path::Path,
+    ro_binds: &[PathBuf],
+    allow_net: bool,
+) -> Option<std::process::Command> {
+    match kind {
+        Cage::Bwrap => {
+            // 檻: / は読み取り専用、ホームは空、書けるのは作業場だけ
+            let mut c = std::process::Command::new("/usr/bin/bwrap");
+            c.args(["--ro-bind", "/", "/", "--tmpfs", "/home", "--tmpfs", "/tmp"]);
+            for p in ro_binds {
+                if p.exists() {
+                    c.arg("--ro-bind").arg(p).arg(p);
+                }
+            }
+            c.arg("--bind").arg(dir).arg(dir);
+            if !allow_net {
+                c.arg("--unshare-net");
+            }
+            c.args([
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--die-with-parent",
+                "--new-session",
+                "--setenv",
+                "HOME",
+                "/tmp",
+                "--",
+            ]);
+            c.arg(py);
+            Some(c)
+        }
+        Cage::Flatpak => {
+            // 公式の入れ子: バスは切れ、ファイルは /app と runtime と
+            // expose した作業場だけ。網は --no-network で閉じる
+            let name = dir.file_name()?.to_string_lossy().to_string();
+            let mut c = std::process::Command::new("flatpak-spawn");
+            c.arg("--sandbox");
+            c.arg(format!("--sandbox-expose={name}"));
+            if !allow_net {
+                c.arg("--no-network");
+            }
+            c.arg(py);
+            Some(c)
+        }
+        Cage::None => None,
+    }
+}
+
 /// 子プロセスを時間制限つきで回す → (成功か, stdout, stderr)。
 /// 出力は別スレッドで吸い出す(パイプが詰まっても try_wait が止まらない)。
 /// 時間切れは殺して Err — 檻の中の無限ループでアプリの手が塞がらない
@@ -1048,7 +1162,7 @@ impl Calc {
         if !self.commit() {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("jo-py-{}", std::process::id()));
+        let dir = cage_work_dir("jo-py");
         let _ = std::fs::create_dir_all(&dir);
         let in_x = dir.join("in.xlsx");
         let out_x = dir.join("out.xlsx");
@@ -1096,45 +1210,19 @@ impl Calc {
             let py_path = dir.join("run.py");
             std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
             let py = find_python();
-            let have_bwrap = std::path::Path::new("/usr/bin/bwrap").exists();
-            if sandbox && !have_bwrap {
-                return Err(
-                    ui::t!("檻(bubblewrap)がありません。ブックに載ったコードは檻の外では\
-実行しません(apt install bubblewrap)").to_string(),
-                );
-            }
-            let _ = allow_net;
-            let mut cmd = if have_bwrap {
-                // 檻: / は読み取り専用、ホームは空、書けるのは作業場だけ、ネット無し
-                let venv = std::fs::canonicalize(".venv").unwrap_or_default();
-                let mut c = std::process::Command::new("/usr/bin/bwrap");
-                c.args(["--ro-bind", "/", "/", "--tmpfs", "/home", "--tmpfs", "/tmp"]);
-                if venv.exists() {
-                    c.arg("--ro-bind").arg(&venv).arg(&venv);
+            // 檻はあれば必ず使う(深層防御)。他所から来たかもしれないコード
+            // (sandbox=true)は、檻が組めなければ実行しない
+            let venv = std::fs::canonicalize(".venv").unwrap_or_default();
+            let mut cmd = match caged_python(&py, &dir, &[venv, so_dir2], allow_net) {
+                Some(c) => c,
+                None if sandbox => {
+                    return Err(ui::t!(
+                        "檻が組めません(bubblewrap か Flatpak が要ります)。\
+他所から来たかもしれないコードは檻の外では実行しません(apt install bubblewrap)"
+                    )
+                    .to_string());
                 }
-                if so_dir2.exists() {
-                    c.arg("--ro-bind").arg(&so_dir2).arg(&so_dir2);
-                }
-                c.arg("--bind").arg(&dir).arg(&dir);
-                if !allow_net {
-                    c.arg("--unshare-net");
-                }
-                c.args([
-                    "--dev",
-                    "/dev",
-                    "--proc",
-                    "/proc",
-                    "--die-with-parent",
-                    "--new-session",
-                    "--setenv",
-                    "HOME",
-                    "/tmp",
-                    "--",
-                ]);
-                c.arg(&py);
-                c
-            } else {
-                std::process::Command::new(&py)
+                None => std::process::Command::new(&py),
             };
             // 時間制限つき(60秒)— 檻の中の無限ループで手が塞がらない
             let (ok, out, err) = run_with_timeout(cmd.arg(&py_path), 60)?;
@@ -1245,7 +1333,7 @@ calc の隣に置いてください)").to_string()
                 ui::t!("関数の定義がありません(@save 関数 で def の入った .py をブックに載せる)").into();
             return;
         }
-        let dir = std::env::temp_dir().join(format!("jo-udf-{}", std::process::id()));
+        let dir = cage_work_dir("jo-udf");
         let _ = std::fs::create_dir_all(&dir);
         let mut scripts = Vec::new();
         for (i, calls) in &per_sheet {
@@ -1259,9 +1347,9 @@ calc の隣に置いてください)").to_string()
         }
         self.status = ui::t!("PY を計算しています…(檻の中)").into();
         let task = cx.background_executor().spawn(async move {
-            if !std::path::Path::new("/usr/bin/bwrap").exists() {
+            if cage_kind() == Cage::None {
                 return Err(
-                    ui::t!("檻(bubblewrap)がありません。ブックの関数は檻の外では計算しません").to_string(),
+                    ui::t!("檻が組めません(bubblewrap か Flatpak が要ります)。ブックの関数は檻の外では計算しません").to_string(),
                 );
             }
             let py = find_python();
@@ -1269,27 +1357,13 @@ calc の隣に置いてください)").to_string()
             let mut results = Vec::new();
             for (i, py_path, out_path, script) in scripts {
                 std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
-                let mut c = std::process::Command::new("/usr/bin/bwrap");
-                c.args(["--ro-bind", "/", "/", "--tmpfs", "/home", "--tmpfs", "/tmp"]);
-                if venv.exists() {
-                    c.arg("--ro-bind").arg(&venv).arg(&venv);
-                }
-                c.arg("--bind").arg(&dir).arg(&dir);
-                c.args([
-                    "--unshare-net",
-                    "--dev",
-                    "/dev",
-                    "--proc",
-                    "/proc",
-                    "--die-with-parent",
-                    "--new-session",
-                    "--setenv",
-                    "HOME",
-                    "/tmp",
-                    "--",
-                ]);
+                // 関数(UDF)は常に網なしの檻
+                let Some(mut c) = caged_python(&py, &dir, std::slice::from_ref(&venv), false)
+                else {
+                    return Err(ui::t!("檻が組めません(bubblewrap か Flatpak が要ります)。ブックの関数は檻の外では計算しません").to_string());
+                };
                 // 時間制限つき(30秒)。関数は値の計算だけ — それより長いのは異常
-                let (ok, _, err) = run_with_timeout(c.arg(&py).arg(&py_path), 30)?;
+                let (ok, _, err) = run_with_timeout(c.arg(&py_path), 30)?;
                 if !ok {
                     let last = err
                         .lines()
@@ -2038,5 +2112,50 @@ calc の隣に置いてください)").to_string()
                 .into();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cage_tests {
+    use super::*;
+
+    fn args_of(c: &std::process::Command) -> Vec<String> {
+        std::iter::once(c.get_program().to_string_lossy().to_string())
+            .chain(c.get_args().map(|a| a.to_string_lossy().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn bwrapの檻は網を既定で切る() {
+        let d = PathBuf::from("/tmp/jo-py-1");
+        let py = std::path::Path::new("python3");
+        let c = caged_python_with(Cage::Bwrap, py, &d, &[], false).unwrap();
+        let a = args_of(&c);
+        assert_eq!(a[0], "/usr/bin/bwrap");
+        assert!(a.contains(&"--unshare-net".into()), "網が切れていない: {a:?}");
+        assert!(a.contains(&"--die-with-parent".into()));
+        // net を許したときだけ網が通る
+        let c2 = caged_python_with(Cage::Bwrap, py, &d, &[], true).unwrap();
+        assert!(!args_of(&c2).contains(&"--unshare-net".into()));
+    }
+
+    #[test]
+    fn flatpakの檻は公式の入れ子口を使う() {
+        // Flatpak の中では bwrap の入れ子が動かない — flatpak-spawn --sandbox
+        let d = PathBuf::from("/x/sandbox/jo-udf-9");
+        let py = std::path::Path::new("python3");
+        let c = caged_python_with(Cage::Flatpak, py, &d, &[], false).unwrap();
+        let a = args_of(&c);
+        assert_eq!(a[0], "flatpak-spawn");
+        assert!(a.contains(&"--sandbox".into()), "{a:?}");
+        assert!(
+            a.contains(&"--sandbox-expose=jo-udf-9".into()),
+            "作業場が expose されていない: {a:?}"
+        );
+        assert!(a.contains(&"--no-network".into()), "網が切れていない: {a:?}");
+        assert!(!args_of(&caged_python_with(Cage::Flatpak, py, &d, &[], true).unwrap())
+            .contains(&"--no-network".into()));
+        // 檻が組めなければ None(「実行しない」と言うのは呼ぶ側)
+        assert!(caged_python_with(Cage::None, py, &d, &[], false).is_none());
     }
 }
