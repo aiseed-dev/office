@@ -3143,3 +3143,57 @@ mod hide_lines_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod data_edge_tests {
+    use crate::*;
+
+    /// A1:A3 に中身、A4〜A6 は空、A7 に中身(飛び石の縦一列)
+    fn setup(this: &mut Calc) {
+        for a1 in ["A1", "A2", "A3", "A7"] {
+            this.book.sheets[0].set(Pos::parse(a1).unwrap(), sheet::Cell::input("x"));
+        }
+    }
+
+    #[gpui::test]
+    fn 塊の終わりと次の塊へ飛ぶ(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            setup(this);
+            // A1 から下 = 塊の終わり A3
+            this.cursor = Pos::parse("A1").unwrap();
+            assert_eq!(this.data_edge(1, 0), Pos::parse("A3").unwrap());
+            // A3 から下 = 隣が空なので次の中身 A7
+            this.cursor = Pos::parse("A3").unwrap();
+            assert_eq!(this.data_edge(1, 0), Pos::parse("A7").unwrap());
+            // A7 から上 = 隣が空なので次の中身 A3
+            this.cursor = Pos::parse("A7").unwrap();
+            assert_eq!(this.data_edge(-1, 0), Pos::parse("A3").unwrap());
+            // A1 から上 = もう行けないのでそのまま
+            this.cursor = Pos::parse("A1").unwrap();
+            assert_eq!(this.data_edge(-1, 0), Pos::parse("A1").unwrap());
+            // 中身の無い向きは使っている範囲の端で止まる(表の最果てへ飛ばない)
+            this.cursor = Pos::parse("A1").unwrap();
+            let e = this.data_edge(0, 1);
+            assert_eq!(e.col, 0, "使っている範囲の外へ出た: {}", e.a1());
+        });
+    }
+
+    #[gpui::test]
+    fn 端まで選択は起点を保つ(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            setup(this);
+            // Ctrl+Shift+↓ の実体: 起点を置いてから端へ動く
+            this.cursor = Pos::parse("A1").unwrap();
+            this.anchor = Some(this.cursor);
+            this.cursor = this.data_edge(1, 0);
+            let (a, b) = this.sel_rect();
+            assert_eq!((a.a1(), b.a1()), ("A1".to_string(), "A3".to_string()));
+            // もう一度伸ばすと次の塊まで(起点は動かない)
+            this.cursor = this.data_edge(1, 0);
+            let (a, b) = this.sel_rect();
+            assert_eq!((a.a1(), b.a1()), ("A1".to_string(), "A7".to_string()));
+        });
+    }
+}

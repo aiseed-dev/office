@@ -171,6 +171,10 @@ actions!(
         Home, End, Enter, Undo, Redo, Save, Open, Up, Down, Tab, ShiftTab,
         Copy, Cut, Paste, PasteValues, Quit, ContextMenu, Cancel,
         WordLeft, WordRight, SelectWordLeft, SelectWordRight, PageUp, PageDown,
+        // 表の「データの端へ」(Ctrl+↑↓)。左右は WordLeft/WordRight が兼ねる。
+        // **受け口を持つのは calc だけ** — 束縛があっても writer では動かない
+        // (docs/sekkei/sugata.ja.md「キーの嘘 — 束縛と受け口は別」)
+        EdgeUp, EdgeDown, SelectEdgeUp, SelectEdgeDown,
         Find, DocHome, DocEnd, EditCell, Recalc, RecalcSheet, NewLine,
         UiBigger, UiSmaller, InsLink,
     ]
@@ -189,6 +193,10 @@ pub fn bindings(context: &'static str) -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-right", WordRight, Some(context)),
         KeyBinding::new("ctrl-shift-left", SelectWordLeft, Some(context)),
         KeyBinding::new("ctrl-shift-right", SelectWordRight, Some(context)),
+        KeyBinding::new("ctrl-up", EdgeUp, Some(context)),
+        KeyBinding::new("ctrl-down", EdgeDown, Some(context)),
+        KeyBinding::new("ctrl-shift-up", SelectEdgeUp, Some(context)),
+        KeyBinding::new("ctrl-shift-down", SelectEdgeDown, Some(context)),
         KeyBinding::new("pageup", PageUp, Some(context)),
         KeyBinding::new("pagedown", PageDown, Some(context)),
         KeyBinding::new("f2", EditCell, Some(context)),

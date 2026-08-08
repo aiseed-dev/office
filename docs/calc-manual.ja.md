@@ -60,6 +60,7 @@ xlsx を開いて、直して、保存する表計算アプリ。式も計算す
 | セル移動 | ↑ ↓ ← → / Enter(下へ)/ Tab(右へ) |
 | 範囲選択 | Shift+矢印 |
 | 先頭 / 末尾へ | Ctrl+Home / Ctrl+End |
+| **データの端へ / 端まで選択** | Ctrl+矢印 / Ctrl+Shift+矢印(隣に中身があれば塊の終わり、空なら次の中身まで。使っている範囲の端で止まる) |
 | ページ送り | PageUp / PageDown |
 | すべて選択 | Ctrl+A |
 | 元に戻す / やり直し | Ctrl+Z / Ctrl+Shift+Z(Ctrl+Y も同じ) |

@@ -4210,6 +4210,16 @@ impl Render for Calc {
             .on_action(cx.listener(Calc::a_page_down))
             .on_action(cx.listener(Calc::a_doc_home))
             .on_action(cx.listener(Calc::a_doc_end))
+            // Ctrl+矢印(データの端へ)と Ctrl+Shift+矢印(端まで選ぶ)。
+            // 左右は WordLeft/WordRight の割り当てを表の意味で受ける
+            .on_action(cx.listener(Calc::a_word_left))
+            .on_action(cx.listener(Calc::a_word_right))
+            .on_action(cx.listener(Calc::a_sel_word_left))
+            .on_action(cx.listener(Calc::a_sel_word_right))
+            .on_action(cx.listener(Calc::a_edge_up))
+            .on_action(cx.listener(Calc::a_edge_down))
+            .on_action(cx.listener(Calc::a_sel_edge_up))
+            .on_action(cx.listener(Calc::a_sel_edge_down))
             .on_action(cx.listener(Calc::a_tab))
             .on_action(cx.listener(Calc::a_enter))
             .on_action(cx.listener(Calc::a_select_all))

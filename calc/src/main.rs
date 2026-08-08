@@ -2431,6 +2431,95 @@ impl Calc {
         self.sync_input();
         cx.notify();
     }
+    /// Ctrl+矢印 の行き先(Excel の作法):
+    /// - 隣に中身があれば、**続く塊の終わり**まで飛ぶ
+    /// - 隣が空なら、**次に中身のあるセル**まで飛ぶ
+    /// 見つからなければ**使っている範囲の端**で止まる(本家は表の最果て
+    /// = 1048576 行目まで飛ぶが、そこへ置き去りにする方が驚きが大きい)
+    pub(crate) fn data_edge(&self, dr: i32, dc: i32) -> Pos {
+        let has = |p: Pos| {
+            self.sheet().get(p).is_some_and(|c| !c.value.is_empty())
+        };
+        let (rows, cols) = self.sheet().extent();
+        let (maxr, maxc) = (rows.saturating_sub(1) as i64, cols.saturating_sub(1) as i64);
+        let step = |p: Pos| -> Option<Pos> {
+            let (r, c) = (p.row as i64 + dr as i64, p.col as i64 + dc as i64);
+            (r >= 0 && c >= 0 && r <= maxr && c <= maxc).then(|| Pos::new(r as u32, c as u32))
+        };
+        let mut cur = self.cursor;
+        let Some(next) = step(cur) else { return cur };
+        cur = next;
+        if has(next) {
+            // 塊の終わりまで(次が空になる手前で止まる)
+            while let Some(n) = step(cur) {
+                if !has(n) {
+                    break;
+                }
+                cur = n;
+            }
+        } else {
+            // 次の中身まで(無ければ端で止まる)
+            while !has(cur) {
+                match step(cur) {
+                    Some(n) => cur = n,
+                    None => break,
+                }
+            }
+        }
+        cur
+    }
+
+    /// Ctrl+矢印(移動)と Ctrl+Shift+矢印(選択を伸ばす)の共通の実体
+    fn go_edge(&mut self, dr: i32, dc: i32, extend: bool, cx: &mut Context<Self>) {
+        if !self.commit() {
+            cx.notify();
+            return;
+        }
+        if extend {
+            if self.anchor.is_none() {
+                self.anchor = Some(self.cursor);
+            }
+        } else {
+            self.anchor = None;
+        }
+        self.cursor = self.data_edge(dr, dc);
+        self.follow();
+        self.sync_input();
+        if extend {
+            let (a, b) = self.sel_rect();
+            self.status = format!("{}:{}", a.a1(), b.a1()).into();
+        }
+        cx.notify();
+    }
+    fn a_word_left(&mut self, _: &ui::WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_edge(0, -1, false, cx);
+    }
+    fn a_word_right(&mut self, _: &ui::WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_edge(0, 1, false, cx);
+    }
+    fn a_sel_word_left(&mut self, _: &ui::SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_edge(0, -1, true, cx);
+    }
+    fn a_sel_word_right(
+        &mut self,
+        _: &ui::SelectWordRight,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.go_edge(0, 1, true, cx);
+    }
+    fn a_edge_up(&mut self, _: &ui::EdgeUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_edge(-1, 0, false, cx);
+    }
+    fn a_edge_down(&mut self, _: &ui::EdgeDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_edge(1, 0, false, cx);
+    }
+    fn a_sel_edge_up(&mut self, _: &ui::SelectEdgeUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_edge(-1, 0, true, cx);
+    }
+    fn a_sel_edge_down(&mut self, _: &ui::SelectEdgeDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_edge(1, 0, true, cx);
+    }
     fn a_page_up(&mut self, _: &ui::PageUp, _: &mut Window, cx: &mut Context<Self>) {
         self.move_cursor(-(self.rows_snug() as i32 - 1).max(1), 0);
         cx.notify();
