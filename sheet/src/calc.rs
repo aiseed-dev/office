@@ -25,6 +25,9 @@ enum Tok {
     /// 別のシートの参照(シート名, 始点, 終点)。1セルなら始点=終点。
     /// 値は**その時の値を写す**(位置では持ち帰れない — RefAns::Rect と同じ理屈)
     Sheet(String, Pos, Pos),
+    /// 串刺し集計 `Sheet1:Sheet3!A1`(始めのシート, 終わりのシート, 始点, 終点)。
+    /// **ブックの並び順**で2枚の間にある全シートの同じ場所を集める
+    Sheet3(String, String, Pos, Pos),
     /// 構造化参照(表の名前 — `[@列]` のときは None, 列の名前, この行だけか)。
     /// `Table1[金額]` = その列のデータ本体、`[@金額]` = いまの行の同じ列
     Table(Option<String>, String, bool),
@@ -82,7 +85,11 @@ fn lex_table_ref(b: &[char], i: usize) -> Option<(Option<String>, String, bool, 
 /// 読めたら (シート名, 始点, 終点, 次の位置)。**後ろに `!` があるときだけ**
 /// 当たるので、既存の字句の読み方は変わらない(当たらなければ None で素通し)。
 /// 和文のシート名(売上・4月)も通すため、名前の走査は Unicode の英数字で見る
-fn lex_sheet_ref(b: &[char], i: usize) -> Option<(String, Pos, Pos, usize)> {
+#[allow(clippy::type_complexity)]
+fn lex_sheet_ref(
+    b: &[char],
+    i: usize,
+) -> Option<(String, Option<String>, Pos, Pos, usize)> {
     let (name, after) = if b.get(i) == Some(&'\'') {
         // 引用符つき = 空白や記号を含む名前('4月 実績'!B2)
         let mut j = i + 1;
@@ -104,7 +111,37 @@ fn lex_sheet_ref(b: &[char], i: usize) -> Option<(String, Pos, Pos, usize)> {
         }
         (s, j)
     };
-    if name.is_empty() || b.get(after) != Some(&'!') {
+    if name.is_empty() {
+        return None;
+    }
+    // `Sheet1:Sheet3!A1` — 2枚目の名前(串刺し集計)
+    let (name2, after) = if b.get(after) == Some(&':') {
+        let mut j = after + 1;
+        let mut s2 = String::new();
+        if b.get(j) == Some(&'\'') {
+            j += 1;
+            while j < b.len() && b[j] != '\'' {
+                s2.push(b[j]);
+                j += 1;
+            }
+            if j >= b.len() {
+                return None;
+            }
+            j += 1;
+        } else {
+            while j < b.len() && (b[j].is_alphanumeric() || b[j] == '_' || b[j] == '.') {
+                s2.push(b[j]);
+                j += 1;
+            }
+        }
+        if s2.is_empty() {
+            return None;
+        }
+        (Some(s2), j)
+    } else {
+        (None, after)
+    };
+    if b.get(after) != Some(&'!') {
         return None;
     }
     // `!` の後ろの A1 か A1:B3
@@ -120,10 +157,10 @@ fn lex_sheet_ref(b: &[char], i: usize) -> Option<(String, Pos, Pos, usize)> {
     if b.get(j) == Some(&':') {
         let (z, k) = one(j + 1);
         if let Some(z) = z {
-            return Some((name, a, z, k));
+            return Some((name, name2, a, z, k));
         }
     }
-    Some((name, a, a, j))
+    Some((name, name2, a, a, j))
 }
 
 fn lex(src: &str) -> Result<Vec<Tok>, String> {
@@ -152,8 +189,11 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
         }
         // 別シートの参照は**数の枝より先**に見る(`4月!B2` のように
         // 数字で始まる名前があるため)。`!` が無ければ素通しする
-        if let Some((name, a, z, k)) = lex_sheet_ref(&b, i) {
-            out.push(Tok::Sheet(name, a, z));
+        if let Some((name, name2, a, z, k)) = lex_sheet_ref(&b, i) {
+            out.push(match name2 {
+                Some(n2) => Tok::Sheet3(name, n2, a, z),
+                None => Tok::Sheet(name, a, z),
+            });
             i = k;
             continue;
         }
@@ -237,6 +277,9 @@ struct P<'a> {
     /// 同じブックの他のシート(読み取りだけ)。INDIRECT("別の表!A1") が引く。
     /// recalc(1枚だけ)では空 — そのときの別シート参照は #REF!
     others: &'a [&'a Sheet],
+    /// 自分がブックの何枚目か。**others は「自分より前」+「自分より後」の
+    /// 並びなので、これが無いとブックの並び順を復元できない**(串刺し集計が使う)
+    sheet_at: usize,
     /// 範囲を読むとき、**手で隠した行(row_hidden)を飛ばす**。
     /// SUBTOTAL/AGGREGATE の 101〜111 の間だけ立つ(Excel の約束)
     skip_hidden: std::cell::Cell<bool>,
@@ -509,6 +552,47 @@ impl<'a> P<'a> {
         (r0 <= r1).then_some((Pos::new(r0, c), Pos::new(r1, c)))
     }
 
+    /// ブックの並び順のシート一覧(自分を含む)。串刺し集計が使う —
+    /// others は「自分より前」+「自分より後」の並びなので、
+    /// sheet_at の所へ自分を挿し戻せば元の順になる
+    fn sheets_in_order(&self) -> Vec<&Sheet> {
+        let k = self.sheet_at.min(self.others.len());
+        let mut v: Vec<&Sheet> = Vec::with_capacity(self.others.len() + 1);
+        v.extend(self.others[..k].iter().copied());
+        v.push(self.sheet);
+        v.extend(self.others[k..].iter().copied());
+        v
+    }
+
+    /// 串刺し集計 `Sheet1:Sheet3!A1` — 並び順で2枚の間にある全シートの
+    /// 同じ場所を集めて1つの並びにする。どちらかの名前が無ければ #REF!
+    fn sheet3_ans(&self, from: &str, to: &str, a: Pos, z: Pos) -> RefAns {
+        let all = self.sheets_in_order();
+        let (Some(i), Some(j)) = (
+            all.iter().position(|s| s.name == from),
+            all.iter().position(|s| s.name == to),
+        ) else {
+            return RefAns::Bad(Value::Error("#REF!".into()));
+        };
+        let (i, j) = (i.min(j), i.max(j));
+        let cols = a.col.abs_diff(z.col) + 1;
+        let mut vals = Vec::new();
+        for sh in &all[i..=j] {
+            for r in a.row.min(z.row)..=a.row.max(z.row) {
+                for c in a.col.min(z.col)..=a.col.max(z.col) {
+                    let p = Pos::new(r, c);
+                    // 自分のシートは計算途中の値(resolved)を見る
+                    vals.push(if sh.name == self.sheet.name {
+                        self.cell(p)
+                    } else {
+                        sh.value(p)
+                    });
+                }
+            }
+        }
+        RefAns::Rect(cols, vals)
+    }
+
     /// OFFSET / INDIRECT — **計算して決まる参照**。
     /// Ok(RefAns) / Err(構文エラー) の2層
     fn ref_call(&mut self, name: &str) -> Result<RefAns, String> {
@@ -615,6 +699,15 @@ impl<'a> P<'a> {
                 RefAns::Rect(_, vals) => vals.into_iter().next().unwrap_or(Value::Empty),
                 RefAns::Bad(v) => v,
             }),
+            Some(Tok::Sheet3(from, to, a, z)) => {
+                Ok(match self.sheet3_ans(&from, &to, a, z) {
+                    RefAns::Rect(_, vals) => vals.into_iter().next().unwrap_or(Value::Empty),
+                    RefAns::Bad(v) => v,
+                    RefAns::At(a, z) => {
+                        self.range_values(a, z).into_iter().next().unwrap_or(Value::Empty)
+                    }
+                })
+            }
             Some(Tok::Table(tbl, col, this_row)) => {
                 Ok(match self.table_range(tbl.as_deref(), &col, this_row) {
                     // 単独なら先頭の値([@列] は1セルなのでその値)
@@ -870,6 +963,21 @@ impl AP<'_, '_> {
                 let cols = (a.col.abs_diff(z.col) + 1) as usize;
                 let vals = self.p.range_values(a, z);
                 Ok(AVal::Arr(vals.chunks(cols.max(1)).map(|r| r.to_vec()).collect()))
+            }
+            // 串刺し集計も並びで渡す(=SUM(Sheet1:Sheet3!A1) が効く)
+            Some(Tok::Sheet3(from, to, a, z)) => {
+                self.p.next();
+                Ok(match self.p.sheet3_ans(&from, &to, a, z) {
+                    RefAns::Rect(cols, vals) => AVal::Arr(
+                        vals.chunks((cols as usize).max(1)).map(|r| r.to_vec()).collect(),
+                    ),
+                    RefAns::Bad(v) => AVal::One(v),
+                    RefAns::At(a, z) => {
+                        let cols = (a.col.abs_diff(z.col) + 1) as usize;
+                        let vals = self.p.range_values(a, z);
+                        AVal::Arr(vals.chunks(cols.max(1)).map(|r| r.to_vec()).collect())
+                    }
+                })
             }
             // 構造化参照も並びで渡す(=SUM(Table1[金額]) が効く)
             Some(Tok::Table(tbl, col, this_row)) => {
@@ -2641,7 +2749,7 @@ pub fn eval_py_call(sheet: &Sheet, formula: &str) -> Option<(String, Vec<PyArg>)
     // PY ( の中の引数を、通常の引数解析(範囲は形つき)で読む
     let resolved = HashMap::new();
     // PY セルの引数評価では ROW()/COLUMN() の「いまのセル」は分からない — 原点で代える
-    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at: Pos::new(0, 0), others: &[], skip_hidden: Default::default(), lets: Vec::new() };
+    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at: Pos::new(0, 0), others: &[], sheet_at: 0, skip_hidden: Default::default(), lets: Vec::new() };
     match (p.next(), p.next()) {
         (Some(Tok::Name(n)), Some(Tok::LParen)) if n == "PY" => {}
         _ => return None,
@@ -2773,7 +2881,7 @@ const ARRAY_FNS: &[&str] =
     &["FILTER", "SORT", "UNIQUE", "SEQUENCE", "TRANSPOSE", "TEXTSPLIT"];
 
 pub fn recalc(sheet: &mut Sheet) {
-    recalc_impl(sheet, &[]);
+    recalc_impl(sheet, &[], 0);
 }
 
 /// ブックの1枚を、**他のシートを見ながら**再計算する
@@ -2791,13 +2899,13 @@ pub fn recalc_book(book: &mut crate::Book, target: usize) {
             // 反復計算: 循環は前回の値で埋めて、変化が delta 以下に
             // 落ち着くまで(上限 count 回)回す — Excel と同じ枠組み
             for _ in 0..count.max(1) {
-                let (changed, maxd) = recalc_pass_iter(tgt, &others, true);
+                let (changed, maxd) = recalc_pass_iter(tgt, &others, target, true);
                 if !changed || maxd <= delta {
                     break;
                 }
             }
         }
-        None => recalc_impl(tgt, &others),
+        None => recalc_impl(tgt, &others, target),
     }
 }
 
@@ -2821,7 +2929,7 @@ pub fn recalc_all(book: &mut crate::Book) {
     }
 }
 
-fn recalc_impl(sheet: &mut Sheet, others: &[&Sheet]) {
+fn recalc_impl(sheet: &mut Sheet, others: &[&Sheet], at: usize) {
     // OFFSET/INDIRECT(計算で決まる参照)とスピルは、1回の走査では依存の順が
     // 読めないことがある — そのときだけ、値が動かなくなるまで回す(上限つき。
     // RAND/NOW 入りの式は毎回変わるので、比較からは外している)
@@ -2839,24 +2947,29 @@ fn recalc_impl(sheet: &mut Sheet, others: &[&Sheet]) {
                 .unwrap_or(false)
         });
     if !dynamic {
-        recalc_pass(sheet, others);
+        recalc_pass(sheet, others, at);
         return;
     }
     for _ in 0..5 {
-        if !recalc_pass(sheet, others) {
+        if !recalc_pass(sheet, others, at) {
             break;
         }
     }
 }
 
 /// 再計算の1周。値が動いたら true(まだ安定していないかもしれない)
-fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet]) -> bool {
-    recalc_pass_iter(sheet, others, false).0
+fn recalc_pass(sheet: &mut Sheet, others: &[&Sheet], at: usize) -> bool {
+    recalc_pass_iter(sheet, others, at, false).0
 }
 
 /// 再計算の1周(反復モードつき)。反復モードでは循環参照を #CIRC! に
 /// せず**前回の値**で埋める。返りは (動いたか, 数の最大変化量)
-fn recalc_pass_iter(sheet: &mut Sheet, others: &[&Sheet], iter_mode: bool) -> (bool, f64) {
+fn recalc_pass_iter(
+    sheet: &mut Sheet,
+    others: &[&Sheet],
+    at: usize,
+    iter_mode: bool,
+) -> (bool, f64) {
     // PY セルはここでは計算しない(最後に計算した値を保つ)。
     // まだ一度も計算していなければ「#PY?」の印を置く(空白で誤魔化さない)
     let py_cells: Vec<Pos> = sheet
@@ -2920,6 +3033,7 @@ fn recalc_pass_iter(sheet: &mut Sheet, others: &[&Sheet], iter_mode: bool) -> (b
         map: &HashMap<Pos, String>,
         sheet: &Sheet,
         others: &[&Sheet],
+        at: usize,
         resolved: &mut HashMap<Pos, Value>,
         visiting: &mut HashSet<Pos>,
         iter_mode: bool,
@@ -2944,13 +3058,13 @@ fn recalc_pass_iter(sheet: &mut Sheet, others: &[&Sheet], iter_mode: bool) -> (b
         // 先に依存を解く
         for d in deps(f) {
             if map.contains_key(&d) && !resolved.contains_key(&d) {
-                let v = eval_at(d, map, sheet, others, resolved, visiting, iter_mode);
+                let v = eval_at(d, map, sheet, others, at, resolved, visiting, iter_mode);
                 resolved.insert(d, v);
             }
         }
         let v = match lex(f) {
             Ok(toks) => {
-                let mut p2 = P { t: &toks, i: 0, sheet, resolved, at: p, others, skip_hidden: Default::default(), lets: Vec::new() };
+                let mut p2 = P { t: &toks, i: 0, sheet, resolved, at: p, others, sheet_at: at, skip_hidden: Default::default(), lets: Vec::new() };
                 match p2.expr() {
                     Ok(v) if p2.i == toks.len() => v,
                     Ok(_) => Value::Error("#ERROR!".into()),
@@ -2966,7 +3080,7 @@ fn recalc_pass_iter(sheet: &mut Sheet, others: &[&Sheet], iter_mode: bool) -> (b
 
     let map: HashMap<Pos, String> = formulas.iter().cloned().collect();
     for (p, _) in &formulas {
-        let v = eval_at(*p, &map, sheet, others, &mut resolved, &mut visiting, iter_mode);
+        let v = eval_at(*p, &map, sheet, others, at, &mut resolved, &mut visiting, iter_mode);
         resolved.insert(*p, v);
     }
     let mut max_delta = 0.0f64;
@@ -3000,7 +3114,7 @@ fn recalc_pass_iter(sheet: &mut Sheet, others: &[&Sheet], iter_mode: bool) -> (b
                 c.value = v;
             }
         };
-        let rows = match eval_array(sheet, others, f, *origin) {
+        let rows = match eval_array(sheet, others, at, f, *origin) {
             Err(e) => {
                 put_origin(sheet, e, &mut changed);
                 continue;
@@ -3120,13 +3234,14 @@ fn is_array_formula(f: &str) -> bool {
 fn eval_array(
     sheet: &Sheet,
     others: &[&Sheet],
+    sheet_at: usize,
     f: &str,
     at: Pos,
 ) -> Result<Vec<Vec<Value>>, Value> {
     let err = |s: &str| Value::Error(s.into());
     let toks = lex(f).map_err(|_| err("#ERROR!"))?;
     let resolved = HashMap::new();
-    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at, others, skip_hidden: Default::default(), lets: Vec::new() };
+    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at, others, sheet_at, skip_hidden: Default::default(), lets: Vec::new() };
     let v = {
         let mut ap = AP { p: &mut p };
         ap.expr().map_err(|_| err("#ERROR!"))?
@@ -4999,5 +5114,71 @@ mod text_split_tests {
         s2.set(Pos::parse("A1").unwrap(), Cell::input("=TEXTSPLIT(\"甲乙\",\"\")"));
         recalc(&mut s2);
         assert_eq!(s2.value(Pos::parse("A1").unwrap()), Value::Error("#VALUE!".into()));
+    }
+}
+
+/// 串刺し集計(2026-08-08 実装。台帳 第3便 [中])。
+/// `=SUM(4月:6月!B2)` — ブックの並び順で2枚の間の全シートを集める
+#[cfg(test)]
+mod sheet3_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    /// 表紙 / 4月 / 5月 / 6月 / 別 の5枚(この並び)
+    fn book5(formula: &str) -> crate::Book {
+        let mut b = crate::Book::new();
+        let mut cover = Sheet { name: "表紙".into(), ..Default::default() };
+        cover.set(Pos::parse("A1").unwrap(), Cell::input(formula));
+        b.sheets[0] = cover;
+        for (n, v) in [("4月", "10"), ("5月", "20"), ("6月", "30"), ("別", "999")] {
+            let mut s = Sheet { name: n.into(), ..Default::default() };
+            s.set(Pos::parse("B2").unwrap(), Cell::input(v));
+            b.sheets.push(s);
+        }
+        b
+    }
+
+    fn ans(formula: &str) -> Value {
+        let mut b = book5(formula);
+        recalc_all(&mut b);
+        b.sheets[0].value(Pos::parse("A1").unwrap())
+    }
+
+    #[test]
+    fn 並び順で二枚の間を集める() {
+        // 4月〜6月 = 10+20+30(「別」の 999 は入らない)
+        assert_eq!(ans("=SUM(4月:6月!B2)"), Value::Number(60.0));
+        assert_eq!(ans("=SUM(4月:5月!B2)"), Value::Number(30.0));
+        // 逆順に書いても同じ(Excel と同じ)
+        assert_eq!(ans("=SUM(6月:4月!B2)"), Value::Number(60.0));
+        // 1枚だけを挟む形
+        assert_eq!(ans("=SUM(5月:5月!B2)"), Value::Number(20.0));
+        // 平均・個数も同じ並びで効く
+        assert_eq!(ans("=AVERAGE(4月:6月!B2)"), Value::Number(20.0));
+        assert_eq!(ans("=COUNT(4月:6月!B2)"), Value::Number(3.0));
+    }
+
+    #[test]
+    fn 自分のシートを跨いでも並び順が崩れない() {
+        // 表紙(1枚目)を含む範囲。自分の A1 は式なので B2 を見る
+        let mut b = book5("=SUM(表紙:5月!B2)");
+        b.sheets[0].set(Pos::parse("B2").unwrap(), Cell::input("5"));
+        recalc_all(&mut b);
+        // 表紙 5 + 4月 10 + 5月 20
+        assert_eq!(b.sheets[0].value(Pos::parse("A1").unwrap()), Value::Number(35.0));
+    }
+
+    #[test]
+    fn 知らない名前と範囲の形() {
+        assert_eq!(ans("=SUM(4月:無い月!B2)"), Value::Error("#REF!".into()));
+        // 範囲を跨ぐ形(B2:B3)も集められる
+        let mut b = book5("=SUM(4月:6月!B2:B3)");
+        for (i, v) in [("4月", "1"), ("5月", "2"), ("6月", "3")] {
+            let k = b.sheets.iter().position(|s| s.name == i).unwrap();
+            b.sheets[k].set(Pos::parse("B3").unwrap(), Cell::input(v));
+        }
+        recalc_all(&mut b);
+        // B2 の 10+20+30 と B3 の 1+2+3
+        assert_eq!(b.sheets[0].value(Pos::parse("A1").unwrap()), Value::Number(66.0));
     }
 }
