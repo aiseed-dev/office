@@ -1769,7 +1769,9 @@ impl Render for Calc {
                 ("sh-paste", "貼り付け", "", self.shape_clip.is_some(), false),
                 ("", "", "", false, false),
                 ("sh-order", "配置", "", true, true),
+                ("sh-align", "整列", "", true, true),
                 ("sh-rotate", "回転", "", !sh_poly, true),
+                ("sh-group", "グループ化", "", false, false),
                 ("", "", "", false, false),
                 ("sh-macro", "マクロの割り当て", "", false, false),
                 ("sh-save", "画像として保存(SVG)", "", true, false),
@@ -2043,6 +2045,27 @@ impl Render for Calc {
             }
             Some(f)
         });
+        // Ctrl+クリックで束ねた分は細い枠だけ(取っ手は主の1つに)
+        let shape_frames_more: Vec<_> = self
+            .shape_multi
+            .iter()
+            .filter_map(|&i| {
+                let sp = self.sheet().shapes_new.get(i)?;
+                let (x, y) = self.cell_origin_px(sp.at)?;
+                let (x, y) = (x + sp.dx_px, y + sp.dy_px);
+                Some(
+                    div()
+                        .absolute()
+                        .left(px(x - 2.0))
+                        .top(px(y - 2.0))
+                        .w(px(sp.width_px + 4.0))
+                        .h(px(sp.height_px + 4.0))
+                        .border_1()
+                        .border_dashed()
+                        .border_color(rgb(0x2E9E57)),
+                )
+            })
+            .collect();
 
         // ---- 関数を挿入の小窓(本家の FormulaDialog の形) ----
         // 検索 / 分類 / 一覧(↑↓で選ぶ・ダブルクリックで入る)/ 引数と説明
@@ -4345,6 +4368,7 @@ impl Render for Calc {
                    })
                    .child(InputSink { view: me })
                    .children(shape_frame)
+                   .children(shape_frames_more)
                    .children(img_frame)
                    .children(ants)
                    .children(tip)

@@ -121,6 +121,8 @@ struct Calc {
     shape_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
     /// 図形の回転ドラッグ(枠の上の丸を掴んでいる間だけ Some)
     shape_rot: Option<usize>,
+    /// Ctrl+クリックで足した図形(shape_sel が主、こちらは控え。整列が使う)
+    shape_multi: Vec<usize>,
     /// いま出ているメニューは図形の専用メニューか(右クリックが図形の上)
     menu_shape: bool,
     /// 図形の切り取り/コピーの控え(セルのクリップボードとは別の器)
@@ -364,6 +366,7 @@ impl Calc {
             shape_sel: None,
             shape_drag: None,
             shape_rot: None,
+            shape_multi: Vec::new(),
             menu_shape: false,
             shape_clip: None,
             img_sel: None,
@@ -871,8 +874,32 @@ impl Calc {
         // 浮いている図形が最優先(セルの上に描かれているので)
         if let Some((i, (sx, sy), corner)) = self.shape_at(x, y) {
             self.commit();
+            // Ctrl+クリック = 選択に足す/外す(整列・分布の下ごしらえ)
+            if ctrl {
+                if self.shape_sel == Some(i) {
+                    self.shape_sel = if self.shape_multi.is_empty() {
+                        None
+                    } else {
+                        Some(self.shape_multi.remove(0))
+                    };
+                } else if let Some(k) = self.shape_multi.iter().position(|&m| m == i) {
+                    self.shape_multi.remove(k);
+                } else if self.shape_sel.is_none() {
+                    self.shape_sel = Some(i);
+                } else {
+                    self.shape_multi.push(i);
+                }
+                let n = self.shape_sel.is_some() as usize + self.shape_multi.len();
+                self.status = ui::tf!(
+                    "{} 個の図形を選んでいます(右クリック→整列で揃えます)",
+                    n
+                )
+                .into();
+                return;
+            }
             self.checkpoint();
             self.shape_sel = Some(i);
+            self.shape_multi.clear();
             self.shape_drag = Some((i, (x, y), if corner { (sx, sy) } else { (sx, sy) }, corner));
             self.status = if corner {
                 ui::t!("右下を引いて大きさを変えます").into()
@@ -882,6 +909,7 @@ impl Calc {
             return;
         }
         self.shape_sel = None;
+        self.shape_multi.clear();
         // 浮いている画像(グラフ)も同じ扱い
         if let Some((i, (sx, sy), corner)) = self.image_at(x, y) {
             self.commit();
@@ -1231,7 +1259,11 @@ impl Calc {
         // 図形はセルの上に描かれているので、セルより先に見る
         if let Some((i, _, _)) = self.shape_at(x, y) {
             self.commit();
-            self.shape_sel = Some(i);
+            // Ctrl+クリックで束ねた選択の中なら保つ(整列へ続く)。外なら選び直す
+            if self.shape_sel != Some(i) && !self.shape_multi.contains(&i) {
+                self.shape_multi.clear();
+                self.shape_sel = Some(i);
+            }
             self.menu_at = Some((x, y));
             self.menu_sub = None;
             self.menu_head = None;
@@ -2195,11 +2227,24 @@ impl Calc {
             return;
         }
         if let Some(i) = self.shape_sel.take() {
-            if self.sheet().shapes_new.len() > i {
+            // 束ねた選択(Ctrl+クリック)があればまとめて消す。
+            // 後ろから消す=残りの番号がずれない
+            let mut idx: Vec<usize> = std::mem::take(&mut self.shape_multi);
+            idx.push(i);
+            idx.sort_unstable();
+            idx.dedup();
+            idx.retain(|&k| k < self.sheet().shapes_new.len());
+            if !idx.is_empty() {
                 self.checkpoint();
-                self.sheet_mut().shapes_new.remove(i);
+                for k in idx.iter().rev() {
+                    self.sheet_mut().shapes_new.remove(*k);
+                }
                 self.dirty = true;
-                self.status = ui::t!("図形を削除しました(Ctrl+Z で戻せます)").into();
+                self.status = if idx.len() == 1 {
+                    ui::t!("図形を削除しました(Ctrl+Z で戻せます)").into()
+                } else {
+                    ui::tf!("{} 個の図形を削除しました(Ctrl+Z で戻せます)", idx.len()).into()
+                };
             }
             cx.notify();
             return;
@@ -2850,6 +2895,7 @@ impl Calc {
                     self.checkpoint();
                     self.sheet_mut().shapes_new.remove(i);
                     self.shape_sel = None;
+                    self.shape_multi.clear();
                     self.dirty = true;
                     self.status = ui::t!("図形を切り取りました(貼り付けで戻せます)").into();
                 } else {
@@ -2870,17 +2916,31 @@ impl Calc {
                 self.status = ui::tf!("図形を {} に貼り付けました", self.cursor.a1()).into();
             }
             "sh-del" => {
+                // Ctrl+クリックの束ごと消す(Del キーと同じ振る舞い)
                 let Some(i) = self.shape_sel.take() else { return };
-                if self.sheet().shapes_new.len() <= i {
+                let mut idx: Vec<usize> = std::mem::take(&mut self.shape_multi);
+                idx.push(i);
+                idx.sort_unstable();
+                idx.dedup();
+                idx.retain(|&k| k < self.sheet().shapes_new.len());
+                if idx.is_empty() {
                     return;
                 }
                 self.checkpoint();
-                self.sheet_mut().shapes_new.remove(i);
+                for k in idx.iter().rev() {
+                    self.sheet_mut().shapes_new.remove(*k);
+                }
                 self.dirty = true;
-                self.status = ui::t!("図形を削除しました(Ctrl+Z で戻せます)").into();
+                self.status = if idx.len() == 1 {
+                    ui::t!("図形を削除しました(Ctrl+Z で戻せます)").into()
+                } else {
+                    ui::tf!("{} 個の図形を削除しました(Ctrl+Z で戻せます)", idx.len()).into()
+                };
             }
-            // 重なり順 = shapes_new の並び(後に描く方が前)
+            // 重なり順 = shapes_new の並び(後に描く方が前)。
+            // 並びが変わると束の番号が狂うので、束は解いて主の1つに絞る
             "sh-front" | "sh-forward" | "sh-backward" | "sh-back" => {
+                self.shape_multi.clear();
                 let Some(i) = self.shape_sel else { return };
                 let len = self.sheet().shapes_new.len();
                 if len <= i {
@@ -2956,6 +3016,113 @@ impl Calc {
         self.checkpoint();
         f(&mut self.sheet_mut().shapes_new[i]);
         self.dirty = true;
+    }
+
+    /// 図形を格子の絶対 px の位置へ置き直す(錨のセル+ずらしに直す)。
+    /// 整列・分布が使う。置き先が画面に無ければ動かさない(黙って飛ばさない)
+    fn place_shape_px(&mut self, i: usize, nx: f32, ny: f32) -> bool {
+        if let (Some(c), Some(r)) = (self.col_at(nx.max(HEAD_W)), self.row_at(ny.max(ROW_H))) {
+            let at = Pos::new(r, c);
+            if let Some((cx0, cy0)) = self.cell_origin_px(at) {
+                let sp = &mut self.sheet_mut().shapes_new[i];
+                sp.at = at;
+                sp.dx_px = (nx - cx0).max(0.0);
+                sp.dy_px = (ny - cy0).max(0.0);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 整列と分布(Ctrl+クリックで束ねた図形へ)。整列は2個から、分布は3個から。
+    /// 基準は束の外接の箱(本家の「選択した図形に合わせる」と同じ)
+    pub(crate) fn shape_align(&mut self, id: &str) {
+        let mut idx: Vec<usize> = self
+            .shape_sel
+            .into_iter()
+            .chain(self.shape_multi.iter().copied())
+            .collect();
+        idx.sort_unstable();
+        idx.dedup();
+        idx.retain(|&i| i < self.sheet().shapes_new.len());
+        // (番号, x, y, w, h)。画面に見えている(=位置が測れる)ものだけ
+        let mut items: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
+        for &i in &idx {
+            let sp = &self.sheet().shapes_new[i];
+            if let Some((sx, sy)) = self.cell_origin_px(sp.at) {
+                items.push((i, sx + sp.dx_px, sy + sp.dy_px, sp.width_px, sp.height_px));
+            }
+        }
+        let need = if id.starts_with("sh-dist") { 3 } else { 2 };
+        if items.len() < need {
+            self.status = ui::tf!(
+                "{} 個以上の図形を選んでから(Ctrl+クリックで足せます)",
+                need
+            )
+            .into();
+            return;
+        }
+        self.checkpoint();
+        let min_x = items.iter().map(|it| it.1).fold(f32::MAX, f32::min);
+        let max_r = items.iter().map(|it| it.1 + it.3).fold(f32::MIN, f32::max);
+        let min_y = items.iter().map(|it| it.2).fold(f32::MAX, f32::min);
+        let max_b = items.iter().map(|it| it.2 + it.4).fold(f32::MIN, f32::max);
+        let mut moves: Vec<(usize, f32, f32)> = Vec::new();
+        match id {
+            "sh-al-l" => moves.extend(items.iter().map(|&(i, _, y, _, _)| (i, min_x, y))),
+            "sh-al-r" => {
+                moves.extend(items.iter().map(|&(i, _, y, w, _)| (i, max_r - w, y)))
+            }
+            "sh-al-c" => {
+                let c = (min_x + max_r) / 2.0;
+                moves.extend(items.iter().map(|&(i, _, y, w, _)| (i, c - w / 2.0, y)));
+            }
+            "sh-al-t" => moves.extend(items.iter().map(|&(i, x, _, _, _)| (i, x, min_y))),
+            "sh-al-b" => {
+                moves.extend(items.iter().map(|&(i, x, _, _, h)| (i, x, max_b - h)))
+            }
+            "sh-al-m" => {
+                let m = (min_y + max_b) / 2.0;
+                moves.extend(items.iter().map(|&(i, x, _, _, h)| (i, x, m - h / 2.0)));
+            }
+            // 分布: 端の2つは留め、間の隙間を等しく
+            "sh-dist-h" => {
+                items.sort_by(|a, b| a.1.total_cmp(&b.1));
+                let sum_w: f32 = items.iter().map(|it| it.3).sum();
+                let gap = ((max_r - min_x) - sum_w) / (items.len() - 1) as f32;
+                let mut x = min_x;
+                for &(i, _, y, w, _) in &items {
+                    moves.push((i, x, y));
+                    x += w + gap;
+                }
+            }
+            "sh-dist-v" => {
+                items.sort_by(|a, b| a.2.total_cmp(&b.2));
+                let sum_h: f32 = items.iter().map(|it| it.4).sum();
+                let gap = ((max_b - min_y) - sum_h) / (items.len() - 1) as f32;
+                let mut y = min_y;
+                for &(i, x, _, _, h) in &items {
+                    moves.push((i, x, y));
+                    y += h + gap;
+                }
+            }
+            _ => return,
+        }
+        let mut n = 0usize;
+        for (i, nx, ny) in moves {
+            n += self.place_shape_px(i, nx, ny) as usize;
+        }
+        self.dirty = true;
+        self.status = match id {
+            "sh-al-l" => ui::tf!("{} 個を左に揃えました", n).into(),
+            "sh-al-c" => ui::tf!("{} 個を左右の中央に揃えました", n).into(),
+            "sh-al-r" => ui::tf!("{} 個を右に揃えました", n).into(),
+            "sh-al-t" => ui::tf!("{} 個を上に揃えました", n).into(),
+            "sh-al-m" => ui::tf!("{} 個を上下の中央に揃えました", n).into(),
+            "sh-al-b" => ui::tf!("{} 個を下に揃えました", n).into(),
+            "sh-dist-h" => ui::tf!("{} 個を横に等間隔で並べました", n).into(),
+            _ => ui::tf!("{} 個を縦に等間隔で並べました", n).into(),
+        };
     }
 
     /// 選択中の図形の回転の取っ手の中心(格子px)。折れ線ものには無い

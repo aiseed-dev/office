@@ -1487,6 +1487,63 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn 図形の整列と分布は束の外接の箱が基準(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            // 3つを別々の場所に(全部画面の中)
+            for (r, cc, w, h) in [(1u32, 1u32, 40.0f32, 20.0f32), (3, 3, 60.0, 30.0), (5, 5, 20.0, 40.0)] {
+                this.book.sheets[0].shapes_new.push(sheet::model::SheetShape {
+                    at: Pos::new(r, cc),
+                    width_px: w,
+                    height_px: h,
+                    kind: "rect".into(),
+                    line: Some("1B6E3C".into()),
+                    ..Default::default()
+                });
+            }
+            let pos = |this: &Calc, i: usize| -> (f32, f32, f32, f32) {
+                let sp = &this.book.sheets[0].shapes_new[i];
+                let (x, y) = this.cell_origin_px(sp.at).unwrap();
+                (x + sp.dx_px, y + sp.dy_px, sp.width_px, sp.height_px)
+            };
+            // 2個未満は動かず、状態行で案内する
+            this.shape_sel = Some(0);
+            let before = pos(this, 0);
+            this.shape_align("sh-al-l");
+            assert_eq!(pos(this, 0), before, "1個で整列が動いた");
+            // 左揃え: いちばん左の x に揃う
+            this.shape_multi = vec![1, 2];
+            let min_x = (0..3).map(|i| pos(this, i).0).fold(f32::MAX, f32::min);
+            this.shape_align("sh-al-l");
+            for i in 0..3 {
+                assert!((pos(this, i).0 - min_x).abs() < 1.5, "左に揃わない: {i}");
+            }
+            // 下揃え: いちばん下の底に揃う
+            let max_b = (0..3).map(|i| { let p = pos(this, i); p.1 + p.3 }).fold(f32::MIN, f32::max);
+            this.shape_align("sh-al-b");
+            for i in 0..3 {
+                let p = pos(this, i);
+                assert!((p.1 + p.3 - max_b).abs() < 1.5, "下に揃わない: {i}");
+            }
+            // 横に分布: 隙間が等しい(端の2つは留まる)
+            // まず縦に揃えてから横へ広げ直す
+            this.book.sheets[0].shapes_new[1].at = Pos::new(3, 6);
+            this.shape_align("sh-dist-h");
+            let mut ps: Vec<(f32, f32)> = (0..3).map(|i| { let p = pos(this, i); (p.0, p.2) }).collect();
+            ps.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let g1 = ps[1].0 - (ps[0].0 + ps[0].1);
+            let g2 = ps[2].0 - (ps[1].0 + ps[1].1);
+            assert!((g1 - g2).abs() < 2.0, "隙間が等しくない: {g1} vs {g2}");
+            // Del は束ごと消す
+            this.shape_sel = Some(0);
+            this.shape_multi = vec![1];
+            this.shape_menu_action("sh-del");
+            assert_eq!(this.book.sheets[0].shapes_new.len(), 1);
+            assert!(this.shape_multi.is_empty());
+        });
+    }
+
+    #[gpui::test]
     fn r1c1では見せ方が変わり中身はa1のまま(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

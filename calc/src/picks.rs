@@ -853,6 +853,8 @@ impl Calc {
             "sh-cut" | "sh-copy" | "sh-paste" | "sh-del" | "sh-front" | "sh-forward"
             | "sh-backward" | "sh-back" | "sh-rot-r" | "sh-rot-l" | "sh-flip-h"
             | "sh-flip-v" | "sh-save" | "sh-settings" => self.shape_menu_action(id),
+            "sh-al-l" | "sh-al-c" | "sh-al-r" | "sh-al-t" | "sh-al-m" | "sh-al-b"
+            | "sh-dist-h" | "sh-dist-v" => self.shape_align(id),
             "ps-values" => self.paste_special("values", cx),
             "ps-formulas" => self.paste_special("formulas", cx),
             "ps-formats" => self.paste_special("formats", cx),
@@ -1217,6 +1219,20 @@ impl Calc {
                 ("sh-flip-h", "左右に反転", true),
                 ("sh-flip-v", "上下に反転", true),
             ],
+            // 整列は2個から、分布は3個から(Ctrl+クリックで束ねる)
+            "sh-align" => {
+                let n = self.shape_sel.is_some() as usize + self.shape_multi.len();
+                vec![
+                    ("sh-al-l", "左揃え", n >= 2),
+                    ("sh-al-c", "左右中央揃え", n >= 2),
+                    ("sh-al-r", "右揃え", n >= 2),
+                    ("sh-al-t", "上揃え", n >= 2),
+                    ("sh-al-m", "上下中央揃え", n >= 2),
+                    ("sh-al-b", "下揃え", n >= 2),
+                    ("sh-dist-h", "横に分布", n >= 3),
+                    ("sh-dist-v", "縦に分布", n >= 3),
+                ]
+            }
             "clr" => vec![
                 // 本家の消去は5択(すべて/テキスト/書式/コメント/ハイパーリンク)
                 ("clear-all", "すべて", true),
@@ -2233,6 +2249,7 @@ impl Calc {
             self.ink_cur = None;
             self.status = ui::t!("セルの操作に戻りました").into();
         }
+        self.shape_multi.clear();
         if self.filter_panel.take().is_some()
             || self.solver.take().is_some()
             || self.slicer.take().is_some()
