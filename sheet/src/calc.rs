@@ -25,12 +25,57 @@ enum Tok {
     /// 別のシートの参照(シート名, 始点, 終点)。1セルなら始点=終点。
     /// 値は**その時の値を写す**(位置では持ち帰れない — RefAns::Rect と同じ理屈)
     Sheet(String, Pos, Pos),
+    /// 構造化参照(表の名前 — `[@列]` のときは None, 列の名前, この行だけか)。
+    /// `Table1[金額]` = その列のデータ本体、`[@金額]` = いまの行の同じ列
+    Table(Option<String>, String, bool),
     Name(String),
     Op(char),
     Cmp(String),
     LParen,
     RParen,
     Comma,
+}
+
+/// 構造化参照 `Table1[金額]` / `Table1[@金額]` / `[@金額]` / `[金額]` を読む。
+/// 読めたら (表の名前, 列の名前, この行だけか, 次の位置)。
+/// `[[#見出し],[列]]` のような入れ子の形は**受けない**(None を返して
+/// 式のエラーにする — 黙って違う範囲を読むより正直)
+#[allow(clippy::type_complexity)]
+fn lex_table_ref(b: &[char], i: usize) -> Option<(Option<String>, String, bool, usize)> {
+    let (tbl, open) = if b.get(i) == Some(&'[') {
+        (None, i) // 表の名前を省いた形 — いまのセルが入っている表
+    } else {
+        let mut j = i;
+        let mut s = String::new();
+        while j < b.len() && (b[j].is_alphanumeric() || b[j] == '_' || b[j] == '.') {
+            s.push(b[j]);
+            j += 1;
+        }
+        if s.is_empty() || b.get(j) != Some(&'[') {
+            return None;
+        }
+        (Some(s), j)
+    };
+    // 中身は `]` まで。入れ子の `[` があれば受けない
+    let mut k = open + 1;
+    let mut inner = String::new();
+    while k < b.len() && b[k] != ']' {
+        if b[k] == '[' {
+            return None;
+        }
+        inner.push(b[k]);
+        k += 1;
+    }
+    if k >= b.len() {
+        return None; // 閉じていない
+    }
+    let this_row = inner.starts_with('@');
+    let col = inner.trim_start_matches('@').trim().to_string();
+    // `#見出し` などの特別な名前は受けない(上と同じ理由)
+    if col.is_empty() || col.starts_with('#') {
+        return None;
+    }
+    Some((tbl, col, this_row, k + 1))
 }
 
 /// `Sheet2!A1` / `売上!A1:B3` / `'4月 実績'!B2` を読む。
@@ -109,6 +154,12 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
         // 数字で始まる名前があるため)。`!` が無ければ素通しする
         if let Some((name, a, z, k)) = lex_sheet_ref(&b, i) {
             out.push(Tok::Sheet(name, a, z));
+            i = k;
+            continue;
+        }
+        // 構造化参照(表の列)。`[` が要るので、これも当たらなければ素通し
+        if let Some((tbl, col, this_row, k)) = lex_table_ref(&b, i) {
+            out.push(Tok::Table(tbl, col, this_row));
             i = k;
             continue;
         }
@@ -391,6 +442,39 @@ impl<'a> P<'a> {
         }
     }
 
+    /// 構造化参照を範囲に直す。表の名前(省いたらいまのセルが入っている表)と
+    /// **見出しの字**で列を引く。見出し行の無い表からは引けない(None)
+    fn table_range(&self, tbl: Option<&str>, col: &str, this_row: bool) -> Option<(Pos, Pos)> {
+        let inside = |t: &crate::model::TableDef, p: Pos| {
+            p.row >= t.a.row && p.row <= t.b.row && p.col >= t.a.col && p.col <= t.b.col
+        };
+        let t = match tbl {
+            Some(n) => self.sheet.tables.iter().find(|t| t.name == n)?,
+            None => self.sheet.tables.iter().find(|t| inside(t, self.at))?,
+        };
+        if !t.header {
+            return None; // 見出しが無ければ列を名前で引けない
+        }
+        let c = (t.a.col..=t.b.col).find(|c| {
+            self.sheet
+                .get(Pos::new(t.a.row, *c))
+                .map(|x| x.value.display())
+                .unwrap_or_default()
+                == col
+        })?;
+        if this_row {
+            // いまの行の同じ列。表の外や見出しの行なら引けない
+            if self.at.row <= t.a.row || self.at.row > t.b.row {
+                return None;
+            }
+            return Some((Pos::new(self.at.row, c), Pos::new(self.at.row, c)));
+        }
+        // データ本体(見出しと合計行は外す)
+        let r0 = t.a.row + 1;
+        let r1 = if t.totals { t.b.row.checked_sub(1)? } else { t.b.row };
+        (r0 <= r1).then_some((Pos::new(r0, c), Pos::new(r1, c)))
+    }
+
     /// OFFSET / INDIRECT — **計算して決まる参照**。
     /// Ok(RefAns) / Err(構文エラー) の2層
     fn ref_call(&mut self, name: &str) -> Result<RefAns, String> {
@@ -497,6 +581,15 @@ impl<'a> P<'a> {
                 RefAns::Rect(_, vals) => vals.into_iter().next().unwrap_or(Value::Empty),
                 RefAns::Bad(v) => v,
             }),
+            Some(Tok::Table(tbl, col, this_row)) => {
+                Ok(match self.table_range(tbl.as_deref(), &col, this_row) {
+                    // 単独なら先頭の値([@列] は1セルなのでその値)
+                    Some((a, z)) => {
+                        self.range_values(a, z).into_iter().next().unwrap_or(Value::Empty)
+                    }
+                    None => Value::Error("#REF!".into()),
+                })
+            }
             Some(Tok::LParen) => {
                 let v = self.expr()?;
                 match self.next() {
@@ -730,6 +823,18 @@ impl AP<'_, '_> {
                 let cols = (a.col.abs_diff(z.col) + 1) as usize;
                 let vals = self.p.range_values(a, z);
                 Ok(AVal::Arr(vals.chunks(cols.max(1)).map(|r| r.to_vec()).collect()))
+            }
+            // 構造化参照も並びで渡す(=SUM(Table1[金額]) が効く)
+            Some(Tok::Table(tbl, col, this_row)) => {
+                self.p.next();
+                Ok(match self.p.table_range(tbl.as_deref(), &col, this_row) {
+                    Some((a, z)) => {
+                        let cols = (a.col.abs_diff(z.col) + 1) as usize;
+                        let vals = self.p.range_values(a, z);
+                        AVal::Arr(vals.chunks(cols.max(1)).map(|r| r.to_vec()).collect())
+                    }
+                    None => AVal::One(Value::Error("#REF!".into())),
+                })
             }
             // 別シートの範囲も並びで渡す(=SUM(Sheet2!A1:A5) が効く)
             Some(Tok::Sheet(name, a, z)) => {
@@ -2652,7 +2757,9 @@ fn recalc_impl(sheet: &mut Sheet, others: &[&Sheet]) {
                 .as_ref()
                 .map(|f| {
                     let u = f.to_ascii_uppercase();
-                    u.contains("OFFSET") || u.contains("INDIRECT")
+                    // 構造化参照(`[`)も deps では位置に解けない —
+                    // 依存の順が読めないので、値が動かなくなるまで回す組に入れる
+                    u.contains("OFFSET") || u.contains("INDIRECT") || u.contains('[')
                         || ARRAY_FNS.iter().any(|n| u.contains(n))
                 })
                 .unwrap_or(false)
@@ -4583,5 +4690,91 @@ mod subtotal_hidden_tests {
         s2.row_hidden.insert(1);
         assert_eq!(val(&mut s2, "=SUM(A1:A4)"), Value::Number(100.0));
         assert_eq!(val(&mut s2, "=AVERAGE(A1:A4)"), Value::Number(25.0));
+    }
+}
+
+/// 構造化参照(2026-08-08 実装。台帳 第3便 [中])。
+/// 表オブジェクトの列を見出しの字で引く — Excel の `=SUM(Table1[金額])`
+#[cfg(test)]
+mod table_ref_tests {
+    use super::*;
+    use crate::model::{Cell, TableDef};
+
+    /// A1:C4 の表(見出し + 3行)。名前は「売上表」
+    fn with_table(totals: bool) -> Sheet {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        let rows = [
+            ("A1", "品名"), ("B1", "数量"), ("C1", "金額"),
+            ("A2", "筆"), ("B2", "2"), ("C2", "100"),
+            ("A3", "紙"), ("B3", "3"), ("C3", "200"),
+            ("A4", "机"), ("B4", "1"), ("C4", "900"),
+        ];
+        for (a1, v) in rows {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(v));
+        }
+        if totals {
+            s.set(Pos::parse("A5").unwrap(), Cell::input("合計"));
+            s.set(Pos::parse("C5").unwrap(), Cell::input("1200"));
+        }
+        s.tables.push(TableDef {
+            name: "売上表".into(),
+            a: Pos::parse("A1").unwrap(),
+            b: Pos::parse(if totals { "C5" } else { "C4" }).unwrap(),
+            header: true,
+            totals,
+            ..Default::default()
+        });
+        s
+    }
+
+    fn at(s: &mut Sheet, cell: &str, f: &str) -> Value {
+        s.set(Pos::parse(cell).unwrap(), Cell::input(f));
+        recalc(s);
+        s.value(Pos::parse(cell).unwrap())
+    }
+
+    #[test]
+    fn 表の列を見出しの字で引ける() {
+        let mut s = with_table(false);
+        assert_eq!(at(&mut s, "E1", "=SUM(売上表[金額])"), Value::Number(1200.0));
+        assert_eq!(at(&mut s, "E2", "=AVERAGE(売上表[数量])"), Value::Number(2.0));
+        assert_eq!(at(&mut s, "E3", "=COUNTA(売上表[品名])"), Value::Number(3.0));
+        // 単独なら先頭の値
+        assert_eq!(at(&mut s, "E4", "=売上表[金額]"), Value::Number(100.0));
+        // 知らない列・知らない表は #REF!(黙って違う所を読まない)
+        assert_eq!(at(&mut s, "E5", "=SUM(売上表[無い列])"), Value::Error("#REF!".into()));
+        assert_eq!(at(&mut s, "E6", "=SUM(無い表[金額])"), Value::Error("#REF!".into()));
+    }
+
+    #[test]
+    fn 合計行はデータ本体から外れる() {
+        let mut s = with_table(true);
+        // C5 の 1200 は合計行なので二重に数えない
+        assert_eq!(at(&mut s, "E1", "=SUM(売上表[金額])"), Value::Number(1200.0));
+    }
+
+    #[test]
+    fn この行の参照は同じ行の列を指す() {
+        let mut s = with_table(false);
+        // 表を D 列(税)まで広げて、その中で [@金額] を使う。
+        // **名前を省いた形は表の中でだけ効く**(Excel と同じ)
+        s.set(Pos::parse("D1").unwrap(), Cell::input("税"));
+        s.tables[0].b = Pos::parse("D4").unwrap();
+        assert_eq!(at(&mut s, "D3", "=[@金額]*2"), Value::Number(400.0));
+        // 表の名前つきなら表の外の同じ行からも引ける
+        assert_eq!(at(&mut s, "E3", "=売上表[@数量]"), Value::Number(3.0));
+        // 見出しの行では引けない
+        assert_eq!(at(&mut s, "E1", "=売上表[@金額]"), Value::Error("#REF!".into()));
+        // 表の外で名前を省いたら引けない(どの表か決まらない)
+        assert_eq!(at(&mut s, "G3", "=[@金額]"), Value::Error("#REF!".into()));
+    }
+
+    #[test]
+    fn 表が無ければ今までどおりの読み方() {
+        // 表オブジェクトが無いシートで [ が出たら式のエラー(黙って0にしない)
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        s.set(Pos::parse("A1").unwrap(), Cell::input("=SUM(無い表[金額])"));
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("A1").unwrap()), Value::Error("#REF!".into()));
     }
 }
