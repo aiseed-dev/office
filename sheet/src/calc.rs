@@ -1096,19 +1096,29 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
                 _ => Value::Number(picked.iter().cloned().reduce(f64::max).unwrap_or(0.0)),
             });
         }
-        "AVERAGEIF" => {
+        "SUMIF" | "AVERAGEIF" => {
+            // SUMIF(条件を見る範囲, 条件, [足す範囲])
             // AVERAGEIF(条件を見る範囲, 条件, [平均する範囲])
+            // 3つ目を省いたら、条件を見た範囲そのものを足す(平均する)
             let rng = args.first().map(|g| g.values()).unwrap_or(&[]);
             let cond = args.get(1).map(|g| g.first()).unwrap_or(Value::Empty);
-            let avg = args.get(2).map(|g| g.values()).unwrap_or(rng);
-            if avg.len() != rng.len() {
+            let tgt = args.get(2).map(|g| g.values()).unwrap_or(rng);
+            if tgt.len() != rng.len() {
                 return Ok(Value::Error("#VALUE!".into()));
+            }
+            // 範囲にエラーがあればそれを返す(黙って0として数えない)
+            if let Some(e) =
+                rng.iter().chain(tgt).chain([&cond]).find(|v| matches!(v, Value::Error(_)))
+            {
+                return Ok(e.clone());
             }
             let picked: Vec<f64> = (0..rng.len())
                 .filter(|i| matches_cond(&rng[*i], &cond))
-                .map(|i| avg[i].as_number())
+                .map(|i| tgt[i].as_number())
                 .collect();
-            return Ok(if picked.is_empty() {
+            return Ok(if name == "SUMIF" {
+                Value::Number(picked.iter().sum())
+            } else if picked.is_empty() {
                 Value::Error("#DIV/0!".into())
             } else {
                 Value::Number(picked.iter().sum::<f64>() / picked.len() as f64)
@@ -1392,16 +1402,6 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
             let f = 10f64.powi(d as i32);
             // 0 から遠ざかる向きに上げる(負の数で符号が入れ替わらないように)
             Value::Number(if v < 0.0 { (v * f).floor() / f } else { (v * f).ceil() / f })
-        }
-        "SUMIF" => {
-            // SUMIF(範囲, 条件) — 条件に合うものだけ足す
-            let cond = a.last().cloned().unwrap_or(Value::Empty);
-            let sum: f64 = a[..a.len().saturating_sub(1)]
-                .iter()
-                .filter(|v| matches_cond(v, &cond))
-                .map(|v| v.as_number())
-                .sum();
-            Value::Number(sum)
         }
         "COUNTIF" => {
             let cond = a.last().cloned().unwrap_or(Value::Empty);
@@ -3385,6 +3385,28 @@ mod dan1_tests {
     }
 
     #[test]
+    fn 三つ引数のsumifは足す範囲を分けられる() {
+        // =SUMIF(条件範囲, 条件, 合計範囲) — Excel で最も多い書き方。
+        // 条件は B 列で見て、足すのは C 列
+        let mut s = sheet_with(&[
+            ("A1", "筆"), ("B1", "文具"), ("C1", "100"),
+            ("A2", "紙"), ("B2", "文具"), ("C2", "200"),
+            ("A3", "机"), ("B3", "家具"), ("C3", "900"),
+        ]);
+        assert_eq!(n(&mut s, "=SUMIF(B1:B3,\"文具\",C1:C3)"), 300.0);
+        // 3つ目を省いたら、条件を見た範囲そのものを足す
+        assert_eq!(n(&mut s, "=SUMIF(C1:C3,\">150\")"), 1100.0);
+        // 1件も合わなければ 0(Excel の約束)
+        assert_eq!(n(&mut s, "=SUMIF(B1:B3,\"食品\",C1:C3)"), 0.0);
+        // 範囲の大きさが違えば黙って数を返さない
+        assert_eq!(
+            value_of(&mut s, "=SUMIF(B1:B3,\"文具\",C1:C2)"),
+            Value::Error("#VALUE!".into()),
+            "大きさ違いを黙って計算しない"
+        );
+    }
+
+    #[test]
     fn sumproductで掛けて足す() {
         let mut s = sheet_with(&[
             ("A1", "4"), ("B1", "100"),
@@ -4153,6 +4175,28 @@ mod dan5_tests {
         let mut alone = sheet_with(&[("A1", "=INDIRECT(\"台帳!B2\")")]);
         recalc(&mut alone);
         assert_eq!(alone.value(Pos::parse("A1").unwrap()), Value::Error("#REF!".into()));
+    }
+
+    #[test]
+    fn 別のシートを間接参照する三つ引数のsumif() {
+        // 実物の xlsx で出た形。条件範囲と合計範囲が別々に INDIRECT で来る
+        let mut book = crate::Book::new();
+        book.sheets[0] =
+            sheet_with(&[("A1", "=SUMIF(INDIRECT(\"4月!A1:A3\"),\"りんご\",INDIRECT(\"4月!B1:B3\"))")]);
+        book.sheets[0].name = "表紙".into();
+        let mut april = sheet_with(&[
+            ("A1", "りんご"), ("B1", "100"),
+            ("A2", "みかん"), ("B2", "200"),
+            ("A3", "りんご"), ("B3", "50"),
+        ]);
+        april.name = "4月".into();
+        book.sheets.push(april);
+        recalc_all(&mut book);
+        assert_eq!(
+            book.sheets[0].value(Pos::parse("A1").unwrap()),
+            Value::Number(150.0),
+            "3引数 SUMIF が黙って違う数を返している"
+        );
     }
 }
 
