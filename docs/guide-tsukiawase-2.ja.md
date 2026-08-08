@@ -563,7 +563,7 @@ from-excel(乗り換えの手引き)の起草で、Excel の課題の並びと�
 - **[中] SUBTOTAL/AGGREGATE の 101〜111(隠れた行の除外)** — 評価器が
   行の畳み(絞り込み・非表示)を知らず 1〜11 と同じに扱う(calc.rs に
   正直な近似と明記)。上の「合計の集計のしかた」✔ 行の文言もこれで訂正した
-- **[大] 直書きの別シート参照(=Sheet2!A1)が字句で落ちる** — `lex`
+- ✔(2026-08-08 実装: lex に `lex_sheet_ref`(和文の名前・引用符つき・範囲)を足し `Tok::Sheet` を新設。解決は `P::sheet_ans` に一本化して INDIRECT と道を共有。知らない名前と1枚だけの計算は #REF!。recalc_all は `!` を含む式があれば2周する。試験4本)**[大] 直書きの別シート参照(=Sheet2!A1)が字句で落ちる** — `lex`
   (sheet/src/calc.rs)が `!` を知らず、`=Sheet2!A1` も `=4月!B2` も
   「読めない文字」で #ERROR!(recalc・recalc_all のどちらでも)。解けるのは
   `INDIRECT("Sheet2!A1")` 経由だけ(calc.rs の `ref_call`)。**他所の xlsx を

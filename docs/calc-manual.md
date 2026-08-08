@@ -96,6 +96,14 @@ Start with `=` for a formula. Arithmetic (`+ - * /`), comparisons
 names all work. Editing triggers recalculation; circular references are detected
 and reported (never silent).
 
+**Cross-sheet references**: write `=Sheet2!B2` directly (ranges too:
+`=SUM(Sheet2!B1:B5)`; quote names containing spaces or symbols:
+`='Q1 actuals'!B2`). An unknown sheet name gives **#REF!** — it is never
+silently read as the current sheet. Cross-sheet values are **copied as of that
+moment**, so edit the source and recalculate (F9) to catch up. Renaming a sheet
+rewrites `oldname!` inside formulas (but **not inside strings** such as
+`INDIRECT("oldname!A1")` — quoted text is left alone).
+
 **About 185 functions** are implemented (including modern aliases). By category:
 
 | Category | Functions |

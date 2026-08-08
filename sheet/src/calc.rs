@@ -22,12 +22,63 @@ enum Tok {
     Str(String),
     Ref(Pos),
     Range(Pos, Pos),
+    /// 別のシートの参照(シート名, 始点, 終点)。1セルなら始点=終点。
+    /// 値は**その時の値を写す**(位置では持ち帰れない — RefAns::Rect と同じ理屈)
+    Sheet(String, Pos, Pos),
     Name(String),
     Op(char),
     Cmp(String),
     LParen,
     RParen,
     Comma,
+}
+
+/// `Sheet2!A1` / `売上!A1:B3` / `'4月 実績'!B2` を読む。
+/// 読めたら (シート名, 始点, 終点, 次の位置)。**後ろに `!` があるときだけ**
+/// 当たるので、既存の字句の読み方は変わらない(当たらなければ None で素通し)。
+/// 和文のシート名(売上・4月)も通すため、名前の走査は Unicode の英数字で見る
+fn lex_sheet_ref(b: &[char], i: usize) -> Option<(String, Pos, Pos, usize)> {
+    let (name, after) = if b.get(i) == Some(&'\'') {
+        // 引用符つき = 空白や記号を含む名前('4月 実績'!B2)
+        let mut j = i + 1;
+        let mut s = String::new();
+        while j < b.len() && b[j] != '\'' {
+            s.push(b[j]);
+            j += 1;
+        }
+        if j >= b.len() {
+            return None; // 閉じていない — 既存の枝に任せる
+        }
+        (s, j + 1)
+    } else {
+        let mut j = i;
+        let mut s = String::new();
+        while j < b.len() && (b[j].is_alphanumeric() || b[j] == '_' || b[j] == '.') {
+            s.push(b[j]);
+            j += 1;
+        }
+        (s, j)
+    };
+    if name.is_empty() || b.get(after) != Some(&'!') {
+        return None;
+    }
+    // `!` の後ろの A1 か A1:B3
+    let one = |from: usize| -> (Option<Pos>, usize) {
+        let mut j = from;
+        while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == '$') {
+            j += 1;
+        }
+        (Pos::parse(&b[from..j].iter().collect::<String>()), j)
+    };
+    let (a, j) = one(after + 1);
+    let a = a?;
+    if b.get(j) == Some(&':') {
+        let (z, k) = one(j + 1);
+        if let Some(z) = z {
+            return Some((name, a, z, k));
+        }
+    }
+    Some((name, a, a, j))
 }
 
 fn lex(src: &str) -> Result<Vec<Tok>, String> {
@@ -52,6 +103,13 @@ fn lex(src: &str) -> Result<Vec<Tok>, String> {
             }
             i += 1;
             out.push(Tok::Str(s));
+            continue;
+        }
+        // 別シートの参照は**数の枝より先**に見る(`4月!B2` のように
+        // 数字で始まる名前があるため)。`!` が無ければ素通しする
+        if let Some((name, a, z, k)) = lex_sheet_ref(&b, i) {
+            out.push(Tok::Sheet(name, a, z));
+            i = k;
             continue;
         }
         if c.is_ascii_digit() || (c == '.' && i + 1 < b.len() && b[i + 1].is_ascii_digit()) {
@@ -301,6 +359,30 @@ impl<'a> P<'a> {
         Ok(out)
     }
 
+    /// 別のシートの範囲を答える。直書きの `Sheet2!A1` と
+    /// `INDIRECT("Sheet2!A1")` の両方がここを通る(道を1本にする)。
+    /// 自分のシート名なら普通の範囲、知らない名前と1枚だけの計算では #REF!
+    fn sheet_ans(&self, name: &str, a: Pos, z: Pos) -> RefAns {
+        if name == self.sheet.name {
+            return RefAns::At(a, z);
+        }
+        match self.others.iter().find(|s| s.name == name) {
+            // 別のシートの値は**その時の値**を写す(位置では持ち帰れない)
+            Some(other) => {
+                let cols = a.col.abs_diff(z.col) + 1;
+                let mut vals = Vec::new();
+                for r in a.row.min(z.row)..=a.row.max(z.row) {
+                    for c in a.col.min(z.col)..=a.col.max(z.col) {
+                        vals.push(other.value(Pos::new(r, c)));
+                    }
+                }
+                RefAns::Rect(cols, vals)
+            }
+            // 知らない名前・1枚だけの計算では #REF!(黙って自シートと読まない)
+            None => RefAns::Bad(Value::Error("#REF!".into())),
+        }
+    }
+
     /// OFFSET / INDIRECT — **計算して決まる参照**。
     /// Ok(RefAns) / Err(構文エラー) の2層
     fn ref_call(&mut self, name: &str) -> Result<RefAns, String> {
@@ -328,22 +410,7 @@ impl<'a> P<'a> {
             };
             return Ok(match sheet_name {
                 None => RefAns::At(a, z),
-                Some(n) if n == self.sheet.name => RefAns::At(a, z),
-                Some(n) => match self.others.iter().find(|s| s.name == n) {
-                    // 別のシートの値は**その時の値**を写す(位置では持ち帰れない)
-                    Some(other) => {
-                        let cols = a.col.abs_diff(z.col) + 1;
-                        let mut vals = Vec::new();
-                        for r in a.row.min(z.row)..=a.row.max(z.row) {
-                            for c in a.col.min(z.col)..=a.col.max(z.col) {
-                                vals.push(other.value(Pos::new(r, c)));
-                            }
-                        }
-                        RefAns::Rect(cols, vals)
-                    }
-                    // 知らない名前・1枚だけの計算では #REF!(黙って自シートと読まない)
-                    None => RefAns::Bad(Value::Error("#REF!".into())),
-                },
+                Some(n) => self.sheet_ans(&n, a, z),
             });
         }
         // OFFSET(基準, 行, 列, [高さ], [幅])
@@ -415,6 +482,13 @@ impl<'a> P<'a> {
                 // 単独の範囲は先頭セルの値(関数の外では範囲は使えない)
                 Ok(self.range_values(a, z).into_iter().next().unwrap_or(Value::Empty))
             }
+            Some(Tok::Sheet(name, a, z)) => Ok(match self.sheet_ans(&name, a, z) {
+                RefAns::At(a, z) => {
+                    self.range_values(a, z).into_iter().next().unwrap_or(Value::Empty)
+                }
+                RefAns::Rect(_, vals) => vals.into_iter().next().unwrap_or(Value::Empty),
+                RefAns::Bad(v) => v,
+            }),
             Some(Tok::LParen) => {
                 let v = self.expr()?;
                 match self.next() {
@@ -631,6 +705,21 @@ impl AP<'_, '_> {
                 let cols = (a.col.abs_diff(z.col) + 1) as usize;
                 let vals = self.p.range_values(a, z);
                 Ok(AVal::Arr(vals.chunks(cols.max(1)).map(|r| r.to_vec()).collect()))
+            }
+            // 別シートの範囲も並びで渡す(=SUM(Sheet2!A1:A5) が効く)
+            Some(Tok::Sheet(name, a, z)) => {
+                self.p.next();
+                Ok(match self.p.sheet_ans(&name, a, z) {
+                    RefAns::At(a, z) => {
+                        let cols = (a.col.abs_diff(z.col) + 1) as usize;
+                        let vals = self.p.range_values(a, z);
+                        AVal::Arr(vals.chunks(cols.max(1)).map(|r| r.to_vec()).collect())
+                    }
+                    RefAns::Rect(cols, vals) => AVal::Arr(
+                        vals.chunks((cols as usize).max(1)).map(|r| r.to_vec()).collect(),
+                    ),
+                    RefAns::Bad(v) => AVal::One(v),
+                })
             }
             Some(Tok::LParen) => {
                 self.p.next();
@@ -2510,11 +2599,13 @@ pub fn recalc_book(book: &mut crate::Book, target: usize) {
 /// 全シートの再計算。別のシートへの間接参照があるときは、
 /// 参照の先が新しくなるようもう1周する
 pub fn recalc_all(book: &mut crate::Book) {
+    // 直書きの `Sheet2!A1` も INDIRECT と同じく別シートを見るので、
+    // `!` を含む式があれば2周する(参照の先が新しくなってから写すため)
     let cross = book.sheets.iter().any(|s| {
         s.cells.values().any(|c| {
             c.formula
                 .as_ref()
-                .map(|f| f.to_ascii_uppercase().contains("INDIRECT"))
+                .map(|f| f.to_ascii_uppercase().contains("INDIRECT") || f.contains('!'))
                 .unwrap_or(false)
         })
     });
@@ -4333,5 +4424,86 @@ mod py_cell_tests {
             }
             _ => panic!("引数の型が違う"),
         }
+    }
+}
+
+/// 直書きの別シート参照(2026-08-08。それまでは `!` を読めず #ERROR! だった)。
+/// 他所の xlsx にはこの形の式が並の頻度で入っている — 乗り換えの壁だった所
+#[cfg(test)]
+mod cross_sheet_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn sheet_named(name: &str, cells: &[(&str, &str)]) -> Sheet {
+        let mut s = Sheet { name: name.into(), ..Default::default() };
+        for (a1, v) in cells {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(v));
+        }
+        s
+    }
+
+    /// 表紙 + 4月 + '5月 実績' の3枚。表紙の式を引数で差し替えて値を見る
+    fn ans(formula: &str) -> Value {
+        let mut book = crate::Book::new();
+        book.sheets[0] = sheet_named("表紙", &[("A1", formula)]);
+        book.sheets.push(sheet_named("4月", &[("B1", "100"), ("B2", "200"), ("B3", "文")]));
+        book.sheets.push(sheet_named("5月 実績", &[("B2", "50")]));
+        recalc_all(&mut book);
+        book.sheets[0].value(Pos::parse("A1").unwrap())
+    }
+
+    #[test]
+    fn 直書きの別シート参照が解ける() {
+        // 1セル・和文のシート名(Excel が普通に書く形)
+        assert_eq!(ans("=4月!B1"), Value::Number(100.0));
+        // 範囲は関数の中で並びとして渡る
+        assert_eq!(ans("=SUM(4月!B1:B2)"), Value::Number(300.0));
+        assert_eq!(ans("=COUNTA(4月!B1:B3)"), Value::Number(3.0));
+        // 式の中で他の値と混ぜられる
+        assert_eq!(ans("=4月!B1*2+1"), Value::Number(201.0));
+        // 引用符つき(空白を含む名前)
+        assert_eq!(ans("='5月 実績'!B2"), Value::Number(50.0));
+        // 自分のシート名は普通の参照として働く
+        let mut book = crate::Book::new();
+        book.sheets[0] = sheet_named("表紙", &[("A1", "=表紙!C3"), ("C3", "7")]);
+        recalc_all(&mut book);
+        assert_eq!(book.sheets[0].value(Pos::parse("A1").unwrap()), Value::Number(7.0));
+    }
+
+    #[test]
+    fn 知らないシートと1枚だけの計算は参照エラー() {
+        // 黙って自分のシートと読まない
+        assert_eq!(ans("=無い月!B1"), Value::Error("#REF!".into()));
+        // 1枚だけの再計算(others が空)でも #REF! — 嘘の値を出さない
+        let mut only = sheet_named("表紙", &[("A1", "=4月!B1")]);
+        recalc(&mut only);
+        assert_eq!(only.value(Pos::parse("A1").unwrap()), Value::Error("#REF!".into()));
+    }
+
+    #[test]
+    fn 既存の書き方を壊していない() {
+        // INDIRECT の道は今までどおり
+        assert_eq!(ans("=INDIRECT(\"4月!B1\")"), Value::Number(100.0));
+        assert_eq!(ans("=SUM(INDIRECT(\"4月!B1:B2\"))"), Value::Number(300.0));
+        // 同じシートの参照・範囲・関数名は `!` を足しても変わらない
+        let mut s = sheet_named("表紙", &[
+            ("A1", "10"), ("A2", "20"),
+            ("B1", "=SUM(A1:A2)"), ("B2", "=A1<>A2"), ("B3", "=NOT(A1=A2)"),
+        ]);
+        recalc(&mut s);
+        assert_eq!(s.value(Pos::parse("B1").unwrap()), Value::Number(30.0));
+        assert_eq!(s.value(Pos::parse("B2").unwrap()), Value::Bool(true));
+        assert_eq!(s.value(Pos::parse("B3").unwrap()), Value::Bool(true));
+    }
+
+    #[test]
+    fn 別シートを見る式どうしが連鎖しても解ける() {
+        // 4月!B1 → 集計!A1 → 表紙!A1 の2段(再計算の周回が足りるか)
+        let mut book = crate::Book::new();
+        book.sheets[0] = sheet_named("表紙", &[("A1", "=集計!A1+1")]);
+        book.sheets.push(sheet_named("集計", &[("A1", "=4月!B1*2")]));
+        book.sheets.push(sheet_named("4月", &[("B1", "100")]));
+        recalc_all(&mut book);
+        assert_eq!(book.sheets[0].value(Pos::parse("A1").unwrap()), Value::Number(201.0));
     }
 }
