@@ -45,7 +45,15 @@
    finish-args の `--filesystem=home` を外してポータルに絞る(狭い方が良い)
 3. **GPUI(blade/Vulkan)** が `--device=dri` で描けるか。Wayland と X11 両方
 4. 排他ロック(開いているブックの .lock)が共有フォルダで従来どおり働くか
-5. Flathub 申請の残り: アイコン(scalable SVG)、metainfo の screenshots、
+5. **AI メニューの claude CLI**: 中からホストの claude を呼ぶには
+   `flatpak-spawn --host` が要る。--sandbox と同じ talk-name の口だが、
+   --host は「ホストで任意のコマンド」の重い権限で **Flathub 審査で見られる**。
+   AI 無しでも製品は成立する作りなので、通らなければストア版は AI 宛先を
+   「Claude API 直」に絞る(2026-08-04 の検討どおり)
+6. ホストのフォント: Flatpak は /run/host/fonts に見せてくる。
+   kumihan::font の解決がそこを拾えるか(書体は名指ししない方針なので、
+   fontconfig が通れば素通りのはず — 実機で見る)
+7. Flathub 申請の残り: アイコン(scalable SVG)、metainfo の screenshots、
    summary/description の磨き、OARS の回答
 
 ## Mac App Store は?
