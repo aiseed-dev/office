@@ -51,7 +51,7 @@ impl Backend {
             _ => Backend::Local,
         }
     }
-    /// 次の宛先(釦で回して選ぶ)
+    /// 次の宛先(ボタンで回して選ぶ)
     pub fn next(self) -> Backend {
         match self {
             Backend::Local => Backend::ClaudeCli,

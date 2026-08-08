@@ -143,8 +143,8 @@ pub const WRITER: &[Tab] = &[
         c("ruler", "标尺", "ruler"),
         c("show-toolbar", "始终显示工具栏", "show-toolbar"),
         c("show-statusbar", "状态栏", "show-statusbar"),
-        c("show-left", "左侧面板", "show-left"),
-        c("show-right", "右侧面板", "show-right"),
+        c("show-left", "左侧面パネル", "show-left"),
+        c("show-right", "右侧面パネル", "show-right"),
     ]},
     Tab { name: "插件", cmds: &[
         c("plug-macros", "宏", "plug-macros"),

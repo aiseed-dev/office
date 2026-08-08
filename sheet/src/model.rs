@@ -412,7 +412,7 @@ pub struct Sheet {
     pub tables: Vec<TableDef>,
     /// 読み込んだ xlsx でのセルの書式索引(`<c s="…">`)。
     /// **保存で原本の styles.xml を据え置く**ための控え — 書式を触って
-    /// いないセルは同じ索引で書き戻す(勝手な書式設定をしないの家訓)。
+    /// いないセルは同じ索引で書き戻す(勝手な書式設定をしないの方針)。
     /// 行や列を動かして古くなっても、保存時に中身を照合するので誤用はない
     pub style_of: BTreeMap<Pos, u32>,
     /// 右から左へ並べる(xlsx の sheetView rightToLeft)。
@@ -513,7 +513,7 @@ pub struct SheetShape {
     pub points: Vec<(f32, f32)>,
     /// 棒の底(0..1 の y)。"spark-col"/"spark-wl" が使う(他は 0 のまま)
     pub base: f32,
-    /// 錨のセルからの右・下へのずらし(px)。SmartArt のような
+    /// アンカーのセルからの右・下へのずらし(px)。SmartArt のような
     /// 図形の集まりを、セルの粗さに縛られずに組むための細かい座標
     pub dx_px: f32,
     pub dy_px: f32,
@@ -751,7 +751,7 @@ impl SheetShape {
 pub struct SheetImage {
     /// 左上を留めるセル
     pub at: Pos,
-    /// 錨のセルからのずらし(px)。移動でセルに収まらない分を持つ
+    /// アンカーのセルからのずらし(px)。移動でセルに収まらない分を持つ
     pub dx_px: f32,
     pub dy_px: f32,
     /// 画面での大きさ(px)。xlsx の EMU とは 9525 EMU = 1px で換算
@@ -813,7 +813,7 @@ impl Validation {
     }
 
     /// 打った文字が規則に合うか。**判定できない規則は堰き止めない**
-    /// (date/time/custom、数でない式 — 読めない規則で入力を止めない家訓)
+    /// (date/time/custom、数でない式 — 読めない規則で入力を止めない方針)
     pub fn passes(&self, sheet: &Sheet, text: &str) -> bool {
         match self.kind.as_str() {
             "list" => {
@@ -822,7 +822,7 @@ impl Validation {
             }
             "whole" | "decimal" => {
                 // 規則の式が数として読めない(セル参照など)なら判定できない —
-                // 文字を打っても堰き止めない(読めない規則で入力を止めない家訓)
+                // 文字を打っても堰き止めない(読めない規則で入力を止めない方針)
                 if !self.judgeable() {
                     return true;
                 }
@@ -1230,7 +1230,7 @@ pub struct PivotDef {
     pub hide: Vec<(String, Vec<String>)>,
     /// 見た目の組(""=青(既定) / "緑" / "橙" / "灰")。置くときの帯の色
     pub style: String,
-    /// 名前(ピボットテーブル1, 2, …)。板の題と状態行で名指しする
+    /// 名前(ピボットテーブル1, 2, …)。パネルの題と状態行で名指しする
     pub name: String,
     /// 値のフィルター: (比較 ">" ">=" "<" "<=" "=", しきい値)。
     /// 集計した後の行に掛ける(列に広げていれば行の総計で判定)
@@ -1273,7 +1273,7 @@ pub struct TableDef {
     pub banded_cols: bool,
     pub first_col: bool,
     pub last_col: bool,
-    /// 見出しに絞り込みの釦を出す
+    /// 見出しに絞り込みのボタンを出す
     pub filter: bool,
 }
 
@@ -3120,7 +3120,7 @@ mod validation_tests {
     #[test]
     fn 読めない数値規則は文字も堰き止めない() {
         // 式がセル参照の整数規則 — 判定できないので、文字を打っても止めない
-        // (読めない規則で入力を止めない家訓。実物の xlsx にはよくある形)
+        // (読めない規則で入力を止めない方針。実物の xlsx にはよくある形)
         let s = Sheet::default();
         let mut v = Validation::list((Pos::new(0, 0), Pos::new(0, 0)), "$D$1".into());
         v.kind = "whole".into();

@@ -21,7 +21,7 @@ impl EntityInputHandler for Calc {
     fn unmark_text(&mut self, _w: &mut Window, _cx: &mut Context<Self>) { handler::unmark(self) }
     fn replace_text_in_range(&mut self, r: Option<Range<usize>>, text: &str,
                              _w: &mut Window, cx: &mut Context<Self>) {
-        // 空白キーはチェックボックス(Bool のセル)の切替。打ちかけ・板・
+        // 空白キーはチェックボックス(Bool のセル)の切替。打ちかけ・パネル・
         // 小窓が無いときだけ(文字としての空白を奪わない)
         if text == " " && self.prompt.is_none() && self.solver.is_none() && !self.editing() {
             if let Some(Value::Bool(b)) =
@@ -241,7 +241,7 @@ impl Render for Calc {
         self.view_w_px = f32::from(window.viewport_size().width);
         self.view_h_px = f32::from(window.viewport_size().height);
         // 画面の文字の大きさ(Ctrl+= / Ctrl+- 、表示タブ)。リボン・数式バー・
-        // メニュー・見出し・状態行の文字と釦がこれに追従する。格子のズームとは別
+        // メニュー・見出し・状態行の文字とボタンがこれに追従する。格子のズームとは別
         let us = self.ui_scale;
         if std::env::var_os("JO_SELFTEST").is_some() {
             // 実際に描画が走った証拠を残す(notify だけでは画面は変わらない —
@@ -256,7 +256,7 @@ impl Render for Calc {
         // 下端 = ステータスバー(シートの耳+状態の文言+選択の生きた値)
         let (ready, all) = ribbon::progress(ribbon::calc_tabs());
         // 画面の明暗(インターフェイステーマ)。**セルは白のまま** —
-        // 暗くするのは周り(帯・タブ・釦・見出し・耳)だけ
+        // 暗くするのは周り(帯・タブ・ボタン・見出し・耳)だけ
         let dk = self.dark;
         let th_bar = if dk { rgb(0x14432A) } else { rgb(0x1B6E3C) };
         let th_band = if dk { rgb(0x1B1E21) } else { rgb(0xFFFFFF) };
@@ -397,9 +397,9 @@ impl Render for Calc {
                     cx.notify()
                 })));
 
-        // 釦の帯: 本家のデスクトップ版の一段の絵釦(writer の写し)。
-        // 主要な釦は名札つきの大釦、他は絵だけ(乗ると名前が下のステータス
-        // バーへ)。絵の無い釦は小さな文字の釦。ホームだけ2段(釦が多い)
+        // ボタンの帯: 本家のデスクトップ版の一段の絵ボタン(writer の写し)。
+        // 主要なボタンは名札つきの大ボタン、他は絵だけ(乗ると名前が下のステータス
+        // バーへ)。絵の無いボタンは小さな文字のボタン。ホームだけ2段(ボタンが多い)
         const BIG: &[(&str, &str)] = &[
             ("instable", "表"), ("insimage-c", "画像"), ("insshape", "図形"),
             ("inschart", "グラフ"), ("inssmartart", "SmartArt"),
@@ -437,10 +437,10 @@ impl Render for Calc {
                 format!("{pt:.1}").into()
             }
         };
-        // 1つの釦を組み立てる(名札つきの大釦 / 絵だけ / 文字の小釦)。
+        // 1つのボタンを組み立てる(名札つきの大ボタン / 絵だけ / 文字の小ボタン)。
         // ホームの対の並びと、他タブの一段の並びの両方から使う
-        // 絵の無い釦の**短い札**(ja)。長い正式名はツールチップと状態行へ。
-        // 場所を食う文字の釦を細くする(発注者 2026-08-07)
+        // 絵の無いボタンの**短い札**(ja)。長い正式名はツールチップと状態行へ。
+        // 場所を食う文字のボタンを細くする(発注者 2026-08-07)
         const SHORT: &[(&str, &str)] = &[
             ("fillparag", "塗り"), ("text-orient", "向き"),
             ("clear-filter", "解除"), ("format", "書式"),
@@ -457,7 +457,7 @@ impl Render for Calc {
             ("pivot-refresh-all", "全更新"), ("pivot-select", "選択"),
             ("pivot-layout", "レイアウト"), ("td-band-row", "縞(行)"),
             ("td-first", "先頭列"), ("td-last", "末尾列"),
-            ("td-band-col", "縞(列)"), ("td-filter", "▼釦"),
+            ("td-band-col", "縞(列)"), ("td-filter", "▼ボタン"),
             ("rem-duplicates", "重複"), ("td-torange", "範囲へ"),
             ("td-resize", "サイズ"), ("sheet-view", "表示"),
             ("ui-bigger", "字を大"), ("ui-smaller", "字を小"),
@@ -465,7 +465,7 @@ impl Render for Calc {
             ("show-gridlines", "枠線"), ("show-headings", "見出し"),
             ("show-zeros", "0表示"),
         ];
-        // 一覧・板・小窓が開く釦(本家は ▼ を添える)。id で見分ける
+        // 一覧・パネル・小窓が開くボタン(本家は ▼ を添える)。id で見分ける
         const DROP_IDS: &[&str] = &[
             "fontname", "fontsize", "changecase", "format", "cell-format",
             "borders", "fontcolor", "fillparag", "freeze", "clear",
@@ -480,7 +480,7 @@ impl Render for Calc {
         let mk_btn = |cmd: &ribbon::Cmd, cx: &mut Context<Self>| -> gpui::AnyElement {
             let label = cmd.label;
             let icon = cmd.icon;
-            // 書体と大きさは釦でなく**欄**(本家の形): 今の値を枠の中に見せ、
+            // 書体と大きさはボタンでなく**欄**(本家の形): 今の値を枠の中に見せ、
             // 押すと一覧が開く
             if cmd.id == "fontname" || cmd.id == "fontsize" {
                 let (w, val) = if cmd.id == "fontname" {
@@ -529,14 +529,14 @@ impl Render for Calc {
                 }
                 cx.notify()
             });
-            // ピボットの上で締める釦は灰色に(本家の editPivot ロック。
+            // ピボットの上で締めるボタンは灰色に(本家の editPivot ロック。
             // 押しても run_cmd 側で断るが、見た目でも先に伝える)
             let locked = on_pivot && Calc::PIVOT_LOCKED.contains(&cmd.id);
             let fg = if cmd.ready && !locked { th_fg } else { th_gray };
             let drops = DROP_IDS.contains(&cmd.id);
             if let Some(short) = big {
-                // 名札つきの大釦(絵の下に短い名前 — 本家の言い方)。
-                // 一覧の開く釦は名札の横に小さな ▾
+                // 名札つきの大ボタン(絵の下に短い名前 — 本家の言い方)。
+                // 一覧の開くボタンは名札の横に小さな ▾
                 let mut b = div().id(SharedString::from(format!("h-{icon}")))
                     .px_2().h(px(us * 46.0)).rounded_sm()
                     .flex().flex_col().items_center().justify_center().gap_1()
@@ -661,7 +661,7 @@ impl Render for Calc {
                 }
                 band = band.child(col);
             }
-            // 対の表に無い釦も**黙って落とさない** — 右端に半々で足す
+            // 対の表に無いボタンも**黙って落とさない** — 右端に半々で足す
             let rest: Vec<&ribbon::Cmd> =
                 items.iter().filter(|c| !used.contains(c.id)).collect();
             if !rest.is_empty() {
@@ -688,7 +688,7 @@ impl Render for Calc {
             cmds = cmds.child(row);
         }
         let bar = if self.tab == 0 {
-            // ファイルの全面ページは釦の帯を持たない(本家の形)
+            // ファイルの全面ページはボタンの帯を持たない(本家の形)
             div().flex().flex_col().child(top).child(tabs)
         } else {
             div().flex().flex_col().child(top).child(tabs).child(cmds)
@@ -1424,7 +1424,7 @@ impl Render for Calc {
             }
         }
 
-        // ---- オートフィルタの▼と板(格子の上に重ねる) ----
+        // ---- オートフィルタの▼とパネル(格子の上に重ねる) ----
         if let Some(f) = &self.auto_filter {
             grid = grid.relative();
             let (a, b) = f.range;
@@ -1460,7 +1460,7 @@ impl Render for Calc {
                             })),
                 );
             }
-            // ▼の板(値のチェックボックス)。開いている列の見出しの下に出す
+            // ▼のパネル(値のチェックボックス)。開いている列の見出しの下に出す
             if let Some((col, ed)) = &self.filter_panel {
                 let col = *col;
                 let (vals, cut) = self.filter_values(col);
@@ -1518,7 +1518,7 @@ impl Render for Calc {
                                 cx.notify();
                             })),
                 );
-                // 値の一覧(検索で絞る。長ければ板の中でスクロール)
+                // 値の一覧(検索で絞る。長ければパネルの中でスクロール)
                 let mut list = div().id("flt-list").max_h(px(240.0)).overflow_y_scroll();
                 let mut shown_any = false;
                 for (i, (v, n)) in vals.iter().enumerate() {
@@ -1729,7 +1729,7 @@ impl Render for Calc {
             .child(div().pl_3().text_size(px(us * 11.0)).text_color(rgb(0x66707A))
                 .whitespace_nowrap().overflow_hidden()
                 .child(SharedString::from(match self.hover_hint {
-                    // 釦に乗っている間はその名前(本家の作法)
+                    // ボタンに乗っている間はその名前(本家の作法)
                     Some(h) => h.to_string(),
                     None => format!(
                         "{}{}",
@@ -1913,7 +1913,7 @@ impl Render for Calc {
                                 cx.notify();
                             })));
                     if open {
-                        // 子の板。親項目の右横に出す
+                        // 子のパネル。親項目の右横に出す
                         let mut sp = div().absolute()
                             .left(px(mx + us * 244.0)).top(px(my + row_y))
                             .w(px(us * 210.0)).p_1().rounded_md().bg(rgb(0xFFFFFF))
@@ -2302,7 +2302,7 @@ impl Render for Calc {
                             })))))
         });
 
-        // ---- 終了確認の板(窓の中の中央。rfd はスクリーン中央に出て遠い) ----
+        // ---- 終了確認のパネル(窓の中の中央。rfd はスクリーン中央に出て遠い) ----
         let quit_panel = self.quit_ask.then(|| {
             let btn = |id: &'static str, label: String, primary: bool| {
                 div().id(id).px_3().py_1().rounded_sm().text_size(px(us * 12.5))
@@ -2615,7 +2615,7 @@ impl Render for Calc {
             })
         };
 
-        // ---- 入力の板(名前の定義など) ----
+        // ---- 入力のパネル(名前の定義など) ----
         let prompt_panel = self.prompt.as_ref().map(|(kind, ed)| {
             let (a, b) = self.sel_rect();
             let range = if self.anchor.is_some() {
@@ -2689,7 +2689,7 @@ impl Render for Calc {
             };
             let cur = ed.cursor().min(text.len());
             text.insert(cur, '|');
-            // 板は表の中央に出す(発注者 2026-08-06「表示位置を見直す」)。
+            // パネルは表の中央に出す(発注者 2026-08-06「表示位置を見直す」)。
             // 外側の受け皿は聞き手を持たない = 後ろのセルの操作を遮らない
             div().absolute().inset_0().flex().items_center().justify_center()
                 .child(div().w(px(us * 380.0))
@@ -2717,7 +2717,7 @@ impl Render for Calc {
                         "textart" => "太字+縁取り(calc の緑)で描いて、画像としてシートに浮かべます",
                         "ai-table" => "答えのタブ区切りを、カーソルの位置の空きに流し込みます",
                         "ai-ask" => "= で始まる答えはカーソルに式として入ります。他はコメントに付きます",
-                        "pw-open" => "間違えると開けません(板は残ります)。Esc で開くのをやめる",
+                        "pw-open" => "間違えると開けません(パネルは残ります)。Esc で開くのをやめる",
                         "pw-set" => "次の保存から AES-128 で包みます。Excel や LibreOffice でも開けます",
                         "subtotal-by" => "使える見出しは下の状態行に出ています。並べ替えてから使うと区切りがまとまります",
                         "subtotal-vals" => "空のまま Enter = 数の列全部に入れます。畳んでも小計と総計は残ります",
@@ -2727,7 +2727,7 @@ impl Render for Calc {
                     })))
         });
 
-        // ---- データの入力規則の板(本家の3タブのダイアログの形 —
+        // ---- データの入力規則のパネル(本家の3タブのダイアログの形 —
         //      設定 / メッセージを入力 / エラー警告、OK・キャンセル) ----
         let dv_panel = self.dv_dlg.as_ref().map(|d| {
             let (tab, kindi, opi, styl, menu, focus) =
@@ -3006,7 +3006,7 @@ impl Render for Calc {
         });
 
         // ---- ソルバーの小窓(ONLYOFFICE の「ソルバーのパラメータ」の形) ----
-        // モーダルにしない板たちと同じ作法。打鍵は focus の欄へ(HasEditor)
+        // モーダルにしないパネルたちと同じ作法。打鍵は focus の欄へ(HasEditor)
         let solver_panel = self.solver.as_ref().map(|sv| {
             let show = |ed: &Editor, on: bool| -> String {
                 let mut t = ed.text().to_string();
@@ -3090,7 +3090,7 @@ impl Render for Calc {
                         })));
                 }
             }
-            // ソルバーも表の中央(prompt の板と同じ作法)
+            // ソルバーも表の中央(prompt のパネルと同じ作法)
             div().absolute().inset_0().flex().items_center().justify_center()
                 .child(div().w(px(470.0))
                 .p_3().rounded_md().bg(rgb(0xF7F9FA))
@@ -3552,7 +3552,7 @@ impl Render for Calc {
                 .child(pane)
         });
 
-        // ---- スライサーの小窓(列の値の釦で絞る) ----
+        // ---- スライサーの小窓(列の値のボタンで絞る) ----
         let slicer_panel = self.slicer.as_ref().map(|(col, sel, multi)| {
             let col = *col;
             let multi = *multi;
@@ -3641,7 +3641,7 @@ impl Render for Calc {
                                     sel.insert(v.clone());
                                 }
                             } else if sel.len() == 1 && sel.contains(&v) {
-                                sel.clear(); // 同じ釦をもう一度 = 解除
+                                sel.clear(); // 同じボタンをもう一度 = 解除
                             } else {
                                 sel.clear();
                                 sel.insert(v.clone());
@@ -3660,7 +3660,7 @@ impl Render for Calc {
         });
 
         // ---- 図形の設定(選ぶと右に出る) ----
-        // 塗り・線・太さ・不透明度・回転/反転・影。どの釦も shape_edit を
+        // 塗り・線・太さ・不透明度・回転/反転・影。どのボタンも shape_edit を
         // 通る=1手ずつ戻せる。折れ線もの(スパークライン・ペン)は色と太さだけ
         let shape_panel = self.shape_sel.and_then(|si| {
             let sp = self.sheet().shapes_new.get(si)?;
@@ -3716,7 +3716,7 @@ impl Render for Calc {
                             this.shape_sel = None;
                             cx.notify();
                         }))));
-            // 塗りと線の色(RGB 直指定の板を開く / なし)
+            // 塗りと線の色(RGB 直指定のパネルを開く / なし)
             if !poly {
                 let cf = cur_fill.clone();
                 p = p.child(div().flex().flex_row().items_center().gap_1()
@@ -3860,7 +3860,7 @@ impl Render for Calc {
 
         // ---- 書式の小窓(セルをフォーマットする) ----
         // モーダルにしない: 範囲を選び直しながら続けて使える道具箱。
-        // どの釦も既存の書式の道(fmt / run_cmd)を通り、1手ずつ戻せる
+        // どのボタンも既存の書式の道(fmt / run_cmd)を通り、1手ずつ戻せる
         let fmt_panel = self.fmt_panel.map(|(fx, fy)| {
             let fx = fx.min(560.0);
             let fy = fy.min(320.0);
@@ -4132,7 +4132,7 @@ impl Render for Calc {
                     _ => None,
                 }
             };
-            // 長い一覧(書体など)は板の中でスクロール — 数で切り捨てない
+            // 長い一覧(書体など)はパネルの中でスクロール — 数で切り捨てない
             let mut p = div().id("pick-list").absolute().left(px(vx)).top(px(vy))
                 .w(px(self.col_px(self.cursor.col).max(if self.pick_note.is_some() { 300.0 } else { 120.0 })))
                 .max_h(px((self.view_h_px - 160.0).max(160.0)))
@@ -4157,7 +4157,7 @@ impl Render for Calc {
                     .hover(|s| s.bg(rgb(0xEAF5EE)))
                     .flex().flex_row().items_center().gap_2()
                     .text_size(px(us * 12.5))
-                    // 「→ 」は次の段へ進む釦 — 並びの項目と見分ける
+                    // 「→ 」は次の段へ進むボタン — 並びの項目と見分ける
                     .text_color(if v.starts_with("→ ") { rgb(0x1B6E3C) } else { rgb(0x1B1B1B) })
                     .when(v.starts_with("→ "), |s| s
                         .font_weight(gpui::FontWeight::BOLD)
@@ -4282,7 +4282,7 @@ impl Render for Calc {
                    .children(freeze_shadow)
                    .children(ink_preview)
                    .children({
-                       // 浮かぶ画像(グラフ)。錨のセルが見えている間だけ描く。
+                       // 浮かぶ画像(グラフ)。アンカーのセルが見えている間だけ描く。
                        // マウスは受けない(セルの操作を遮らない)
                        let mut layer: Vec<gpui::AnyElement> = Vec::new();
                        for im in self.sheet().images.iter().chain(self.sheet().images_new.iter()) {

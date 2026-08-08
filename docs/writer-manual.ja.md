@@ -235,7 +235,7 @@ IME の未確定は下線つきで本文に見え、確定した時点で undo �
 - **プラグインの管理**: `~/.config/office/plugins` の .py を一覧して実行
   (サンドボックスの中)。青空注記・EPUB などの拡張はここに足していく
 - **マクロの書き方** — 名前つき記入欄(`fill`/`extract`)・雛形(`render`)・
-  速さの作法・AI に書かせる釦は
+  速さの作法・AI に書かせるボタンは
   [writer マクロの手引き](writer-macro-manual.ja.md)に
 
 ## 印刷(PDF)と保存

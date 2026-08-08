@@ -10,7 +10,7 @@
 **VBA 型のマクロは実装しない** — 「開く=実行」という攻撃経路を持たない
 (aiseed-migration-kit DESIGN.md §5 と同じ思想)。コードの持ち運びは
 Python in Calc が担う(2026-08-04 改訂): ブックにコードを**載せられる**が、
-開いても決して自動実行せず、実行は明示の操作+檻(サンドボックス)の中だけ。
+開いても決して自動実行せず、実行は明示の操作+サンドボックス(サンドボックス)の中だけ。
 詳細は「Python in Calc」の節。
 
 ## 前提の確定(2026-08-02)
@@ -40,7 +40,7 @@ Python in Calc が担う(2026-08-04 改訂): ブックにコードを**載せら
   共同の印はロックファイルと言伝ファイル。口座もサーバーも要らず、
   網が無くても全部動く(網を使うのは明示の操作だけ — @更新 net など)
 - **統合は「40のWeb統合」ではなくデスクトップの流儀で。**
-  ファイルそのもの・Python(檻つき)・CLI・ローカルのプロセスが統合点。
+  ファイルそのもの・Python(サンドボックスつき)・CLI・ローカルのプロセスが統合点。
   配布も OS の流儀(.deb / 公証つき .dmg — 「office の配布方針」参照)
 
 ## 構成(Zed との対応)
@@ -74,7 +74,7 @@ Python in Calc が担う(2026-08-04 改訂): ブックにコードを**載せら
 |---|---|
 | [docs/sekkei/calc.ja.md](docs/sekkei/calc.ja.md) | calc: 5つの直し・本家ガイド突き合わせ(台帳の使い方)・calc/src の部屋割り |
 | [docs/sekkei/writer.ja.md](docs/sekkei/writer.ja.md) | writer: 編集モデル(run)・挿入系・変更履歴・HTML・灰色ゼロ・保護 |
-| [docs/sekkei/python.ja.md](docs/sekkei/python.ja.md) | Python と檻: calc の分業・UDF だけが旅する・檻の抽象化・officework 連携 |
+| [docs/sekkei/python.ja.md](docs/sekkei/python.ja.md) | Python とサンドボックス: calc の分業・UDF だけが旅する・サンドボックスの抽象化・officework 連携 |
 | [docs/sekkei/nihongo.ja.md](docs/sekkei/nihongo.ja.md) | 日本語: なぜ作るか・校正・辞書・K4(縦書き/ルビ/均等割付)・右横書き |
 | [docs/sekkei/sugata.ja.md](docs/sekkei/sugata.ja.md) | 姿(UI): リボン・額縁・テーマ色・設定・罫線の直交モデル |
 | [docs/sekkei/ayumi.ja.md](docs/sekkei/ayumi.ja.md) | 歩みと商い: 目標・里程標・名前と免許・製品名・配布・e-shop・同類との距離 |

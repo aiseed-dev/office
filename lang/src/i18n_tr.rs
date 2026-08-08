@@ -23,7 +23,7 @@ pub const TABLE: &[(&str, &str)] = &[
                                (AES-128。Word や LibreOffice でも開けます)", "Bir sonraki kayıttan itibaren bu parolayla şifrelenir (AES-128; Word ve LibreOffice'te de açılır)"),
     ("マクロが読めません: {}", "Makro okunamıyor: {}"),
     ("マクロに渡せません: {}", "Makroya aktarılamıyor: {}"),
-    ("マクロ {} を実行しています…(檻の中の Python)", "Makro {} çalıştırılıyor… (korumalı alanda Python)"),
+    ("マクロ {} を実行しています…(サンドボックスの中の Python)", "Makro {} çalıştırılıyor… (korumalı alanda Python)"),
     ("Python が起動できません: {}", "Python başlatılamıyor: {}"),
     ("python-docx がありません(pip install python-docx。\
                      .venv があればそちらへ)", "python-docx yok (pip install python-docx; .venv varsa oraya)"),
@@ -72,7 +72,7 @@ pub const TABLE: &[(&str, &str)] = &[
              マクロは fill(\"{}\", 値) で記入できます)", "Alana \"{}\" adı verildi (docx w:tag; makrolar fill(\"{}\", değer) ile doldurabilir)"),
     ("チェックを {} にしました", "Onay kutusu {} yapıldı"),
     ("{}に合わせました(ズーム {}%)", "Şuna sığdırıldı: {} (yakınlaştırma %{})"),
-    ("記入しました(送信の釦で送る)", "Dolduruldu (göndermek için Gönder düğmesine basın)"),
+    ("記入しました(送信のボタンで送る)", "Dolduruldu (göndermek için Gönder düğmesine basın)"),
     ("ローカルの HTML からは送れません(URL で開いてください)", "Yerel HTML'den gönderilemez (URL ile açın)"),
     ("送り先が開いた相手と違います(送りません)", "Hedef, açılan kaynaktan farklı (gönderilmiyor)"),
     ("送っています…", "Gönderiliyor…"),
@@ -150,19 +150,19 @@ pub const TABLE: &[(&str, &str)] = &[
     ("この段落にコメントはありません", "Bu paragrafta açıklama yok"),
     ("コメントを編集中(段落に付きます。空にして閉じると外れる)", "Açıklama düzenleniyor (paragrafa iliştirilir; boş kapatınca kalkar)"),
     ("保護を外しました(編集できます。保存で docx にも残ります)", "Koruma kaldırıldı (düzenlenebilir; docx'e de kaydedilir)"),
-    ("読み取り専用で保護しました(同じ釦で解除。\
+    ("読み取り専用で保護しました(同じボタンで解除。\
                                    パスワードは掛けません — 掛けた振りもしません)", "Salt okunur olarak korundu (aynı düğme kaldırır; parola yok — parola varmış gibi de yapılmaz)"),
     ("まだファイルになっていません(保存すると編集権=錠を取ります)", "Henüz dosya değil (kaydedince düzenleme kilidi alınır)"),
     ("編集権はこちら({})にあります。同じ文書は先に開いた人が書け、\
                              後の人は読むだけになります(錠は .~lock ファイル)", "Düzenleme hakkı sizde ({}). Bir belgeyi ilk açan yazar, sonrakiler yalnızca okur (kilit bir .~lock dosyasıdır)"),
     ("{} が編集中です(読めますが上書き保存はできません。\
-                                 相手が閉じたら、またこの釦で確かめてください)", "{} düzenliyor (okuyabilirsiniz ama üzerine kaydedemezsiniz; kapattığında bu düğmeye yeniden basın)"),
+                                 相手が閉じたら、またこのボタンで確かめてください)", "{} düzenliyor (okuyabilirsiniz ama üzerine kaydedemezsiniz; kapattığında bu düğmeye yeniden basın)"),
     ("先客が居なくなっていたので、編集権を取り直しました", "Önceki düzenleyici ayrılmış; düzenleme hakkı devralındı"),
     ("まだファイルになっていません(保存すると、上書きのたびに\
                          控えが残ります)", "Henüz dosya değil (kaydedildikten sonra her üzerine yazmada bir kopya saklanır)"),
     ("バージョン履歴: 押すと控えを名無しの複製で開きます", "Sürüm geçmişi: tıklayınca kopyayı adsız belge olarak açar"),
     ("チャット: 打って Enter で書き残す(文書の隣の .chat.txt)", "Sohbet: yazıp Enter ile mesaj bırakın (belgenin yanındaki .chat.txt)"),
-    ("マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
+    ("マクロ: .py を選ぶと、サンドボックスの中の Python が文書の複製を\
                                直します(台本の d が python-docx の文書。\
                                fill(名前, 値)=記入・extract(名前)=読む・\
                                fields()=一覧・render(辞書)=雛形差し込み)", "Makrolar: bir .py seçin; korumalı alandaki Python belgenin kopyasını düzenler (betikteki d, python-docx belgesidir; fill(ad, değer) doldurur, extract(ad) okur, fields() listeler, render(sözlük) şablonu doldurur)"),
@@ -217,7 +217,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("しおり「{}」へ移りました", "\"{}\" yer işaretine gidildi"),
     ("しおりを外しました", "Yer işareti kaldırıldı"),
     ("送信({} {})", "Gönder ({} {})"),
-    ("(検索の板で語を打つ → ここに出ます)", "(arama kutusuna terim yazın — sonuçlar burada görünür)"),
+    ("(検索のパネルで語を打つ → ここに出ます)", "(arama kutusuna terim yazın — sonuçlar burada görünür)"),
     ("大きさ {} pt / 書体 {}", "Boyut {} pt / yazı tipi {}"),
     ("ルビ「{}」", "Ruby \"{}\""),
     ("行間 {:.2} / 字下げ {}", "Satır aralığı {:.2} / girinti {}"),
@@ -292,7 +292,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("@save 名前 の形で", "@save ad biçiminde yazın"),
     ("「{}」をブックから外しました", "\"{}\" çalışma kitabından kaldırıldı"),
     ("「{}」はありません", "\"{}\" yok"),
-    ("網あり檻で実行します(ファイルは守られたまま)", "Ağ erişimli korumalı alanda çalıştırılıyor (dosyalar korunmaya devam eder)"),
+    ("網ありサンドボックスで実行します(ファイルは守られたまま)", "Ağ erişimli korumalı alanda çalıştırılıyor (dosyalar korunmaya devam eder)"),
     ("「{}」はありません(@list で一覧)", "\"{}\" yok (@list listeler)"),
     ("文字を消しました", "Metin silindi"),
     ("図形に文字を入れました(保存で xlsx に入ります)", "Şekle metin eklendi (kaydetmede xlsx'e girer)"),
@@ -308,7 +308,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("ブックの情報を控えました(保存で xlsx に入ります)", "Çalışma kitabı bilgileri kaydedildi (kaydetmede xlsx'e girer)"),
     ("範囲は A1:C9 の形で書いてください", "Aralığı A1:C9 biçiminde yazın"),
     ("左上と右下が逆です(A1:C9 の順で)", "Sol üst ile sağ alt ters (A1:C9 sırasıyla yazın)"),
-    ("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインの釦でどうぞ)", "Tablo aralığı {}:{} yapıldı (biçimlendirme yeniden uygulanmaz — Tablo Tasarımı düğmelerini kullanın)"),
+    ("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインのボタンでどうぞ)", "Tablo aralığı {}:{} yapıldı (biçimlendirme yeniden uygulanmaz — Tablo Tasarımı düğmelerini kullanın)"),
     ("文章がありません(何もしていません)", "Metin yok (hiçbir şey yapılmadı)"),
     ("用件がありません(何もしていません)", "İstek yok (hiçbir şey yapılmadı)"),
     ("何も書き残しませんでした", "Mesaj bırakılmadı"),
@@ -348,7 +348,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("右に空きが見つかりません(場所を空けてから)", "Sağda boş yer bulunamadı (önce yer açın)"),
     ("広がった分の場所が塞がっています(右下を空けてから更新)", "Büyüyen alan dolu (sağ altı boşaltıp yenileyin)"),
     ("Python を実行しています…", "Python çalıştırılıyor…"),
-    ("檻(bubblewrap)がありません。ブックに載ったコードは檻の外では\
+    ("サンドボックス(bubblewrap)がありません。ブックに載ったコードはサンドボックスの外では\
 実行しません(apt install bubblewrap)", "Korumalı alan (bubblewrap) yok. Çalışma kitabından gelen kod korumalı alan dışında asla çalıştırılmaz (apt install bubblewrap)"),
     ("office_sheet.so がありません(cargo build -p pysheet --release \
 --features extension-module して、liboffice_sheet.so を office_sheet.so の名で \
@@ -356,8 +356,8 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("Python を実行しました(Ctrl+Z で1手で戻せます)", "Python tamamlandı (tek Ctrl+Z geri alır)"),
     ("=PY(\"関数名\", 引数…) のセルがありません", "=PY(\"işlev\", bağımsız değişkenler…) içeren hücre yok"),
     ("関数の定義がありません(@save 関数 で def の入った .py をブックに載せる)", "İşlev tanımı yok (@save 関数, def içeren bir .py'yi çalışma kitabına ekler)"),
-    ("PY を計算しています…(檻の中)", "PY hesaplanıyor… (korumalı alanda)"),
-    ("檻(bubblewrap)がありません。ブックの関数は檻の外では計算しません", "Korumalı alan (bubblewrap) yok; çalışma kitabı işlevleri onun dışında asla hesaplanmaz"),
+    ("PY を計算しています…(サンドボックスの中)", "PY hesaplanıyor… (korumalı alanda)"),
+    ("サンドボックス(bubblewrap)がありません。ブックの関数はサンドボックスの外では計算しません", "Korumalı alan (bubblewrap) yok; çalışma kitabı işlevleri onun dışında asla hesaplanmaz"),
     ("一時ファイルが書けません", "Geçici dosya yazılamıyor"),
     ("清書しています…", "Dizgi yapılıyor…"),
     ("テキスト", "Metin"),
@@ -384,8 +384,8 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("バージョン履歴: 選ぶと控えを名無しの複製で開きます(いまの書きかけは要るなら先に保存)", "Sürüm geçmişi: birini seçince kopyayı adsız açar (şu anki çalışmanız gerekiyorsa önce kaydedin)"),
     ("まだファイルになっていません(保存すると、隣に申し送り帳ができます)", "Henüz dosya değil (kaydedince yanında sohbet dosyası oluşur)"),
     ("まだ言伝はありません(打って Enter で書き残します)", "Henüz mesaj yok (yazıp Enter ile bırakın)"),
-    ("マクロ: .py を選ぶと檻の中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)", "Makrolar: bir .py seçin; korumalı alandaki Python çalışır (b = çalışma kitabı, s = sayfa; Veri > Python ile aynı mekanizma)"),
-    ("プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)", "Eklentiler: seçince korumalı alandaki Python ile çalıştırılır (b = çalışma kitabı, s = sayfa)"),
+    ("マクロ: .py を選ぶとサンドボックスの中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)", "Makrolar: bir .py seçin; korumalı alandaki Python çalışır (b = çalışma kitabı, s = sayfa; Veri > Python ile aynı mekanizma)"),
+    ("プラグイン: 選ぶとサンドボックスの中の Python で実行します(b=ブック s=シート)", "Eklentiler: seçince korumalı alandaki Python ile çalıştırılır (b = çalışma kitabı, s = sayfa)"),
     ("空のセルを選んでください(中身のあるセルは潰しません)", "Boş bir hücre seçin (dolu hücrelerin üzerine asla yazılmaz)"),
     ("スライサーにする列を選んでください(見出しの下にデータの行が要ります)", "Dilimleyici için bir sütun seçin (başlığın altında veri satırları gerekli)"),
     ("テキストアート: 文字を打つと、太字+縁取りの飾り文字を画像で置きます", "Metin sanatı: yazın; kalın ve kenarlıklı süslü yazı resim olarak yerleştirilir"),
@@ -545,7 +545,7 @@ calc の隣に置いてください)", "office_sheet.so yok (cargo build -p pysh
     ("設定 — いる場所を直す", "Ayarlar — imlecin bulunduğu yeri düzenle"),
     ("(ここは相互参照。更新は 参考資料 > 相互参照)", "(bu bir çapraz başvuru; güncelleme: Başvurular > Çapraz başvuru)"),
     ("ルビ — 読みを打って Enter(空で外す。Esc で取りやめ)", "Ruby — okunuşu yazıp Enter'a basın (boş kaldırır; Esc iptal eder)"),
-    ("プラグイン — 押すと檻(bubblewrap)の中で実行", "Eklentiler — tıklayınca korumalı alanda (bubblewrap) çalışır"),
+    ("プラグイン — 押すとサンドボックス(bubblewrap)の中で実行", "Eklentiler — tıklayınca korumalı alanda (bubblewrap) çalışır"),
     ("(まだありません。置き場に .py を置いてください。\
                             台本の d が python-docx の文書、fill(名前, 値)・\
                             extract(名前)・fields() で記入欄の出し入れ)", "(henüz yok; klasöre .py dosyaları koyun. Betikteki d, python-docx belgesidir; fill(ad, değer), extract(ad) ve fields() form alanlarını yönetir)"),

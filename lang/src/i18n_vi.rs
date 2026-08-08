@@ -23,7 +23,7 @@ pub const TABLE: &[(&str, &str)] = &[
                                (AES-128。Word や LibreOffice でも開けます)", "Từ lần lưu sau sẽ mã hóa bằng mật khẩu này (AES-128; mở được cả trong Word và LibreOffice)"),
     ("マクロが読めません: {}", "Không đọc được macro: {}"),
     ("マクロに渡せません: {}", "Không chuyển được cho macro: {}"),
-    ("マクロ {} を実行しています…(檻の中の Python)", "Đang chạy macro {}… (Python trong hộp cát)"),
+    ("マクロ {} を実行しています…(サンドボックスの中の Python)", "Đang chạy macro {}… (Python trong hộp cát)"),
     ("Python が起動できません: {}", "Không khởi động được Python: {}"),
     ("python-docx がありません(pip install python-docx。\
                      .venv があればそちらへ)", "Thiếu python-docx (pip install python-docx; nếu có .venv thì cài vào đó)"),
@@ -72,7 +72,7 @@ pub const TABLE: &[(&str, &str)] = &[
              マクロは fill(\"{}\", 値) で記入できます)", "Đã đặt tên \"{}\" cho trường nhập (w:tag của docx; macro có thể điền bằng fill(\"{}\", giá trị))"),
     ("チェックを {} にしました", "Đã đặt hộp kiểm thành {}"),
     ("{}に合わせました(ズーム {}%)", "Đã khớp theo {} (thu phóng {}%)"),
-    ("記入しました(送信の釦で送る)", "Đã điền xong (nhấn nút Gửi để gửi đi)"),
+    ("記入しました(送信のボタンで送る)", "Đã điền xong (nhấn nút Gửi để gửi đi)"),
     ("ローカルの HTML からは送れません(URL で開いてください)", "Không gửi được từ HTML cục bộ (hãy mở bằng URL)"),
     ("送り先が開いた相手と違います(送りません)", "Đích gửi khác với nơi đã mở (không gửi)"),
     ("送っています…", "Đang gửi…"),
@@ -150,19 +150,19 @@ pub const TABLE: &[(&str, &str)] = &[
     ("この段落にコメントはありません", "Đoạn văn này không có nhận xét"),
     ("コメントを編集中(段落に付きます。空にして閉じると外れる)", "Đang sửa nhận xét (gắn vào đoạn văn; đóng khi trống thì bị bỏ)"),
     ("保護を外しました(編集できます。保存で docx にも残ります)", "Đã bỏ bảo vệ (có thể sửa; khi lưu cũng ghi vào docx)"),
-    ("読み取り専用で保護しました(同じ釦で解除。\
+    ("読み取り専用で保護しました(同じボタンで解除。\
                                    パスワードは掛けません — 掛けた振りもしません)", "Đã bảo vệ chỉ đọc (cùng nút đó để bỏ; không đặt mật khẩu — cũng không giả vờ là có)"),
     ("まだファイルになっていません(保存すると編集権=錠を取ります)", "Chưa phải là tệp (khi lưu sẽ lấy quyền sửa = khóa)"),
     ("編集権はこちら({})にあります。同じ文書は先に開いた人が書け、\
                              後の人は読むだけになります(錠は .~lock ファイル)", "Quyền sửa thuộc về bạn ({}). Ai mở tài liệu trước thì được ghi, người đến sau chỉ đọc (khóa là tệp .~lock)"),
     ("{} が編集中です(読めますが上書き保存はできません。\
-                                 相手が閉じたら、またこの釦で確かめてください)", "{} đang sửa (bạn đọc được nhưng không lưu đè được; khi họ đóng, hãy nhấn nút này lần nữa)"),
+                                 相手が閉じたら、またこのボタンで確かめてください)", "{} đang sửa (bạn đọc được nhưng không lưu đè được; khi họ đóng, hãy nhấn nút này lần nữa)"),
     ("先客が居なくなっていたので、編集権を取り直しました", "Người sửa trước đã rời đi nên đã lấy lại quyền sửa"),
     ("まだファイルになっていません(保存すると、上書きのたびに\
                          控えが残ります)", "Chưa phải là tệp (sau khi lưu, mỗi lần lưu đè sẽ giữ một bản sao)"),
     ("バージョン履歴: 押すと控えを名無しの複製で開きます", "Lịch sử phiên bản: bấm để mở bản sao thành bản nhân đôi chưa có tên"),
     ("チャット: 打って Enter で書き残す(文書の隣の .chat.txt)", "Trò chuyện: gõ rồi Enter để ghi lời nhắn (.chat.txt cạnh tài liệu)"),
-    ("マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
+    ("マクロ: .py を選ぶと、サンドボックスの中の Python が文書の複製を\
                                直します(台本の d が python-docx の文書。\
                                fill(名前, 値)=記入・extract(名前)=読む・\
                                fields()=一覧・render(辞書)=雛形差し込み)", "Macro: chọn tệp .py và Python trong hộp cát sẽ sửa một bản sao của tài liệu (d trong kịch bản là Document của python-docx; fill(tên, giá trị) điền, extract(tên) đọc, fields() liệt kê, render(dict) điền vào mẫu)"),
@@ -217,7 +217,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("しおり「{}」へ移りました", "Đã chuyển đến dấu trang \"{}\""),
     ("しおりを外しました", "Đã bỏ dấu trang"),
     ("送信({} {})", "Gửi ({} {})"),
-    ("(検索の板で語を打つ → ここに出ます)", "(gõ từ khóa trong hộp tìm kiếm → kết quả hiện ở đây)"),
+    ("(検索のパネルで語を打つ → ここに出ます)", "(gõ từ khóa trong hộp tìm kiếm → kết quả hiện ở đây)"),
     ("大きさ {} pt / 書体 {}", "Cỡ {} pt / phông {}"),
     ("ルビ「{}」", "Ruby \"{}\""),
     ("行間 {:.2} / 字下げ {}", "Giãn dòng {:.2} / thụt lề {}"),
@@ -292,7 +292,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("@save 名前 の形で", "Dùng dạng: @save tên"),
     ("「{}」をブックから外しました", "Đã bỏ \"{}\" khỏi sổ làm việc"),
     ("「{}」はありません", "\"{}\" không tồn tại"),
-    ("網あり檻で実行します(ファイルは守られたまま)", "Chạy trong hộp cát có mạng (tệp vẫn được bảo vệ)"),
+    ("網ありサンドボックスで実行します(ファイルは守られたまま)", "Chạy trong hộp cát có mạng (tệp vẫn được bảo vệ)"),
     ("「{}」はありません(@list で一覧)", "\"{}\" không tồn tại (@list để xem danh sách)"),
     ("文字を消しました", "Đã xóa chữ"),
     ("図形に文字を入れました(保存で xlsx に入ります)", "Đã ghi chữ vào hình (sẽ vào xlsx khi lưu)"),
@@ -308,7 +308,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("ブックの情報を控えました(保存で xlsx に入ります)", "Đã ghi nhận thông tin sổ làm việc (sẽ vào xlsx khi lưu)"),
     ("範囲は A1:C9 の形で書いてください", "Hãy viết vùng theo dạng A1:C9"),
     ("左上と右下が逆です(A1:C9 の順で)", "Góc trên-trái và dưới-phải bị ngược (theo thứ tự như A1:C9)"),
-    ("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインの釦でどうぞ)", "Đã đổi vùng của bảng thành {}:{} (không áp lại định dạng — hãy dùng các nút Thiết kế Bảng)"),
+    ("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインのボタンでどうぞ)", "Đã đổi vùng của bảng thành {}:{} (không áp lại định dạng — hãy dùng các nút Thiết kế Bảng)"),
     ("文章がありません(何もしていません)", "Không có văn bản (chưa làm gì cả)"),
     ("用件がありません(何もしていません)", "Không có yêu cầu (chưa làm gì cả)"),
     ("何も書き残しませんでした", "Không ghi lời nhắn nào"),
@@ -348,7 +348,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("右に空きが見つかりません(場所を空けてから)", "Không còn chỗ trống bên phải (hãy dọn chỗ trước)"),
     ("広がった分の場所が塞がっています(右下を空けてから更新)", "Phần mở rộng thêm đang bị chắn (hãy dọn trống phía dưới-phải rồi làm mới)"),
     ("Python を実行しています…", "Đang chạy Python…"),
-    ("檻(bubblewrap)がありません。ブックに載ったコードは檻の外では\
+    ("サンドボックス(bubblewrap)がありません。ブックに載ったコードはサンドボックスの外では\
 実行しません(apt install bubblewrap)", "Không có hộp cát (bubblewrap). Mã nằm trong sổ làm việc không bao giờ được chạy ngoài hộp cát (apt install bubblewrap)"),
     ("office_sheet.so がありません(cargo build -p pysheet --release \
 --features extension-module して、liboffice_sheet.so を office_sheet.so の名で \
@@ -356,8 +356,8 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("Python を実行しました(Ctrl+Z で1手で戻せます)", "Đã chạy xong Python (một lần Ctrl+Z để hoàn tác)"),
     ("=PY(\"関数名\", 引数…) のセルがありません", "Không có ô =PY(\"tên hàm\", đối số…) nào"),
     ("関数の定義がありません(@save 関数 で def の入った .py をブックに載せる)", "Chưa có định nghĩa hàm (@save 関数 để nạp tệp .py chứa def vào sổ làm việc)"),
-    ("PY を計算しています…(檻の中)", "Đang tính PY… (trong hộp cát)"),
-    ("檻(bubblewrap)がありません。ブックの関数は檻の外では計算しません", "Không có hộp cát (bubblewrap); hàm trong sổ làm việc không bao giờ được tính ngoài hộp cát"),
+    ("PY を計算しています…(サンドボックスの中)", "Đang tính PY… (trong hộp cát)"),
+    ("サンドボックス(bubblewrap)がありません。ブックの関数はサンドボックスの外では計算しません", "Không có hộp cát (bubblewrap); hàm trong sổ làm việc không bao giờ được tính ngoài hộp cát"),
     ("一時ファイルが書けません", "Không ghi được tệp tạm"),
     ("清書しています…", "Đang sắp chữ…"),
     ("テキスト", "Văn bản"),
@@ -384,8 +384,8 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("バージョン履歴: 選ぶと控えを名無しの複製で開きます(いまの書きかけは要るなら先に保存)", "Lịch sử phiên bản: chọn một bản để mở thành bản chưa có tên (nếu cần bản đang làm dở thì lưu trước)"),
     ("まだファイルになっていません(保存すると、隣に申し送り帳ができます)", "Chưa phải là tệp (khi lưu sẽ có sổ nhắn tin bên cạnh)"),
     ("まだ言伝はありません(打って Enter で書き残します)", "Chưa có lời nhắn nào (gõ rồi Enter để ghi lại)"),
-    ("マクロ: .py を選ぶと檻の中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)", "Macro: chọn tệp .py và Python trong hộp cát sẽ chạy (b = sổ làm việc, s = trang tính; cùng cơ chế với Dữ liệu > Python)"),
-    ("プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)", "Plugin: chọn để chạy bằng Python trong hộp cát (b = sổ làm việc, s = trang tính)"),
+    ("マクロ: .py を選ぶとサンドボックスの中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)", "Macro: chọn tệp .py và Python trong hộp cát sẽ chạy (b = sổ làm việc, s = trang tính; cùng cơ chế với Dữ liệu > Python)"),
+    ("プラグイン: 選ぶとサンドボックスの中の Python で実行します(b=ブック s=シート)", "Plugin: chọn để chạy bằng Python trong hộp cát (b = sổ làm việc, s = trang tính)"),
     ("空のセルを選んでください(中身のあるセルは潰しません)", "Hãy chọn một ô trống (không bao giờ ghi đè ô có nội dung)"),
     ("スライサーにする列を選んでください(見出しの下にデータの行が要ります)", "Hãy chọn cột để làm slicer (cần có hàng dữ liệu dưới tiêu đề)"),
     ("テキストアート: 文字を打つと、太字+縁取りの飾り文字を画像で置きます", "Chữ nghệ thuật: gõ chữ và nó được đặt thành ảnh chữ đậm có viền"),
@@ -545,7 +545,7 @@ calc の隣に置いてください)", "Thiếu office_sheet.so (hãy build bằ
     ("設定 — いる場所を直す", "Cài đặt — chỉnh tại vị trí con trỏ"),
     ("(ここは相互参照。更新は 参考資料 > 相互参照)", "(đây là tham chiếu chéo; cập nhật qua Tham chiếu > Tham chiếu chéo)"),
     ("ルビ — 読みを打って Enter(空で外す。Esc で取りやめ)", "Ruby — gõ cách đọc rồi Enter (trống để bỏ; Esc để hủy)"),
-    ("プラグイン — 押すと檻(bubblewrap)の中で実行", "Plugin — bấm để chạy trong hộp cát (bubblewrap)"),
+    ("プラグイン — 押すとサンドボックス(bubblewrap)の中で実行", "Plugin — bấm để chạy trong hộp cát (bubblewrap)"),
     ("(まだありません。置き場に .py を置いてください。\
                             台本の d が python-docx の文書、fill(名前, 値)・\
                             extract(名前)・fields() で記入欄の出し入れ)", "(chưa có; hãy đặt tệp .py vào thư mục. Trong kịch bản, d là Document của python-docx; fill(tên, giá trị), extract(tên) và fields() thao tác các trường nhập)"),

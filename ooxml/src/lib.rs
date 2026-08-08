@@ -816,7 +816,7 @@ fn sdt_pr_elem(
         b"tag" => {
             if let Some(v) = attr(e, "val") {
                 let s = sd.get_or_insert_with(Default::default);
-                // 「jo:email:連絡先」= うちだけの種類の印+名前(名前釦)。
+                // 「jo:email:連絡先」= うちだけの種類の印+名前(名前ボタン)。
                 // 解いてモデルの tag には名前だけを持つ(書く側が組み直す)
                 if let Some((k, name)) = K::split_tag(&v) {
                     s.kind = k;
@@ -3308,7 +3308,7 @@ mod sdt_round_tests {
 
     #[test]
     fn 独自の種類は名前を付けても種類ごと往復する() {
-        // うちだけの種類(jo:email)+「名前」釦の名は、
+        // うちだけの種類(jo:email)+「名前」ボタンの名は、
         // w:tag「jo:email:連絡先」に合成して両立させる
         let mut d = Document::plain("宛先: 未記入", 10.5);
         d.apply_char_format(8..17, |f| {
@@ -3724,7 +3724,7 @@ mod bookmark_tests {
     #[test]
     fn しおりとコメントの印は保存で残る() {
         // 実物の様式はしおりで記入欄を指すものがある。黙って捨てると
-        // 相互参照・コメントの錨が壊れる
+        // 相互参照・コメントのアンカーが壊れる
         let xml = r#"<w:document xmlns:w="x"><w:body><w:p>
             <w:bookmarkStart w:id="0" w:name="会社名"/>
             <w:r><w:t>日本フネン</w:t></w:r>
@@ -3741,7 +3741,7 @@ mod bookmark_tests {
         assert!(out.contains(r#"w:name="会社名""#), "しおりが消えた: {out}");
         assert!(out.contains("bookmarkEnd"), "しおりの終わりが消えた");
         assert!(out.contains("commentRangeStart"), "コメントの範囲が消えた");
-        assert!(out.contains("commentReference"), "コメントの錨が消えた");
+        assert!(out.contains("commentReference"), "コメントのアンカーが消えた");
         assert!(out.contains("日本フネン") && out.contains("要確認の箇所"), "本文が消えた");
     }
 }

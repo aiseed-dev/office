@@ -13,14 +13,14 @@
     python3 ui/gen_lang.py --check            # 登録済み全言語の表を検査
 
 生成するもの(すべて「手で書かない」ファイル):
-- ui/src/ribbon_<loc>.rs — リボン(標準の釦は vendor の本家対訳、
-  こちら独自の釦は材料の訳)
+- ui/src/ribbon_<loc>.rs — リボン(標準のボタンは vendor の本家対訳、
+  こちら独自のボタンは材料の訳)
 - lang/src/i18n_<loc>.rs — 文言の対訳表
 - lang/src/i18n_tables.rs / ui/src/ribbon_tables.rs — 登録簿
 - lang/src/lib.rs / ui/src/lib.rs の gen_lang:begin〜end 区間
 
 検査(止まる条件): 訳の欠け・番号のずれ・穴埋め {} の数の不一致・
-vendor に無い標準釦の語。**表の揃わない言語は登録しない**(家訓)。
+vendor に無い標準ボタンの語。**表の揃わない言語は登録しない**(方針)。
 """
 import json
 import re
@@ -95,7 +95,7 @@ def escape(s):
 
 
 def material():
-    """番号つきの材料: 文言(i18n_en の鍵順)+ こちら独自の釦の語"""
+    """番号つきの材料: 文言(i18n_en の鍵順)+ こちら独自のボタンの語"""
     rows = []
     for key, en in en_pairs():
         rows.append({"kind": "msg", "key": key, "ja": unescape(key), "en": unescape(en)})
@@ -255,7 +255,7 @@ def generate(loc):
     body += ["];", ""]
     (ROOT / f"lang/src/i18n_{m}.rs").write_text("\n".join(body), encoding="utf-8")
 
-    # リボン(標準の釦は vendor、独自の釦は材料の訳)
+    # リボン(標準のボタンは vendor、独自のボタンは材料の訳)
     # 材料の訳 + スクリプトに書いた穴埋め(vendor のロケールに無い語)を併用
     extra = grl.OVERRIDES.get(loc, {})
     grl.OVERRIDES[loc] = {

@@ -84,7 +84,7 @@ mod find_tests {
     }
 }
 
-/// **メニューの釦を全部おして、落ちないか・繋がっているかを見る。**
+/// **メニューのボタンを全部おして、落ちないか・繋がっているかを見る。**
 /// リボンに ready で並ぶものは、ここで実際に run_cmd を通す
 /// (ダイアログを開くものだけは、開いた窓が閉じられないので外す)。
 /// GUI は起こさない — gpui の試験用の場で Writer を作って叩く
@@ -92,7 +92,7 @@ mod find_tests {
 mod menu_run_tests {
     use crate::*;
 
-    /// ファイル選択の窓を開く釦。**試験では押さない** —
+    /// ファイル選択の窓を開くボタン。**試験では押さない** —
     /// rfd は実際に窓を出しに行くので、画面の無い試験では返ってこない
     /// (踏んで確かめた。実機での確認に回す)
     const DIALOG: &[&str] = &[
@@ -106,7 +106,7 @@ mod menu_run_tests {
     static AI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[gpui::test]
-    fn 全部の釦が落ちずに通る(cx: &mut gpui::TestAppContext) {
+    fn 全部のボタンが落ちずに通る(cx: &mut gpui::TestAppContext) {
         let _ai = AI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // AI の宛先は覚える設定なので、試験で変えたら戻す
         let keep_ai = ui::ai::backend();
@@ -119,7 +119,7 @@ mod menu_run_tests {
                 let id = cmd.id;
                 let label = cmd.label;
                 w.update(cx, |this, cx| {
-                    // 本文が空だと何も起きない釦があるので、毎回中身を入れておく
+                    // 本文が空だと何も起きないボタンがあるので、毎回中身を入れておく
                     if this.ed.text().is_empty() {
                         this.set_doc(Document::plain("見出し\n本文の字。", SIZE_PT));
                     }
@@ -136,9 +136,9 @@ mod menu_run_tests {
         ui::ai::set_backend(keep_ai);
     }
 
-    /// 押すと入切する釦は、2回押すと元に戻る(1手で戻せる家訓)
+    /// 押すと入切するボタンは、2回押すと元に戻る(1手で戻せる方針)
     #[gpui::test]
-    fn 入切の釦は二度おすと戻る(cx: &mut gpui::TestAppContext) {
+    fn 入切のボタンは二度おすと戻る(cx: &mut gpui::TestAppContext) {
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         for id in [
             "ruler", "darkmode", "hidenchars", "line-numbers", "nav",
@@ -156,11 +156,11 @@ mod menu_run_tests {
         }
     }
 
-    /// **見本の文書を開いた状態でも**全部の釦が通る。
+    /// **見本の文書を開いた状態でも**全部のボタンが通る。
     /// 空の文書と違い、表・見出し・記入欄・縦書きが入っているので、
     /// 「前提があるときの道」も通る(sample/writer が検査の材料)
     #[gpui::test]
-    fn 見本を開いても全部の釦が通る(cx: &mut gpui::TestAppContext) {
+    fn 見本を開いても全部のボタンが通る(cx: &mut gpui::TestAppContext) {
         let dir = std::path::Path::new("../sample/writer");
         let dir = if dir.exists() {
             dir.to_path_buf()
@@ -206,7 +206,7 @@ mod menu_run_tests {
     /// **押した結果が本当に文書に出るか。** status だけ見ても
     /// 「押せるのに何も起きない」は捕まらないので、モデルを見る
     #[gpui::test]
-    fn 主な釦は文書を実際に変える(cx: &mut gpui::TestAppContext) {
+    fn 主なボタンは文書を実際に変える(cx: &mut gpui::TestAppContext) {
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         let fresh = |this: &mut Writer| {
             this.set_doc(Document::plain("あいうえお\nかきくけこ", SIZE_PT));
@@ -255,7 +255,7 @@ mod menu_run_tests {
             this.run_cmd("blankpage", cx);
             assert!(this.doc.paragraphs().count() > n0, "空白ページが入らない");
             this.run_cmd("watermark", cx);
-            assert!(this.wm_edit, "透かしの板が開かない");
+            assert!(this.wm_edit, "透かしのパネルが開かない");
             this.run_cmd("watermark", cx);
             this.run_cmd("pagecolor", cx);
             assert!(this.doc.page_color.is_some(), "紙の色が変わらない");
@@ -270,7 +270,7 @@ mod menu_run_tests {
         w.update(cx, |this, cx| {
             this.set_doc(Document::plain("章のはじめ\n本文です。", SIZE_PT));
             this.ed.move_to(0, false);
-            // 見出しにするのは「テキストの追加」(parastyle は一覧の板を開く)
+            // 見出しにするのは「テキストの追加」(parastyle は一覧のパネルを開く)
             this.run_cmd("add-text", cx);
             assert!(
                 matches!(
@@ -343,7 +343,7 @@ mod menu_run_tests {
 
     /// 記入欄(フォーム)は押した種類の欄が本当に入る
     #[gpui::test]
-    fn フォームの釦が記入欄を入れる(cx: &mut gpui::TestAppContext) {
+    fn フォームのボタンが記入欄を入れる(cx: &mut gpui::TestAppContext) {
         use kumihan::SdtKind as K;
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         for (id, want) in [
@@ -370,7 +370,7 @@ mod menu_run_tests {
     }
 
     /// マクロの fill(名前, 値) が名前つき記入欄に本当に書く。
-    /// 檻の外で同じ台本を回す(bwrap の無い試験環境でも通る)。
+    /// サンドボックスの外で同じ台本を回す(bwrap の無い試験環境でも通る)。
     /// python-docx が無い環境では黙って飛ばす
     #[test]
     fn マクロのfillが名前の記入欄に書く() {
@@ -637,19 +637,19 @@ render({"顧客名": "青森県庁", "担当者": "山田",
         );
     }
 
-    /// 「マクロを書く」は板を開き、宛先が無ければ正直に断る。
+    /// 「マクロを書く」はパネルを開き、宛先が無ければ正直に断る。
     /// 台本が文書に入ることは決してない(置き場に置くだけ)
     #[gpui::test]
-    fn マクロを書くは板を開き宛先が無ければ断る(cx: &mut gpui::TestAppContext) {
+    fn マクロを書くはパネルを開き宛先が無ければ断る(cx: &mut gpui::TestAppContext) {
         let _ai = AI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let keep = ui::ai::backend();
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         w.update(cx, |this, cx| {
             this.set_doc(Document::plain("本文です。", SIZE_PT));
             this.run_cmd("ai-macro", cx);
-            assert!(this.ai_open && this.ai_macro, "マクロの板が開かない");
+            assert!(this.ai_open && this.ai_macro, "マクロのパネルが開かない");
             this.run_cmd("ai-macro", cx); // もう一度押すと閉じる
-            assert!(!this.ai_open && !this.ai_macro, "板が閉じない");
+            assert!(!this.ai_open && !this.ai_macro, "パネルが閉じない");
         });
         ui::ai::set_backend(ui::ai::Backend::ClaudeApi);
         if ui::ai::ready(ui::ai::Backend::ClaudeApi).is_err() {
@@ -799,15 +799,15 @@ print(len(fields()))
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 「名前」釦で記入欄に名前が付く(docx の w:tag。マクロの fill の鍵)
+    /// 「名前」ボタンで記入欄に名前が付く(docx の w:tag。マクロの fill の鍵)
     #[gpui::test]
     fn 記入欄に名前を付けられる(cx: &mut gpui::TestAppContext) {
         let w = cx.update(|cx| cx.new(|cx| Writer::new(None, cx)));
         w.update(cx, |this, cx| {
             this.set_doc(Document::plain("", SIZE_PT));
             this.run_cmd("form-text", cx); // 欄が入りカーソルは欄の直後
-            this.run_cmd("form-name", cx); // 名前の板が開く
-            assert!(this.sd_open && this.sd_naming, "名前の板が開かない");
+            this.run_cmd("form-name", cx); // 名前のパネルが開く
+            assert!(this.sd_open && this.sd_naming, "名前のパネルが開かない");
             this.sd_ed = Editor::new("氏名");
             this.sd_commit();
             let tags: Vec<_> = this
@@ -817,11 +817,11 @@ print(len(fields()))
                 .filter_map(|r| r.fmt.sdt.as_ref().map(|s| s.tag.clone()))
                 .collect();
             assert!(tags.contains(&"氏名".to_string()), "名前が付かない: {tags:?}");
-            // 欄の外で押すと板は開かず、ことばで断る
+            // 欄の外で押すとパネルは開かず、ことばで断る
             this.set_doc(Document::plain("ただの字", SIZE_PT));
             this.ed.move_to(0, false);
             this.run_cmd("form-name", cx);
-            assert!(!this.sd_open, "欄が無いのに板が開く");
+            assert!(!this.sd_open, "欄が無いのにパネルが開く");
         });
     }
 }

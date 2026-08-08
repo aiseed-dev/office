@@ -130,7 +130,7 @@ impl SdtKind {
 
     /// docx の tag から(種類, 名前)を解く。「jo:email」は種類だけ
     /// (名前は印のまま)、「jo:email:連絡先」は種類+名前 —
-    /// 「名前」釦で付けた名とうちだけの種類の印を、一つの w:tag で両立させる形
+    /// 「名前」ボタンで付けた名とうちだけの種類の印を、一つの w:tag で両立させる形
     pub fn split_tag(tag: &str) -> Option<(SdtKind, String)> {
         use SdtKind as K;
         for k in [K::Email, K::Phone, K::Complex, K::Signature] {
@@ -426,7 +426,7 @@ pub struct Document {
     pub hyphenate: bool,
     /// 文書の保護(docx の settings の documentProtection の w:edit)。
     /// Some("readOnly") なら読み取り専用。パスワード無しの保護は Word と
-    /// 同じく「注意書き」— 解除の釦で誰でも外せる(そう見せる)
+    /// 同じく「注意書き」— 解除のボタンで誰でも外せる(そう見せる)
     pub protection: Option<String>,
     /// 文書の情報(docx の docProps/core.xml)。作成者・タイトルなど
     pub props: CoreProps,
@@ -925,7 +925,7 @@ impl Document {
     /// モデルを軽く保つのが主目的で、雛形の「{{差し込み口}}」が
     /// 道具の目に割れて見える事故の保険にもなる(docxtpl 0.20 は多くの
     /// 分断を自力で繋ぐと実測した — が、賭けにはしない)。
-    /// 書式の違う分断は繋がない(書式は据え置きの家訓どおり)
+    /// 書式の違う分断は繋がない(書式は据え置きの方針どおり)
     pub fn heal_runs(&mut self) {
         fn heal(p: &mut Paragraph) {
             let pt = p.runs.first().map(|r| r.size_pt).unwrap_or(10.5);
@@ -1604,7 +1604,7 @@ pub fn layout(doc: &Document, m: &Metrics, frame: &Frame) -> Sheet {
 ///
 /// [`PAGE_MARK`] はそのページの番号、[`PAGES_MARK`] は総頁の字に置き換わる。
 /// **表示専用** — 置き換えでバイト位置が変わるので、行の byte0 は編集と結ばない
-/// (ヘッダーの編集は紙面上ではなく板で行う)。
+/// (ヘッダーの編集は紙面上ではなくパネルで行う)。
 /// y はページ上端からの mm、x は左余白からの mm(本文の行と同じ物差し)。
 pub fn layout_hf(
     hf: &HeadFoot,
@@ -3217,7 +3217,7 @@ mod hf_layout_tests {
 
     #[test]
     fn 平文との相互変換で書式が残る() {
-        // 板での編集は paras_text / set_paras_text を通る
+        // パネルでの編集は paras_text / set_paras_text を通る
         let mut ps: Vec<Paragraph> =
             Document::plain("社外秘", 10.5).paragraphs().cloned().collect();
         ps[0].align = Align::Right;

@@ -190,7 +190,7 @@ impl Calc {
             "names-pick" => {
                 if v.starts_with("→ 新しい名前") {
                     self.prompt = Some(("name", Editor::new("")));
-                    return; // 板の確定まで
+                    return; // パネルの確定まで
                 }
                 let name = v.split(" = ").next().unwrap_or(v).to_string();
                 if v.ends_with("(テーブル)") {
@@ -257,7 +257,7 @@ impl Calc {
                     "中身を打ち直す…" => {
                         self.name_pend = Some(name);
                         self.prompt = Some(("name-range", Editor::new(&range)));
-                        return; // 板の確定まで
+                        return; // パネルの確定まで
                     }
                     _ => {
                         // 名前を消す
@@ -269,7 +269,7 @@ impl Calc {
                     }
                 }
             }
-            // ヘッダー/フッター: 6つの区分から選んで板で打つ
+            // ヘッダー/フッター: 6つの区分から選んでパネルで打つ
             "hf-pick" => {
                 if v == "全部消す" {
                     self.checkpoint();
@@ -296,7 +296,7 @@ impl Calc {
                     let cur = match slot { 0 => l, 1 => c, _ => r };
                     self.hf_pend = Some((footer, slot));
                     self.prompt = Some(("hf-edit", Editor::new(&cur)));
-                    return; // 板の確定まで
+                    return; // パネルの確定まで
                 }
             }
             "border-pick" => {
@@ -336,8 +336,8 @@ impl Calc {
                     }
                     _ => {
                         self.apply_borders(v);
-                        // 板は開いたまま — 外枠→内側…と連打で組み立てる
-                        // (閉じるのは Esc か板の外。発注者報告 2026-08-08)
+                        // パネルは開いたまま — 外枠→内側…と連打で組み立てる
+                        // (閉じるのは Esc かパネルの外。発注者報告 2026-08-08)
                         self.run_cmd("borders", cx);
                         return;
                     }
@@ -352,7 +352,7 @@ impl Calc {
             "border-color-pick" => {
                 if v.starts_with("その他") {
                     self.prompt = Some(("border-color-rgb", Editor::new("")));
-                    return; // 板の確定まで pick_kind を戻さない
+                    return; // パネルの確定まで pick_kind を戻さない
                 }
                 if let Some((_, hx)) = FONT_COLORS.iter().find(|(n, _)| *n == v) {
                     self.pen_color =
@@ -424,7 +424,7 @@ impl Calc {
                 if v == "→ ラベルで絞る…" {
                     // 含む/で始まる/で終わる 語 — 合う値以外を hide に落とす
                     self.prompt = Some(("pivot-label", Editor::new("")));
-                    return; // pivot_flt は板の確定まで持つ
+                    return; // pivot_flt はパネルの確定まで持つ
                 }
                 if v == "→ 値で絞る…" {
                     let cur = self
@@ -579,7 +579,7 @@ impl Calc {
                     self.prompt = Some(("csv-dest", Editor::new(&cur)));
                     return;
                 }
-                // プレビューの行は何もしない(板は開いたまま)
+                // プレビューの行は何もしない(パネルは開いたまま)
                 self.import_pick();
                 return;
             }
@@ -736,7 +736,7 @@ impl Calc {
                         .and_then(|c| c.fmt.number_format.clone())
                         .unwrap_or_default();
                     self.prompt = Some(("numfmt-custom", Editor::new(&cur)));
-                    return; // pick_kind を戻さない(板の確定まで)
+                    return; // pick_kind を戻さない(パネルの確定まで)
                 }
                 if let Some((_, code)) = NUMFMTS.iter().find(|(n, _)| *n == v) {
                     let c = code.map(|s| s.to_string());
@@ -803,14 +803,14 @@ impl Calc {
                     None => {
                         // その他 = 任意の角度(-90〜90)
                         self.prompt = Some(("text-angle", Editor::new("")));
-                        return; // 板の確定まで
+                        return; // パネルの確定まで
                     }
                 }
             }
             "font-color" => {
                 if v.starts_with("その他") {
                     self.prompt = Some(("font-color-rgb", Editor::new("")));
-                    return; // 板の確定まで
+                    return; // パネルの確定まで
                 }
                 if let Some((_, hx)) = FONT_COLORS.iter().find(|(n, _)| *n == v) {
                     let c = hx.map(|h| h.to_string());
@@ -825,7 +825,7 @@ impl Calc {
             "fill-color" => {
                 if v.starts_with("その他") {
                     self.prompt = Some(("fill-color-rgb", Editor::new("")));
-                    return; // 板の確定まで
+                    return; // パネルの確定まで
                 }
                 if let Some((_, hx)) = FILL_COLORS.iter().find(|(n, _)| *n == v) {
                     let c = hx.map(|h| h.to_string());
@@ -1070,7 +1070,7 @@ impl Calc {
                     Editor::new("10"),
                 ));
             }
-            // 板の要らない規則はその場で掛ける
+            // パネルの要らない規則はその場で掛ける
             // 第2版: バー/スケール/アイコン(範囲の最小〜最大が物差し)
             "cond-bar" | "cond-scale" | "cond-icons" => self.cond_visual(id),
             "cond-manage" => {
@@ -1823,7 +1823,7 @@ impl Calc {
         .into();
     }
 
-    /// 重複の削除の板 — 比べる列の入切と「先頭行は見出し」。
+    /// 重複の削除のパネル — 比べる列の入切と「先頭行は見出し」。
     pub(crate) fn dedup_pick(&mut self) {
         let Some((list, header)) = &self.dedup_pend else { return };
         let at = self
@@ -1894,7 +1894,7 @@ impl Calc {
     }
 
     /// 罫線を選択に掛ける(ペンの線種・色で)。which は一覧の項目名
-    /// 線のスタイルの板(ペンに入る)。罫線パレットからも来る
+    /// 線のスタイルのパネル(ペンに入る)。罫線パレットからも来る
     pub(crate) fn open_border_style_pick(&mut self) {
         let at = self
             .cell_origin_px(self.cursor)
@@ -1915,7 +1915,7 @@ impl Calc {
         self.pick = Some((items, at));
     }
 
-    /// 線の色の板(ペンに入る)。罫線パレットからも来る
+    /// 線の色のパネル(ペンに入る)。罫線パレットからも来る
     pub(crate) fn open_border_color_pick(&mut self) {
         let at = self
             .cell_origin_px(self.cursor)
@@ -1981,7 +1981,7 @@ impl Calc {
         self.status = ui::tf!("罫線: {} を {}:{} に掛けました(Ctrl+Z で1手)", which, a.a1(), b.a1()).into();
     }
 
-    /// 「データの入力規則」の板を開く(いまの規則を下敷きに)
+    /// 「データの入力規則」のパネルを開く(いまの規則を下敷きに)
     pub(crate) fn dv_open(&mut self) {
         let v = self.sheet().validation_at(self.cursor).cloned();
         let mut d = DvDlg {
@@ -2041,7 +2041,7 @@ impl Calc {
     }
 
     /// 「データの入力規則」の OK。選択の範囲に規則を掛ける(重なる規則は
-    /// 入れ替え)。読めない条件は板を開いたまま言い返す
+    /// 入れ替え)。読めない条件はパネルを開いたまま言い返す
     pub(crate) fn dv_ok(&mut self, cx: &mut Context<Self>) {
         let Some(mut d) = self.dv_dlg.take() else { return };
         let f = |i: usize| -> String { d.eds[i].text().trim().to_string() };
@@ -2192,7 +2192,7 @@ impl Calc {
         cx.notify();
     }
 
-    /// ▼の板の開閉(見出しのボタンから。同じ列ならしまう)
+    /// ▼のパネルの開閉(見出しのボタンから。同じ列ならしまう)
     pub(crate) fn toggle_filter_panel(&mut self, col: u32) {
         match &self.filter_panel {
             Some((c, _)) if *c == col => self.filter_panel = None,
@@ -2200,7 +2200,7 @@ impl Calc {
         }
     }
 
-    /// ▼の板: 値ひとつの入切。空になったらその列は素通しに戻す
+    /// ▼のパネル: 値ひとつの入切。空になったらその列は素通しに戻す
     pub(crate) fn filter_toggle_value(&mut self, col: u32, v: &str) {
         let Some(f) = &mut self.auto_filter else { return };
         let set = f.hide.entry(col).or_default();
@@ -2213,7 +2213,7 @@ impl Calc {
         self.filter_note();
     }
 
-    /// ▼の板: (すべて選択)。全部見えていれば全部隠し、そうでなければ全部見せる
+    /// ▼のパネル: (すべて選択)。全部見えていれば全部隠し、そうでなければ全部見せる
     pub(crate) fn filter_toggle_all(&mut self, col: u32, all: Vec<String>) {
         let Some(f) = &mut self.auto_filter else { return };
         if f.hide.remove(&col).is_none() {
@@ -2222,7 +2222,7 @@ impl Calc {
         self.filter_note();
     }
 
-    /// ▼の板: この列の絞り込みを解く
+    /// ▼のパネル: この列の絞り込みを解く
     pub(crate) fn filter_clear_col(&mut self, col: u32) {
         if let Some(f) = &mut self.auto_filter {
             f.hide.remove(&col);
@@ -2255,7 +2255,7 @@ impl Calc {
             cx.notify();
             return;
         }
-        // 入力の板 → 一覧 → 子メニュー → 親メニュー → 書式の小窓 → コピーの破線、
+        // 入力のパネル → 一覧 → 子メニュー → 親メニュー → 書式の小窓 → コピーの破線、
         // の順で閉じる
         self.pivot_pend = None; // 聞き取り途中のピボット・小計は Esc でやめる
         self.sub_pend = None;
@@ -2273,7 +2273,7 @@ impl Calc {
         self.border_pal = None;
 
         self.pw_pending = None; // パスワード待ちも Esc でやめる(開かない)
-        // 入力規則の板: 開いたドロップダウン → 板、の順で閉じる
+        // 入力規則のパネル: 開いたドロップダウン → パネル、の順で閉じる
         if let Some(d) = &mut self.dv_dlg {
             if d.menu != 0 {
                 d.menu = 0;
@@ -2301,7 +2301,7 @@ impl Calc {
             || self.shape_sel.take().is_some()
             || self.img_sel.take().is_some()
         {
-            // 一覧・板を閉じたら意味づけも戻す(耳のメニューの狙い先も)
+            // 一覧・パネルを閉じたら意味づけも戻す(耳のメニューの狙い先も)
             self.pick_kind = "value";
             self.pick_note = None;
             self.sheet_menu_at = None;
@@ -2319,7 +2319,7 @@ impl Calc {
         }
     }
 
-    /// 入力の板を確定する(Enter)。
+    /// 入力のパネルを確定する(Enter)。
     pub(crate) fn finish_prompt(&mut self, cx: &mut Context<Self>) {
         let Some((kind, ed)) = self.prompt.take() else { return };
         let text = ed.text().trim().to_string();
@@ -2699,7 +2699,7 @@ impl Calc {
                             }
                         });
                     let Some(col) = col else {
-                        // 打ち直せるように板を開いたまま返す
+                        // 打ち直せるようにパネルを開いたまま返す
                         self.prompt = Some(("sort-by", ed));
                         self.status = ui::tf!(
                             "「{}」という見出しが見つかりません。使える見出し: {}",
@@ -2842,7 +2842,7 @@ impl Calc {
                 self.dirty = true;
                 self.status = ui::tf!("{}:{} — {} より{}を塗ります", range.0.a1(), range.1.a1(), value, if gt { "大きい値" } else { "小さい値" }).into();
             }
-            // 条件付き書式の板(間・文字・上位/下位N)
+            // 条件付き書式のパネル(間・文字・上位/下位N)
             "cond-between" => {
                 let t = text.replace('~', "〜");
                 let Some((a1, b1)) = t.split_once('〜') else {
@@ -2967,7 +2967,7 @@ impl Calc {
                 } else if let Some(rest) = t.strip_prefix('@') {
                     // 手続きは**手元(plugins)の .py だけ**実行する(発注者確定
                     // 2026-08-08)。ブックに載って旅してきた手続きは実行しない —
-                    // ファイルは実行の起点になれない。檻は従来どおり必須、
+                    // ファイルは実行の起点になれない。サンドボックスは従来どおり必須、
                     // 網は既定で閉じ「@名前 net」とその場で打ったときだけ開く
                     let (name, net) = match rest.trim().strip_suffix(" net") {
                         Some(n) => (n.trim(), true),
@@ -2979,7 +2979,7 @@ impl Calc {
                             Ok(code) => {
                                 if net {
                                     self.status = ui::t!(
-                                        "網あり檻で実行します(ファイルは守られたまま)"
+                                        "網ありサンドボックスで実行します(ファイルは守られたまま)"
                                     )
                                     .into();
                                 }
@@ -3182,7 +3182,7 @@ impl Calc {
                 };
                 self.goal_seek(target, goal, var);
             }
-            // パスワードの板。開き待ちがあれば解いて開き、
+            // パスワードのパネル。開き待ちがあれば解いて開き、
             // 無ければ「次の保存から暗号化」を決める(空なら解除)
             "pw-open" => {
                 let Some(p) = self.pw_pending.take() else { return };
@@ -3203,7 +3203,7 @@ impl Calc {
                         }
                     }
                     Err(e) => {
-                        // 板は開いたまま。打ち直せる
+                        // パネルは開いたまま。打ち直せる
                         self.pw_pending = Some(p);
                         self.prompt = Some(("pw-open", Editor::new("")));
                         self.status = e.into();
@@ -3276,7 +3276,7 @@ impl Calc {
                             t.b = b;
                         }
                         self.dirty = true;
-                        self.status = ui::tf!("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインの釦でどうぞ)", a.a1(), b.a1())
+                        self.status = ui::tf!("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインのボタンでどうぞ)", a.a1(), b.a1())
                         .into();
                     }
                 }
@@ -3503,7 +3503,7 @@ impl Calc {
         self.status = ui::t!("外枠を引きました").into();
     }
 
-    /// 書式の小窓の釦。
+    /// 書式の小窓のボタン。
     pub(crate) fn fmt_panel_action(&mut self, id: &str, cx: &mut Context<Self>) {
         match id {
             "close" => self.fmt_panel = None,
@@ -3614,7 +3614,7 @@ impl Calc {
     }
 
     /// 耳の右クリックメニュー(本家「シートの管理」の並び)。
-    /// 出す場所は耳に近い左下 — 板を遠くに出さない(終了確認と同じ判断)
+    /// 出す場所は耳に近い左下 — パネルを遠くに出さない(終了確認と同じ判断)
     pub(crate) fn open_sheet_menu(&mut self, i: usize) {
         self.sheet_menu_at = Some(i);
         self.pick_kind = "sheet-menu";
@@ -3700,7 +3700,7 @@ impl Calc {
             "名前の変更" => {
                 let cur = self.book.sheets[t].name.clone();
                 self.prompt = Some(("sheet-rename", Editor::new(&cur)));
-                return; // sheet_menu_at は板の確定まで持ち越す
+                return; // sheet_menu_at はパネルの確定まで持ち越す
             }
             "コピーを作成" => {
                 let mut copy = self.book.sheets[t].clone();

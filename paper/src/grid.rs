@@ -412,7 +412,7 @@ pub fn sheet_to_pdf<W: Write>(
         for sp in grid.shapes.iter().chain(grid.shapes_new.iter()) {
             let (x, y_top) = cell_mm(sp.at);
             let mm = 25.4 / 96.0; // px → mm
-            // 錨のセルからの px のずらしも紙に写す
+            // アンカーのセルからの px のずらしも紙に写す
             let (x, y_top) =
                 (x + sp.dx_px * mm * scale, y_top - sp.dy_px * mm * scale);
             let (w, h) = (sp.width_px * mm * scale, sp.height_px * mm * scale);

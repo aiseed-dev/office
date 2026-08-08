@@ -240,7 +240,7 @@ fn parse_rels(xml: &str) -> Vec<(String, String, String, bool)> {
 }
 
 /// xl/worksheets/ からの相対の的を zip の中の道に直す("../comments1.xml" → "xl/comments1.xml")。
-/// drawing の錨の中身(画像か図形か)。
+/// drawing のアンカーの中身(画像か図形か)。
 enum DrawKind {
     /// 画像(r:embed)
     Image(String),
@@ -249,7 +249,7 @@ enum DrawKind {
     Shape(Box<crate::model::SheetShape>),
 }
 
-/// drawing(xl/drawings/drawingN.xml)から、画像と図形の錨を拾う。
+/// drawing(xl/drawings/drawingN.xml)から、画像と図形のアンカーを拾う。
 /// 返すのは (置き場所のセル, 幅EMU, 高さEMU, 中身)。
 /// `xl/tables/tableN.xml` を読む。範囲が読めなければ None(黙って作らない)。
 fn parse_table(xml: &str) -> Option<crate::model::TableDef> {
@@ -543,7 +543,7 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
     out
 }
 
-/// 挿した図形1枚の錨(oneCellAnchor の xdr:sp)。Excel でも図形として開ける。
+/// 挿した図形1枚のアンカー(oneCellAnchor の xdr:sp)。Excel でも図形として開ける。
 fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
     let (cx, cy) = ((sp.width_px * 9525.0) as i64, (sp.height_px * 9525.0) as i64);
     // 不透明度は srgbClr の子 a:alpha(10万分率)。1.0 なら書かない
@@ -696,7 +696,7 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
     )
 }
 
-/// 挿した画像1枚の錨(oneCellAnchor)。大きさは px → EMU(9525 EMU = 1px)。
+/// 挿した画像1枚のアンカー(oneCellAnchor)。大きさは px → EMU(9525 EMU = 1px)。
 fn image_anchor_xml(im: &crate::model::SheetImage, rid: &str, id: u32) -> String {
     let (cx, cy) = ((im.width_px * 9525.0) as i64, (im.height_px * 9525.0) as i64);
     format!(
@@ -2532,7 +2532,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         .map(|i| format!(r#"<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#))
         .collect();
     // このアプリで挿した画像(グラフ)の部品。原本に drawing のあるシートは
-    // **その部品の中へ錨と rels を継ぎ足す**(drawing は1シート1部品の決まり)。
+    // **その部品の中へアンカーと rels を継ぎ足す**(drawing は1シート1部品の決まり)。
     // 無いシートは drawingC{N}.xml を新しく作る
     let mut media_out: Vec<(String, Vec<u8>)> = Vec::new();
     let mut fresh_parts: Vec<(String, String)> = Vec::new();
@@ -2920,7 +2920,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             w.write_event(Event::End(BytesEnd::new("sheetViews"))).unwrap();
         }
         // グループ化があるときは sheetFormatPr に深さの最大を書く
-        // (Excel のアウトライン欄の 1 2 3 釦がこれを見る)。cols より前が作法
+        // (Excel のアウトライン欄の 1 2 3 ボタンがこれを見る)。cols より前が作法
         if !sh.row_outline.is_empty() || !sh.col_outline.is_empty() {
             let mut fp = BytesStart::new("sheetFormatPr");
             fp.push_attribute(("defaultRowHeight", "15"));
@@ -3250,7 +3250,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             }
         }
         // このアプリで挿した画像。原本に drawing が無ければ新しい部品への参照を足す
-        // (原本に有るときは、その部品の中へ錨を継ぎ足す — 部品は1シート1つの決まり)
+        // (原本に有るときは、その部品の中へアンカーを継ぎ足す — 部品は1シート1つの決まり)
         if (!sh.images_new.is_empty() || !sh.shapes_new.is_empty())
             && !body.contains("<drawing ")
         {
@@ -4368,7 +4368,7 @@ mod image_roundtrip_tests {
         let (back, _) = read(buf).expect("読めない");
         let ims = &back.sheets[0].images;
         assert_eq!(ims.len(), 1, "画像が往復しない");
-        assert_eq!(ims[0].at, Pos::new(2, 3), "錨のセルが違う");
+        assert_eq!(ims[0].at, Pos::new(2, 3), "アンカーのセルが違う");
         assert!((ims[0].width_px - 300.0).abs() < 1.0, "幅が違う: {}", ims[0].width_px);
         assert_eq!(ims[0].data, png(), "実体が化けた");
         assert!(back.sheets[0].images_new.is_empty(), "読んだ画像が「挿した側」に入った");
@@ -4408,7 +4408,7 @@ mod image_roundtrip_tests {
         assert_eq!(b3.sheets[0].images.len(), 2, "継ぎ足しで枚数が合わない");
         assert!(
             b3.sheets[0].images.iter().any(|im| im.at == Pos::new(5, 5)),
-            "足した方の錨が無い"
+            "足した方のアンカーが無い"
         );
     }
 }

@@ -127,7 +127,7 @@ impl Calc {
             }
         };
         if ooxml::crypt::is_encrypted(&bytes) {
-            // 板でパスワードを聞き、Enter が続きをやる
+            // パネルでパスワードを聞き、Enter が続きをやる
             self.pw_pending = Some(p);
             self.prompt = Some(("pw-open", Editor::new("")));
             self.status =
@@ -137,10 +137,10 @@ impl Calc {
         self.open_plain(p, bytes);
     }
 
-    /// 平文(zip)の xlsx を読み込む。open とパスワードの板の共通の続き。
+    /// 平文(zip)の xlsx を読み込む。open とパスワードのパネルの共通の続き。
     pub(crate) fn open_plain(&mut self, p: PathBuf, bytes: Vec<u8>) {
         // 前のブックのパスワードを引きずらない(暗号化して開いた時だけ
-        // 板の続きが後から入れ直す)
+        // パネルの続きが後から入れ直す)
         self.encrypt_pw = None;
         match sheet::xlsx::read(std::io::Cursor::new(bytes)) {
             Ok((mut book, rep)) => {
@@ -426,7 +426,7 @@ impl Calc {
         true
     }
 
-    /// 名前を付けて保存(いつでもダイアログ。別の糸 — rfd は同期)
+    /// 名前を付けて保存(いつでもダイアログ。別のスレッド — rfd は同期)
     pub(crate) fn save_as(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new()
@@ -519,8 +519,8 @@ impl Calc {
         self.open_dialog(cx); cx.notify();
     }
 
-    /// 開くファイルを選ぶ。**ダイアログは別の糸** — rfd は同期で、
-    /// 主の糸で開くと画面ごと固まる(終了確認と同じ作法)。
+    /// 開くファイルを選ぶ。**ダイアログは別のスレッド** — rfd は同期で、
+    /// メインスレッドで開くと画面ごと固まる(終了確認と同じ作法)。
     pub(crate) fn open_dialog(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new().add_filter("Excelブック", &["xlsx"]).pick_file()
@@ -537,8 +537,8 @@ impl Calc {
         .detach();
     }
 
-    /// 終了の要求。書きかけが無ければ即終了、あれば確認を**別の糸**で出す。
-    /// 確認のダイアログで主の糸を塞がない — 塞ぐと画面ごと固まり、
+    /// 終了の要求。書きかけが無ければ即終了、あれば確認を**別のスレッド**で出す。
+    /// 確認のダイアログでメインスレッドを塞がない — 塞ぐと画面ごと固まり、
     /// GNOME に「応答なし」と判定される(踏んで直した)。
     /// 「はい」でも保存できなかった(保存の窓を閉じた等)なら終了しない —
     /// 書きかけを黙って捨てない。
@@ -556,7 +556,7 @@ impl Calc {
             cx.quit();
             return;
         }
-        // 確認は**窓の中の板**で出す。rfd の OS ダイアログは親窓を持てず
+        // 確認は**窓の中のパネル**で出す。rfd の OS ダイアログは親窓を持てず
         // **スクリーンの中央**に出て、窓から離れすぎる(発注者 2026-08-06)
         self.quit_ask = true;
         cx.notify();
@@ -566,7 +566,7 @@ impl Calc {
         self.request_quit(cx);
     }
 
-    /// PDF に書き出す。保存先の選択は**別の糸**(rfd は同期)。
+    /// PDF に書き出す。保存先の選択は**別のスレッド**(rfd は同期)。
     pub(crate) fn save_pdf(&mut self, cx: &mut Context<Self>) {
         self.commit();
         let ask = cx.background_executor().spawn(async {
@@ -587,7 +587,7 @@ impl Calc {
         .detach();
     }
 
-    /// 画像ファイルを選んで、いまのセルに浮かべる(選択は別の糸)。
+    /// 画像ファイルを選んで、いまのセルに浮かべる(選択は別のスレッド)。
     pub(crate) fn insert_image_dialog(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new()
@@ -712,7 +712,7 @@ impl Calc {
         };
     }
 
-    /// 保存。名前が無ければ選ばせる(**ダイアログは別の糸**)。
+    /// 保存。名前が無ければ選ばせる(**ダイアログは別のスレッド**)。
     /// `then_quit` なら保存が済んだときだけ終了する — 書きかけを黙って捨てない。
     pub(crate) fn save(&mut self, then_quit: bool, cx: &mut Context<Self>) {
         self.commit();

@@ -23,7 +23,7 @@ pub const TABLE: &[(&str, &str)] = &[
                                (AES-128。Word や LibreOffice でも開けます)", "El próximo guardado se cifra con esta contraseña (AES-128; se abre en Word y LibreOffice)"),
     ("マクロが読めません: {}", "No se puede leer la macro: {}"),
     ("マクロに渡せません: {}", "No se puede pasar a la macro: {}"),
-    ("マクロ {} を実行しています…(檻の中の Python)", "Ejecutando la macro {}… (Python en el sandbox)"),
+    ("マクロ {} を実行しています…(サンドボックスの中の Python)", "Ejecutando la macro {}… (Python en el sandbox)"),
     ("Python が起動できません: {}", "No se puede iniciar Python: {}"),
     ("python-docx がありません(pip install python-docx。\
                      .venv があればそちらへ)", "Falta python-docx (pip install python-docx; en .venv si existe)"),
@@ -72,7 +72,7 @@ pub const TABLE: &[(&str, &str)] = &[
              マクロは fill(\"{}\", 値) で記入できます)", "Campo con nombre \"{}\" (w:tag del docx; las macros pueden rellenarlo con fill(\"{}\", valor))"),
     ("チェックを {} にしました", "Casilla puesta en {}"),
     ("{}に合わせました(ズーム {}%)", "Ajustado a {} (zoom {}%)"),
-    ("記入しました(送信の釦で送る)", "Rellenado (pulse Enviar para mandarlo)"),
+    ("記入しました(送信のボタンで送る)", "Rellenado (pulse Enviar para mandarlo)"),
     ("ローカルの HTML からは送れません(URL で開いてください)", "No se puede enviar desde HTML local (ábralo mediante URL)"),
     ("送り先が開いた相手と違います(送りません)", "El destino difiere del origen (no se envía)"),
     ("送っています…", "Enviando…"),
@@ -150,19 +150,19 @@ pub const TABLE: &[(&str, &str)] = &[
     ("この段落にコメントはありません", "Este párrafo no tiene comentarios"),
     ("コメントを編集中(段落に付きます。空にして閉じると外れる)", "Editando un comentario (se adjunta al párrafo; ciérrelo vacío para quitarlo)"),
     ("保護を外しました(編集できます。保存で docx にも残ります)", "Protección quitada (se puede editar; también se guarda en el docx)"),
-    ("読み取り専用で保護しました(同じ釦で解除。\
+    ("読み取り専用で保護しました(同じボタンで解除。\
                                    パスワードは掛けません — 掛けた振りもしません)", "Protegido contra escritura (el mismo botón lo quita; sin contraseña — y sin fingir que la hay)"),
     ("まだファイルになっていません(保存すると編集権=錠を取ります)", "Aún no es un archivo (al guardar se toma el bloqueo de edición)"),
     ("編集権はこちら({})にあります。同じ文書は先に開いた人が書け、\
                              後の人は読むだけになります(錠は .~lock ファイル)", "Usted ({}) tiene los derechos de edición. Quien abre primero un documento puede escribir; los que llegan después solo leen (el bloqueo es un archivo .~lock)"),
     ("{} が編集中です(読めますが上書き保存はできません。\
-                                 相手が閉じたら、またこの釦で確かめてください)", "{} lo está editando (puede leerlo, pero no sobrescribirlo; cuando lo cierre, pulse este botón otra vez)"),
+                                 相手が閉じたら、またこのボタンで確かめてください)", "{} lo está editando (puede leerlo, pero no sobrescribirlo; cuando lo cierre, pulse este botón otra vez)"),
     ("先客が居なくなっていたので、編集権を取り直しました", "El editor anterior ya no está, así que se retomaron los derechos de edición"),
     ("まだファイルになっていません(保存すると、上書きのたびに\
                          控えが残ります)", "Aún no es un archivo (una vez guardado, cada sobrescritura conserva una copia)"),
     ("バージョン履歴: 押すと控えを名無しの複製で開きます", "Historial de versiones: haga clic para abrir una copia como documento sin título"),
     ("チャット: 打って Enter で書き残す(文書の隣の .chat.txt)", "Chat: escriba y pulse Enter para dejar un mensaje (.chat.txt junto al documento)"),
-    ("マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
+    ("マクロ: .py を選ぶと、サンドボックスの中の Python が文書の複製を\
                                直します(台本の d が python-docx の文書。\
                                fill(名前, 値)=記入・extract(名前)=読む・\
                                fields()=一覧・render(辞書)=雛形差し込み)", "Macros: elija un .py y Python en el sandbox edita una copia del documento (d es el Document de python-docx; fill(nombre, valor) rellena, extract(nombre) lee, fields() lista, render(dict) rellena una plantilla)"),
@@ -217,7 +217,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("しおり「{}」へ移りました", "Ha ido al marcador \"{}\""),
     ("しおりを外しました", "Marcador quitado"),
     ("送信({} {})", "Enviar ({} {})"),
-    ("(検索の板で語を打つ → ここに出ます)", "(escriba un término en el cuadro de búsqueda — los resultados aparecen aquí)"),
+    ("(検索のパネルで語を打つ → ここに出ます)", "(escriba un término en el cuadro de búsqueda — los resultados aparecen aquí)"),
     ("大きさ {} pt / 書体 {}", "Tamaño {} pt / fuente {}"),
     ("ルビ「{}」", "Ruby \"{}\""),
     ("行間 {:.2} / 字下げ {}", "Interlineado {:.2} / sangría {}"),
@@ -292,7 +292,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("@save 名前 の形で", "Use la forma: @save nombre"),
     ("「{}」をブックから外しました", "\"{}\" quitado del libro"),
     ("「{}」はありません", "\"{}\" no existe"),
-    ("網あり檻で実行します(ファイルは守られたまま)", "Ejecutando en el sandbox con red (los archivos siguen protegidos)"),
+    ("網ありサンドボックスで実行します(ファイルは守られたまま)", "Ejecutando en el sandbox con red (los archivos siguen protegidos)"),
     ("「{}」はありません(@list で一覧)", "\"{}\" no existe (@list muestra la lista)"),
     ("文字を消しました", "Texto quitado"),
     ("図形に文字を入れました(保存で xlsx に入ります)", "Texto puesto en la forma (entra en el xlsx al guardar)"),
@@ -308,7 +308,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("ブックの情報を控えました(保存で xlsx に入ります)", "Información del libro anotada (entra en el xlsx al guardar)"),
     ("範囲は A1:C9 の形で書いてください", "Escriba el rango como A1:C9"),
     ("左上と右下が逆です(A1:C9 の順で)", "La esquina superior izquierda y la inferior derecha están invertidas (en el orden A1:C9)"),
-    ("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインの釦でどうぞ)", "Tabla redimensionada a {}:{} (el formato no se vuelve a aplicar — use los botones de Diseño de tabla)"),
+    ("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインのボタンでどうぞ)", "Tabla redimensionada a {}:{} (el formato no se vuelve a aplicar — use los botones de Diseño de tabla)"),
     ("文章がありません(何もしていません)", "No hay texto (no se hizo nada)"),
     ("用件がありません(何もしていません)", "No hay petición (no se hizo nada)"),
     ("何も書き残しませんでした", "No se dejó ningún mensaje"),
@@ -348,7 +348,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("右に空きが見つかりません(場所を空けてから)", "No hay espacio libre a la derecha (despeje un poco primero)"),
     ("広がった分の場所が塞がっています(右下を空けてから更新)", "La zona ampliada está bloqueada (despeje abajo a la derecha y actualice)"),
     ("Python を実行しています…", "Ejecutando Python…"),
-    ("檻(bubblewrap)がありません。ブックに載ったコードは檻の外では\
+    ("サンドボックス(bubblewrap)がありません。ブックに載ったコードはサンドボックスの外では\
 実行しません(apt install bubblewrap)", "No hay sandbox (bubblewrap). El código que trae el libro nunca se ejecuta fuera del sandbox (apt install bubblewrap)"),
     ("office_sheet.so がありません(cargo build -p pysheet --release \
 --features extension-module して、liboffice_sheet.so を office_sheet.so の名で \
@@ -356,8 +356,8 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("Python を実行しました(Ctrl+Z で1手で戻せます)", "Python terminado (un solo Ctrl+Z deshace)"),
     ("=PY(\"関数名\", 引数…) のセルがありません", "No hay celdas =PY(\"nombre\", args…)"),
     ("関数の定義がありません(@save 関数 で def の入った .py をブックに載せる)", "No hay definiciones de funciones (@save 関数 incrusta un .py con defs)"),
-    ("PY を計算しています…(檻の中)", "Evaluando PY… (en el sandbox)"),
-    ("檻(bubblewrap)がありません。ブックの関数は檻の外では計算しません", "No hay sandbox (bubblewrap); las funciones del libro nunca se evalúan fuera de él"),
+    ("PY を計算しています…(サンドボックスの中)", "Evaluando PY… (en el sandbox)"),
+    ("サンドボックス(bubblewrap)がありません。ブックの関数はサンドボックスの外では計算しません", "No hay sandbox (bubblewrap); las funciones del libro nunca se evalúan fuera de él"),
     ("一時ファイルが書けません", "No se puede escribir un archivo temporal"),
     ("清書しています…", "Componiendo…"),
     ("テキスト", "Texto"),
@@ -384,8 +384,8 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("バージョン履歴: 選ぶと控えを名無しの複製で開きます(いまの書きかけは要るなら先に保存)", "Historial de versiones: elija una copia para abrirla sin título (guarde antes su trabajo actual si lo necesita)"),
     ("まだファイルになっていません(保存すると、隣に申し送り帳ができます)", "Aún no es un archivo (guárdelo y tendrá un archivo de chat al lado)"),
     ("まだ言伝はありません(打って Enter で書き残します)", "Aún no hay mensajes (escriba y pulse Enter para dejar uno)"),
-    ("マクロ: .py を選ぶと檻の中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)", "Macros: elija un .py y se ejecuta Python en el sandbox (b = libro, s = hoja; el mismo mecanismo que Datos > Python)"),
-    ("プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)", "Complementos: elija uno para ejecutarlo con Python en el sandbox (b = libro, s = hoja)"),
+    ("マクロ: .py を選ぶとサンドボックスの中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)", "Macros: elija un .py y se ejecuta Python en el sandbox (b = libro, s = hoja; el mismo mecanismo que Datos > Python)"),
+    ("プラグイン: 選ぶとサンドボックスの中の Python で実行します(b=ブック s=シート)", "Complementos: elija uno para ejecutarlo con Python en el sandbox (b = libro, s = hoja)"),
     ("空のセルを選んでください(中身のあるセルは潰しません)", "Elija una celda vacía (las celdas ocupadas nunca se sobrescriben)"),
     ("スライサーにする列を選んでください(見出しの下にデータの行が要ります)", "Elija una columna para la segmentación (se necesitan filas de datos bajo el encabezado)"),
     ("テキストアート: 文字を打つと、太字+縁取りの飾り文字を画像で置きます", "Texto artístico: escriba un texto y se coloca como imagen en negrita con contorno"),
@@ -545,7 +545,7 @@ calc の隣に置いてください)", "Falta office_sheet.so (compile con cargo
     ("設定 — いる場所を直す", "Configuración — ajustar donde está el cursor"),
     ("(ここは相互参照。更新は 参考資料 > 相互参照)", "(esto es una referencia cruzada; actualice en Referencias > Referencia cruzada)"),
     ("ルビ — 読みを打って Enter(空で外す。Esc で取りやめ)", "Ruby — escriba la lectura y pulse Enter (vacío lo quita; Esc cancela)"),
-    ("プラグイン — 押すと檻(bubblewrap)の中で実行", "Complementos — clic para ejecutar en el sandbox (bubblewrap)"),
+    ("プラグイン — 押すとサンドボックス(bubblewrap)の中で実行", "Complementos — clic para ejecutar en el sandbox (bubblewrap)"),
     ("(まだありません。置き場に .py を置いてください。\
                             台本の d が python-docx の文書、fill(名前, 値)・\
                             extract(名前)・fields() で記入欄の出し入れ)", "(aún no hay; ponga archivos .py en la carpeta. El guion recibe d = el Document de python-docx; fill(nombre, valor), extract(nombre) y fields() manejan los campos de formulario)"),

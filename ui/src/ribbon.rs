@@ -11,9 +11,9 @@
 //!
 //! **全部入れる**(2026-08-04 発注者確定で改訂。以前は共同編集・保護・
 //! プラグイン・AI・マクロを「入れない」としていた)。乗り換える人の
-//! 目当てを消さないため、タブも釦も本家どおり並べる。
-//! **VBA 型のマクロを持たないことだけは不変** — マクロの釦の実体は
-//! 檻(bubblewrap)の中の Python で、文書の中に実行コードは置かない。
+//! 目当てを消さないため、タブもボタンも本家どおり並べる。
+//! **VBA 型のマクロを持たないことだけは不変** — マクロのボタンの実体は
+//! サンドボックス(bubblewrap)の中の Python で、文書の中に実行コードは置かない。
 //!
 //! **できないものを、できるように見せない。** 実装済みのコマンドだけを押せる形にし、
 //! 未実装は灰色で残す。並びを Euro-Office に合わせたまま、
@@ -389,7 +389,7 @@ pub const CALC: &[Tab] = &[
     ]},
     Tab { name: "保護", cmds: &[
         // 本家 SSE の並び: 暗号化 / ブック / シート / 範囲。
-        // ブックと範囲は未実装(灰)。署名は本家に無いこちらの釦 — 末尾
+        // ブックと範囲は未実装(灰)。署名は本家に無いこちらのボタン — 末尾
         c("prot-encrypt", "暗号化する", "prot-encrypt"),
         x("ブックを保護する", "protect-workbook"),
         c("prot-doc", "シートを保護する", "protect-sheet"),
@@ -458,7 +458,7 @@ mod tests {
             assert_eq!(ja.len(), other.len(), "タブの数が違う");
             for (a, b) in ja.iter().zip(other) {
                 assert!(!b.name.is_empty(), "タブ名が空");
-                assert_eq!(a.cmds.len(), b.cmds.len(), "「{}」の釦の数が違う", a.name);
+                assert_eq!(a.cmds.len(), b.cmds.len(), "「{}」のボタンの数が違う", a.name);
                 for (x, y) in a.cmds.iter().zip(b.cmds) {
                     assert_eq!(x.id, y.id, "id がずれた(配線が壊れる)");
                     assert_eq!(x.icon, y.icon, "「{}」の icon が違う", x.id);

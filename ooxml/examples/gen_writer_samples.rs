@@ -180,8 +180,8 @@ fn moushikomi_sample() -> Document {
     }));
     d.blocks.push(Block::Para(p(
         "薄い箱が記入欄(コンテンツコントロール)です。中は普通に打てます。\
-         チェックはフォームタブの同じ釦で ☐ と ☑ が入れ替わり、\
-         選ぶ欄は同じ釦で次の選択肢へ回ります。",
+         チェックはフォームタブの同じボタンで ☐ と ☑ が入れ替わり、\
+         選ぶ欄は同じボタンで次の選択肢へ回ります。",
     )));
 
     d.blocks.push(Block::Table(Table {
@@ -342,17 +342,17 @@ fn houkoku_sample() -> Document {
     d
 }
 
-// ---- 5. 道具くらべ(釦を試すための的) ----
+// ---- 5. 道具くらべ(ボタンを試すための的) ----
 // 「押してみる」ための材料を1枚に集める。試験(menu_run_tests)は
-// この文書も開いて全部の釦を通す
+// この文書も開いて全部のボタンを通す
 fn dougu_sample() -> Document {
     let mut d = Document::plain("", PT);
     d.blocks.clear();
     d.props.title = "道具くらべ".into();
 
-    d.blocks.push(Block::Para(heading(1, "道具くらべ — 釦を試す紙")));
+    d.blocks.push(Block::Para(heading(1, "道具くらべ — ボタンを試す紙")));
     d.blocks.push(Block::Para(p(
-        "リボンの釦を順に押して確かめるための紙です。どの釦も1手で戻せます         (Ctrl+Z)。中身はすべて架空です。",
+        "リボンのボタンを順に押して確かめるための紙です。どのボタンも1手で戻せます         (Ctrl+Z)。中身はすべて架空です。",
     )));
 
     d.blocks.push(Block::Para(heading(2, "字と段落")));
@@ -372,7 +372,7 @@ fn dougu_sample() -> Document {
     ])));
     d.blocks.push(Block::Para(Paragraph {
         align: Align::Center,
-        ..p("中央揃えの行(揃えの釦で左・右・両端・均等に変えられます)")
+        ..p("中央揃えの行(揃えのボタンで左・右・両端・均等に変えられます)")
     }));
     d.blocks.push(Block::Para(Paragraph {
         list: ListKind::Number,

@@ -451,7 +451,7 @@ impl Solver {
 
 pub(crate) const SOLVER_OPS: [&str; 3] = ["<=", "=", ">="];
 
-/// 「データの入力規則」の板(本家の3タブのダイアログと同じ形 —
+/// 「データの入力規則」のパネル(本家の3タブのダイアログと同じ形 —
 /// 設定 / メッセージを入力 / エラー警告、OK・キャンセル)。
 pub(crate) struct DvDlg {
     /// 0=設定 1=メッセージを入力 2=エラー警告
@@ -567,7 +567,7 @@ pub(crate) fn parse_cell_list(text: &str, cap: usize) -> Option<Vec<Pos>> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-/// ピボットの聞き取りの途中経過。板を3枚続けて使う間の控え
+/// ピボットの聞き取りの途中経過。パネルを3枚続けて使う間の控え
 /// (行に並べる欄 → 列に広げる欄 → 値と集計、の順に聞く)。
 pub(crate) struct PivotPend {
     pub(crate) a: Pos,
@@ -1066,7 +1066,7 @@ pub(crate) fn cond_kind_name(k: &sheet::model::CondKind) -> String {
 }
 
 /// いまの日時「YYYY-MM-DD HH:MM」(地方時)。**外部の date を呼ばない** —
-/// 呼ぶと Windows で動かないし、糸を塞ぐ(引き継ぎの残件でもある)。
+/// 呼ぶと Windows で動かないし、スレッドを塞ぐ(引き継ぎの残件でもある)。
 /// 暦は civil-from-days の素直な算法(1970-01-01 起点)
 pub(crate) fn now_stamp() -> String {
     let secs = std::time::SystemTime::now()

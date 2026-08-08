@@ -112,12 +112,12 @@ impl AiJob {
                 "あなたは日本語の文書を扱う道具です。頼まれたことに対する答えの                 本文だけを返します。前置き・後書き・見出しは書きません。",
                 "",
             ),
-            // 台本の作法 = 檻の中の python-docx。前置きの関数だけを使わせ、
+            // 台本の作法 = サンドボックスの中の python-docx。前置きの関数だけを使わせ、
             // ラベル走査と cell(i,j) ループ(実測 140 倍遅い)を禁じる
             AiJob::Macro(_) => (
                 "あなたは writer(docx 互換ワープロ)のマクロ台本を書く道具です。\
                  Python のコードだけを返してください(説明・前置き・\
-                 コードフェンスは書かない)。台本は檻の中で実行され、\
+                 コードフェンスは書かない)。台本はサンドボックスの中で実行され、\
                  d = python-docx の Document が渡されています。\
                  import docx / Document() / d.save() は書きません。\
                  記入欄の読み書きは必ず次の関数を使います: \
@@ -129,7 +129,7 @@ impl AiJob {
                  ラベルの文字列を探して隣のセルに書く走査はしません(誤爆する)。\
                  表を歩くときは for row in tb.rows: for c in row.cells: の形にし、\
                  tb.cell(i, j) をループの中で呼びません(遅い)。\
-                 ネットとファイルの読み書きはできません(檻の外に出ない)。\
+                 ネットとファイルの読み書きはできません(サンドボックスの外に出ない)。\
                  最後に print で何をしたかを一行で報告し、できない・危うい頼みは \
                  raise SystemExit(\"理由\") で断ります。",
                 "",
@@ -218,31 +218,31 @@ struct Writer {
     font_bytes: std::sync::Arc<Vec<u8>>,
     /// 用紙。**文書の設定に従う**(既定 A4・余白20mm)
     pg: kumihan::PageSetup,
-    /// 置換の板。開いている間、打鍵は検索欄に入る
+    /// 置換のパネル。開いている間、打鍵は検索欄に入る
     find_open: bool,
     /// 0=検索語 1=置換後
     find_field: usize,
     find_ed: Editor,
     repl_ed: Editor,
-    /// ヘッダー・フッターの編集の板。Some(false)=ヘッダー / Some(true)=フッター。
-    /// 開いている間、打鍵はここに入る(検索の板と同じ方式)
+    /// ヘッダー・フッターの編集のパネル。Some(false)=ヘッダー / Some(true)=フッター。
+    /// 開いている間、打鍵はここに入る(検索のパネルと同じ方式)
     hf_edit: Option<bool>,
     hf_ed: Editor,
-    /// コメントの板(開いている間、打鍵はここに入る)と、付け先の段落番号
+    /// コメントのパネル(開いている間、打鍵はここに入る)と、付け先の段落番号
     cmt_edit: bool,
     cmt_ed: Editor,
     cmt_para: usize,
-    /// 透かしの板
+    /// 透かしのパネル
     wm_edit: bool,
     wm_ed: Editor,
-    /// しおりの板(名前の入力欄つきの一覧)
+    /// しおりのパネル(名前の入力欄つきの一覧)
     bm_open: bool,
     bm_ed: Editor,
-    /// バージョン履歴の板(上書き保存のたびに残る控えの一覧)
+    /// バージョン履歴のパネル(上書き保存のたびに残る控えの一覧)
     hist_open: bool,
-    /// プラグインの板(置き場の .py 一覧)
+    /// プラグインのパネル(置き場の .py 一覧)
     plug_open: bool,
-    /// リボンの絵釦に乗ったときの説明(下のステータスバーに出す)
+    /// リボンの絵ボタンに乗ったときの説明(下のステータスバーに出す)
     hover_hint: Option<&'static str>,
     /// 編集領域の幅(px。ページ幅に合わせるの計算に使う)
     view_w_px: f32,
@@ -251,7 +251,7 @@ struct Writer {
     nav_tab: u8,
     /// 右パネル(いる場所の設定を直す盤)
     rp_open: bool,
-    /// 表示の入切(本家の表示タブ)。釦の帯・ステータスバー・右の板
+    /// 表示の入切(本家の表示タブ)。ボタンの帯・ステータスバー・右のパネル
     show_toolbar: bool,
     show_statusbar: bool,
     /// ファイルのページ(タブ0)から戻る先のタブ
@@ -271,44 +271,44 @@ struct Writer {
     fm_open: bool,
     fm_field: Option<usize>,
     fm_ed: Editor,
-    /// URL を開く板
+    /// URL を開くパネル
     url_open: bool,
     url_ed: Editor,
     /// いまの配色(レイアウト > 配色の変更)
     theme: usize,
-    /// AI に自由に頼む板
+    /// AI に自由に頼むパネル
     ai_open: bool,
     ai_ed: Editor,
     /// AI が働いている間は真(二重に頼まない)
     ai_busy: bool,
     /// 複数ページ(見開き。画面だけの見え方 — 紙は1ページずつのまま)
     multipage: bool,
-    /// 記入欄の選択肢を聞く板(コンボ・ドロップダウンを挿すとき)
+    /// 記入欄の選択肢を聞くパネル(コンボ・ドロップダウンを挿すとき)
     sd_open: bool,
     sd_ed: Editor,
     sd_kind: kumihan::SdtKind,
-    /// 板が「選択肢」でなく「記入欄の名前」を聞いている
+    /// パネルが「選択肢」でなく「記入欄の名前」を聞いている
     sd_naming: bool,
-    /// AI の板が「頼む」でなく「マクロ台本」を聞いている
+    /// AI のパネルが「頼む」でなく「マクロ台本」を聞いている
     ai_macro: bool,
-    /// 終了確認の板(未保存の変更があるときに出る。窓の中の中央)
+    /// 終了確認のパネル(未保存の変更があるときに出る。窓の中の中央)
     quit_ask: bool,
-    /// ルビの板(選んだ字に読みを振る)
+    /// ルビのパネル(選んだ字に読みを振る)
     rb_open: bool,
     rb_ed: Editor,
     rb_range: std::ops::Range<usize>,
     /// 暗号化のパスワード。Some なら保存で ECMA-376 Standard に包む
     encrypt_pw: Option<String>,
-    /// パスワードの板。pw_pending が Some なら「開くために聞いている」
+    /// パスワードのパネル。pw_pending が Some なら「開くために聞いている」
     pw_open: bool,
     pw_ed: Editor,
     pw_pending: Option<PathBuf>,
     /// マクロで置き換える直前の文書(Ctrl+Z で1手で戻すため)
     doc_undo: Option<Document>,
-    /// チャット(文書の隣の申し送り帳)の板と入力欄
+    /// チャット(文書の隣の申し送り帳)のパネルと入力欄
     chat_open: bool,
     chat_ed: Editor,
-    /// 相互参照の板(しおり一覧から「文字」「ページ」を挿す)
+    /// 相互参照のパネル(しおり一覧から「文字」「ページ」を挿す)
     xr_open: bool,
     /// 描画の道具(0=ペン 1=蛍光ペン 2=消しゴム)。Some の間はマウスが筆
     tool: Option<u8>,
@@ -337,7 +337,7 @@ struct Writer {
 
 impl HasEditor for Writer {
     fn editor(&mut self) -> &mut Editor {
-        // 置換・ヘッダーの板が開いている間、入力(IME含む)はそちらへ入る。
+        // 置換・ヘッダーのパネルが開いている間、入力(IME含む)はそちらへ入る。
         // 別の入力部品を作らず、同じ Editor と結線を使い回す
         if self.pw_open {
             &mut self.pw_ed
@@ -413,7 +413,7 @@ impl HasEditor for Writer {
         }
         if self.protected() {
             // 読み取り専用の保護。**打った分を取り消して、文書は変えない。**
-            // 板(ヘッダー等)の打鍵は文書に入る前なので、板ごと閉じて捨てる
+            // パネル(ヘッダー等)の打鍵は文書に入る前なので、パネルごと閉じて捨てる
             if self.hf_edit.is_some() || self.wm_edit || self.cmt_edit {
                 self.hf_edit = None;
                 self.wm_edit = false;
@@ -444,7 +444,7 @@ impl HasEditor for Writer {
             return;
         }
         if let Some(footer) = self.hf_edit {
-            // 板の打鍵はその場で文書のヘッダー・フッターに反映する
+            // パネルの打鍵はその場で文書のヘッダー・フッターに反映する
             let text = self.hf_ed.text().to_string();
             let hf = if footer { &mut self.doc.footer } else { &mut self.doc.header };
             kumihan::set_paras_text(&mut hf.paragraphs, &text, SIZE_PT);
@@ -453,18 +453,18 @@ impl HasEditor for Writer {
             return;
         }
         if self.bm_open {
-            // しおりの板は名前の入力欄。打鍵は文書を変えない
+            // しおりのパネルは名前の入力欄。打鍵は文書を変えない
             return;
         }
         if self.wm_edit {
-            // 透かしの板。空にすると外れる
+            // 透かしのパネル。空にすると外れる
             let text = self.wm_ed.text().to_string();
             self.doc.watermark = if text.is_empty() { None } else { Some(text) };
             self.dirty = true;
             return;
         }
         if self.cmt_edit {
-            // コメントの板。空にすると外れる(1つ目のコメントを編集する)
+            // コメントのパネル。空にすると外れる(1つ目のコメントを編集する)
             let text = self.cmt_ed.text().to_string();
             let author = std::env::var("USER").unwrap_or_else(|_| ui::t!("私").into());
             let pi = self.cmt_para;
@@ -908,7 +908,7 @@ impl Writer {
             kumihan::layout_hf(&self.doc.footer, &m, &self.pg, LINE_MM, 1, total, true);
     }
 
-    /// ヘッダー・フッターの編集の板を開く(もう一度で閉じる)。
+    /// ヘッダー・フッターの編集のパネルを開く(もう一度で閉じる)。
     fn open_hf(&mut self, footer: bool) {
         if self.hf_edit == Some(footer) {
             self.hf_edit = None;
@@ -948,7 +948,7 @@ impl Writer {
         }
     }
 
-    /// パスワードの板の Enter。開き待ちがあれば解いて開き、
+    /// パスワードのパネルの Enter。開き待ちがあれば解いて開き、
     /// 無ければ「次の保存から暗号化」を決める(空なら解除)
     fn pw_commit(&mut self) {
         let pw = self.pw_ed.text().to_string();
@@ -972,7 +972,7 @@ impl Writer {
                     }
                 }
                 Err(e) => {
-                    // 板は開いたまま。打ち直せる
+                    // パネルは開いたまま。打ち直せる
                     self.pw_pending = Some(p);
                     self.pw_ed = Editor::new("");
                     self.status = e.into();
@@ -1008,7 +1008,7 @@ impl Writer {
         self.doc.protection.is_some()
     }
 
-    /// マクロ = **檻(bubblewrap)の中の Python** が python-docx で文書の
+    /// マクロ = **サンドボックス(bubblewrap)の中の Python** が python-docx で文書の
     /// **複製**を直し、直った複製を読み込む(失敗しても文書は無傷)。
     /// 文書にコードは載せない — 「開く=実行」を作らない設計はそのまま。
     /// 台本の中で d が python-docx の Document、fill(名前, 値) が
@@ -1042,15 +1042,15 @@ impl Writer {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        self.status = ui::tf!("マクロ {} を実行しています…(檻の中の Python)", name).into();
+        self.status = ui::tf!("マクロ {} を実行しています…(サンドボックスの中の Python)", name).into();
         let task = cx.background_executor().spawn(async move {
             let py_path = dir.join("run.py");
             std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
             let py = find_python();
             let have_bwrap = std::path::Path::new("/usr/bin/bwrap").exists();
             let mut cmd = if have_bwrap {
-                // 檻: / は読み取り専用、ホームは空、書けるのは作業場だけ、
-                // ネット無し(calc の Python と同じ檻)
+                // サンドボックス: / は読み取り専用、ホームは空、書けるのは作業場だけ、
+                // ネット無し(calc の Python と同じサンドボックス)
                 let venv = std::fs::canonicalize(".venv").unwrap_or_default();
                 let mut c = std::process::Command::new("/usr/bin/bwrap");
                 c.args(["--ro-bind", "/", "/", "--tmpfs", "/home", "--tmpfs", "/tmp"]);
@@ -1190,7 +1190,7 @@ impl Writer {
         true
     }
 
-    /// 名前を付けて保存(いつでもダイアログ。別の糸 — rfd は同期)
+    /// 名前を付けて保存(いつでもダイアログ。別のスレッド — rfd は同期)
     fn save_as(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new().add_filter("Word文書", &["docx"]).save_file()
@@ -1231,7 +1231,7 @@ impl Writer {
         self.status = ui::t!("文書の情報を控えました(保存で docx に入ります)").into();
     }
 
-    /// ルビの板の Enter。控えた範囲に読みを付ける(空なら外す)
+    /// ルビのパネルの Enter。控えた範囲に読みを付ける(空なら外す)
     fn rb_commit(&mut self) {
         self.rb_open = false;
         let text = self.rb_ed.text().trim().to_string();
@@ -1465,7 +1465,7 @@ impl Writer {
             return;
         }
         if ooxml::crypt::is_encrypted(&bytes) {
-            // 板でパスワードを聞き、Enter(pw_commit)が続きをやる
+            // パネルでパスワードを聞き、Enter(pw_commit)が続きをやる
             self.pw_pending = Some(p);
             self.pw_open = true;
             self.pw_ed = Editor::new("");
@@ -1513,11 +1513,11 @@ impl Writer {
         // 保存は docx として名前を聞く(HTML には書き戻さない)
         self.path = None;
         self.dirty = true;
-        self.status = ui::tf!("HTML を読みました — {}(JS は実行しません。保存は docx{})", p.file_name().unwrap_or_default().to_string_lossy(), if self.fm_open { "。記入は右上の板から" } else { "" })
+        self.status = ui::tf!("HTML を読みました — {}(JS は実行しません。保存は docx{})", p.file_name().unwrap_or_default().to_string_lossy(), if self.fm_open { "。記入は右上のパネルから" } else { "" })
         .into();
     }
 
-    /// URL の板の Enter。GET して HTML として開く(いま繋いだ相手が起点)
+    /// URL のパネルの Enter。GET して HTML として開く(いま繋いだ相手が起点)
     fn url_commit(&mut self, cx: &mut Context<Self>) {
         let url = self.url_ed.text().trim().to_string();
         if url.is_empty() {
@@ -1539,7 +1539,7 @@ impl Writer {
         self.status = ui::tf!("取りに行っています… {}", self.url_ed.text()).into();
     }
 
-    /// AI に頼んで、返事を文書に反映する。**別の糸で待つ**(画面は止めない)。
+    /// AI に頼んで、返事を文書に反映する。**別のスレッドで待つ**(画面は止めない)。
     /// 反映は必ず doc_undo に控えてから = **Ctrl+Z の1手で戻る**。
     /// 宛先が使えなければ理由を言う(黙って空にしない)
     fn ai_go(&mut self, job: AiJob, cx: &mut Context<Self>) {
@@ -1812,7 +1812,7 @@ impl Writer {
             .cloned()
     }
 
-    /// 選択肢の板の Enter(コンボ・ドロップダウンを挿す。
+    /// 選択肢のパネルの Enter(コンボ・ドロップダウンを挿す。
     /// 名前を聞いていたときは付け替えへ)
     fn sd_commit(&mut self) {
         self.sd_open = false;
@@ -1835,7 +1835,7 @@ impl Writer {
         self.insert_sdt(self.sd_kind, items);
     }
 
-    /// 名前の板の Enter。カーソルの記入欄の alias / tag をまるごと打ち替える
+    /// 名前のパネルの Enter。カーソルの記入欄の alias / tag をまるごと打ち替える
     /// (run が割れていても sdt_range_at が一つに繋げる)
     fn sd_name_commit(&mut self) {
         let name = self.sd_ed.text().trim().to_string();
@@ -1888,8 +1888,8 @@ impl Writer {
         true
     }
 
-    /// 入切の釦が「いま入っているか」。押した結果が画面に残るものは、
-    /// 釦の側にも出す(押したのに何も変わらないように見えるのを防ぐ)
+    /// 入切のボタンが「いま入っているか」。押した結果が画面に残るものは、
+    /// ボタンの側にも出す(押したのに何も変わらないように見えるのを防ぐ)
     fn toggled(&self, id: &str) -> bool {
         match id {
             "nav" | "show-left" => self.nav_open,
@@ -1967,7 +1967,7 @@ impl Writer {
         .detach();
     }
 
-    /// 記入の欄の Enter。板の欄へ書き戻す
+    /// 記入の欄の Enter。パネルの欄へ書き戻す
     fn fm_commit(&mut self) {
         let Some(i) = self.fm_field.take() else { return };
         let text = self.fm_ed.text().to_string();
@@ -1976,7 +1976,7 @@ impl Writer {
                 f.value = text;
             }
         }
-        self.status = ui::t!("記入しました(送信の釦で送る)").into();
+        self.status = ui::t!("記入しました(送信のボタンで送る)").into();
     }
 
     /// フォームを送る。POST は urlencoded、GET は ?query。
@@ -2030,7 +2030,7 @@ impl Writer {
     /// 平文(zip)の docx を読み込む。open と pw_commit の共通の続き
     fn open_plain(&mut self, p: PathBuf, bytes: Vec<u8>) {
         self.target = Target::Body;
-        // 前の文書の板が残っていると、打鍵が新しい文書のヘッダーを潰す
+        // 前の文書のパネルが残っていると、打鍵が新しい文書のヘッダーを潰す
         self.hf_edit = None;
         self.track = false;
         self.track_base = None;
@@ -2068,8 +2068,8 @@ impl Writer {
         }
     }
 
-    /// 保存。名前が無ければ選ばせる(**ダイアログは別の糸** — rfd は同期で、
-    /// 主の糸で開くと画面ごと固まる。calc と同じ作法)。
+    /// 保存。名前が無ければ選ばせる(**ダイアログは別のスレッド** — rfd は同期で、
+    /// メインスレッドで開くと画面ごと固まる。calc と同じ作法)。
     /// `then_quit` なら保存が済んだときだけ終了する — 書きかけを黙って捨てない。
     fn save(&mut self, then_quit: bool, cx: &mut Context<Self>) {
         if let Some(p) = self.path.clone() {
@@ -2416,7 +2416,7 @@ impl Writer {
         self.relayout_keep();
     }
 
-    /// PDF として保存。保存先の選択は**別の糸**(rfd は同期)。
+    /// PDF として保存。保存先の選択は**別のスレッド**(rfd は同期)。
     fn save_pdf(&mut self, cx: &mut Context<Self>) {
         // 見開きは画面だけの見え方。紙は1ページずつなので組み直してから写す
         if self.multipage {
@@ -3335,7 +3335,7 @@ impl Writer {
         .into();
     }
 
-    /// 開くファイルを選ぶ(**ダイアログは別の糸**)。
+    /// 開くファイルを選ぶ(**ダイアログは別のスレッド**)。
     fn open_dialog(&mut self, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new()
@@ -3412,7 +3412,7 @@ impl Writer {
     }
 
     fn a_cancel(&mut self, _: &ui::Cancel, _: &mut Window, cx: &mut Context<Self>) {
-        // 道具 → メニュー → 検索の板 → ヘッダーの板 → 一覧の板、の順で戻す
+        // 道具 → メニュー → 検索のパネル → ヘッダーのパネル → 一覧のパネル、の順で戻す
         if self.tool.take().is_some() {
             self.ink_cur = None;
             self.status = ui::t!("文字の編集に戻りました").into();
@@ -3519,7 +3519,7 @@ impl Writer {
 
     fn do_find(&mut self, _: &ui::Find, _: &mut Window, cx: &mut Context<Self>) {
         if !self.find_open {
-            self.run_cmd("replace", cx); // 検索と置換の板を開く
+            self.run_cmd("replace", cx); // 検索と置換のパネルを開く
         }
         cx.notify();
     }
@@ -3538,7 +3538,7 @@ impl Writer {
     /// リストではレベル(印も変わる)、普通の段落ではインデントとして効く。
     fn a_tab(&mut self, _: &ui::Tab, _: &mut Window, cx: &mut Context<Self>) {
         if self.find_open || self.hf_edit.is_some() {
-            return; // 板の中では使わない
+            return; // パネルの中では使わない
         }
         self.para(|p| p.indent = (p.indent + 1).min(8));
         cx.notify();
@@ -3629,7 +3629,7 @@ impl Writer {
         cx.notify();
     }
     fn copy(&mut self, _: &ui::Copy, _: &mut Window, cx: &mut Context<Self>) {
-        // 板(ヘッダー等)を編集中なら、その板の選択が対象
+        // パネル(ヘッダー等)を編集中なら、そのパネルの選択が対象
         let e = self.editor_ref();
         let sel = e.selection();
         if sel.is_empty() {
@@ -3673,7 +3673,7 @@ impl Writer {
             cx.notify();
             return;
         }
-        // 板(ヘッダー等)を編集中なら、その板の一手を戻す
+        // パネル(ヘッダー等)を編集中なら、そのパネルの一手を戻す
         if self.editor().undo() {
             self.on_edited();
         } else if let Some(prev) = self.doc_undo.take() {
@@ -3697,8 +3697,8 @@ impl Writer {
         self.save(false, cx);
         cx.notify();
     }
-    /// 終了の要求。書きかけが無ければ即終了、あれば確認を**別の糸**で出す。
-    /// 確認のダイアログで主の糸を塞がない — 塞ぐと画面ごと固まり、
+    /// 終了の要求。書きかけが無ければ即終了、あれば確認を**別のスレッド**で出す。
+    /// 確認のダイアログでメインスレッドを塞がない — 塞ぐと画面ごと固まり、
     /// GNOME に「応答なし」と判定される(calc で踏んで直したのと同じ)。
     fn request_quit(&mut self, cx: &mut Context<Self>) {
         // 確認を出すのは**未保存の変更があるとき**。名前の無い新規でも、
@@ -3710,7 +3710,7 @@ impl Writer {
             cx.quit();
             return;
         }
-        // 確認は**窓の中の板**で出す。rfd の OS ダイアログは親窓を持てず
+        // 確認は**窓の中のパネル**で出す。rfd の OS ダイアログは親窓を持てず
         // **スクリーンの中央**に出て、窓から離れすぎる(発注者 2026-08-06)
         self.quit_ask = true;
         cx.notify();
@@ -3867,7 +3867,7 @@ fn main() {
                     .detach();
                 });
                 // WM からの「閉じる」(Alt+F4 等)も同じ確認を通す。
-                // 書きかけがあれば「まだ閉じない」と答え、確認は別の糸で出す
+                // 書きかけがあれば「まだ閉じない」と答え、確認は別のスレッドで出す
                 let v = view.clone();
                 window.on_window_should_close(cx, move |_, cx| {
                     let quit_now = v.update(cx, |this, cx| {

@@ -23,7 +23,7 @@ pub const TABLE: &[(&str, &str)] = &[
                                (AES-128。Word や LibreOffice でも開けます)", "Penyimpanan berikutnya dienkripsi dengan kata sandi ini (AES-128; bisa dibuka di Word dan LibreOffice)"),
     ("マクロが読めません: {}", "Tidak bisa membaca makro: {}"),
     ("マクロに渡せません: {}", "Tidak bisa menyerahkannya ke makro: {}"),
-    ("マクロ {} を実行しています…(檻の中の Python)", "Menjalankan makro {}… (Python di dalam sandbox)"),
+    ("マクロ {} を実行しています…(サンドボックスの中の Python)", "Menjalankan makro {}… (Python di dalam sandbox)"),
     ("Python が起動できません: {}", "Tidak bisa memulai Python: {}"),
     ("python-docx がありません(pip install python-docx。\
                      .venv があればそちらへ)", "python-docx tidak ada (pip install python-docx; ke .venv jika ada)"),
@@ -72,7 +72,7 @@ pub const TABLE: &[(&str, &str)] = &[
              マクロは fill(\"{}\", 値) で記入できます)", "Bidang diberi nama \"{}\" (w:tag docx; makro bisa mengisinya dengan fill(\"{}\", nilai))"),
     ("チェックを {} にしました", "Kotak centang diatur ke {}"),
     ("{}に合わせました(ズーム {}%)", "Disesuaikan dengan {} (zoom {}%)"),
-    ("記入しました(送信の釦で送る)", "Terisi (tekan tombol Kirim untuk mengirim)"),
+    ("記入しました(送信のボタンで送る)", "Terisi (tekan tombol Kirim untuk mengirim)"),
     ("ローカルの HTML からは送れません(URL で開いてください)", "Tidak bisa mengirim dari HTML lokal (buka lewat URL)"),
     ("送り先が開いた相手と違います(送りません)", "Tujuan pengiriman berbeda dari asal halaman (tidak dikirim)"),
     ("送っています…", "Mengirim…"),
@@ -150,19 +150,19 @@ pub const TABLE: &[(&str, &str)] = &[
     ("この段落にコメントはありません", "Paragraf ini tidak punya komentar"),
     ("コメントを編集中(段落に付きます。空にして閉じると外れる)", "Mengedit komentar (menempel pada paragraf; tutup dalam keadaan kosong untuk menghapus)"),
     ("保護を外しました(編集できます。保存で docx にも残ります)", "Proteksi dilepas (bisa diedit; juga tersimpan ke docx)"),
-    ("読み取り専用で保護しました(同じ釦で解除。\
+    ("読み取り専用で保護しました(同じボタンで解除。\
                                    パスワードは掛けません — 掛けた振りもしません)", "Diproteksi hanya-baca (tombol yang sama melepasnya; tanpa kata sandi, dan tanpa pura-pura ada kata sandi)"),
     ("まだファイルになっていません(保存すると編集権=錠を取ります)", "Belum menjadi file (menyimpan akan mengambil hak edit = kuncinya)"),
     ("編集権はこちら({})にあります。同じ文書は先に開いた人が書け、\
                              後の人は読むだけになります(錠は .~lock ファイル)", "Hak edit ada pada Anda ({}). Siapa yang membuka dokumen lebih dulu bisa menulis; yang datang belakangan hanya membaca (kuncinya file .~lock)"),
     ("{} が編集中です(読めますが上書き保存はできません。\
-                                 相手が閉じたら、またこの釦で確かめてください)", "{} sedang mengedit (Anda bisa membaca, tetapi simpan-timpa diblokir; setelah mereka menutupnya, tekan tombol ini lagi)"),
+                                 相手が閉じたら、またこのボタンで確かめてください)", "{} sedang mengedit (Anda bisa membaca, tetapi simpan-timpa diblokir; setelah mereka menutupnya, tekan tombol ini lagi)"),
     ("先客が居なくなっていたので、編集権を取り直しました", "Editor sebelumnya sudah pergi, jadi hak edit diambil alih"),
     ("まだファイルになっていません(保存すると、上書きのたびに\
                          控えが残ります)", "Belum menjadi file (setelah disimpan, setiap penimpaan menyimpan salinan)"),
     ("バージョン履歴: 押すと控えを名無しの複製で開きます", "Riwayat versi: klik untuk membuka salinan sebagai dokumen tanpa nama"),
     ("チャット: 打って Enter で書き残す(文書の隣の .chat.txt)", "Obrolan: ketik lalu tekan Enter untuk meninggalkan pesan (.chat.txt di samping dokumen)"),
-    ("マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
+    ("マクロ: .py を選ぶと、サンドボックスの中の Python が文書の複製を\
                                直します(台本の d が python-docx の文書。\
                                fill(名前, 値)=記入・extract(名前)=読む・\
                                fields()=一覧・render(辞書)=雛形差し込み)", "Makro: pilih .py dan Python dalam sandbox mengedit salinan dokumen (d adalah Document python-docx; fill(nama, nilai) mengisi, extract(nama) membaca, fields() mendaftar, render(dict) mengisi templat)"),
@@ -217,7 +217,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("しおり「{}」へ移りました", "Melompat ke marka buku \"{}\""),
     ("しおりを外しました", "Marka buku dihapus"),
     ("送信({} {})", "Kirim ({} {})"),
-    ("(検索の板で語を打つ → ここに出ます)", "(ketik kata di dialog pencarian — hasilnya muncul di sini)"),
+    ("(検索のパネルで語を打つ → ここに出ます)", "(ketik kata di dialog pencarian — hasilnya muncul di sini)"),
     ("大きさ {} pt / 書体 {}", "Ukuran {} pt / font {}"),
     ("ルビ「{}」", "Ruby \"{}\""),
     ("行間 {:.2} / 字下げ {}", "Spasi baris {:.2} / indentasi {}"),
@@ -292,7 +292,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("@save 名前 の形で", "Gunakan bentuk: @save nama"),
     ("「{}」をブックから外しました", "\"{}\" dikeluarkan dari buku kerja"),
     ("「{}」はありません", "\"{}\" tidak ada"),
-    ("網あり檻で実行します(ファイルは守られたまま)", "Dijalankan di sandbox dengan jaringan (file tetap terlindungi)"),
+    ("網ありサンドボックスで実行します(ファイルは守られたまま)", "Dijalankan di sandbox dengan jaringan (file tetap terlindungi)"),
     ("「{}」はありません(@list で一覧)", "\"{}\" tidak ada (@list menampilkan daftarnya)"),
     ("文字を消しました", "Teks dihapus"),
     ("図形に文字を入れました(保存で xlsx に入ります)", "Teks dimasukkan ke bentuk (masuk ke xlsx saat disimpan)"),
@@ -308,7 +308,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("ブックの情報を控えました(保存で xlsx に入ります)", "Info buku kerja dicatat (masuk ke xlsx saat disimpan)"),
     ("範囲は A1:C9 の形で書いてください", "Tulis rentang seperti A1:C9"),
     ("左上と右下が逆です(A1:C9 の順で)", "Kiri-atas dan kanan-bawah terbalik (urutannya seperti A1:C9)"),
-    ("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインの釦でどうぞ)", "Rentang tabel diubah menjadi {}:{} (format tidak diterapkan ulang — pakai tombol Desain Tabel)"),
+    ("表の範囲を {}:{} にしました(書式は掛け直しません — 表のデザインのボタンでどうぞ)", "Rentang tabel diubah menjadi {}:{} (format tidak diterapkan ulang — pakai tombol Desain Tabel)"),
     ("文章がありません(何もしていません)", "Tidak ada teks (tidak ada yang dilakukan)"),
     ("用件がありません(何もしていません)", "Tidak ada permintaan (tidak ada yang dilakukan)"),
     ("何も書き残しませんでした", "Tidak ada pesan yang ditinggalkan"),
@@ -348,7 +348,7 @@ pub const TABLE: &[(&str, &str)] = &[
     ("右に空きが見つかりません(場所を空けてから)", "Tidak ada ruang kosong di sebelah kanan (kosongkan dulu)"),
     ("広がった分の場所が塞がっています(右下を空けてから更新)", "Area perluasannya terhalang (kosongkan kanan-bawah, lalu segarkan)"),
     ("Python を実行しています…", "Menjalankan Python…"),
-    ("檻(bubblewrap)がありません。ブックに載ったコードは檻の外では\
+    ("サンドボックス(bubblewrap)がありません。ブックに載ったコードはサンドボックスの外では\
 実行しません(apt install bubblewrap)", "Sandbox (bubblewrap) tidak ditemukan. Kode yang dibawa buku kerja tidak pernah dijalankan di luar sandbox (apt install bubblewrap)"),
     ("office_sheet.so がありません(cargo build -p pysheet --release \
 --features extension-module して、liboffice_sheet.so を office_sheet.so の名で \
@@ -356,8 +356,8 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("Python を実行しました(Ctrl+Z で1手で戻せます)", "Python selesai (satu Ctrl+Z membatalkan semuanya)"),
     ("=PY(\"関数名\", 引数…) のセルがありません", "Tidak ada sel =PY(\"nama_fungsi\", argumen…)"),
     ("関数の定義がありません(@save 関数 で def の入った .py をブックに載せる)", "Tidak ada definisi fungsi (@save 関数 menyematkan .py berisi def)"),
-    ("PY を計算しています…(檻の中)", "Menghitung PY… (di dalam sandbox)"),
-    ("檻(bubblewrap)がありません。ブックの関数は檻の外では計算しません", "Sandbox (bubblewrap) tidak ada; fungsi buku kerja tidak pernah dihitung di luarnya"),
+    ("PY を計算しています…(サンドボックスの中)", "Menghitung PY… (di dalam sandbox)"),
+    ("サンドボックス(bubblewrap)がありません。ブックの関数はサンドボックスの外では計算しません", "Sandbox (bubblewrap) tidak ada; fungsi buku kerja tidak pernah dihitung di luarnya"),
     ("一時ファイルが書けません", "Tidak bisa menulis file sementara"),
     ("清書しています…", "Menata huruf…"),
     ("テキスト", "Teks"),
@@ -384,8 +384,8 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("バージョン履歴: 選ぶと控えを名無しの複製で開きます(いまの書きかけは要るなら先に保存)", "Riwayat versi: pilih satu untuk membukanya tanpa nama (simpan dulu pekerjaan Anda jika masih diperlukan)"),
     ("まだファイルになっていません(保存すると、隣に申し送り帳ができます)", "Belum menjadi file (simpan untuk mendapatkan file obrolan di sampingnya)"),
     ("まだ言伝はありません(打って Enter で書き残します)", "Belum ada pesan (ketik lalu tekan Enter untuk meninggalkannya)"),
-    ("マクロ: .py を選ぶと檻の中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)", "Makro: pilih .py dan Python dalam sandbox berjalan (b = buku kerja, s = lembar kerja; mesinnya sama dengan Data > Python)"),
-    ("プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)", "Plugin: pilih satu untuk dijalankan di Python dalam sandbox (b = buku kerja, s = lembar kerja)"),
+    ("マクロ: .py を選ぶとサンドボックスの中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)", "Makro: pilih .py dan Python dalam sandbox berjalan (b = buku kerja, s = lembar kerja; mesinnya sama dengan Data > Python)"),
+    ("プラグイン: 選ぶとサンドボックスの中の Python で実行します(b=ブック s=シート)", "Plugin: pilih satu untuk dijalankan di Python dalam sandbox (b = buku kerja, s = lembar kerja)"),
     ("空のセルを選んでください(中身のあるセルは潰しません)", "Pilih sel kosong (sel yang ada isinya tidak pernah ditimpa)"),
     ("スライサーにする列を選んでください(見出しの下にデータの行が要ります)", "Pilih kolom untuk slicer (perlu baris data di bawah judul)"),
     ("テキストアート: 文字を打つと、太字+縁取りの飾り文字を画像で置きます", "Seni teks: ketik teks dan akan ditempatkan sebagai gambar tebal bergaris tepi"),
@@ -545,7 +545,7 @@ calc の隣に置いてください)", "office_sheet.so tidak ada (bangun dengan
     ("設定 — いる場所を直す", "Pengaturan — menyetel di posisi kursor"),
     ("(ここは相互参照。更新は 参考資料 > 相互参照)", "(ini referensi silang; perbarui lewat Referensi > Referensi Silang)"),
     ("ルビ — 読みを打って Enter(空で外す。Esc で取りやめ)", "Ruby — ketik cara bacanya lalu tekan Enter (kosong menghapus; Esc membatalkan)"),
-    ("プラグイン — 押すと檻(bubblewrap)の中で実行", "Plugin — klik untuk menjalankan di sandbox (bubblewrap)"),
+    ("プラグイン — 押すとサンドボックス(bubblewrap)の中で実行", "Plugin — klik untuk menjalankan di sandbox (bubblewrap)"),
     ("(まだありません。置き場に .py を置いてください。\
                             台本の d が python-docx の文書、fill(名前, 値)・\
                             extract(名前)・fields() で記入欄の出し入れ)", "(belum ada; letakkan file .py di foldernya. Skrip mendapat d = Document python-docx; fill(nama, nilai), extract(nama), dan fields() mengurus bidang isian)"),

@@ -1,12 +1,12 @@
-//! writer のリボンの釦と右クリックの受け口(main.rs から純移動 2026-08-08。
+//! writer のリボンのボタンと右クリックの受け口(main.rs から純移動 2026-08-08。
 //! 部屋割りの5歩目)。run_cmd が1,095行の最大の塊だった。**純移動**
 
 use crate::*;
 
 impl Writer {
     pub(crate) fn run_cmd(&mut self, id: &str, cx: &mut Context<Self>) {
-        // 読み取り専用の保護。文書を変える釦はここで断る(見る・出す・
-        // 保存・検索の類いは通す)。解除はいつでも「保護」の釦1手
+        // 読み取り専用の保護。文書を変えるボタンはここで断る(見る・出す・
+        // 保存・検索の類いは通す)。解除はいつでも「保護」のボタン1手
         const READONLY_OK: &[&str] = &[
             "open", "save", "pdf", "zoom-in", "zoom-out", "ruler", "darkmode",
             "line-numbers", "hidenchars", "selectall", "spell", "wordcount",
@@ -166,10 +166,10 @@ impl Writer {
                 self.status =
                     ui::t!("ドロップキャップを切り替えました(docx では Word の枠になります)").into();
             }
-            // 画像の挿入。段落の下に付く(選択も**別の糸**)。
+            // 画像の挿入。段落の下に付く(選択も**別のスレッド**)。
             // 図形・グラフ・SmartArt・テキストアート・方程式も同じ道 —
             // **絵は Python で描いて画像として貼る**(SEKKEI「writer の挿入系」)。
-            // 灰色で残すより、方針どおりに動く釦にする(発注者判断)
+            // 灰色で残すより、方針どおりに動くボタンにする(発注者判断)
             "insimage" | "insshape" | "inssmartart" | "inschart" | "smartpicker"
             | "instextart" | "insequation" => {
                 if id != "insimage" {
@@ -300,7 +300,7 @@ impl Writer {
                 };
                 self.set_para_style(next);
             }
-            // 置換の板。開いている間、打鍵は検索欄に入る
+            // 置換のパネル。開いている間、打鍵は検索欄に入る
             "replace" => {
                 self.find_open = !self.find_open;
                 self.find_field = 0;
@@ -313,7 +313,7 @@ impl Writer {
             "zoom-in" => self.zoom = (self.zoom + 0.1).min(2.0),
             // 見え方だけの切り替え(文書は変わらない)
             "hidenchars" => self.show_marks = !self.show_marks,
-            // 一覧板(フォント・大きさ)。選ぶのは板の中
+            // 一覧パネル(フォント・大きさ)。選ぶのはパネルの中
             "fontname" => { self.font_list = !self.font_list; self.size_list = false;
                             self.style_list = false; }
             // 用紙。向き / サイズ / 余白(選ぶ小窓は無いが、回して選べる)
@@ -359,10 +359,10 @@ impl Writer {
             "toc" | "toc-update" => self.make_toc(),
             // 図表目次も同じ作法(Tof の印)
             "tof" | "tof-update" => self.make_tof(),
-            // ヘッダー・フッターの編集(板。開いている間、打鍵はそこへ)
+            // ヘッダー・フッターの編集(パネル。開いている間、打鍵はそこへ)
             "edit-header" => self.open_hf(false),
             "edit-footer" => self.open_hf(true),
-            // ページ番号・ページ数。開いている板(無ければフッター)の
+            // ページ番号・ページ数。開いているパネル(無ければフッター)の
             // カーソル位置に印を入れる
             "pagenum" | "numpages" => {
                 if self.hf_edit.is_none() {
@@ -485,7 +485,7 @@ impl Writer {
                 self.follow_caret();
                 self.status = ui::tf!("{} を入れました(中央揃えの段落)", label).into();
             }
-            // 相互参照。しおり一覧から「文字」「ページ」を挿す板
+            // 相互参照。しおり一覧から「文字」「ページ」を挿すパネル
             "crossref" => {
                 self.xr_open = !self.xr_open;
                 if self.xr_open {
@@ -498,7 +498,7 @@ impl Writer {
                         ui::t!("相互参照: しおりを選んで「文字」か「ページ」を挿す").into();
                 }
             }
-            // しおり。一覧の板(名前を打って追加・押して移動・✕で削除)
+            // しおり。一覧のパネル(名前を打って追加・押して移動・✕で削除)
             "bookmarks" => {
                 self.bm_open = !self.bm_open;
                 if self.bm_open {
@@ -511,7 +511,7 @@ impl Writer {
                         ui::t!("しおり: 名前を打って「追加」。一覧を押すとそこへ移る").into();
                 }
             }
-            // 透かし。板で文字を打つ(空にして閉じると外れる)。
+            // 透かし。パネルで文字を打つ(空にして閉じると外れる)。
             // 文書ではヘッダーの中の VML になり、Word でも斜めの薄い字で出る
             "watermark" => {
                 if self.wm_edit {
@@ -626,13 +626,13 @@ impl Writer {
                 } else {
                     self.flush_target();
                     self.doc.protection = Some("readOnly".into());
-                    // 文書を変える板とペンは店じまい
+                    // 文書を変えるパネルとペンは店じまい
                     self.hf_edit = None;
                     self.wm_edit = false;
                     self.cmt_edit = false;
                     self.tool = None;
                     self.dirty = true;
-                    self.status = ui::t!("読み取り専用で保護しました(同じ釦で解除。\
+                    self.status = ui::t!("読み取り専用で保護しました(同じボタンで解除。\
                                    パスワードは掛けません — 掛けた振りもしません)").into();
                 }
             }
@@ -652,7 +652,7 @@ impl Writer {
                         self.acquire_lock(&p);
                         self.status = match &self.locked_by {
                             Some(who) => ui::tf!("{} が編集中です(読めますが上書き保存はできません。\
-                                 相手が閉じたら、またこの釦で確かめてください)", who)
+                                 相手が閉じたら、またこのボタンで確かめてください)", who)
                             .into(),
                             None => ui::t!("先客が居なくなっていたので、編集権を取り直しました").into(),
                         };
@@ -688,7 +688,7 @@ impl Writer {
                         ui::t!("チャット: 打って Enter で書き残す(文書の隣の .chat.txt)").into();
                 }
             }
-            // マクロ。.py を選ぶと檻の中の Python が文書の複製を直す
+            // マクロ。.py を選ぶとサンドボックスの中の Python が文書の複製を直す
             "plug-macros" => {
                 let ask = cx.background_executor().spawn(async {
                     rfd::FileDialog::new().add_filter("Python", &["py"]).pick_file()
@@ -703,12 +703,12 @@ impl Writer {
                     });
                 })
                 .detach();
-                self.status = ui::t!("マクロ: .py を選ぶと、檻の中の Python が文書の複製を\
+                self.status = ui::t!("マクロ: .py を選ぶと、サンドボックスの中の Python が文書の複製を\
                                直します(台本の d が python-docx の文書。\
                                fill(名前, 値)=記入・extract(名前)=読む・\
                                fields()=一覧・render(辞書)=雛形差し込み)").into();
             }
-            // プラグインの管理。置き場の .py を一覧し、マクロと同じ檻で実行
+            // プラグインの管理。置き場の .py を一覧し、マクロと同じサンドボックスで実行
             "plug-manage" => {
                 self.plug_open = !self.plug_open;
                 if self.plug_open {
@@ -842,14 +842,14 @@ impl Writer {
                 };
                 self.insert_sdt(kind, Vec::new());
             }
-            // チェックの欄。**同じ釦で入切**(欄の中にカーソルがあるとき)
+            // チェックの欄。**同じボタンで入切**(欄の中にカーソルがあるとき)
             "form-checkbox" | "form-radio" => {
                 if self.toggle_checkbox() {
                     return;
                 }
                 self.insert_sdt(kumihan::SdtKind::Checkbox, Vec::new());
             }
-            // 選ばせる欄。選択肢を板で聞いてから挿す
+            // 選ばせる欄。選択肢をパネルで聞いてから挿す
             "form-combo" | "form-dropdown" => {
                 // 既にその欄にいるなら、選択肢を順に回す(選び直し)
                 if let Some(sd) = self.sdt_at() {
@@ -894,7 +894,7 @@ impl Writer {
                         ui::t!("名前を付ける記入欄の中にカーソルを置いてください").into();
                     return;
                 };
-                // いまの名前を板に前置き(種類の既定名のままなら空)
+                // いまの名前をパネルに前置き(種類の既定名のままなら空)
                 let now = if sd.tag == sd.kind.as_tag() {
                     String::new()
                 } else {

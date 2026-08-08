@@ -80,7 +80,7 @@ def svg_product(code):
     elif cat == "ファイル・収納":  # フォルダ
         g = (f'<path d="M40 34 h30 l8 8 h42 v40 h-80 z" fill="{ink}" opacity="0.85"/>'
              '<rect x="40" y="46" width="80" height="36" fill="#fff" opacity="0.25"/>')
-    elif cat == "事務機器":   # 計器の箱と釦
+    elif cat == "事務機器":   # 計器の箱とボタン
         g = (f'<rect x="55" y="22" width="50" height="66" rx="6" fill="{ink}" opacity="0.9"/>'
              '<rect x="62" y="30" width="36" height="14" fill="#eef"/>'
              + "".join(f'<circle cx="{68+dx*12}" cy="{56+dy*12}" r="4" fill="#eef"/>'

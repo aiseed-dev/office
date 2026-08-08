@@ -5,8 +5,8 @@
 //! ユニックスソケット `$XDG_RUNTIME_DIR/officework/calc.sock` に JSON を
 //! 1行ずつ。**この機械の中だけ**(TCP は開かない — ネイティブファースト)。
 //!
-//! 糸の作法: ソケットの糸は状態に触らない。要求を溜め、GPUI の泵(ポンプ)が
-//! 30ms ごとに主の糸で捌いて答えを返す(Editor 系と同じ「主で触る」を守る)。
+//! スレッドの作法: ソケットのスレッドは状態に触らない。要求を溜め、GPUI の泵(ポンプ)が
+//! 30ms ごとにメインスレッドで捌いて答えを返す(Editor 系と同じ「主で触る」を守る)。
 
 use crate::*;
 use std::io::{BufRead, Write};
@@ -36,7 +36,7 @@ pub(crate) fn sock_path() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("officework-{uid}")).join("calc.sock")
 }
 
-/// 口を開く。聞き取りの糸を立て、主の糸に泵を付ける。
+/// 口を開く。聞き取りのスレッドを立て、メインスレッドに泵を付ける。
 pub(crate) fn start(view: gpui::Entity<Calc>, cx: &mut gpui::App) {
     let queue: RpcQueue = Arc::new(Mutex::new(Vec::new()));
     let path = sock_path();
@@ -70,7 +70,7 @@ pub(crate) fn start(view: gpui::Entity<Calc>, cx: &mut gpui::App) {
                     }
                     let (tx, rx) = std::sync::mpsc::channel();
                     q.lock().unwrap().push(RpcReq { line, reply: tx });
-                    // 主の糸が捌くのを待つ(泵は 30ms 刻み。5秒で諦める)
+                    // メインスレッドが捌くのを待つ(泵は 30ms 刻み。5秒で諦める)
                     let resp = rx
                         .recv_timeout(std::time::Duration::from_secs(5))
                         .unwrap_or_else(|_| {
@@ -84,7 +84,7 @@ pub(crate) fn start(view: gpui::Entity<Calc>, cx: &mut gpui::App) {
             });
         }
     });
-    // 泵: 30ms ごとに溜まった要求を主の糸で捌く
+    // 泵: 30ms ごとに溜まった要求をメインスレッドで捌く
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor()
@@ -314,7 +314,7 @@ fn err(msg: &str) -> String {
     format!("{{\"err\":\"{}\"}}", jesc(msg))
 }
 
-/// 1要求を捌く(主の糸)。答えは JSON 1行。
+/// 1要求を捌く(メインスレッド)。答えは JSON 1行。
 pub(crate) fn handle(calc: &mut Calc, line: &str, cx: &mut Context<Calc>) -> String {
     let Some(o) = Jobj::parse(line) else {
         return err("JSON が読めません");

@@ -111,7 +111,7 @@ def 集計(r, 上限, 種別):        # r = [[行1列1, 行1列2], [行2列1, �
 
 **専用の手引き: [writer-macro-manual.ja.md](writer-macro-manual.ja.md)** —
 名前つき記入欄(`fill` / `extract` / `fields`)、雛形(`render` /
-`tpl_fields`、docxtpl)、檻の中身、AI に台本を書かせる話まで。
+`tpl_fields`、docxtpl)、サンドボックスの中身、AI に台本を書かせる話まで。
 
 ```python
 # d が python-docx の Document。API は python-docx の公式文書のまま

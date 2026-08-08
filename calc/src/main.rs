@@ -54,7 +54,7 @@ struct Calc {
     /// 画像の復号の控え(実体のアドレス → GPUI の画像)。
     /// 毎フレーム作り直すと復号と転送をやり直すことになる
     img_cache: std::cell::RefCell<std::collections::HashMap<usize, std::sync::Arc<gpui::Image>>>,
-    /// 検索と置換の検索語(板を2枚続けて使う間の控え。次回の初期値にもなる)
+    /// 検索と置換の検索語(パネルを2枚続けて使う間の控え。次回の初期値にもなる)
     find_term: Option<String>,
     /// ゴールシークの途中の控え(目標セル, 目標値)
     goal: Option<(Pos, f64)>,
@@ -73,7 +73,7 @@ struct Calc {
     pub(crate) dedup_pend: Option<(Vec<(u32, String, bool)>, bool)>,
     /// 条件付き書式のルールの管理で選んだ規則(sheet.cond の添字)
     pub(crate) cond_pend: Option<usize>,
-    /// テキスト取り込みの下ごしらえ(ウィザードの板が持つ)
+    /// テキスト取り込みの下ごしらえ(ウィザードのパネルが持つ)
     pub(crate) import_pend: Option<crate::py::ImportPend>,
     /// 既定の書体(実在する家族に解決済み)。「Noto Sans JP」の名指しは
     /// 入っていない機械で**素通りして太字も効かなくなる**(発注者報告)
@@ -107,7 +107,7 @@ struct Calc {
     pw_pending: Option<PathBuf>,
     /// pick の一覧が指す実体(バージョン履歴・プラグインの表示名 → パス)
     pick_paths: Vec<(String, PathBuf)>,
-    /// PY のスピルの台帳(シート番号, 錨 → 行×列)。次の @計算 で前の面を消す
+    /// PY のスピルの台帳(シート番号, アンカー → 行×列)。次の @計算 で前の面を消す
     py_spills: std::collections::HashMap<(usize, Pos), (u32, u32)>,
     /// トレースの光り(参照元=青緑 / 参照先=橙)。見え方だけ、保存されない
     trace: Vec<(Pos, bool)>,
@@ -117,7 +117,7 @@ struct Calc {
     locked_by: Option<String>,
     /// 選択中の図形(shapes_new の番号)。Esc/他クリックで解除、Del で削除
     shape_sel: Option<usize>,
-    /// 図形のドラッグ(番号, 掴んだ格子px, 掴んだ時の錨の格子px, 大きさ変更か)
+    /// 図形のドラッグ(番号, 掴んだ格子px, 掴んだ時のアンカーの格子px, 大きさ変更か)
     shape_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
     /// 図形の回転ドラッグ(枠の上の丸を掴んでいる間だけ Some)
     shape_rot: Option<usize>,
@@ -127,7 +127,7 @@ struct Calc {
     menu_shape: bool,
     /// 図形の切り取り/コピーの控え(セルのクリップボードとは別の器)
     shape_clip: Option<sheet::model::SheetShape>,
-    /// データテーブルの板の途中(列の入力セル)。行の板の確定まで持つ
+    /// データテーブルのパネルの途中(列の入力セル)。行のパネルの確定まで持つ
     dt_col: Option<Pos>,
     /// 変更履歴の記録中: 開始時点の「打った姿」の写し(シート名 → セル)。
     /// **writer と同じ型** — 操作を拾わず、止めたときに差分を数える
@@ -136,7 +136,7 @@ struct Calc {
     /// 選んでいる画像(images_new の番号)。グラフもここ
     img_sel: Option<usize>,
     img_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
-    /// ホイールの端数(触板の細かい送りを捨てずに貯める)
+    /// ホイールの端数(触パネルの細かい送りを捨てずに貯める)
     wheel: (f32, f32),
     /// 窓の大きさ(px)。描画のたびに実測 — **見える範囲**の計算に使う。
     /// セルの大きさは設定どおり固定で、窓に合わせて伸縮させない
@@ -156,7 +156,7 @@ struct Calc {
     /// 式の直入力中のセル掴み(起点, 入れた参照の文字の範囲)。
     /// クリックで参照がカーソルに入り、ドラッグで範囲(A1:C9)に伸びる
     ref_pick: Option<(Pos, std::ops::Range<usize>)>,
-    /// 終了確認の板(未保存の変更があるときに出る。窓の中の中央)
+    /// 終了確認のパネル(未保存の変更があるときに出る。窓の中の中央)
     quit_ask: bool,
     /// 右クリックのメニュー(出ている場所。格子領域の px)
     menu_at: Option<(f32, f32)>,
@@ -167,11 +167,11 @@ struct Calc {
     /// pick の中身の意味: "value"=セルに入れる / "font"=書体 / "size"=文字の大きさ
     pick_kind: &'static str,
     /// 耳(シートのタブ)のメニューが指しているシート(右クリックで開く)。
-    /// 改名・色の2段目の板が閉じるまで持ち越す
+    /// 改名・色の2段目のパネルが閉じるまで持ち越す
     sheet_menu_at: Option<usize>,
     /// 書式の小窓(セルをフォーマットする)。範囲を選び直しながら使える
     fmt_panel: Option<(f32, f32)>,
-    /// 小さな入力の板(種類, 入力欄)。"name"=名前の定義。開いている間は打鍵がここへ
+    /// 小さな入力のパネル(種類, 入力欄)。"name"=名前の定義。開いている間は打鍵がここへ
     prompt: Option<(&'static str, Editor)>,
     /// 数式を値の代わりに出す(数式の表示)
     show_formulas: bool,
@@ -185,9 +185,9 @@ struct Calc {
     /// 変わらず、閉じれば消える。範囲の1行目が見出しで、列ごとに
     /// 「隠す値」を持つ(map に無い列は素通し)
     auto_filter: Option<AutoFilter>,
-    /// 開いている▼の板(列, 値の検索)。Esc で閉じる
+    /// 開いている▼のパネル(列, 値の検索)。Esc で閉じる
     filter_panel: Option<(u32, Editor)>,
-    /// 「データの入力規則」の板(本家の3タブのダイアログの形)
+    /// 「データの入力規則」のパネル(本家の3タブのダイアログの形)
     dv_dlg: Option<DvDlg>,
     /// 画面の文字の大きさ(リボン・メニュー・状態行まで全部に掛かる倍率。
     /// 格子のズームとは別。設定に覚える — 次回も同じ大きさで開く)
@@ -221,7 +221,7 @@ struct Calc {
     tab: usize,
     /// ファイルの全面ページから「戻る」ときのタブ
     prev_tab: usize,
-    /// 釦に乗っているときの名前(下のステータスバーに出す)
+    /// ボタンに乗っているときの名前(下のステータスバーに出す)
     hover_hint: Option<&'static str>,
     /// ファイルのページの右側(0=詳細情報 1=最近開いた)
     file_view: u8,
@@ -249,7 +249,7 @@ struct Calc {
 }
 
 impl HasEditor for Calc {
-    // 小さな入力の板(名前の定義など)・ソルバーの小窓が開いている間は、
+    // 小さな入力のパネル(名前の定義など)・ソルバーの小窓が開いている間は、
     // 打鍵(IME含む)はそこへ
     fn editor(&mut self) -> &mut Editor {
         if let Some(ed) = &mut self.name_edit {
@@ -268,7 +268,7 @@ impl HasEditor for Calc {
             return sv.focused();
         }
         if let Some((_, ed)) = &mut self.filter_panel {
-            return ed; // ▼の板の検索欄
+            return ed; // ▼のパネルの検索欄
         }
         if let Some(d) = &mut self.dv_dlg {
             return d.focused();
@@ -314,7 +314,7 @@ impl HasEditor for Calc {
         if self.fn_args.is_some() {
             self.fn_args_recalc();
         }
-        // 板・小窓・名前ボックスへの打鍵は文書を変えない
+        // パネル・小窓・名前ボックスへの打鍵は文書を変えない
         if self.prompt.is_none() && self.name_edit.is_none()
             && self.fn_dlg.is_none() && self.fn_args.is_none()
             && self.filter_panel.is_none() && self.dv_dlg.is_none()
@@ -1541,7 +1541,7 @@ impl Calc {
         };
     }
 
-    /// 指定の列で並べ替え(▼の板の昇順/降順もここに来る)
+    /// 指定の列で並べ替え(▼のパネルの昇順/降順もここに来る)
     fn sort_col(&mut self, c: u32, asc: bool) {
         self.commit();
         self.checkpoint();
@@ -1574,7 +1574,7 @@ impl Calc {
             y1 = y1.max(*y);
         }
         let (w, h) = ((x1 - x0).max(4.0), (y1 - y0).max(4.0));
-        // 錨は左上の点があるセル。そこからのずらしで位置を覚える
+        // アンカーは左上の点があるセル。そこからのずらしで位置を覚える
         let at = self.cell_at(x0, y0).unwrap_or(self.view);
         let (ox, oy) = self.cell_origin_px(at).unwrap_or((self.head_w(), self.head_h()));
         let marker = self.tool == Some(1);
@@ -1637,7 +1637,7 @@ impl Calc {
             .join("\n")
     }
 
-    /// AI に頼んで、返事を表に反映する。**別の糸で待つ**(画面は止めない)。
+    /// AI に頼んで、返事を表に反映する。**別のスレッドで待つ**(画面は止めない)。
     /// 反映は必ず checkpoint してから = **Ctrl+Z の1手で戻る**。
     /// 宛先が使えなければ理由を言う(黙って空にしない)
     fn ai_go(&mut self, job: CalcAi, cx: &mut Context<Self>) {
@@ -2160,7 +2160,7 @@ impl Calc {
             || self.dv_dlg.is_some()
             || self.prompt.is_some()
         {
-            // 板・小窓の欄へ(editor() が今の宛先を知っている)
+            // パネル・小窓の欄へ(editor() が今の宛先を知っている)
             self.editor().backspace();
         } else if self.editing() || self.edit_armed {
             self.input.backspace();
@@ -2210,7 +2210,7 @@ impl Calc {
     }
 
     fn a_delete(&mut self, _: &ui::Delete, _: &mut Window, cx: &mut Context<Self>) {
-        // 板・小窓の欄が開いていれば、その欄の1文字削除(セルに流さない)
+        // パネル・小窓の欄が開いていれば、その欄の1文字削除(セルに流さない)
         if self.name_edit.is_some()
             || self.fn_dlg.is_some()
             || self.solver.is_some()
@@ -2392,7 +2392,7 @@ impl Calc {
     }
 
     fn a_left(&mut self, _: &ui::Left, _: &mut Window, cx: &mut Context<Self>) {
-        // 小窓 → 板 → 打ちかけの文字 → セル、の順で見る
+        // 小窓 → パネル → 打ちかけの文字 → セル、の順で見る
         if let Some(ed) = &mut self.name_edit { ed.move_char(false, false) }
         else if self.fn_args.is_some() { self.editor().move_char(false, false) }
         else if let Some(d) = &mut self.fn_dlg { d.search.move_char(false, false) }
@@ -2591,12 +2591,12 @@ impl Calc {
             return;
         }
         if self.solver.is_some() {
-            // 小窓の Enter では何も走らせない(解くのは「解を求める」の釦)
+            // 小窓の Enter では何も走らせない(解くのは「解を求める」のボタン)
             cx.notify();
             return;
         }
         if self.dv_dlg.is_some() {
-            // 入力規則の板の Enter = OK(本家と同じ)
+            // 入力規則のパネルの Enter = OK(本家と同じ)
             self.dv_ok(cx);
             return;
         }
@@ -3098,7 +3098,7 @@ impl Calc {
             }
             // 詳細設定 = 右の設定パネル(選択中はいつも出ている)
             "sh-settings" => {
-                self.status = ui::t!("設定は右の「図形の設定」の板でどうぞ").into();
+                self.status = ui::t!("設定は右の「図形の設定」のパネルでどうぞ").into();
             }
             _ => {}
         }
@@ -3115,7 +3115,7 @@ impl Calc {
         self.dirty = true;
     }
 
-    /// 図形を格子の絶対 px の位置へ置き直す(錨のセル+ずらしに直す)。
+    /// 図形を格子の絶対 px の位置へ置き直す(アンカーのセル+ずらしに直す)。
     /// 整列・分布が使う。置き先が画面に無ければ動かさない(黙って飛ばさない)
     fn place_shape_px(&mut self, i: usize, nx: f32, ny: f32) -> bool {
         if let (Some(c), Some(r)) = (self.col_at(nx.max(HEAD_W)), self.row_at(ny.max(ROW_H))) {
@@ -3317,7 +3317,7 @@ impl Calc {
             hits.len()
         )
         .into();
-        // 次回の板の初期値に残す(続けて探すのが検索の常)
+        // 次回のパネルの初期値に残す(続けて探すのが検索の常)
         self.find_term = Some(term.to_string());
     }
 
@@ -3358,7 +3358,7 @@ impl Calc {
         Some((total, shown))
     }
 
-    /// ▼の板に出す値の一覧(値, 件数)。**他の列の絞り込みは効かせたまま**
+    /// ▼のパネルに出す値の一覧(値, 件数)。**他の列の絞り込みは効かせたまま**
     /// この列の値を数える(Excel の作法)。1,000 種で切り、切ったら true
     fn filter_values(&self, col: u32) -> (Vec<(String, usize)>, bool) {
         let Some(f) = &self.auto_filter else { return (Vec::new(), false) };
@@ -3406,7 +3406,7 @@ impl Drop for Calc {
     }
 }
 
-/// AI に頼む仕事(calc 流)。writer と同じ10釦だが、表計算なので
+/// AI に頼む仕事(calc 流)。writer と同じ10ボタンだが、表計算なので
 /// 渡すのは選択範囲の TSV、返してもらうのも TSV や式になる。
 #[derive(Clone)]
 enum CalcAi {
@@ -3520,7 +3520,7 @@ fn main() {
                     .detach();
                 });
                 // WM からの「閉じる」(Alt+F4 等)も同じ確認を通す。
-                // 書きかけがあれば「まだ閉じない」と答え、確認は別の糸で出す
+                // 書きかけがあれば「まだ閉じない」と答え、確認は別のスレッドで出す
                 let v = view.clone();
                 window.on_window_should_close(cx, move |_, cx| {
                     let quit_now = v.update(cx, |this, cx| {

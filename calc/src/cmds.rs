@@ -4,7 +4,7 @@ use crate::*;
 
 impl Calc {
     /// run_cmd が処理できる id。**リボンの ready はこの表の中に限る**
-    /// (試験で突き合わせる。合っていない釦は「押せるのに何もしない」嘘になる)
+    /// (試験で突き合わせる。合っていないボタンは「押せるのに何もしない」嘘になる)
     #[allow(dead_code)] // wiring_tests(cfg(test))が使う
     pub(crate) const HANDLED: &'static [&'static str] = &[
         "open", "save", "undo", "redo", "selectall", "pdf",
@@ -536,7 +536,7 @@ impl Calc {
                     self.sheet_mut().protected = true;
                     self.dirty = true;
                     self.status = format!(
-                        "シート「{name}」を保護しました(編集を堰き止めます。同じ釦で解除。パスワードは掛けません — 掛けた振りもしません)"
+                        "シート「{name}」を保護しました(編集を堰き止めます。同じボタンで解除。パスワードは掛けません — 掛けた振りもしません)"
                     )
                     .into();
                 }
@@ -642,7 +642,7 @@ impl Calc {
                         self.acquire_lock(&p);
                         self.status = match &self.locked_by {
                             Some(who) => format!(
-                                "{who} が編集中です(読めますが上書き保存はできません。相手が閉じたら、またこの釦で確かめてください)"
+                                "{who} が編集中です(読めますが上書き保存はできません。相手が閉じたら、またこのボタンで確かめてください)"
                             )
                             .into(),
                             None => ui::t!("先客が居なくなっていたので、編集権を取り直しました").into(),
@@ -720,14 +720,14 @@ impl Calc {
                     self.prompt = Some(("chat", Editor::new("")));
                 }
             },
-            // マクロ = Python in Calc と同じ実体(檻の中で .py を回す)
+            // マクロ = Python in Calc と同じ実体(サンドボックスの中で .py を回す)
             "plug-macros" => {
                 self.commit();
                 self.run_python_file_dialog(cx);
                 self.status =
-                    ui::t!("マクロ: .py を選ぶと檻の中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)").into();
+                    ui::t!("マクロ: .py を選ぶとサンドボックスの中の Python が回ります(b=ブック s=シート。実体は データ > Python と同じ)").into();
             }
-            // プラグインの管理。置き場の .py を一覧し、同じ檻で実行
+            // プラグインの管理。置き場の .py を一覧し、同じサンドボックスで実行
             "plug-manage" => {
                 let dir = plugins_dir();
                 let mut items: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -760,7 +760,7 @@ impl Calc {
                     self.pick_kind = "plugin";
                     self.pick = Some((names, (HEAD_W + 60.0, ROW_H + 20.0)));
                     self.status =
-                        ui::t!("プラグイン: 選ぶと檻の中の Python で実行します(b=ブック s=シート)").into();
+                        ui::t!("プラグイン: 選ぶとサンドボックスの中の Python で実行します(b=ブック s=シート)").into();
                 }
             }
             // チェックボックス(セルの部品)。空のセルに FALSE を置くと
@@ -810,7 +810,7 @@ impl Calc {
                     .into();
                 }
             }
-            // スライサー。カーソルの列の一意な値を釦で並べ、押して絞る。
+            // スライサー。カーソルの列の一意な値をボタンで並べ、押して絞る。
             // 絞り込みと同じく**見え方だけ**(保存される中身は変わらない)
             "insslicer" => {
                 if self.slicer.take().is_none() {
@@ -831,14 +831,14 @@ impl Calc {
                     }
                 }
             }
-            // テキストアート。文字を板に打つと飾り文字を描いて画像で置く
+            // テキストアート。文字をパネルに打つと飾り文字を描いて画像で置く
             "instextart" => {
                 self.commit();
                 self.prompt = Some(("textart", Editor::new("")));
                 self.status =
                     ui::t!("テキストアート: 文字を打つと、太字+縁取りの飾り文字を画像で置きます").into();
             }
-            // 方程式(数式エディタ)。式を板に打つと mathtext が清書して画像で置く
+            // 方程式(数式エディタ)。式をパネルに打つと mathtext が清書して画像で置く
             "insequation" => {
                 self.commit();
                 self.prompt = Some(("equation", Editor::new("")));
@@ -940,7 +940,7 @@ impl Calc {
                     ui::t!("参照の形式: A1(いつもの B2 の形)").into()
                 };
             }
-            // 反復計算(循環参照の反復解決)。入なら板で回数と変化量を聞く
+            // 反復計算(循環参照の反復解決)。入ならパネルで回数と変化量を聞く
             "calc-iter" => {
                 let cur = self
                     .book
@@ -993,7 +993,7 @@ impl Calc {
                         }
                         self.dirty = true;
                         self.status = format!(
-                            "シート「{n}」を隠しました(同じ釦で戻せます。保存で xlsx にも残ります)"
+                            "シート「{n}」を隠しました(同じボタンで戻せます。保存で xlsx にも残ります)"
                         )
                         .into();
                     }
@@ -1168,7 +1168,7 @@ impl Calc {
                     }
                 }
             }
-            // テーブルのサイズ変更(範囲を変える)。板で新しい範囲を聞く
+            // テーブルのサイズ変更(範囲を変える)。パネルで新しい範囲を聞く
             "td-resize" => {
                 self.commit();
                 let p = self.cursor;
@@ -1213,7 +1213,7 @@ impl Calc {
             "ui-bigger" | "ui-smaller" => {
                 let step = if id == "ui-bigger" { 0.1 } else { -0.1 };
                 self.ui_scale = ((self.ui_scale + step) * 10.0).round() / 10.0;
-                // 上限は 150% — これ以上は板や欄の設えが崩れる(発注者 2026-08-07)
+                // 上限は 150% — これ以上はパネルや欄の設えが崩れる(発注者 2026-08-07)
                 self.ui_scale = self.ui_scale.clamp(0.8, 1.5);
                 // 試験では書かない(実利用者の settings.toml を汚さない)
                 if !cfg!(test) {
@@ -1249,7 +1249,7 @@ impl Calc {
                     ui::t!("0 を隠しました(見え方だけ — 値は 0 のまま)").into()
                 };
             }
-            // 小計(Excel の集計)。本家のデータタブに無い釦だが、グループ化を
+            // 小計(Excel の集計)。本家のデータタブに無いボタンだが、グループ化を
             // 「畳むと合計が残る」形で使うために要る(発注者指摘 2026-08-04)
             "subtotal" => {
                 self.commit();
@@ -1993,7 +1993,7 @@ impl Calc {
                 )
                 .into();
             }
-            // 検索と置換(ホーム > 置き換え)。板を2枚続けて使う
+            // 検索と置換(ホーム > 置き換え)。パネルを2枚続けて使う
             "replace" => {
                 self.commit();
                 let init = self.find_term.clone().unwrap_or_default();
@@ -2015,7 +2015,7 @@ impl Calc {
                 self.insert_image_dialog(cx);
             }
             "instext" => {
-                // テキストボックス = 枠の図形 + 文字。すぐ文字の板を開く
+                // テキストボックス = 枠の図形 + 文字。すぐ文字のパネルを開く
                 self.checkpoint();
                 let at = self.cursor;
                 self.sheet_mut().shapes_new.push(sheet::model::SheetShape {
@@ -2073,12 +2073,12 @@ impl Calc {
                 let cur = self.sheet().links.get(&self.cursor).cloned().unwrap_or_default();
                 self.prompt = Some(("link", Editor::new(&cur)));
             }
-            // データの入力規則。選んだ範囲に候補を付ける(板で受ける)
+            // データの入力規則。選んだ範囲に候補を付ける(パネルで受ける)
             // データの入力規則。本家は 設定/入力メッセージ/エラーアラートの
-            // 3タブのダイアログ — calc は種類の一覧 → 聞き取りの板の2段
+            // 3タブのダイアログ — calc は種類の一覧 → 聞き取りのパネルの2段
             "data-validation" => {
                 self.commit();
-                // 本家の3タブのダイアログと同じ形の板(発注者 2026-08-07)
+                // 本家の3タブのダイアログと同じ形のパネル(発注者 2026-08-07)
                 self.dv_open();
             }
             // 条件付き書式。右クリックメニューと同じ一覧を開く(道は1本)
@@ -2090,7 +2090,7 @@ impl Calc {
                 self.menu_at = Some((x, y));
                 self.menu_sub = Some("cond");
             }
-            // 名前の管理。右クリックの「名前の定義」と同じ板
+            // 名前の管理。右クリックの「名前の定義」と同じパネル
             // 名前マネージャー(本家の一覧+新規/編集/削除に相当)
             "defname" => {
                 self.commit();
@@ -2164,7 +2164,7 @@ impl Calc {
             }
             // 並べ替えは**見出しを据え置き、行はまるごと動かす**
             // ユーザー設定の並べ替え。本家は複数基準のダイアログ —
-            // calc は小計・ピボットと同じ聞き取りの板で複数基準を受ける
+            // calc は小計・ピボットと同じ聞き取りのパネルで複数基準を受ける
             "custom-sort" => {
                 self.commit();
                 let (rows, cols) = self.sheet().extent();
@@ -2246,7 +2246,7 @@ impl Calc {
                                   MEDIAN MODE STDEV STDEVP VAR VARP PERCENTILE QUARTILE \
                                   CORREL SLOPE INTERCEPT FORECAST AVERAGEA MAXA MINA \
                                   SUBTOTAL QUOTIENT CEILING.MATH FLOOR.MATH \
-                                  ISEVEN ISODD T N TYPE — 一覧は各族の釦で",
+                                  ISEVEN ISODD T N TYPE — 一覧は各族のボタンで",
                     _ => "SUM AVERAGE COUNT MAX MIN IF SUMIF COUNTIF VLOOKUP TODAY",
                 };
                 self.status = ui::tf!("使える関数: {}", names).into();
@@ -2415,7 +2415,7 @@ impl Calc {
                 self.status = if n == 0 {
                     ui::t!("記録を止めました(変わった所はありません)").into()
                 } else {
-                    ui::tf!("記録を止めました — {} 件を刻みました(一覧は同じ釦をもう一度)", n)
+                    ui::tf!("記録を止めました — {} 件を刻みました(一覧は同じボタンをもう一度)", n)
                         .into()
                 };
                 if n == 0 {

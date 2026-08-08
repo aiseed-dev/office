@@ -8,7 +8,7 @@ use crate::{
     Block, Cellbox, CharFormat, Document, ListKind, Paragraph, ParaStyle, Run, Table,
 };
 
-/// 記入欄(HTML の form)。writer が板で記入し、GET/POST で送る
+/// 記入欄(HTML の form)。writer がパネルで記入し、GET/POST で送る
 #[derive(Debug, Clone, Default)]
 pub struct Form {
     pub action: String,

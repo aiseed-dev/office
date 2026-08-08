@@ -82,7 +82,7 @@ pub(crate) fn parse_udf_output(raw: &str) -> Vec<(Pos, Vec<Vec<String>>)> {
         .collect()
 }
 
-/// PY の結果をシートへ。錨のセルは**式を保ったまま**値を差し替え、
+/// PY の結果をシートへ。アンカーのセルは**式を保ったまま**値を差し替え、
 /// 2次元はスピル(右下へ展開)。他人のデータを潰しそうなら #SPILL! で止まる。
 /// 返すのは (新しいスピルの台帳, 適用した数, 衝突した数)。
 pub(crate) fn apply_py_results(
@@ -90,7 +90,7 @@ pub(crate) fn apply_py_results(
     results: &[(Pos, Vec<Vec<String>>)],
     prev: &std::collections::HashMap<Pos, (u32, u32)>,
 ) -> (std::collections::HashMap<Pos, (u32, u32)>, usize, usize) {
-    // 前回のスピル面(錨以外)をまず消す(小さくなったとき古い値を残さない)
+    // 前回のスピル面(アンカー以外)をまず消す(小さくなったとき古い値を残さない)
     for (anchor, (rows, cols)) in prev {
         for dr in 0..*rows {
             for dc in 0..*cols {
@@ -110,7 +110,7 @@ pub(crate) fn apply_py_results(
     let (mut applied, mut conflicts) = (0usize, 0usize);
     for (anchor, rows) in results {
         let (nr, nc) = (rows.len() as u32, rows.iter().map(|r| r.len()).max().unwrap_or(1) as u32);
-        // 衝突検査(錨以外に、中身か式のあるセルが居ないか)
+        // 衝突検査(アンカー以外に、中身か式のあるセルが居ないか)
         let mut blocked = false;
         for dr in 0..nr {
             for dc in 0..nc {
@@ -167,10 +167,10 @@ pub(crate) fn apply_py_results(
     (spills, applied, conflicts)
 }
 
-/// 檻の種類。**Flatpak の中では bwrap の入れ子が動かない**(ユーザー名前空間の
+/// サンドボックスの種類。**Flatpak の中では bwrap の入れ子が動かない**(ユーザー名前空間の
 /// 入れ子が塞がれている)ので、そこでは公式の入れ子口 flatpak-spawn --sandbox
 /// を使う。どちらも組めなければ None — 他所から来たかもしれないコードは
-/// 檻の外では実行しない(そう言う)。
+/// サンドボックスの外では実行しない(そう言う)。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum Cage {
     /// 素の Linux: /usr/bin/bwrap
@@ -178,11 +178,11 @@ pub(crate) enum Cage {
     /// Flatpak の中: flatpak-spawn --sandbox(実機での実証はまだ —
     /// packaging/flatpak/README.md の実証項目を参照)
     Flatpak,
-    /// 檻が組めない
+    /// サンドボックスが組めない
     None,
 }
 
-/// いまの環境で組める檻。Flatpak の中かは /.flatpak-info で見分ける(公式の印)
+/// いまの環境で組めるサンドボックス。Flatpak の中かは /.flatpak-info で見分ける(公式の印)
 pub(crate) fn cage_kind() -> Cage {
     if std::path::Path::new("/.flatpak-info").exists() {
         // flatpak-spawn は flatpak-xdg-utils の道具。Flatpak の runtime には居る
@@ -198,8 +198,8 @@ pub(crate) fn cage_kind() -> Cage {
     }
 }
 
-/// 檻つき実行の作業場(交換用の読み書き領域)。Flatpak の --sandbox-expose は
-/// **~/.var/app/$ID/sandbox の下しか見せられない**ので、置き場が檻で変わる
+/// サンドボックスつき実行の作業場(交換用の読み書き領域)。Flatpak の --sandbox-expose は
+/// **~/.var/app/$ID/sandbox の下しか見せられない**ので、置き場がサンドボックスで変わる
 pub(crate) fn cage_work_dir(tag: &str) -> PathBuf {
     match cage_kind() {
         Cage::Flatpak => {
@@ -215,9 +215,9 @@ pub(crate) fn cage_work_dir(tag: &str) -> PathBuf {
     }
 }
 
-/// 檻の中で Python を回す Command を組む。dir = cage_work_dir の作業場。
+/// サンドボックスの中で Python を回す Command を組む。dir = cage_work_dir の作業場。
 /// ro_binds = 読み取り専用で見せたい場所(.venv や .so の隣 — bwrap だけが使う。
-/// Flatpak では /app と runtime が最初から見えている)。None = 檻が組めない
+/// Flatpak では /app と runtime が最初から見えている)。None = サンドボックスが組めない
 pub(crate) fn caged_python(
     py: &std::path::Path,
     dir: &std::path::Path,
@@ -227,7 +227,7 @@ pub(crate) fn caged_python(
     caged_python_with(cage_kind(), py, dir, ro_binds, allow_net)
 }
 
-/// 檻の種類を外から差せる形(試験が引数の組みを確かめる)
+/// サンドボックスの種類を外から差せる形(試験が引数の組みを確かめる)
 pub(crate) fn caged_python_with(
     kind: Cage,
     py: &std::path::Path,
@@ -237,7 +237,7 @@ pub(crate) fn caged_python_with(
 ) -> Option<std::process::Command> {
     match kind {
         Cage::Bwrap => {
-            // 檻: / は読み取り専用、ホームは空、書けるのは作業場だけ
+            // サンドボックス: / は読み取り専用、ホームは空、書けるのは作業場だけ
             let mut c = std::process::Command::new("/usr/bin/bwrap");
             c.args(["--ro-bind", "/", "/", "--tmpfs", "/home", "--tmpfs", "/tmp"]);
             for p in ro_binds {
@@ -283,7 +283,7 @@ pub(crate) fn caged_python_with(
 
 /// 子プロセスを時間制限つきで回す → (成功か, stdout, stderr)。
 /// 出力は別スレッドで吸い出す(パイプが詰まっても try_wait が止まらない)。
-/// 時間切れは殺して Err — 檻の中の無限ループでアプリの手が塞がらない
+/// 時間切れは殺して Err — サンドボックスの中の無限ループでアプリの手が塞がらない
 pub(crate) fn run_with_timeout(
     cmd: &mut std::process::Command,
     secs: u64,
@@ -420,7 +420,7 @@ pub(crate) const IMPORT_ENCS: &[(&str, &str)] = &[
     ("Latin-1", "latin-1"),
 ];
 
-/// 区切りの選択肢(見せる名前, 実体)。「その他」は板で1文字を聞く。
+/// 区切りの選択肢(見せる名前, 実体)。「その他」はパネルで1文字を聞く。
 pub(crate) const IMPORT_DELIMS: &[(&str, &str)] = &[
     ("自動", "auto"),
     ("カンマ", ","),
@@ -752,7 +752,7 @@ pub(crate) fn plugins_dir() -> PathBuf {
 impl Calc {
     /// 選んだ範囲を matplotlib で棒グラフにして、シートに浮かべる。
     /// 1列目が項目名、残りの列が系列(先頭行が文字なら系列名)。
-    /// Python は別の糸で回す(主の糸を塞がない — ダイアログと同じ作法)。
+    /// Python は別のスレッドで回す(メインスレッドを塞がない — ダイアログと同じ作法)。
     pub(crate) fn insert_chart(&mut self, a: Pos, b: Pos, cx: &mut Context<Self>) {
         let sh = self.sheet();
         // 先頭行が見出しか(項目列以外に文字があるか)
@@ -1175,16 +1175,16 @@ impl Calc {
     /// office_sheet(pysheet)で b(ブック)と s(いまのシート)を束縛して
     /// 利用者のコードを回し、保存されたものを読み戻して**1手として**適用する。
     pub(crate) fn run_python(&mut self, user_code: String, cx: &mut Context<Self>) {
-        // 自分で打った/選んだコード: 檻はかけるが網は許す(自分の道具が
+        // 自分で打った/選んだコード: サンドボックスはかけるが網は許す(自分の道具が
         // Web から取り込むのは普通の仕事。守るのは機械のファイルの方)
         self.run_python_inner(user_code, false, true, cx);
     }
 
-    /// sandbox=true は**必ず**bubblewrap の檻の中で回す(ブックに載っていた
-    /// コード = 他人のファイル由来かもしれないもの)。檻: ネット遮断・
+    /// sandbox=true は**必ず**bubblewrap のサンドボックスの中で回す(ブックに載っていた
+    /// コード = 他人のファイル由来かもしれないもの)。サンドボックス: ネット遮断・
     /// 実ファイルは読み取り専用・ホームは不可視・書けるのは交換用の一時領域だけ。
-    /// 檻が無い機械では載せたコードは**実行しない**(そう言う)。
-    /// 自分で打った/選んだコードも、檻があれば檻で回す(深層防御)。
+    /// サンドボックスが無い機械では載せたコードは**実行しない**(そう言う)。
+    /// 自分で打った/選んだコードも、サンドボックスがあればサンドボックスで回す(深層防御)。
     pub(crate) fn run_python_inner(
         &mut self,
         user_code: String,
@@ -1243,21 +1243,21 @@ impl Calc {
             let py_path = dir.join("run.py");
             std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
             let py = find_python();
-            // 檻はあれば必ず使う(深層防御)。他所から来たかもしれないコード
-            // (sandbox=true)は、檻が組めなければ実行しない
+            // サンドボックスはあれば必ず使う(深層防御)。他所から来たかもしれないコード
+            // (sandbox=true)は、サンドボックスが組めなければ実行しない
             let venv = std::fs::canonicalize(".venv").unwrap_or_default();
             let mut cmd = match caged_python(&py, &dir, &[venv, so_dir2], allow_net) {
                 Some(c) => c,
                 None if sandbox => {
                     return Err(ui::t!(
-                        "檻が組めません(bubblewrap か Flatpak が要ります)。\
-他所から来たかもしれないコードは檻の外では実行しません(apt install bubblewrap)"
+                        "サンドボックスが組めません(bubblewrap か Flatpak が要ります)。\
+他所から来たかもしれないコードはサンドボックスの外では実行しません(apt install bubblewrap)"
                     )
                     .to_string());
                 }
                 None => std::process::Command::new(&py),
             };
-            // 時間制限つき(60秒)— 檻の中の無限ループで手が塞がらない
+            // 時間制限つき(60秒)— サンドボックスの中の無限ループで手が塞がらない
             let (ok, out, err) = run_with_timeout(cmd.arg(&py_path), 60)?;
             let out = out.trim().to_string();
             if !ok {
@@ -1325,7 +1325,7 @@ calc の隣に置いてください)").to_string()
         .detach();
     }
 
-    /// =PY(…) のセルを全部、檻の中で計算する(@計算)。
+    /// =PY(…) のセルを全部、サンドボックスの中で計算する(@計算)。
     /// 関数の定義はブックの「関数」で始まる名前のスクリプトから読む。
     /// **これ以外の道で PY セルが計算されることはない**(開く=実行を持たない)。
     pub(crate) fn run_py_calc(&mut self, cx: &mut Context<Self>) {
@@ -1378,11 +1378,11 @@ calc の隣に置いてください)").to_string()
                 build_udf_script(&defs, calls, &out),
             ));
         }
-        self.status = ui::t!("PY を計算しています…(檻の中)").into();
+        self.status = ui::t!("PY を計算しています…(サンドボックスの中)").into();
         let task = cx.background_executor().spawn(async move {
             if cage_kind() == Cage::None {
                 return Err(
-                    ui::t!("檻が組めません(bubblewrap か Flatpak が要ります)。ブックの関数は檻の外では計算しません").to_string(),
+                    ui::t!("サンドボックスが組めません(bubblewrap か Flatpak が要ります)。ブックの関数はサンドボックスの外では計算しません").to_string(),
                 );
             }
             let py = find_python();
@@ -1390,10 +1390,10 @@ calc の隣に置いてください)").to_string()
             let mut results = Vec::new();
             for (i, py_path, out_path, script) in scripts {
                 std::fs::write(&py_path, script).map_err(|e| e.to_string())?;
-                // 関数(UDF)は常に網なしの檻
+                // 関数(UDF)は常に網なしのサンドボックス
                 let Some(mut c) = caged_python(&py, &dir, std::slice::from_ref(&venv), false)
                 else {
-                    return Err(ui::t!("檻が組めません(bubblewrap か Flatpak が要ります)。ブックの関数は檻の外では計算しません").to_string());
+                    return Err(ui::t!("サンドボックスが組めません(bubblewrap か Flatpak が要ります)。ブックの関数はサンドボックスの外では計算しません").to_string());
                 };
                 // 時間制限つき(30秒)。関数は値の計算だけ — それより長いのは異常
                 let (ok, _, err) = run_with_timeout(c.arg(&py_path), 30)?;
@@ -1455,7 +1455,7 @@ calc の隣に置いてください)").to_string()
     }
 
     /// .py を選んで**ブックに載せる**(実行はしない)。載せたコードは
-    /// 保存で xlsx に入り、帳票と一緒に旅をする。実行は @名前 で、必ず檻の中。
+    /// 保存で xlsx に入り、帳票と一緒に旅をする。実行は @名前 で、必ずサンドボックスの中。
     pub(crate) fn store_python_dialog(&mut self, name: String, cx: &mut Context<Self>) {
         let ask = cx.background_executor().spawn(async {
             rfd::FileDialog::new()
@@ -1547,7 +1547,7 @@ calc の隣に置いてください)").to_string()
         .detach();
     }
 
-    /// CSV/TSV を選んで、ウィザードの板(文字コード・区切り・置き場所・
+    /// CSV/TSV を選んで、ウィザードのパネル(文字コード・区切り・置き場所・
     /// プレビュー)を開く。読み直しは Python(CP932 も読める)。
     pub(crate) fn import_text_dialog(&mut self, cx: &mut Context<Self>) {
         let ask = cx
@@ -1575,7 +1575,7 @@ calc の隣に置いてください)").to_string()
         .detach();
     }
 
-    /// いまの設定(文字コード・区切り)でファイルを読み直し、板を出し直す。
+    /// いまの設定(文字コード・区切り)でファイルを読み直し、パネルを出し直す。
     pub(crate) fn import_reparse(&mut self, cx: &mut Context<Self>) {
         let Some(pend) = &self.import_pend else { return };
         let (path, enc, delim) = (
@@ -1634,7 +1634,7 @@ calc の隣に置いてください)").to_string()
                     }
                     Err(e) => {
                         this.status = ui::tf!("読み込めません: {}", e).into();
-                        this.import_pick(); // 板は残す(設定を替えて再挑戦できる)
+                        this.import_pick(); // パネルは残す(設定を替えて再挑戦できる)
                     }
                 }
                 cx.notify();
@@ -1643,7 +1643,7 @@ calc の隣に置いてください)").to_string()
         .detach();
     }
 
-    /// 取り込みウィザードの板を(いまの下ごしらえから)組む。
+    /// 取り込みウィザードのパネルを(いまの下ごしらえから)組む。
     pub(crate) fn import_pick(&mut self) {
         let Some(pend) = &self.import_pend else { return };
         let mut items: Vec<String> = Vec::new();
@@ -1697,7 +1697,7 @@ calc の隣に置いてください)").to_string()
         self.pick = Some((items, at));
     }
 
-    /// 板の文字を Python の台本で絵にして、画像としてシートに浮かべる。
+    /// パネルの文字を Python の台本で絵にして、画像としてシートに浮かべる。
     /// writer の方式(図は Python で描いて画像で貼る)の自動化 —
     /// 方程式(EQ_PY)とテキストアート(TEXTART_PY)が同じ道を通る。
     pub(crate) fn insert_py_image(
@@ -2159,7 +2159,7 @@ mod cage_tests {
     }
 
     #[test]
-    fn bwrapの檻は網を既定で切る() {
+    fn bwrapのサンドボックスは網を既定で切る() {
         let d = PathBuf::from("/tmp/jo-py-1");
         let py = std::path::Path::new("python3");
         let c = caged_python_with(Cage::Bwrap, py, &d, &[], false).unwrap();
@@ -2173,7 +2173,7 @@ mod cage_tests {
     }
 
     #[test]
-    fn flatpakの檻は公式の入れ子口を使う() {
+    fn flatpakのサンドボックスは公式の入れ子口を使う() {
         // Flatpak の中では bwrap の入れ子が動かない — flatpak-spawn --sandbox
         let d = PathBuf::from("/x/sandbox/jo-udf-9");
         let py = std::path::Path::new("python3");
@@ -2188,7 +2188,7 @@ mod cage_tests {
         assert!(a.contains(&"--no-network".into()), "網が切れていない: {a:?}");
         assert!(!args_of(&caged_python_with(Cage::Flatpak, py, &d, &[], true).unwrap())
             .contains(&"--no-network".into()));
-        // 檻が組めなければ None(「実行しない」と言うのは呼ぶ側)
+        // サンドボックスが組めなければ None(「実行しない」と言うのは呼ぶ側)
         assert!(caged_python_with(Cage::None, py, &d, &[], false).is_none());
     }
 }

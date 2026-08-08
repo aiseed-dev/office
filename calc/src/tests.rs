@@ -66,15 +66,15 @@ mod validation_tests {
     use crate::*;
 
     #[gpui::test]
-    fn 板から整数の規則を掛けて堰き止める(cx: &mut gpui::TestAppContext) {
+    fn パネルから整数の規則を掛けて堰き止める(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
-            // B2:B4 に 1〜100 の整数(本家の形の板: 設定タブで組む)
+            // B2:B4 に 1〜100 の整数(本家の形のパネル: 設定タブで組む)
             this.anchor = Some(Pos::parse("B2").unwrap());
             this.cursor = Pos::parse("B4").unwrap();
             this.run_cmd("data-validation", cx);
             {
-                let d = this.dv_dlg.as_mut().expect("入力規則の板が開かない");
+                let d = this.dv_dlg.as_mut().expect("入力規則のパネルが開かない");
                 d.kind = 1; // 整数
                 d.op = 0; // 次の値の間
                 d.eds[0] = Editor::new("1");
@@ -87,7 +87,7 @@ mod validation_tests {
                 d.eds[3] = Editor::new("1〜100 で");
             }
             this.dv_ok(cx);
-            assert!(this.dv_dlg.is_none(), "OK で板が閉じない");
+            assert!(this.dv_dlg.is_none(), "OK でパネルが閉じない");
             let v = &this.sheet().validations[0];
             assert_eq!((v.kind.as_str(), v.op.as_str()), ("whole", "between"));
             assert_eq!((v.formula.as_str(), v.formula2.as_str()), ("1", "100"));
@@ -104,7 +104,7 @@ mod validation_tests {
             this.run_cmd("data-validation", cx);
             {
                 let d = this.dv_dlg.as_mut().unwrap();
-                assert_eq!(d.kind, 1, "既存の規則が板に読み込まれない");
+                assert_eq!(d.kind, 1, "既存の規則がパネルに読み込まれない");
                 assert_eq!(d.eds[0].text(), "1");
                 d.err_style = 0; // 停止
             }
@@ -155,7 +155,7 @@ mod validation_tests {
     }
 
     #[gpui::test]
-    fn 読めない種類の規則は板で壊れない(cx: &mut gpui::TestAppContext) {
+    fn 読めない種類の規則はパネルで壊れない(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
             // 日付の規則(判定できない種類)が既にある
@@ -222,7 +222,7 @@ mod numfmt_tests {
             // その他 → コード直打ち(今のコードが下敷きに入る)
             this.run_cmd("format", cx);
             this.apply_pick("その他(書式コードを打つ)…", cx);
-            let (kind, ed) = this.prompt.as_ref().expect("コードの板が開かない");
+            let (kind, ed) = this.prompt.as_ref().expect("コードのパネルが開かない");
             assert_eq!(*kind, "numfmt-custom");
             assert_eq!(ed.text(), "0.00%", "今のコードが下敷きにならない");
             this.prompt = Some(("numfmt-custom", Editor::new("#,##0.0")));
@@ -336,10 +336,10 @@ mod sort_tests {
             this.prompt = Some(("sort-by", Editor::new("B")));
             this.finish_prompt(cx);
             assert_eq!(col_a(this), ["甲", "乙", "甲", "丙"], "列の字の基準が効かない");
-            // 知らない見出しは板を開いたまま言い返す
+            // 知らない見出しはパネルを開いたまま言い返す
             this.prompt = Some(("sort-by", Editor::new("存在しない列")));
             this.finish_prompt(cx);
-            assert!(this.prompt.is_some(), "打ち直せるように板が残るはず");
+            assert!(this.prompt.is_some(), "打ち直せるようにパネルが残るはず");
             assert!(this.status.contains("見つかりません"), "{}", this.status);
         });
     }
@@ -375,7 +375,7 @@ mod filter_tests {
             this.run_cmd("setfilter", cx); // 表全体 A1:B5 に範囲を張る
             let f = this.auto_filter.as_ref().expect("範囲が張られない");
             assert_eq!(f.range, (Pos::parse("A1").unwrap(), Pos::parse("B5").unwrap()));
-            // 板の一覧: A列の値と件数(BTreeMap の並び=文字順)
+            // パネルの一覧: A列の値と件数(BTreeMap の並び=文字順)
             let (vals, cut) = this.filter_values(0);
             assert!(!cut);
             assert_eq!(
@@ -910,7 +910,7 @@ mod pivot_tests {
     }
 
     #[gpui::test]
-    fn 罫線の板は連打でき表の形が1押しで掛かる(cx: &mut gpui::TestAppContext) {
+    fn 罫線のパネルは連打でき表の形が1押しで掛かる(cx: &mut gpui::TestAppContext) {
         use sheet::model::BStyle;
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
@@ -1061,7 +1061,7 @@ mod pivot_tests {
     }
 
     #[gpui::test]
-    fn ホームの全釦を一巡り点検(cx: &mut gpui::TestAppContext) {
+    fn ホームの全ボタンを一巡り点検(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
             use sheet::model::{HAlign, VAlign};
@@ -1106,7 +1106,7 @@ mod pivot_tests {
             assert_eq!(f(this).number_format.as_deref(), Some("#,##0"));
             this.run_cmd("clear", cx);
             assert_eq!(f(this), Default::default(), "書式のクリアが効かない");
-            // --- 板・小窓が開く系 ---
+            // --- パネル・小窓が開く系 ---
             let mut close = |this: &mut Calc| {
                 this.pick = None;
                 this.pick_kind = "value";
@@ -1137,8 +1137,8 @@ mod pivot_tests {
                     this.sync_input();
                 }
                 this.run_cmd(id, cx);
-                assert_eq!(this.pick_kind, kind, "{id} の板が開かない");
-                assert!(this.pick.is_some(), "{id} の板が無い");
+                assert_eq!(this.pick_kind, kind, "{id} のパネルが開かない");
+                assert!(this.pick.is_some(), "{id} のパネルが無い");
                 close(this);
                 if id == "merge" {
                     this.anchor = None;
@@ -1147,7 +1147,7 @@ mod pivot_tests {
                 }
             }
             this.run_cmd("fontsize", cx);
-            assert!(this.pick.is_some(), "fontsize の板が開かない");
+            assert!(this.pick.is_some(), "fontsize のパネルが開かない");
             close(this);
             this.run_cmd("condformat", cx);
             assert_eq!(this.menu_sub.as_deref(), Some("cond"), "条件付き書式の一覧が開かない");
@@ -1159,7 +1159,7 @@ mod pivot_tests {
             assert!(this.fmt_panel.is_some(), "書式の小窓が開かない");
             close(this);
             this.run_cmd("replace", cx);
-            assert!(matches!(this.prompt, Some(("find", _))), "置換の板が開かない");
+            assert!(matches!(this.prompt, Some(("find", _))), "置換のパネルが開かない");
             close(this);
             // --- 行動系 ---
             this.run_cmd("copystyle", cx);
@@ -1230,7 +1230,7 @@ mod pivot_tests {
     }
 
     #[gpui::test]
-    fn テキスト取り込みの板は置き場所と取り込みが効く(cx: &mut gpui::TestAppContext) {
+    fn テキスト取り込みのパネルは置き場所と取り込みが効く(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
             this.import_pend = Some(crate::py::ImportPend {
@@ -1253,7 +1253,7 @@ mod pivot_tests {
             assert_eq!(this.import_pend.as_ref().unwrap().dest, Pos::new(2, 1));
             // 取り込む
             this.apply_pick("→ 取り込む(2 行)", cx);
-            assert!(this.import_pend.is_none(), "板が閉じない");
+            assert!(this.import_pend.is_none(), "パネルが閉じない");
             let got = this.book.sheets[0].get(Pos::new(3, 1)).unwrap().value.display();
             assert_eq!(got, "鉛筆", "置き場所に流し込まれていない");
             let got = this.book.sheets[0].get(Pos::new(3, 2)).unwrap().value.display();
@@ -1358,7 +1358,7 @@ mod pivot_tests {
                 "回転の直指定が効かない: {}",
                 this.book.sheets[0].shapes_new[0].rot
             );
-            // 太さ・不透明度・影・反転(パネルの釦の実体は shape_edit)
+            // 太さ・不透明度・影・反転(パネルのボタンの実体は shape_edit)
             this.shape_edit(|sp| {
                 sp.line_w = 3.0;
                 sp.alpha = 0.5;
@@ -1372,10 +1372,10 @@ mod pivot_tests {
             this.prompt = Some(("shape-fill-rgb", Editor::new("")));
             this.finish_prompt(cx);
             assert!(this.book.sheets[0].shapes_new[0].fill.is_none());
-            // 読めない色は板が残る(黙って捨てない)
+            // 読めない色はパネルが残る(黙って捨てない)
             this.prompt = Some(("shape-line-rgb", Editor::new("赤")));
             this.finish_prompt(cx);
-            assert!(this.prompt.is_some(), "読めない色で板が閉じた");
+            assert!(this.prompt.is_some(), "読めない色でパネルが閉じた");
             this.prompt = None;
             // 選択が無ければ何も起きない(shape_edit の守り)
             this.shape_sel = None;
@@ -1569,7 +1569,7 @@ mod pivot_tests {
                 this.status
             );
             // @save は「関数」で始まる名前だけ(手続きは門前で断る —
-            // ここで断るのでファイル選択の板は開かない)
+            // ここで断るのでファイル選択のパネルは開かない)
             this.prompt = Some(("py", Editor::new("@save 取り込み試験")));
             this.finish_prompt(cx);
             assert!(
@@ -1615,7 +1615,7 @@ mod pivot_tests {
     }
 
     #[gpui::test]
-    fn ラベルと値とグループの指図が板から入る(cx: &mut gpui::TestAppContext) {
+    fn ラベルと値とグループの指図がパネルから入る(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
             // 元の表
@@ -1903,7 +1903,7 @@ mod recalc_tests {
     }
 
     #[gpui::test]
-    fn 条件付き書式の板の規則が掛かる(cx: &mut gpui::TestAppContext) {
+    fn 条件付き書式のパネルの規則が掛かる(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
             for (a1, v) in [("A1", "10"), ("A2", "20"), ("A3", "20"), ("A4", "5")] {
@@ -1915,10 +1915,10 @@ mod recalc_tests {
             this.anchor = Some(Pos::parse("A1").unwrap());
             this.cursor = Pos::parse("A4").unwrap();
             this.sync_input();
-            // 間(板)
+            // 間(パネル)
             this.prompt = Some(("cond-between", Editor::new("8〜15")));
             this.finish_prompt(cx);
-            // 上位N(板)
+            // 上位N(パネル)
             this.prompt = Some(("cond-top", Editor::new("2")));
             this.finish_prompt(cx);
             let rules = &this.sheet().cond;
@@ -2068,11 +2068,11 @@ mod recalc_tests {
                 this.book.sheets[0].set(Pos::new(r as u32, 1), sheet::Cell::input(amt));
             }
             this.run_cmd("rem-duplicates", cx);
-            assert_eq!(this.pick_kind, "dedup-pick", "選ぶ板が開かない");
+            assert_eq!(this.pick_kind, "dedup-pick", "選ぶパネルが開かない");
             assert!(this.dedup_pend.is_some());
             // 「金額」を外す → 品名だけで比べる
             this.apply_pick("金額", cx);
-            assert_eq!(this.pick_kind, "dedup-pick", "入切で板が閉じた");
+            assert_eq!(this.pick_kind, "dedup-pick", "入切でパネルが閉じた");
             this.apply_pick("→ 削除する", cx);
             let s = &this.book.sheets[0];
             assert_eq!(s.get(Pos::new(1, 0)).unwrap().value.display(), "鉛筆");
@@ -2092,8 +2092,8 @@ mod recalc_tests {
             this.prompt = Some(("link", Editor::new("https://example.co.jp/")));
             this.finish_prompt(cx);
             assert!(this.sheet().links.contains_key(&Pos::new(1, 1)), "リンクが付かない");
-            // 続けて表示テキストの板が開く
-            assert_eq!(this.prompt.as_ref().map(|(k, _)| *k), Some("link-text"), "表示テキストの板が開かない");
+            // 続けて表示テキストのパネルが開く
+            assert_eq!(this.prompt.as_ref().map(|(k, _)| *k), Some("link-text"), "表示テキストのパネルが開かない");
             this.prompt = Some(("link-text", Editor::new("会社サイト")));
             this.finish_prompt(cx);
             let got = this.sheet().get(Pos::new(1, 1)).map(|c| c.value.display());
@@ -2185,13 +2185,13 @@ mod recalc_tests {
     }
 
     #[gpui::test]
-    fn ヘッダーとフッターを板から入れて消す(cx: &mut gpui::TestAppContext) {
+    fn ヘッダーとフッターをパネルから入れて消す(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {
             this.run_cmd("editheader", cx);
             assert_eq!(this.pick_kind, "hf-pick", "一覧が開かない");
             this.apply_pick("ヘッダー中", cx);
-            assert!(this.prompt.is_some(), "板が開かない");
+            assert!(this.prompt.is_some(), "パネルが開かない");
             this.prompt = Some(("hf-edit", Editor::new("月次売上")));
             this.finish_prompt(cx);
             assert_eq!(this.sheet().header.as_deref(), Some("&C月次売上"));
@@ -2441,7 +2441,7 @@ mod recalc_tests {
             assert!(this.sheet().merges.is_empty(), "ピボットの上で結合できてしまう");
             assert!(this.status.contains("ピボット"), "{}", this.status);
             this.run_cmd("data-validation", cx);
-            assert!(this.dv_dlg.is_none(), "ピボットの上で入力規則の板が開いた");
+            assert!(this.dv_dlg.is_none(), "ピボットの上で入力規則のパネルが開いた");
             // 外(A1)なら普通に通る
             this.anchor = None;
             this.cursor = Pos::parse("A1").unwrap();
@@ -2521,7 +2521,7 @@ mod recalc_tests {
     }
 }
 
-/// **メニューの釦を全部おして、落ちないか・繋がっているかを見る。**
+/// **メニューのボタンを全部おして、落ちないか・繋がっているかを見る。**
 /// writer の menu_run_tests と同じ作法 — リボンに ready で並ぶものは
 /// ここで実際に run_cmd を通す(ダイアログを開くものだけは外す)。
 /// GUI は起こさない — gpui の試験用の場で Calc を作って叩く
@@ -2529,7 +2529,7 @@ mod recalc_tests {
 mod menu_run_tests {
     use crate::*;
 
-    /// ファイル選択の窓を開く釦。**試験では押さない** —
+    /// ファイル選択の窓を開くボタン。**試験では押さない** —
     /// rfd は実際に窓を出しに行くので、画面の無い試験では返ってこない
     /// (writer で踏んで確かめた轍。実機での確認に回す)
     const DIALOG: &[&str] = &[
@@ -2537,7 +2537,7 @@ mod menu_run_tests {
         "data-external-links",
     ];
 
-    /// 空の表だと何も起きない釦があるので、見本の小さな表を入れて選ぶ
+    /// 空の表だと何も起きないボタンがあるので、見本の小さな表を入れて選ぶ
     fn seed(this: &mut Calc) {
         if this.sheet().cells.is_empty() {
             for (a1, v) in [
@@ -2558,7 +2558,7 @@ mod menu_run_tests {
     }
 
     #[gpui::test]
-    fn 全部の釦が落ちずに通る(cx: &mut gpui::TestAppContext) {
+    fn 全部のボタンが落ちずに通る(cx: &mut gpui::TestAppContext) {
         // AI の宛先は覚える設定なので、試験で変えたら戻す
         let keep_ai = ui::ai::backend();
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
@@ -2602,9 +2602,9 @@ mod menu_run_tests {
         });
     }
 
-    /// 押すと入切する釦は、2回押すと元に戻る(1手で戻せる家訓)
+    /// 押すと入切するボタンは、2回押すと元に戻る(1手で戻せる方針)
     #[gpui::test]
-    fn 入切の釦は二度おすと戻る(cx: &mut gpui::TestAppContext) {
+    fn 入切のボタンは二度おすと戻る(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         let state = |this: &Calc, id: &str| -> bool {
             match id {
@@ -2636,13 +2636,13 @@ mod menu_run_tests {
         }
     }
 
-    /// **見本のブックを開いた状態でも**全部の釦が通る。
+    /// **見本のブックを開いた状態でも**全部のボタンが通る。
     /// 空のブックと違い、式・結合・列幅・条件付き書式が入っているので
     /// 「前提があるときの道」も通る(sample/*.xlsx が検査の材料)。
     /// 見本は写しを開く — 署名やチャットが隣にファイルを添えるため、
     /// 追跡している見本の隣を汚さない
     #[gpui::test]
-    fn 見本を開いても全部の釦が通る(cx: &mut gpui::TestAppContext) {
+    fn 見本を開いても全部のボタンが通る(cx: &mut gpui::TestAppContext) {
         let dir = std::path::Path::new("../sample");
         let dir = if dir.exists() {
             dir.to_path_buf()
@@ -2802,7 +2802,7 @@ mod udf_tests {
         sh.set(Pos::parse("B2").unwrap(), py);
         let (spills, n, c) = apply_py_results(&mut sh, &results, &Default::default());
         assert_eq!((n, c), (2, 0));
-        // 錨は式を保ったまま値が入る
+        // アンカーは式を保ったまま値が入る
         let b2 = sh.get(Pos::parse("B2").unwrap()).unwrap();
         assert!(b2.formula.is_some(), "式が消えた");
         assert_eq!(b2.value, sheet::Value::Number(10.0));

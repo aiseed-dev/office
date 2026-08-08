@@ -10,7 +10,7 @@
 #
 # 店の正本は文書 — 品を足す・値を直すのは writer(または Word)で文書を
 # 直し、この2つを回し直すだけ。Web の知識は要らない。
-# 本実装は writer のプラグイン(~/.config/office/plugins・檻つき)になる —
+# 本実装は writer のプラグイン(~/.config/office/plugins・サンドボックスつき)になる —
 # そのとき d(python-docx の文書)束縛でこの中身がそのまま使える。
 import csv
 import re

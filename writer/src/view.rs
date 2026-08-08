@@ -1,5 +1,5 @@
 //! writer の画面(main.rs から純移動 2026-08-08。部屋割りの2歩目)。
-//! impl Render(紙面の描画・リボン・板)と InputSink(入力とマウスの受け皿)。
+//! impl Render(紙面の描画・リボン・パネル)と InputSink(入力とマウスの受け皿)。
 //! **純移動** — 挙動と文言は一切変えない
 
 use crate::*;
@@ -19,7 +19,7 @@ impl Render for Writer {
         // ---- リボン(Euro-Office に名前と並びを合わせる) ----
         // **タブの行そのものが窓の取っ手**(掴んで移動・二度押しで最大化)。
         // 空きの帯だけを取っ手にすると、タブが多い窓では幅がゼロになり
-        // 掴む場所が無くなる(踏んで直した)。釦の類いは stop_propagation で
+        // 掴む場所が無くなる(踏んで直した)。ボタンの類いは stop_propagation で
         // 取っ手より先に効く
         let (ready, all) = ribbon::progress(ribbon::writer_tabs());
         // ダークモードは**紙以外**を暗くする — 紙は白いまま(印刷と同じ)。
@@ -36,7 +36,7 @@ impl Render for Writer {
         let th_status = if dk { rgb(0x9AA5AE) } else { rgb(0x66707A) };
         let th_desk = if dk { rgb(0x191C1F) } else { rgb(0x63686D) };
         // デスクトップ版の額縁: 1段目がクイックアクセス+文書名(=取っ手)、
-        // 2段目が下線つきのタブ(現在地は青い下線)、3段目が釦の帯
+        // 2段目が下線つきのタブ(現在地は青い下線)、3段目がボタンの帯
         let th_top_bg = if dk { rgb(0x1B1E21) } else { rgb(0xF1F3F5) };
         let th_top_fg = if dk { rgb(0xCFD6DC) } else { rgb(0x444B52) };
         let th_qa_hover = if dk { rgb(0x2C333A) } else { rgb(0xE2E6EA) };
@@ -150,9 +150,9 @@ impl Render for Writer {
         let mut cmds = div().flex().flex_col().gap_0p5()
             .px_3().py_1().bg(th_cmd_bg)
             .border_b_1().border_color(th_cmd_border);
-        // 本家風のタブ配置。(id, 大釦の名札)。"‖" は群の区切り線。
-        // 名札つきは絵の下に短い名前(本家の言い方)、無印は絵だけの釦。
-        // 釦の名前は乗ったときに下のステータスバーへ出す(hover_hint)
+        // 本家風のタブ配置。(id, 大ボタンの名札)。"‖" は群の区切り線。
+        // 名札つきは絵の下に短い名前(本家の言い方)、無印は絵だけのボタン。
+        // ボタンの名前は乗ったときに下のステータスバーへ出す(hover_hint)
         type LItem = (&'static str, Option<&'static str>);
         // ホームは2段(発注者の画像 2026-08-04)
         const HOME_ROWS: &[&[LItem]] = &[
@@ -177,7 +177,7 @@ impl Render for Writer {
                 ("‖", None), ("replace", None),
             ],
         ];
-        // 挿入は一段(発注者の画像 2026-08-04)。主要な釦は名札つきの大釦
+        // 挿入は一段(発注者の画像 2026-08-04)。主要なボタンは名札つきの大ボタン
         const INS_ROWS: &[&[LItem]] = &[&[
             ("blankpage", Some("空白ページ")), ("pagebreak", Some("区切り")),
             ("‖", None), ("instable", Some("表")), ("‖", None),
@@ -328,7 +328,7 @@ impl Render for Writer {
                     });
                     let has_icon = ui::icons::find(icon).is_some();
                     if let Some(short) = big {
-                        // 名札つきの大釦(絵の下に短い名前。本家の言い方)
+                        // 名札つきの大ボタン(絵の下に短い名前。本家の言い方)
                         let on = cmd.ready && self.toggled(cmd.id);
                         let fg = if !cmd.ready {
                             th_gray_fg
@@ -453,7 +453,7 @@ impl Render for Writer {
         }
         let bar = if self.tab == 0 || !self.show_toolbar {
             // ファイルのページ(本家の File メニュー)と、畳んだツールバーは
-            // 釦の帯を持たない(タブは残る — 押せば中身へ行ける)
+            // ボタンの帯を持たない(タブは残る — 押せば中身へ行ける)
             div().flex().flex_col().child(top).child(tabs)
         } else {
             div().flex().flex_col().child(top).child(tabs).child(cmds)
@@ -1377,7 +1377,7 @@ impl Render for Writer {
             }
         }
 
-        // 置換の板
+        // 置換のパネル
         let find_panel = if !self.find_open {
             None
         } else {
@@ -1431,10 +1431,10 @@ impl Render for Writer {
                         })))))
         };
 
-        // ヘッダー・フッターの編集の板。開いている間、打鍵はここに入る
+        // ヘッダー・フッターの編集のパネル。開いている間、打鍵はここに入る
         let hf_panel = self.hf_edit.map(|footer| {
             let title = if footer { "フッター" } else { "ヘッダー" };
-            // キャレットは | で見せる(検索の板と同じ割り切り)。
+            // キャレットは | で見せる(検索のパネルと同じ割り切り)。
             // ページ番号の印は読める形で見せる
             let mut s = self.hf_ed.text().to_string();
             let cur = self.hf_ed.cursor().min(s.len());
@@ -1480,9 +1480,9 @@ impl Render for Writer {
                         }))))
         });
 
-        // コメントの板と、カーソルの段落のコメントの一覧
+        // コメントのパネルと、カーソルの段落のコメントの一覧
         let cmt_panel = if !self.cmt_edit {
-            // 板が閉じていても、カーソルの段落にコメントがあれば見せる
+            // パネルが閉じていても、カーソルの段落にコメントがあれば見せる
             let cur = self.ed.cursor();
             let mut at = 0usize;
             let mut found: Option<Vec<(String, String)>> = None;
@@ -1512,7 +1512,7 @@ impl Render for Writer {
                 d
             })
         } else {
-            // 編集の板(検索の板と同じ作法。| がキャレット)
+            // 編集のパネル(検索のパネルと同じ作法。| がキャレット)
             let mut t = self.cmt_ed.text().to_string();
             let cur = self.cmt_ed.cursor().min(t.len());
             t.insert(cur, '|');
@@ -1545,7 +1545,7 @@ impl Render for Writer {
                         })))))
         };
 
-        // 透かしの板
+        // 透かしのパネル
         let wm_panel = if !self.wm_edit {
             None
         } else {
@@ -1577,7 +1577,7 @@ impl Render for Writer {
                         })))))
         };
 
-        // しおりの板(名前の入力欄+一覧)
+        // しおりのパネル(名前の入力欄+一覧)
         let bm_panel = if !self.bm_open {
             None
         } else {
@@ -1655,7 +1655,7 @@ impl Render for Writer {
             Some(d)
         };
 
-        // バージョン履歴の板(控えの一覧。押すと名無しの複製で開く)
+        // バージョン履歴のパネル(控えの一覧。押すと名無しの複製で開く)
         let hist_panel = if !self.hist_open {
             None
         } else {
@@ -1686,7 +1686,7 @@ impl Render for Writer {
             Some(d)
         };
 
-        // チャットの板(申し送り帳の最近の行+入力欄)
+        // チャットのパネル(申し送り帳の最近の行+入力欄)
         let chat_panel = if !self.chat_open {
             None
         } else {
@@ -1727,7 +1727,7 @@ impl Render for Writer {
             Some(d)
         };
 
-        // パスワードの板(伏せ字。開く時と暗号化を決める時の両方)
+        // パスワードのパネル(伏せ字。開く時と暗号化を決める時の両方)
         let pw_panel = if !self.pw_open {
             None
         } else {
@@ -1761,7 +1761,7 @@ impl Render for Writer {
                             パスワードを忘れると誰にも開けません"))))
         };
 
-        // URL の板(JS なしの閲覧の入口)
+        // URL のパネル(JS なしの閲覧の入口)
         let url_panel = if !self.url_open {
             None
         } else {
@@ -1781,7 +1781,7 @@ impl Render for Writer {
                     .child(SharedString::from(t))))
         };
 
-        // 記入の板(HTML の form。欄を押して打ち、送信で送る)
+        // 記入のパネル(HTML の form。欄を押して打ち、送信で送る)
         let fm_panel = if !self.fm_open || self.html_forms.is_empty() {
             None
         } else {
@@ -1952,7 +1952,7 @@ impl Render for Writer {
                         .text_size(px(12.0)).text_color(th_top_fg)
                         .whitespace_nowrap().overflow_hidden()
                         .child(SharedString::from(if term.is_empty() {
-                            ui::t!("(検索の板で語を打つ → ここに出ます)").to_string()
+                            ui::t!("(検索のパネルで語を打つ → ここに出ます)").to_string()
                         } else {
                             term.clone()
                         }))
@@ -2007,7 +2007,7 @@ impl Render for Writer {
                 div().text_size(px(11.0)).font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(0x165E83)).mt_1().child(t)
             };
-            // 小さな釦(押すと run_cmd。入っていれば色が付く)
+            // 小さなボタン(押すと run_cmd。入っていれば色が付く)
             let btn = |this: &Writer, id: &'static str, label: &'static str| {
                 let on = this.toggled(id);
                 div().id(SharedString::from(format!("rp-{id}")))
@@ -2141,7 +2141,7 @@ impl Render for Writer {
             Some(d)
         };
 
-        // リンクの板(押すと辿る。公開 Web も見える — JS は実行しない)
+        // リンクのパネル(押すと辿る。公開 Web も見える — JS は実行しない)
         let lk_panel = if !self.lk_open || self.html_links.is_empty() {
             None
         } else {
@@ -2174,7 +2174,7 @@ impl Render for Writer {
             Some(d)
         };
 
-        // AI に頼む板
+        // AI に頼むパネル
         let ai_panel = if !self.ai_open {
             None
         } else {
@@ -2201,7 +2201,7 @@ impl Render for Writer {
                     })))
         };
 
-        // 記入欄の選択肢を聞く板
+        // 記入欄の選択肢を聞くパネル
         let sd_panel = if !self.sd_open {
             None
         } else {
@@ -2226,7 +2226,7 @@ impl Render for Writer {
                     .child(SharedString::from(t))))
         };
 
-        // ルビの板(読みの入力)
+        // ルビのパネル(読みの入力)
         let rb_panel = if !self.rb_open {
             None
         } else {
@@ -2246,7 +2246,7 @@ impl Render for Writer {
                     .child(SharedString::from(t))))
         };
 
-        // プラグインの板(置き場の .py 一覧。押すと檻の中で実行)
+        // プラグインのパネル(置き場の .py 一覧。押すとサンドボックスの中で実行)
         let plug_panel = if !self.plug_open {
             None
         } else {
@@ -2267,7 +2267,7 @@ impl Render for Writer {
                 .flex().flex_col().gap_2()
                 .child(div().text_size(px(11.5)).font_weight(gpui::FontWeight::BOLD)
                     .text_color(rgb(0x165E83))
-                    .child(ui::t!("プラグイン — 押すと檻(bubblewrap)の中で実行")))
+                    .child(ui::t!("プラグイン — 押すとサンドボックス(bubblewrap)の中で実行")))
                 .child(div().text_size(px(11.0)).text_color(rgb(0x66707A))
                     .child(SharedString::from(ui::tf!("置き場: {}", dir.display()))));
             if items.is_empty() {
@@ -2296,7 +2296,7 @@ impl Render for Writer {
             Some(d)
         };
 
-        // 相互参照の板(しおり一覧 → 文字/ページを挿す。更新もここ)
+        // 相互参照のパネル(しおり一覧 → 文字/ページを挿す。更新もここ)
         let xr_panel = if !self.xr_open {
             None
         } else {
@@ -2679,7 +2679,7 @@ impl Render for Writer {
                     .children(style_panel)
                     .children(symbol_panel)
                     .children(proof_panel)
-                    // 終了確認の板(窓の中の中央。rfd はスクリーン中央に出て遠い)
+                    // 終了確認のパネル(窓の中の中央。rfd はスクリーン中央に出て遠い)
                     .children(self.quit_ask.then(|| {
                         let btn = |id: &'static str, label: String, primary: bool| {
                             div().id(id).px_3().py_1().rounded_sm().text_size(px(12.5))
