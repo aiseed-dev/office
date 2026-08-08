@@ -186,6 +186,9 @@ struct P<'a> {
     /// 同じブックの他のシート(読み取りだけ)。INDIRECT("別の表!A1") が引く。
     /// recalc(1枚だけ)では空 — そのときの別シート参照は #REF!
     others: &'a [&'a Sheet],
+    /// 範囲を読むとき、**手で隠した行(row_hidden)を飛ばす**。
+    /// SUBTOTAL/AGGREGATE の 101〜111 の間だけ立つ(Excel の約束)
+    skip_hidden: std::cell::Cell<bool>,
 }
 
 /// 参照を計算する関数(OFFSET/INDIRECT)の答え。
@@ -216,8 +219,13 @@ impl<'a> P<'a> {
     fn range_values(&self, a: Pos, z: Pos) -> Vec<Value> {
         let (r0, r1) = (a.row.min(z.row), a.row.max(z.row));
         let (c0, c1) = (a.col.min(z.col), a.col.max(z.col));
+        let skip = self.skip_hidden.get();
         let mut v = Vec::new();
         for r in r0..=r1 {
+            // 101〜111 の SUBTOTAL/AGGREGATE のときだけ、隠した行は数に入れない
+            if skip && self.sheet.row_hidden.contains(&r) {
+                continue;
+            }
             for c in c0..=c1 {
                 v.push(self.cell(Pos::new(r, c)));
             }
@@ -538,6 +546,23 @@ impl<'a> P<'a> {
                                 }
                             }
                             return Ok(Value::Text(out));
+                        }
+                        // SUBTOTAL/AGGREGATE の 101〜111 は「手で隠した行を
+                        // 飛ばす」。番号は最初の引数なので、**読んでみてから**
+                        // 100 超なら隠れ行を飛ばして読み直す(字句は残って
+                        // いるので安い)。1〜11 は今までどおり全部数える
+                        if matches!(name.as_str(), "SUBTOTAL" | "AGGREGATE") {
+                            let save = self.i;
+                            let args = self.args()?;
+                            let n = args.first().map(|g| g.first().as_number()).unwrap_or(0.0);
+                            if n > 100.0 && !self.sheet.row_hidden.is_empty() {
+                                self.i = save;
+                                self.skip_hidden.set(true);
+                                let again = self.args();
+                                self.skip_hidden.set(false);
+                                return call(&name, again?);
+                            }
+                            return call(&name, args);
                         }
                         let args = self.args()?;
                         call(&name, args)
@@ -1402,8 +1427,9 @@ fn call(name: &str, args: Vec<Arg>) -> Result<Value, String> {
         "SUBTOTAL" | "AGGREGATE" => {
             // SUBTOTAL(集計番号, 範囲…) — オートフィルターと「小計」が
             // 自動で埋め込む、実物のファイル頻出の関数。
-            // 101〜111(手で隠した行を飛ばす)は 1〜11 と同じに扱う —
-            // この評価器は行の畳みを知らない(正直な近似。AGGREGATE も同様)
+            // **101〜111(手で隠した行を飛ばす)は呼ぶ側で範囲から抜いてある**
+            // (P::atom の二度読み。ここへ来る値は既に飛ばした後)。
+            // 絞り込みで隠れた行は app 側の状態なので、まだ数に入る(在庫)
             let f = args.first().map(|g| g.first().as_number()).unwrap_or(0.0) as i64;
             let f = if f > 100 { f - 100 } else { f };
             // AGGREGATE は第2引数が「無視の指定」— 読み飛ばす
@@ -2437,7 +2463,7 @@ pub fn eval_py_call(sheet: &Sheet, formula: &str) -> Option<(String, Vec<PyArg>)
     // PY ( の中の引数を、通常の引数解析(範囲は形つき)で読む
     let resolved = HashMap::new();
     // PY セルの引数評価では ROW()/COLUMN() の「いまのセル」は分からない — 原点で代える
-    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at: Pos::new(0, 0), others: &[] };
+    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at: Pos::new(0, 0), others: &[], skip_hidden: Default::default() };
     match (p.next(), p.next()) {
         (Some(Tok::Name(n)), Some(Tok::LParen)) if n == "PY" => {}
         _ => return None,
@@ -2743,7 +2769,7 @@ fn recalc_pass_iter(sheet: &mut Sheet, others: &[&Sheet], iter_mode: bool) -> (b
         }
         let v = match lex(f) {
             Ok(toks) => {
-                let mut p2 = P { t: &toks, i: 0, sheet, resolved, at: p, others };
+                let mut p2 = P { t: &toks, i: 0, sheet, resolved, at: p, others, skip_hidden: Default::default() };
                 match p2.expr() {
                     Ok(v) if p2.i == toks.len() => v,
                     Ok(_) => Value::Error("#ERROR!".into()),
@@ -2919,7 +2945,7 @@ fn eval_array(
     let err = |s: &str| Value::Error(s.into());
     let toks = lex(f).map_err(|_| err("#ERROR!"))?;
     let resolved = HashMap::new();
-    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at, others };
+    let mut p = P { t: &toks, i: 0, sheet, resolved: &resolved, at, others, skip_hidden: Default::default() };
     let v = {
         let mut ap = AP { p: &mut p };
         ap.expr().map_err(|_| err("#ERROR!"))?
@@ -4505,5 +4531,57 @@ mod cross_sheet_tests {
         book.sheets.push(sheet_named("4月", &[("B1", "100")]));
         recalc_all(&mut book);
         assert_eq!(book.sheets[0].value(Pos::parse("A1").unwrap()), Value::Number(201.0));
+    }
+}
+
+/// SUBTOTAL/AGGREGATE の 101〜111(隠した行を飛ばす)。2026-08-08 実装 —
+/// それまでは 1〜11 と同じに扱っていて、畳んだ台帳で黙って違う数が出ていた
+#[cfg(test)]
+mod subtotal_hidden_tests {
+    use super::*;
+    use crate::model::Cell;
+
+    fn sheet4() -> Sheet {
+        let mut s = Sheet { name: "表".into(), ..Default::default() };
+        for (a1, v) in [("A1", "10"), ("A2", "20"), ("A3", "30"), ("A4", "40")] {
+            s.set(Pos::parse(a1).unwrap(), Cell::input(v));
+        }
+        s
+    }
+
+    fn val(s: &mut Sheet, f: &str) -> Value {
+        s.set(Pos::parse("C1").unwrap(), Cell::input(f));
+        recalc(s);
+        s.value(Pos::parse("C1").unwrap())
+    }
+
+    #[test]
+    fn 隠した行は百番台だけが飛ばす() {
+        let mut s = sheet4();
+        // 2行目(A2=20)を畳む
+        s.row_hidden.insert(1);
+        // 9 = SUM(全部数える)/ 109 = SUM(隠した行を飛ばす)
+        assert_eq!(val(&mut s, "=SUBTOTAL(9,A1:A4)"), Value::Number(100.0));
+        assert_eq!(val(&mut s, "=SUBTOTAL(109,A1:A4)"), Value::Number(80.0), "隠した行を飛ばしていない");
+        // 平均・個数・最大・最小も同じ規則
+        assert_eq!(val(&mut s, "=SUBTOTAL(101,A1:A4)"), Value::Number(80.0 / 3.0));
+        assert_eq!(val(&mut s, "=SUBTOTAL(102,A1:A4)"), Value::Number(3.0));
+        assert_eq!(val(&mut s, "=SUBTOTAL(104,A1:A4)"), Value::Number(40.0));
+        assert_eq!(val(&mut s, "=SUBTOTAL(105,A1:A4)"), Value::Number(10.0));
+        // AGGREGATE も同じ(第2引数は無視の指定)
+        assert_eq!(val(&mut s, "=AGGREGATE(109,0,A1:A4)"), Value::Number(80.0));
+        assert_eq!(val(&mut s, "=AGGREGATE(9,0,A1:A4)"), Value::Number(100.0));
+    }
+
+    #[test]
+    fn 隠した行が無ければ今までどおり() {
+        let mut s = sheet4();
+        assert_eq!(val(&mut s, "=SUBTOTAL(9,A1:A4)"), Value::Number(100.0));
+        assert_eq!(val(&mut s, "=SUBTOTAL(109,A1:A4)"), Value::Number(100.0));
+        // 隠れ行を飛ばすのは SUBTOTAL の中だけ — 普通の SUM は影響を受けない
+        let mut s2 = sheet4();
+        s2.row_hidden.insert(1);
+        assert_eq!(val(&mut s2, "=SUM(A1:A4)"), Value::Number(100.0));
+        assert_eq!(val(&mut s2, "=AVERAGE(A1:A4)"), Value::Number(25.0));
     }
 }

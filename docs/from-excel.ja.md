@@ -136,7 +136,7 @@ Excel の答えは Power Query と Copilot コネクタ(基幹のデータをク
 | TEXTSPLIT・TEXTBEFORE・TEXTAFTER | ない | FIND+MID の古典か =PY の split。ファイル丸ごとなら取り込みウィザード(在庫候補) |
 | DSUM・DAVERAGE・DGET(D 系) | ない | SUMIFS・AVERAGEIFS・FILTER で — 本家でも今は IFS 系が推奨の道(在庫候補) |
 | PMT・PV・FV・NPER・NPV・IRR・RATE | ある | IRR・RATE は本家と同じく反復解 |
-| SUBTOTAL・AGGREGATE | ある | **ただし評価器は行の畳みを知らず、絞り込み・手で隠した行も数える**(101〜111 は 1〜11 と同じ扱い)。見えている行だけの合計・平均・個数はステータスバーの統計が絞り込みを尊重する |
+| SUBTOTAL・AGGREGATE | ある | **101〜111 は手で隠した行(グループの畳みを含む)を飛ばす**(2026-08-08 実装。1〜11 は全部数える — Excel と同じ)。ただし**絞り込みで隠れた行はまだ数に入る**(絞り込みは画面側の状態で、式の評価器から見えない — 台帳に控え)。見えている行だけの合計・平均・個数は、下のステータスバーの統計が絞り込みを尊重する |
 | PHONETIC・ASC・JIS・DBCS・LENB/LEFTB/RIGHTB/MIDB・DATESTRING・YEN | ある | 日本語の定番一式(和暦・全角=2 の数え方) |
 | =PY(セル関数を Python で) | ある(こちらが先) | 手元の檻・無料。ブックが運べる Python はこの関数(UDF)だけ |
 
