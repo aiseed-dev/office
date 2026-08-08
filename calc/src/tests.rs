@@ -1384,6 +1384,61 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn 図形メニューで重なり順と切り貼りができる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            for k in ["rect", "ellipse", "diamond"] {
+                this.book.sheets[0].shapes_new.push(sheet::model::SheetShape {
+                    at: Pos::new(0, 0),
+                    width_px: 50.0,
+                    height_px: 50.0,
+                    kind: k.into(),
+                    line: Some("1B6E3C".into()),
+                    ..Default::default()
+                });
+            }
+            let kinds = |this: &Calc| -> Vec<String> {
+                this.book.sheets[0].shapes_new.iter().map(|s| s.kind.clone()).collect()
+            };
+            // 重なり順: 後ろの方が前。rect(0) を最前面へ
+            this.shape_sel = Some(0);
+            this.shape_menu_action("sh-front");
+            assert_eq!(kinds(this), vec!["ellipse", "diamond", "rect"]);
+            assert_eq!(this.shape_sel, Some(2), "選択が付いて行かない");
+            // 1つ背面へ
+            this.shape_menu_action("sh-backward");
+            assert_eq!(kinds(this), vec!["ellipse", "rect", "diamond"]);
+            // 最背面へ
+            this.shape_menu_action("sh-back");
+            assert_eq!(kinds(this), vec!["rect", "ellipse", "diamond"]);
+            // コピー → 貼り付け(カーソルの位置に、少しずらして)
+            this.cursor = Pos::new(5, 3);
+            this.shape_menu_action("sh-copy");
+            this.shape_menu_action("sh-paste");
+            assert_eq!(this.book.sheets[0].shapes_new.len(), 4);
+            let pasted = this.book.sheets[0].shapes_new.last().unwrap();
+            assert_eq!(pasted.kind, "rect");
+            assert_eq!(pasted.at, Pos::new(5, 3));
+            // 切り取り → 数が減り、貼り付けで戻る
+            this.shape_sel = Some(0);
+            this.shape_menu_action("sh-cut");
+            assert_eq!(this.book.sheets[0].shapes_new.len(), 3);
+            assert!(this.shape_sel.is_none());
+            this.shape_menu_action("sh-paste");
+            assert_eq!(this.book.sheets[0].shapes_new.len(), 4);
+            // 右回転90度が2度で180
+            this.shape_menu_action("sh-rot-r");
+            this.shape_menu_action("sh-rot-r");
+            let sp = this.book.sheets[0].shapes_new.last().unwrap();
+            assert!((sp.rot - 180.0).abs() < 0.01);
+            // 貼る物が無いときは黙って何も足さない
+            this.shape_clip = None;
+            this.shape_menu_action("sh-paste");
+            assert_eq!(this.book.sheets[0].shapes_new.len(), 4);
+        });
+    }
+
+    #[gpui::test]
     fn r1c1では見せ方が変わり中身はa1のまま(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

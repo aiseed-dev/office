@@ -1754,6 +1754,29 @@ impl Render for Calc {
         // InputSink より**後**に描く(bubble は後に登録した方が先に走るので、
         // 項目の stop_propagation が InputSink のセル選択より先に効く)
         let menu = self.menu_at.map(|(mx, my)| {
+            // 図形の上なら専用メニュー(本家の並び。未実装は灰色で場所だけ)
+            let sh_poly = self.menu_shape
+                && self.shape_sel.and_then(|i| self.sheet().shapes_new.get(i)).is_some_and(|s| {
+                    matches!(s.kind.as_str(), "spark" | "spark-col" | "spark-wl" | "ink" | "marker")
+                });
+            #[allow(clippy::type_complexity)]
+            let shape_entries: Vec<(&'static str, &'static str, &'static str, bool, bool)> = vec![
+                ("sh-cut", "切り取り", "", true, false),
+                ("sh-copy", "コピー", "", true, false),
+                ("sh-paste", "貼り付け", "", self.shape_clip.is_some(), false),
+                ("", "", "", false, false),
+                ("sh-order", "配置", "", true, true),
+                ("sh-rotate", "回転", "", !sh_poly, true),
+                ("", "", "", false, false),
+                ("sh-macro", "マクロの割り当て", "", false, false),
+                ("sh-save", "画像として保存(SVG)", "", true, false),
+                ("sh-points", "ポイントの編集", "", false, false),
+                ("", "", "", false, false),
+                ("sh-settings", "図形の詳細設定", "", true, false),
+                ("sh-link", "リンク", "", false, false),
+                ("", "", "", false, false),
+                ("sh-del", "削除", "Del", true, false),
+            ];
             // (id, 名前, 付記, 押せるか, 子メニューか)
             #[allow(clippy::type_complexity)]
             let mut entries: Vec<(&'static str, &'static str, &'static str, bool, bool)> = vec![
@@ -1793,6 +1816,9 @@ impl Render for Calc {
                 ("", "", "", false, false),
                 ("freeze", "枠の固定", "", true, false),
             ];
+            if self.menu_shape {
+                entries = shape_entries;
+            }
             // 見出しからのメニューには 幅/高さ の数値指定を頭に(Excel の作法)
             match self.menu_head {
                 Some(true) => {

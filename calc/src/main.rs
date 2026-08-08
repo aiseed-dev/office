@@ -119,6 +119,10 @@ struct Calc {
     shape_sel: Option<usize>,
     /// 図形のドラッグ(番号, 掴んだ格子px, 掴んだ時の錨の格子px, 大きさ変更か)
     shape_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
+    /// いま出ているメニューは図形の専用メニューか(右クリックが図形の上)
+    menu_shape: bool,
+    /// 図形の切り取り/コピーの控え(セルのクリップボードとは別の器)
+    shape_clip: Option<sheet::model::SheetShape>,
     /// 選んでいる画像(images_new の番号)。グラフもここ
     img_sel: Option<usize>,
     img_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
@@ -357,6 +361,8 @@ impl Calc {
             locked_by: None,
             shape_sel: None,
             shape_drag: None,
+            menu_shape: false,
+            shape_clip: None,
             img_sel: None,
             img_drag: None,
             wheel: (0.0, 0.0),
@@ -1201,6 +1207,18 @@ impl Calc {
     /// 右クリック。選択の中ならその選択への操作、外ならそのセルへ移ってから
     /// メニューを出す(Excel の作法)。
     fn right_click_at(&mut self, x: f32, y: f32) {
+        self.menu_shape = false;
+        // 浮いている図形の上 = 図形の専用メニュー(本家の作法)。
+        // 図形はセルの上に描かれているので、セルより先に見る
+        if let Some((i, _, _)) = self.shape_at(x, y) {
+            self.commit();
+            self.shape_sel = Some(i);
+            self.menu_at = Some((x, y));
+            self.menu_sub = None;
+            self.menu_head = None;
+            self.menu_shape = true;
+            return;
+        }
         // 見出しの右クリック = その列・行を選んでからメニュー(Excel の作法)。
         // 既に選択の中なら選び直さない(複数列への操作を保つ)
         if y < ROW_H && x >= HEAD_W {
@@ -2799,6 +2817,115 @@ impl Calc {
         self.dirty = true;
         self.status = ui::t!("画像を削除しました(Ctrl+Z で戻せます)").into();
         true
+    }
+
+    /// 図形の右クリックメニューの実体(切り貼り・重なり順・回転・SVG保存)。
+    /// window を要らなくしてあるので試験からそのまま呼べる
+    pub(crate) fn shape_menu_action(&mut self, id: &str) {
+        match id {
+            "sh-copy" | "sh-cut" => {
+                let Some(i) = self.shape_sel else { return };
+                let Some(sp) = self.sheet().shapes_new.get(i).cloned() else { return };
+                self.shape_clip = Some(sp);
+                if id == "sh-cut" {
+                    self.checkpoint();
+                    self.sheet_mut().shapes_new.remove(i);
+                    self.shape_sel = None;
+                    self.dirty = true;
+                    self.status = ui::t!("図形を切り取りました(貼り付けで戻せます)").into();
+                } else {
+                    self.status = ui::t!("図形をコピーしました").into();
+                }
+            }
+            "sh-paste" => {
+                let Some(mut sp) = self.shape_clip.clone() else {
+                    self.status = ui::t!("貼り付ける図形がありません(先に図形をコピー)").into();
+                    return;
+                };
+                self.checkpoint();
+                sp.at = self.cursor;
+                (sp.dx_px, sp.dy_px) = (4.0, 4.0);
+                self.sheet_mut().shapes_new.push(sp);
+                self.shape_sel = Some(self.sheet().shapes_new.len() - 1);
+                self.dirty = true;
+                self.status = ui::tf!("図形を {} に貼り付けました", self.cursor.a1()).into();
+            }
+            "sh-del" => {
+                let Some(i) = self.shape_sel.take() else { return };
+                if self.sheet().shapes_new.len() <= i {
+                    return;
+                }
+                self.checkpoint();
+                self.sheet_mut().shapes_new.remove(i);
+                self.dirty = true;
+                self.status = ui::t!("図形を削除しました(Ctrl+Z で戻せます)").into();
+            }
+            // 重なり順 = shapes_new の並び(後に描く方が前)
+            "sh-front" | "sh-forward" | "sh-backward" | "sh-back" => {
+                let Some(i) = self.shape_sel else { return };
+                let len = self.sheet().shapes_new.len();
+                if len <= i {
+                    return;
+                }
+                let j = match id {
+                    "sh-front" => len - 1,
+                    "sh-forward" => (i + 1).min(len - 1),
+                    "sh-backward" => i.saturating_sub(1),
+                    _ => 0,
+                };
+                if i == j {
+                    self.status = ui::t!("もうその位置です(後に描く図形が前に出ます)").into();
+                    return;
+                }
+                self.checkpoint();
+                let sp = self.sheet_mut().shapes_new.remove(i);
+                self.sheet_mut().shapes_new.insert(j, sp);
+                self.shape_sel = Some(j);
+                self.dirty = true;
+                self.status = match id {
+                    "sh-front" => ui::t!("最前面へ移動しました").into(),
+                    "sh-forward" => ui::t!("前面へ移動しました").into(),
+                    "sh-backward" => ui::t!("背面へ移動しました").into(),
+                    _ => ui::t!("最背面へ移動しました").into(),
+                };
+            }
+            "sh-rot-r" | "sh-rot-l" => {
+                let d = if id == "sh-rot-r" { 90.0 } else { -90.0 };
+                self.shape_edit(move |sp| sp.rot = (sp.rot + d).rem_euclid(360.0));
+                self.status = ui::t!("90度回しました").into();
+            }
+            "sh-flip-h" => {
+                self.shape_edit(|sp| sp.flip_h = !sp.flip_h);
+                self.status = ui::t!("左右に反転しました").into();
+            }
+            "sh-flip-v" => {
+                self.shape_edit(|sp| sp.flip_v = !sp.flip_v);
+                self.status = ui::t!("上下に反転しました").into();
+            }
+            // 画像として保存 = SVG(うちの図形の素の姿。嘘の PNG 変換はしない)
+            "sh-save" => {
+                let Some(i) = self.shape_sel else { return };
+                let Some(sp) = self.sheet().shapes_new.get(i) else { return };
+                let svg = sp.to_svg();
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("SVG", &["svg"])
+                    .set_file_name("figure.svg")
+                    .save_file()
+                else {
+                    self.status = ui::t!("保存をやめました").into();
+                    return;
+                };
+                self.status = match std::fs::write(&path, svg) {
+                    Ok(_) => ui::tf!("SVG で保存しました: {}", path.display().to_string()).into(),
+                    Err(e) => ui::tf!("保存できません: {}", e.to_string()).into(),
+                };
+            }
+            // 詳細設定 = 右の設定パネル(選択中はいつも出ている)
+            "sh-settings" => {
+                self.status = ui::t!("設定は右の「図形の設定」の板でどうぞ").into();
+            }
+            _ => {}
+        }
     }
 
     /// 選択中の図形に手を入れる(undo 1手ぶんを刻んで)。設定パネルが使う

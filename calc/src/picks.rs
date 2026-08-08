@@ -849,6 +849,10 @@ impl Calc {
             "cut" => self.a_cut(&ui::Cut, window, cx),
             "copy" => self.a_copy(&ui::Copy, window, cx),
             "paste" => self.a_paste(&ui::Paste, window, cx),
+            // 図形の専用メニュー(実体は main.rs の shape_menu_action)
+            "sh-cut" | "sh-copy" | "sh-paste" | "sh-del" | "sh-front" | "sh-forward"
+            | "sh-backward" | "sh-back" | "sh-rot-r" | "sh-rot-l" | "sh-flip-h"
+            | "sh-flip-v" | "sh-save" | "sh-settings" => self.shape_menu_action(id),
             "ps-values" => self.paste_special("values", cx),
             "ps-formulas" => self.paste_special("formulas", cx),
             "ps-formats" => self.paste_special("formats", cx),
@@ -1199,6 +1203,19 @@ impl Calc {
                 ("delcell-up", "セルを上にシフト", true),
                 ("delrow", "行全体", true),
                 ("delcol", "列全体", true),
+            ],
+            // 図形の配置(重なり順)と回転
+            "sh-order" => vec![
+                ("sh-front", "最前面へ移動", true),
+                ("sh-forward", "前面へ移動", true),
+                ("sh-backward", "背面へ移動", true),
+                ("sh-back", "最背面へ移動", true),
+            ],
+            "sh-rotate" => vec![
+                ("sh-rot-r", "右へ90度回転", true),
+                ("sh-rot-l", "左へ90度回転", true),
+                ("sh-flip-h", "左右に反転", true),
+                ("sh-flip-v", "上下に反転", true),
             ],
             "clr" => vec![
                 // 本家の消去は5択(すべて/テキスト/書式/コメント/ハイパーリンク)
