@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=officework Calc
+Name[ja]=officework 表計算
+Comment=Native spreadsheet with honest xlsx round-trip
+Comment[ja]=xlsx を壊さないネイティブの表計算
+Exec=calc %f
+Icon=io.github.aiseed_dev.officework
+Terminal=false
+Type=Application
+Categories=Office;Spreadsheet;
+MimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;text/csv;

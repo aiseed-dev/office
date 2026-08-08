@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Flathub 申請の最小形(試作)。summary/description は申請前に磨く。
+     screenshots と OARS(content_rating)は申請要件 — README の手順 5 -->
+<component type="desktop-application">
+  <id>io.github.aiseed_dev.officework</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>officework</name>
+  <summary>Native office suite that keeps your xlsx honest</summary>
+  <summary xml:lang="ja">xlsx を壊さないネイティブのオフィス</summary>
+  <description>
+    <p>
+      A native spreadsheet (calc) and word processor (writer).
+      Documents never execute code on open; Python UDFs run in a sandbox.
+    </p>
+    <p xml:lang="ja">
+      ネイティブの表計算(calc)と文書(writer)。開いたファイルがコードを
+      実行することはなく、Python の関数(UDF)は檻の中でだけ動きます。
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.aiseed_dev.officework.desktop</launchable>
+  <url type="homepage">https://github.com/aiseed-dev/officework</url>
+  <content_rating type="oars-1.1"/>
+</component>

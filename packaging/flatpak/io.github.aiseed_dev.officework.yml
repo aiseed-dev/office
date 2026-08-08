@@ -1,0 +1,61 @@
+# officework の Flatpak(試作 — 2026-08-08。まだ実機で組んでいない。
+# 手順と実証項目は同じ場所の README.ja.md)
+#
+# 決め:
+# - runtime は GNOME(python3 が最初から居る — 同梱 Python の器)。
+#   freedesktop 素のままだと Python を1から積むことになる
+# - 檻: アプリの中からは bwrap の入れ子が動かないので、calc は
+#   /.flatpak-info を見て flatpak-spawn --sandbox に切り替える(py.rs の
+#   cage_kind)。そのために --talk-name=org.freedesktop.Flatpak が要る
+# - 外側(この finish-args)は道具が働ける広さ、内側(flatpak-spawn の檻)が
+#   他所から来たコードを縛る — 二層で役割が違う
+app-id: io.github.aiseed_dev.officework
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: calc
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # 帳票の読み書き。rfd がポータルで開けると実証できたら
+  # --filesystem=home は外して portal に絞る(README の実証項目 2)
+  - --filesystem=home
+  # 自分の道具の「網あり檻」のぶん。他所から来たコードの網は
+  # 内側の檻(flatpak-spawn --no-network)が閉じる
+  - --share=network
+  # flatpak-spawn --sandbox(内側の檻)の口
+  - --talk-name=org.freedesktop.Flatpak
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/officework/cargo
+modules:
+  # polars ほか Python の荷物。flatpak-pip-generator で
+  # python3-modules.json を作って差す(ビルド中は網が無いので、
+  # wheel を sources として持ち込む形にする)— README の手順 3
+  # - python3-modules.json
+
+  - name: officework
+    buildsystem: simple
+    build-commands:
+      # ビルド中は網が無い: cargo-sources.json(flatpak-cargo-generator で
+      # 生成)が vendor を差し込む前提。--offline で組む
+      - cargo --offline build --release -p calc -p writer
+      - cargo --offline build --release -p pysheet --features extension-module
+      - install -Dm755 target/release/calc /app/bin/calc
+      - install -Dm755 target/release/writer /app/bin/writer
+      # office_sheet.so は実行ファイルの隣(calc/src/py.rs の so_dir)
+      - install -Dm644 target/release/liboffice_sheet.so /app/bin/office_sheet.so
+      - install -Dm644 packaging/flatpak/io.github.aiseed_dev.officework.desktop
+        /app/share/applications/io.github.aiseed_dev.officework.desktop
+      - install -Dm644 packaging/flatpak/io.github.aiseed_dev.officework.metainfo.xml
+        /app/share/metainfo/io.github.aiseed_dev.officework.metainfo.xml
+      # アイコンはまだ無い(README の手順 5)。Flathub 申請には必須
+    sources:
+      - type: dir
+        path: ../..
+      # - cargo-sources.json

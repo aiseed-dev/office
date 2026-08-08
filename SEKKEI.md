@@ -1723,3 +1723,29 @@ writer の口(文書・記入欄・差し込み)は今後 officework.writer と�
   .venv には officework.pth で結線(コピーしない — 常に最新)
 - **未対応と正直に言う物**: @xw.func / @xw.sub / Book.caller()(Excel の
   アドイン機構)— calc では AI タブのマクロ(plugins/*.py)が同じ役目
+
+## 配布の第2チャネル — Flatpak(2026-08-08 発注者「進めて」)
+
+「ブックが運べる Python は関数だけ」(上の Python 節)を確定させたところで、
+発注者から「Flatpak や App Store を使える可能性が出てきていないか」。出てきた —
+**開く≠実行・UDF は値だけ・網なし・時間制限・手続きは利用者が置いた物だけ・
+Python 同梱**という形は、ストアの審査とサンドボックスの流儀そのものだった。
+セキュリティのために引いた線が、ストア適合性を副産物として連れてきた。
+
+決めと現在地:
+
+- **順番: Flatpak が先**(.deb 先行の方針は変えない — 第2チャネルとして足す)。
+  Mac App Store は追いかけない事にしたのではなく順番が後 — App Sandbox の
+  entitlements 設計は「内側の檻」の Mac 実装(元々の残件)と一緒にやる
+- **檻は二層**: 外側=Flatpak の finish-args(アプリが働ける広さ)、
+  内側=他所から来たかもしれないコードに掛ける檻。**Flatpak の中では bwrap の
+  入れ子が動かない**ので、内側は flatpak-spawn --sandbox に自動で切り替える
+  (py.rs の cage_kind — /.flatpak-info が公式の印。caged_python に一本化、
+  作業場も ~/.var/app/$ID/sandbox 下へ変わる = cage_work_dir)
+- manifest の試作・desktop・metainfo・**実証項目**(檻が本当に効くか、
+  rfd がポータルで開くか、GPUI が dri で描けるか等)は packaging/flatpak/。
+  **実機で通るまで「対応」とは言わない** — flatpak-builder のある機械で
+  README.ja.md の順に実証してから
+- runtime は GNOME(python3 が最初から居る = 同梱 Python の器)。
+  ビルド中は網が無いので cargo-sources.json / python3-modules.json を
+  生成して差す(README の手順)
