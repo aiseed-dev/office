@@ -358,7 +358,7 @@ fn chumon() -> Book {
     s.set(Pos::new(20, 0),
         Cell::input("品番と数量を入れるだけ(品名・単価・金額は式が引く)。"));
     s.set(Pos::new(21, 0),
-        Cell::input("データ > Python: @更新 net でマスタを取り直し、@送信 net で注文を送る。"));
+        Cell::input("データ > Python: @更新 net でマスタを取り直し、@送信 net で注文を送る(手続きは隣の 更新.py・送信.py を plugins へ)。"));
 
     // 品番マスタの写し(H〜J 列。印刷範囲の外)
     for (i, name) in ["品番", "品名", "単価"].iter().enumerate() {
@@ -383,11 +383,19 @@ fn chumon() -> Book {
     s.paper_size = Some(9); // A4
     s.print_areas.push((Pos::new(0, 0), Pos::new(21, 4)));
     recalc(s);
+    b
+}
 
-    b.scripts.push((
-        "更新".into(),
-        r#"# 品番マスタの写し(H〜J 列)をサーバーの正本と入れ替える。
-# 実行は「@更新 net」(網あり檻 — 許可はその場の操作だけ)。
+/// 注文書の手続き。ブックには載せない(2026-08-08 発注者確定: ファイルを
+/// 実行の起点にしない)— 隣の .py として配り、README が plugins への
+/// 据え付けを案内する。
+const CHUMON_KOSHIN: &str = r#"# 注文書.xlsx の手続き「更新」—
+# 品番マスタの写し(H〜J 列)をサーバーの正本と入れ替える。
+#
+# 据え付け(1機械1回): 中身を確かめてから
+#   ~/.config/office/plugins/更新.py
+# へ写す。以後、注文書を開いて データ > Python の板で「@更新 net」
+# (網あり檻 — 許可はその場の操作だけで、ブックには保存されない)。
 URL = "http://127.0.0.1:8765/catalog.csv"
 
 import urllib.request, csv, io
@@ -402,12 +410,15 @@ for n in range(2 + len(rows), 41):   # 減った分の残骸は消す
     s[f"H{n}"] = None; s[f"I{n}"] = None; s[f"J{n}"] = None
 b.recalc()
 print(f"品番マスタを {len(rows)} 品目に更新しました")
-"#.into(),
-    ));
-    b.scripts.push((
-        "送信".into(),
-        r#"# 注文行(品番と数量の入った行)をサーバーへ送る。
-# 実行は「@送信 net」(網あり檻 — 許可はその場の操作だけ)。
+"#;
+
+const CHUMON_SOSHIN: &str = r#"# 注文書.xlsx の手続き「送信」—
+# 注文行(品番と数量の入った行)をサーバーへ送る。
+#
+# 据え付け(1機械1回): 中身を確かめてから
+#   ~/.config/office/plugins/送信.py
+# へ写す。以後、注文書を開いて データ > Python の板で「@送信 net」
+# (網あり檻 — 許可はその場の操作だけで、ブックには保存されない)。
 URL = "http://127.0.0.1:8765/order"
 
 import urllib.request, json
@@ -425,10 +436,7 @@ else:
         {"Content-Type": "application/json"})
     r = json.loads(urllib.request.urlopen(req, timeout=5).read().decode("utf-8"))
     print(f"送信しました(受付番号 {r['受付番号']}・明細 {len(lines)} 行)")
-"#.into(),
-    ));
-    b
-}
+"#;
 
 /// 受注台帳 — e-shop の販売管理側(SEKKEI「e-shop」の段②)。
 /// 店(catalog_server)に溜まった注文を @取り込み net で引き取り、
@@ -458,11 +466,19 @@ fn juchu() -> Book {
     // 受付番号と衝突して取りこぼす — 実測で踏んだ)。行は @取り込み が刻む
     s.print_title_rows = Some((0, 0));
     recalc(s);
+    b
+}
 
-    b.scripts.push((
-        "取り込み".into(),
-        r#"# 店(catalog_server)に溜まった注文を台帳へ追記する。
-# 実行は「@取り込み net」(網あり檻 — 許可はその場の操作だけ)。
+/// 受注台帳の手続き。ブックには載せず、隣の .py として配る。
+const JUCHU_TORIKOMI: &str = r#"# 受注台帳.xlsx の手続き「取り込み」—
+# 店(catalog_server)に溜まった注文を台帳へ追記する。
+#
+# 据え付け(1機械1回): 中身を確かめてから
+#   ~/.config/office/plugins/取り込み.py
+# へ写す(templates/ の問い合わせ台帳の取り込みと同名 — 同じ機械で両方
+# 使うなら、どちらかを別名で置く。@名前 はファイル名がそのまま)。
+# 以後、台帳を開いて データ > Python の板で「@取り込み net」
+# (網あり檻 — 許可はその場の操作だけで、ブックには保存されない)。
 # 取込済の件数(K2)を控えているので、新しい注文だけが入る。
 URL = "http://127.0.0.1:8765"
 
@@ -496,10 +512,7 @@ else:
     s["K2"] = len(orders)
     b.recalc()
     print(f"{len(new)} 件({lines} 行)を取り込みました(累計 {len(orders)} 件)")
-"#.into(),
-    ));
-    b
-}
+"#;
 
 /// 売上台帳 — ピボットの試し場。月×区分×品名の36行が詰まっていて、
 /// 挿入 > ピボットテーブルを挿入(行=区分、列=月、値=金額)がすぐ試せる。
@@ -556,4 +569,25 @@ fn main() {
     save(&chumon(), "sample/注文書.xlsx");
     save(&juchu(), "sample/受注台帳.xlsx");
     save(&uriage(), "sample/売上台帳.xlsx");
+    // 手続きはブックに載せない — 隣の .py として配る(据え付けは README)
+    for (p, code) in [
+        ("sample/更新.py", CHUMON_KOSHIN),
+        ("sample/送信.py", CHUMON_SOSHIN),
+        ("sample/取り込み.py", JUCHU_TORIKOMI),
+    ] {
+        std::fs::write(p, code).expect("書けない");
+        println!("書いた: {p}");
+    }
+    // 読み戻して壊れていないことを確かめる(黙って配らない)
+    for p in ["sample/見積書.xlsx", "sample/出納帳.xlsx", "sample/成績表.xlsx",
+              "sample/注文書.xlsx", "sample/受注台帳.xlsx", "sample/売上台帳.xlsx"] {
+        let f = std::fs::File::open(p).expect("開けない");
+        let (back, rep) = sheet::xlsx::read(f).expect("読めない");
+        assert!(
+            back.scripts.iter().all(|(n, _)| n.starts_with("関数")),
+            "{p}: 手続きがブックに残った(実行の起点になってしまう)"
+        );
+        assert!(rep.unsupported.is_empty(), "{p}: 読めないもの {:?}", rep.unsupported);
+        println!("検め OK: {p}");
+    }
 }
