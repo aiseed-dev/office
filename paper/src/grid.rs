@@ -89,10 +89,29 @@ pub fn sheet_to_pdf<W: Write>(
     for w in &col_mm {
         col_x.push(col_x.last().unwrap() + w);
     }
-    // 右にはみ出して切れる列(右端が紙の使える幅を超えるもの)
+    // 横方向のページ送り: 紙の幅に入る所で列を束に割る(Excel の既定と同じ
+    // 「縦 → 横」の順で刷る = 束ごとに全行を出してから次の束へ)。
+    // 1列が紙より広いときは、その1列だけで束にする(割りようが無い)
     let usable_w = paper.width_mm - ml - mr;
+    let mut bands: Vec<(u32, u32)> = Vec::new(); // (束の左端の列, 本数)
+    {
+        let mut start = c0;
+        let mut w = 0.0f32;
+        for c in c0..c0 + ncols {
+            let cw = col_mm[(c - c0) as usize];
+            if w > 0.0 && w + cw > usable_w + 0.1 {
+                bands.push((start, c - start));
+                start = c;
+                w = 0.0;
+            }
+            w += cw;
+        }
+        bands.push((start, (c0 + ncols) - start));
+    }
+    // **1列だけで紙をはみ出す列**は割れないので、そこだけは切れる。
+    // 呼ぶ側へはその本数を返す(0 なら全部が紙に載った)
     let clipped = (0..ncols)
-        .filter(|i| col_x[*i as usize + 1] > usable_w + 0.1)
+        .filter(|i| col_mm[*i as usize] > usable_w + 0.1)
         .count() as u32;
 
     // 行の高さ(pt → mm)。指定のない行は既定。畳んだ行は高さゼロ=出さない
@@ -308,13 +327,13 @@ pub fn sheet_to_pdf<W: Write>(
     }
 
     // 列名の見出し(printOptions headings)。各ページの上の余白に
-    let draw_col_heads = |l: &PdfLayerReference| {
+    let draw_col_heads = |l: &PdfLayerReference, bc0: u32, bn: u32, cx: &[f32], cm: &[f32]| {
         if !grid.print_headings {
             return;
         }
         l.set_fill_color(Color::Rgb(Rgb::new(0.4, 0.44, 0.48, None)));
-        for c in c0..c0 + ncols {
-            let x = ml + col_x[(c - c0) as usize] + col_mm[(c - c0) as usize] / 2.0 - 1.0;
+        for c in bc0..bc0 + bn {
+            let x = ml + cx[(c - bc0) as usize] + cm[(c - bc0) as usize] / 2.0 - 1.0;
             let name = sheet::Pos::new(0, c).a1();
             let name = name.trim_end_matches('1');
             l.use_text(name, 6.5, Mm(x), Mm(paper.height_mm - mt + 1.5), &font);
@@ -324,7 +343,26 @@ pub fn sheet_to_pdf<W: Write>(
 
     let mut y_used = 0.0f32; // このページで使った高さ
     let mut page_no = 1u32;
-    draw_col_heads(&l);
+    // 束(横のページ)ごとに全行を出す。束が変わるたび新しい紙へ
+    for (bi, &(bc0, bn)) in bands.iter().enumerate() {
+    let col_mm: Vec<f32> = (0..bn).map(|k| col_mm[(bc0 - c0 + k) as usize]).collect();
+    let mut col_x = vec![0.0f32];
+    for w in &col_mm {
+        col_x.push(col_x.last().unwrap() + w);
+    }
+    let (c0, ncols) = (bc0, bn);
+    if bi > 0 {
+        page_no += 1;
+        y_used = 0.0;
+        let (np, nl) = doc.add_page(
+            Mm(paper.width_mm),
+            Mm(paper.height_mm),
+            format!("帳票 {page_no}"),
+        );
+        l = doc.get_page(np).get_layer(nl);
+        hf_pages.push((np, nl));
+    }
+    draw_col_heads(&l, c0, ncols, &col_x, &col_mm);
     for r in r0..r1.max(r0 + 1) {
         // 畳んだ行は紙にも出さない(画面と同じ)
         if grid.row_hidden.contains(&r) {
@@ -343,7 +381,7 @@ pub fn sheet_to_pdf<W: Write>(
             );
             l = doc.get_page(np).get_layer(nl);
             hf_pages.push((np, nl));
-            draw_col_heads(&l);
+            draw_col_heads(&l, c0, ncols, &col_x, &col_mm);
             // タイトル行を頭で繰り返す(いま描く行が自分自身なら繰り返さない)
             if !title_rows.contains(&r) {
                 for tr in &title_rows {
@@ -357,6 +395,7 @@ pub fn sheet_to_pdf<W: Write>(
         let y_top = paper.height_mm - mt - y_used;
         y_used += rh;
         draw_row(grid, &l, &font, r, y_top, rh, ml, c0, ncols, &col_x, &col_mm, scale, &cond_prep);
+    }
     }
     // 図形(挿した分も読んだ分も)。**輪郭だけ**を紙に出す(塗りはまだ —
     // printpdf の多角形塗りを持ち込むまで。黙って出したことにしない)
@@ -643,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn はみ出した列の数が返る() {
+    fn 幅の広い表は横へページを送る() {
         let (fam, _) = kumihan::font::for_document(None).unwrap();
         let data = kumihan::font::load(fam).unwrap();
         let mut s = Grid { name: "広い".into(), ..Default::default() };
@@ -655,7 +694,28 @@ mod tests {
         }
         let mut buf = Vec::new();
         let clipped = sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap();
-        assert!(clipped > 0, "切れた列が報告されない");
+        // 割れる幅なので切れる列は無く、横へ束が送られる(1行しか無いので
+        // 縦の送りは起きない = 頁数がそのまま束の数)
+        assert_eq!(clipped, 0, "割れるのに切れたことになっている");
+        let hay = String::from_utf8_lossy(&buf).to_string();
+        let i = hay.find("/Count ").unwrap() + 7;
+        let pages: usize =
+            hay[i..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap();
+        assert!(pages >= 3, "横のページ送りが起きていない(頁数 {pages})");
+    }
+
+    #[test]
+    fn 一列が紙より広ければ切れたと言う() {
+        let (fam, _) = kumihan::font::for_document(None).unwrap();
+        let data = kumihan::font::load(fam).unwrap();
+        let mut s = Grid { name: "極太".into(), ..Default::default() };
+        // 1列で 200mm — A4 縦の使える幅(170mm)より広く、割りようが無い
+        s.set(Pos::new(0, 0), Cell {
+            formula: None, value: Value::Number(1.0), fmt: Default::default() });
+        s.col_width.insert(0, 100.0);
+        let mut buf = Vec::new();
+        let clipped = sheet_to_pdf(&s, &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap();
+        assert_eq!(clipped, 1, "割れない列を黙って切っている");
         let mut buf = Vec::new();
         assert_eq!(sheet_to_pdf(&grid(), &data, Paper::default(), &PrintSetup::default(), &mut buf).unwrap(), 0,
                    "入り切っているのに切れたと言った");

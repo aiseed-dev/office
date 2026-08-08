@@ -702,7 +702,7 @@ impl Calc {
                 },
                 if exact { "" } else { " ※代替フォント" },
                 if clipped > 0 {
-                    format!("(右の {clipped} 列は紙に入り切らず切れています)")
+                    format!("({clipped} 列は1列で紙より広く、切れています — 幅を詰めるか用紙を大きく)")
                 } else {
                     String::new()
                 }
