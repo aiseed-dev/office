@@ -399,9 +399,11 @@ Python を動かす形はやらない」と書いたが、同日に改めた。�
 9,575行の main.rs を**純移動だけ**で割った(1部屋=1コミット、毎回
 cargo test 緑。挙動・文言は一切変えない — calc の 2026-08-06 と同じ作法)。
 
-- `main.rs`(5,002)— use と mod、**struct Writer(欄は非公開のまま)**、
-  impl HasEditor、**impl Writer(4,341行 — まだ割れていない)**、
+- `main.rs`(3,893)— use と mod、**struct Writer(欄は非公開のまま)**、
+  impl HasEditor、impl Writer の残り(編集の芯・板の確定・鍵の受け)、
   Focusable/EntityInputHandler、fn main
+- `cmds.rs`(1,116)— リボンの釦と右クリックの受け口。
+  **run_cmd 1,095行が最大の塊**だった
 - `view.rs`(2,903)— impl Render(紙面・リボン・板)と InputSink
 - `tests.rs`(1,077)— 試験一式
 - `util.rs`(255)— 状態を持たない小道具(書体・色・差分・語の境界・ルビ)
@@ -412,7 +414,8 @@ cargo test 緑。挙動・文言は一切変えない — calc の 2026-08-06 �
 **終わりは次の塊の説明の頭で揃える**。関数の行だけで切ると説明が
 取り残され、「doc の後に item が無い」でコンパイルが落ちる。
 
-**残り**: `impl Writer` の 4,341行。calc の picks/cmds に当たる分け方
-(板の確定 = *_commit 系、リボンの run_cmd 系)が素直だが、
-メソッドを150ほど仕分ける仕事なので別の回に。移すときは calc と同じく
-`pub(crate) fn` にして別ファイルの `impl Writer` へ置く。
+**残り**: main.rs の 3,893行(元の 41%)。まだ `impl Writer` に
+板の確定(*_commit 系)と編集の芯が同居している。calc の picks に当たる
+分け方が次の一手だが、メソッドの仕分けが要るので別の回に。
+移すときは calc と同じく `pub(crate) fn` にして別ファイルの
+`impl Writer` へ置く(cmds.rs がその型)。
