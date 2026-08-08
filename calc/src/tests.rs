@@ -1544,6 +1544,46 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn 手続きはブックから実行しない(cx: &mut gpui::TestAppContext) {
+        // 発注者確定 2026-08-08: ファイルを実行の起点にしない。
+        // ブックが運べるのは関数(UDF)だけ、手続きは plugins の .py だけ
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, cx| {
+            this.book.scripts.push(("取り込み試験".into(), "print(1)".into()));
+            this.book.scripts.push(("関数集計".into(), "def f(x):\n    return x".into()));
+            // ブックの手続きは断る(実行せず、取り出しの道を案内)
+            this.prompt = Some(("py", Editor::new("@取り込み試験")));
+            this.finish_prompt(cx);
+            assert!(
+                this.status.contains("実行しません"),
+                "手続きを断っていない: {}",
+                this.status
+            );
+            // 関数は @計算 の持ち場だと言う(手続きとしては回さない)
+            this.prompt = Some(("py", Editor::new("@関数集計")));
+            this.finish_prompt(cx);
+            assert!(
+                this.status.contains("@計算"),
+                "関数の案内が出ない: {}",
+                this.status
+            );
+            // @save は「関数」で始まる名前だけ(手続きは門前で断る —
+            // ここで断るのでファイル選択の板は開かない)
+            this.prompt = Some(("py", Editor::new("@save 取り込み試験")));
+            this.finish_prompt(cx);
+            assert!(
+                this.status.contains("載せられません"),
+                "@save の門が働いていない: {}",
+                this.status
+            );
+            // 無い名前は plugins の置き場を案内
+            this.prompt = Some(("py", Editor::new("@居ない手続きxyz")));
+            this.finish_prompt(cx);
+            assert!(this.status.contains("ありません"), "{}", this.status);
+        });
+    }
+
+    #[gpui::test]
     fn r1c1では見せ方が変わり中身はa1のまま(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

@@ -2857,17 +2857,44 @@ impl Calc {
                 } else if t == "@計算" || t == "@calc" {
                     self.run_py_calc(cx);
                 } else if t == "@" || t == "@list" {
-                    let names: Vec<&str> =
+                    // ブックに載るのは関数(UDF)だけ。手続きは plugins の .py
+                    let fns: Vec<&str> =
                         self.book.scripts.iter().map(|(n, _)| n.as_str()).collect();
-                    self.status = if names.is_empty() {
-                        ui::t!("ブックに載せた Python はありません(@save 名前 で載せる)").into()
-                    } else {
-                        ui::tf!("ブックの Python: {}(@名前 で実行)", names.join(" / ")).into()
+                    let plugs: Vec<String> = std::fs::read_dir(plugins_dir())
+                        .ok()
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| p.extension().is_some_and(|e| e == "py"))
+                        .filter_map(|p| {
+                            p.file_stem().map(|s| s.to_string_lossy().to_string())
+                        })
+                        .collect();
+                    self.status = match (fns.is_empty(), plugs.is_empty()) {
+                        (true, true) => ui::t!(
+                            "Python はありません(関数は @save 関数名 でブックへ、手続きは plugins へ .py を置く)"
+                        )
+                        .into(),
+                        _ => ui::tf!(
+                            "ブックの関数: {} / plugins: {}(手続きは @名前 で実行)",
+                            if fns.is_empty() { "-".to_string() } else { fns.join(" / ") },
+                            if plugs.is_empty() { "-".to_string() } else { plugs.join(" / ") }
+                        )
+                        .into(),
                     };
                 } else if let Some(name) = t.strip_prefix("@save ") {
                     let name = name.trim().to_string();
                     if name.is_empty() {
                         self.status = ui::t!("@save 名前 の形で").into();
+                    } else if !name.starts_with("関数") {
+                        // 手続きはブックに載せない(発注者確定 2026-08-08:
+                        // ファイルを実行の起点にしない。UDF だけが旅できる)
+                        self.status = ui::tf!(
+                            "手続きはブックに載せられません(載るのは「関数」で始まる UDF だけ)。手続きは {} に .py を置いてください",
+                            plugins_dir().display().to_string()
+                        )
+                        .into();
                     } else {
                         self.store_python_dialog(name, cx);
                     }
@@ -2881,27 +2908,52 @@ impl Calc {
                     } else {
                         self.status = ui::tf!("「{}」はありません", name).into();
                     }
+                } else if let Some(name) = t.strip_prefix("@export ") {
+                    // 古いブックの手続きの取り出し口(実行はしない。中身を見て、
+                    // 良ければ自分で plugins へ置く — それが取り込みの門)
+                    self.export_python_dialog(name.trim().to_string(), cx);
                 } else if let Some(rest) = t.strip_prefix('@') {
-                    // ブックに載ったコード = 出所が自分とは限らない。必ず檻の中。
-                    // 網は既定で閉じる。「@名前 net」と**その場で打ったときだけ**開く
-                    // (許可はブックに保存されない — 毎回が明示の同意)
+                    // 手続きは**手元(plugins)の .py だけ**実行する(発注者確定
+                    // 2026-08-08)。ブックに載って旅してきた手続きは実行しない —
+                    // ファイルは実行の起点になれない。檻は従来どおり必須、
+                    // 網は既定で閉じ「@名前 net」とその場で打ったときだけ開く
                     let (name, net) = match rest.trim().strip_suffix(" net") {
                         Some(n) => (n.trim(), true),
                         None => (rest.trim(), false),
                     };
-                    match self.book.scripts.iter().find(|(n, _)| n == name) {
-                        Some((_, code)) => {
-                            let code = code.clone();
-                            if net {
-                                self.status =
-                                    ui::t!("網あり檻で実行します(ファイルは守られたまま)").into();
+                    let path = plugins_dir().join(format!("{name}.py"));
+                    if path.exists() {
+                        match std::fs::read_to_string(&path) {
+                            Ok(code) => {
+                                if net {
+                                    self.status = ui::t!(
+                                        "網あり檻で実行します(ファイルは守られたまま)"
+                                    )
+                                    .into();
+                                }
+                                self.run_python_inner(code, true, net, cx);
                             }
-                            self.run_python_inner(code, true, net, cx);
+                            Err(e) => self.status = ui::tf!("読めません: {}", e.to_string()).into(),
                         }
-                        None => {
-                            self.status =
-                                ui::tf!("「{}」はありません(@list で一覧)", name).into();
-                        }
+                    } else if self.book.scripts.iter().any(|(n, _)| n == name) {
+                        self.status = if name.starts_with("関数") {
+                            ui::t!("それは関数(UDF)です — =PY(\"名前\", …) のセルと @計算 が使います").into()
+                        } else {
+                            ui::tf!(
+                                "「{}」はブックの中の手続きです — ブックからは実行しません(@export {} で取り出し、確かめてから {} へ)",
+                                name,
+                                name,
+                                plugins_dir().display().to_string()
+                            )
+                            .into()
+                        };
+                    } else {
+                        self.status = ui::tf!(
+                            "「{}」はありません({} の .py が @名前 で動きます。@list で一覧)",
+                            name,
+                            plugins_dir().display().to_string()
+                        )
+                        .into();
                     }
                 } else {
                     self.run_python(t, cx);

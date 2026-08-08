@@ -1606,6 +1606,15 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                     }
                     Ok(Event::End(e)) if local(e.name().as_ref()) == b"script" => {
                         if let Some(n) = name.take() {
+                            // 手続き(「関数」以外)は読むが**実行できず、保存で
+                            // ブックから消える**(2026-08-08 発注者確定 —
+                            // ファイルを実行の起点にしない)。黙って落とさない:
+                            // 開くときの報告で言う。取り出しは @export 名前
+                            if !n.starts_with("関数") {
+                                rep.note(
+                                    "ブック搭載の手続きPython(実行しません。@export で取り出し。保存でブックから消えます)",
+                                );
+                            }
                             book.scripts.push((n, code.clone()));
                         }
                         in_s = false;
@@ -2688,11 +2697,19 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     for (name, xml) in &fresh_parts {
         put(name, xml)?;
     }
-    if !book.scripts.is_empty() {
+    // ブックに書くのは**関数(UDF)だけ**(発注者確定 2026-08-08:
+    // ファイルを実行の起点にしない)。手続きは plugins の .py — 書かない。
+    // 古いブックから読んだ手続きは保存で消える(開くときの報告でそう言う)
+    let fns: Vec<&(String, String)> = book
+        .scripts
+        .iter()
+        .filter(|(n, _)| n.starts_with("関数"))
+        .collect();
+    if !fns.is_empty() {
         let mut sx = String::from(
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<joPython>",
         );
-        for (n, code) in &book.scripts {
+        for (n, code) in fns {
             sx.push_str(&format!("<script name=\"{}\">{}</script>", esc(n), esc(code)));
         }
         sx.push_str("</joPython>");
@@ -4589,19 +4606,22 @@ mod script_roundtrip_tests {
     use super::*;
 
     #[test]
-    fn ブックに載せたpythonが往復する() {
+    fn ブックに載って往復するのは関数だけ() {
+        // 発注者確定 2026-08-08: ファイルを実行の起点にしない —
+        // 手続きは plugins へ。joPython に書かれる(=旅できる)のは UDF だけ
         let mut b = Book::new();
         b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
         b.scripts.push((
-            "集計".into(),
-            "s[\"B5\"] = \"合計\"\nprint(1 < 2 and \"OK\")".into(),
+            "関数集計".into(),
+            "def 集計(x):\n    return 1 < 2 and x".into(),
         ));
+        b.scripts.push(("取り込み".into(), "print('手続き')".into()));
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
         buf.set_position(0);
         let (back, _) = read(buf.clone()).expect("読めない");
-        assert_eq!(back.scripts.len(), 1, "控えが往復しない");
-        assert_eq!(back.scripts[0].0, "集計");
+        assert_eq!(back.scripts.len(), 1, "手続きがブックに残った(実行の起点になってしまう)");
+        assert_eq!(back.scripts[0].0, "関数集計");
         assert!(back.scripts[0].1.contains("1 < 2"), "コードの逃がしが壊れた");
         // もう一往復(古い部品と二重にならない)
         let mut buf2 = Cursor::new(Vec::new());

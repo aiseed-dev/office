@@ -167,6 +167,60 @@ pub(crate) fn apply_py_results(
     (spills, applied, conflicts)
 }
 
+/// 子プロセスを時間制限つきで回す → (成功か, stdout, stderr)。
+/// 出力は別スレッドで吸い出す(パイプが詰まっても try_wait が止まらない)。
+/// 時間切れは殺して Err — 檻の中の無限ループでアプリの手が塞がらない
+pub(crate) fn run_with_timeout(
+    cmd: &mut std::process::Command,
+    secs: u64,
+) -> Result<(bool, String, String), String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("Python が起動できません: {e}"))?;
+    let mut so = child.stdout.take();
+    let mut se = child.stderr.take();
+    let th_o = std::thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(r) = so.as_mut() {
+            let _ = r.read_to_string(&mut s);
+        }
+        s
+    });
+    let th_e = std::thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(r) = se.as_mut() {
+            let _ = r.read_to_string(&mut s);
+        }
+        s
+    });
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(st)) => {
+                let out = th_o.join().unwrap_or_default();
+                let err = th_e.join().unwrap_or_default();
+                return Ok((st.success(), out, err));
+            }
+            Ok(None) => {
+                if start.elapsed().as_secs() >= secs {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = th_o.join();
+                    let _ = th_e.join();
+                    return Err(ui::tf!(
+                        "{}秒たっても終わらないので止めました(無限ループ?)",
+                        secs
+                    )
+                    .to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
 /// グラフ描きの Python を探す。JO_PYTHON → リポジトリの .venv → python3。
 /// matplotlib が居るかは実行して分かる(居なければ status で言う)。
 pub(crate) fn find_python() -> std::path::PathBuf {
@@ -1082,13 +1136,10 @@ impl Calc {
             } else {
                 std::process::Command::new(&py)
             };
-            let o = cmd
-                .arg(&py_path)
-                .output()
-                .map_err(|e| format!("Python が起動できません: {e}"))?;
-            let out = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if !o.status.success() {
-                let err = String::from_utf8_lossy(&o.stderr);
+            // 時間制限つき(60秒)— 檻の中の無限ループで手が塞がらない
+            let (ok, out, err) = run_with_timeout(cmd.arg(&py_path), 60)?;
+            let out = out.trim().to_string();
+            if !ok {
                 let last = err
                     .lines()
                     .rev()
@@ -1237,13 +1288,9 @@ calc の隣に置いてください)").to_string()
                     "/tmp",
                     "--",
                 ]);
-                let o = c
-                    .arg(&py)
-                    .arg(&py_path)
-                    .output()
-                    .map_err(|e| format!("Python が起動できません: {e}"))?;
-                if !o.status.success() {
-                    let err = String::from_utf8_lossy(&o.stderr);
+                // 時間制限つき(30秒)。関数は値の計算だけ — それより長いのは異常
+                let (ok, _, err) = run_with_timeout(c.arg(&py).arg(&py_path), 30)?;
+                if !ok {
                     let last = err
                         .lines()
                         .rev()
@@ -1318,12 +1365,51 @@ calc の隣に置いてください)").to_string()
                             this.book.scripts.push((name.clone(), code));
                             this.dirty = true;
                             this.status = format!(
-                                "「{name}」をブックに載せました(保存で xlsx に入る。@{name} で実行)"
+                                "「{name}」をブックに載せました(保存で xlsx に入る。=PY(\"名前\", …) と @計算 が使います)"
                             )
                             .into();
                         }
                         Err(e) => this.status = format!("読めません: {e}").into(),
                     }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// ブックに載っている(古い形の)手続きを .py に取り出す。**実行はしない** —
+    /// 中身を確かめてから plugins へ置くのは人の手(それが取り込みの門)
+    pub(crate) fn export_python_dialog(&mut self, name: String, cx: &mut Context<Self>) {
+        let Some(code) = self
+            .book
+            .scripts
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, c)| c.clone())
+        else {
+            self.status = ui::tf!("「{}」はありません(@list で一覧)", name).into();
+            return;
+        };
+        let fname = format!("{name}.py");
+        let ask = cx.background_executor().spawn(async move {
+            rfd::FileDialog::new()
+                .add_filter("Python", &["py"])
+                .set_file_name(&fname)
+                .save_file()
+        });
+        cx.spawn(async move |this, cx| {
+            let r = ask.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(p) = r {
+                    this.status = match std::fs::write(&p, &code) {
+                        Ok(_) => ui::tf!(
+                            "取り出しました: {}(中身を確かめて、良ければ plugins へ)",
+                            p.display().to_string()
+                        )
+                        .into(),
+                        Err(e) => ui::tf!("書けません: {}", e.to_string()).into(),
+                    };
                 }
                 cx.notify();
             });
