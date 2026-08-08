@@ -1625,6 +1625,39 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
             }
         }
     }
+    // 変更履歴(独自部品 xl/joChanges.xml)。読んで持ち、保存で書き戻す
+    {
+        let mut cx = String::new();
+        if let Ok(mut f) = zip.by_name("xl/joChanges.xml") {
+            let _ = f.read_to_string(&mut cx);
+        }
+        if !cx.is_empty() {
+            let mut r = Reader::from_str(&cx);
+            let mut buf = Vec::new();
+            loop {
+                match r.read_event_into(&mut buf) {
+                    Ok(Event::Eof) | Err(_) => break,
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if local(e.name().as_ref()) == b"c" =>
+                    {
+                        let at = attr_un(&e, "at").and_then(|v| Pos::parse(&v));
+                        if let Some(at) = at {
+                            book.changes.push(crate::model::ChangeRec {
+                                who: attr_un(&e, "who").unwrap_or_default(),
+                                when: attr_un(&e, "when").unwrap_or_default(),
+                                sheet: attr_un(&e, "sheet").unwrap_or_default(),
+                                at,
+                                before: attr_un(&e, "before").unwrap_or_default(),
+                                after: attr_un(&e, "after").unwrap_or_default(),
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+                buf.clear();
+            }
+        }
+    }
     // ピボットの指図(独自部品 xl/joPivot.xml)。読むだけ — 更新は明示の操作
     {
         let mut sx = String::new();
@@ -2598,6 +2631,7 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
     // ブックに載せた Python・ピボット・スピルの記録はモデルが正(古い部品は写さない)
     carried.retain(|(name, _)| {
         name != "xl/joPython.xml" && name != "xl/joPivot.xml" && name != "xl/joSpill.xml"
+        && name != "xl/joChanges.xml"
     });
     let carry = !carried.is_empty();
     // ブックの情報。原本に core.xml が無い・新規ブックでも、書いた情報は残す
@@ -2722,6 +2756,21 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
         }
         sx.push_str("</joPython>");
         put("xl/joPython.xml", &sx)?;
+    }
+    // 変更履歴(独自部品 xl/joChanges.xml)。Excel は読まない — 正直な劣化
+    if !book.changes.is_empty() {
+        let mut cx = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<joChanges>",
+        );
+        for c in &book.changes {
+            cx.push_str(&format!(
+                "<c who=\"{}\" when=\"{}\" sheet=\"{}\" at=\"{}\" before=\"{}\" after=\"{}\"/>",
+                esc(&c.who), esc(&c.when), esc(&c.sheet), c.at.a1(),
+                esc(&c.before), esc(&c.after)
+            ));
+        }
+        cx.push_str("</joChanges>");
+        put("xl/joChanges.xml", &cx)?;
     }
     if !book.pivots.is_empty() {
         let mut px = String::from(

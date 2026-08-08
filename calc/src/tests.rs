@@ -3291,3 +3291,76 @@ mod data_table_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod track_changes_tests {
+    use crate::*;
+
+    #[gpui::test]
+    fn 記録の入切で差分が刻まれる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            let s = &mut this.book.sheets[0];
+            s.set(Pos::parse("A1").unwrap(), sheet::Cell::input("10"));
+            s.set(Pos::parse("A2").unwrap(), sheet::Cell::input("消える"));
+            // 記録を始める
+            this.track_changes();
+            assert!(this.track_from.is_some(), "記録が始まっていない");
+            // 直す・足す・消す
+            let s = &mut this.book.sheets[0];
+            s.set(Pos::parse("A1").unwrap(), sheet::Cell::input("20"));
+            s.set(Pos::parse("B1").unwrap(), sheet::Cell::input("=A1*2"));
+            s.cells.remove(&Pos::parse("A2").unwrap());
+            // 止めると差分が刻まれる
+            this.track_changes();
+            assert!(this.track_from.is_none(), "記録が止まっていない");
+            let ch = &this.book.changes;
+            assert_eq!(ch.len(), 3, "刻んだ数が違う: {ch:?}");
+            let find = |a1: &str| {
+                ch.iter().find(|c| c.at == Pos::parse(a1).unwrap()).expect(a1)
+            };
+            assert_eq!((find("A1").before.as_str(), find("A1").after.as_str()), ("10", "20"));
+            // 増えたセルは before が空。**式は式のまま**刻む
+            assert_eq!((find("B1").before.as_str(), find("B1").after.as_str()), ("", "=A1*2"));
+            // 消えたセルは after が空
+            assert_eq!((find("A2").before.as_str(), find("A2").after.as_str()), ("消える", ""));
+            // 誰が・いつ が入っている
+            assert!(!find("A1").who.is_empty() && find("A1").when.len() >= 16);
+        });
+    }
+
+    #[gpui::test]
+    fn 変わっていなければ何も刻まない(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            this.book.sheets[0].set(Pos::parse("A1").unwrap(), sheet::Cell::input("10"));
+            this.track_changes();
+            this.track_changes();
+            assert!(this.book.changes.is_empty(), "変えていないのに刻まれた");
+            assert!(this.status.contains("ありません"), "{}", this.status);
+        });
+    }
+
+    #[test]
+    fn 変更履歴がxlsxを往復する() {
+        let mut b = sheet::Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), sheet::Cell::input("x"));
+        b.changes.push(sheet::model::ChangeRec {
+            who: "dev@機械".into(),
+            when: "2026-08-08 15:30".into(),
+            sheet: "Sheet1".into(),
+            at: Pos::parse("B2").unwrap(),
+            before: "10".into(),
+            after: "=A1&\"<>\"".into(),
+        });
+        let mut buf = std::io::Cursor::new(Vec::new());
+        sheet::xlsx::write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = sheet::xlsx::read(buf).expect("読めない");
+        assert_eq!(back.changes.len(), 1, "変更履歴が往復しない");
+        let c = &back.changes[0];
+        assert_eq!(c.who, "dev@機械");
+        assert_eq!(c.at, Pos::parse("B2").unwrap());
+        assert_eq!(c.after, "=A1&\"<>\"", "記号の逃がしが壊れた");
+    }
+}

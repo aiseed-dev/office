@@ -31,7 +31,7 @@ impl Calc {
         "instable", "table-tpl", "inssymbol", "pivot-insert", "pivot-fields",
         "pivot-refresh", "pivot-refresh-all", "pivot-select",
         "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout", "pivot-style",
-        "pivot-showas", "datatable",
+        "pivot-showas", "datatable", "track-changes",
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
@@ -1491,6 +1491,16 @@ impl Calc {
             }
             // スタイルギャラリー(帯の色の組)。一覧から選んで掛け直す
             // 計算の種類(そのまま / 総計に対する比率 / 累計 / 前との差)
+            // 変更履歴(校閲の記録)。記録中なら止めて差分を刻み、
+            // そうでなければ記録を始める(刻んだ分の一覧は止めた後にもう一度)
+            "track-changes" => {
+                self.commit();
+                if self.track_from.is_some() || self.book.changes.is_empty() {
+                    self.track_changes();
+                } else {
+                    self.show_changes();
+                }
+            }
             // データテーブル(感度表)。入力セルを2段で聞く
             "datatable" => {
                 self.commit();
@@ -2329,3 +2339,130 @@ impl Calc {
         };
     }
 }
+
+impl Calc {
+    /// 変更履歴(校閲の記録)の入切。**writer と同じ型** — 操作を1つずつ
+    /// 拾うのではなく、**記録開始時点の写しと突き合わせて差分を刻む**。
+    /// 編集中は普通に打てて(モデルに手を入れない)、止めたときに1度だけ数える。
+    /// 記録は xl/joChanges.xml で往復する — Excel は読まない(正直な劣化)
+    pub(crate) fn track_changes(&mut self) {
+        match self.track_from.take() {
+            None => {
+                // 開始: いまの「打った姿」を写す(式は式のまま)
+                let snap = self
+                    .book
+                    .sheets
+                    .iter()
+                    .map(|s| {
+                        let cells = s
+                            .cells
+                            .iter()
+                            .map(|(p, c)| (*p, c.editable().to_string()))
+                            .collect();
+                        (s.name.clone(), cells)
+                    })
+                    .collect();
+                self.track_from = Some(snap);
+                self.status = ui::t!(
+                    "変更履歴を記録します(もう一度押すと、開始時点との差を刻んで一覧を出します)"
+                )
+                .into();
+            }
+            Some(snap) => {
+                let (who, when) = (crate::io::lock_identity(), crate::util::now_stamp());
+                let mut add: Vec<sheet::model::ChangeRec> = Vec::new();
+                for s in &self.book.sheets {
+                    let before: &std::collections::BTreeMap<Pos, String> = snap
+                        .iter()
+                        .find(|(n, _)| *n == s.name)
+                        .map(|(_, m)| m)
+                        .unwrap_or(&EMPTY_SNAP);
+                    // いま在るセル: 変わった / 増えた
+                    for (p, c) in &s.cells {
+                        let now = c.editable().to_string();
+                        let was = before.get(p).cloned().unwrap_or_default();
+                        if was != now {
+                            add.push(sheet::model::ChangeRec {
+                                who: who.clone(),
+                                when: when.clone(),
+                                sheet: s.name.clone(),
+                                at: *p,
+                                before: was,
+                                after: now,
+                            });
+                        }
+                    }
+                    // 消えたセル
+                    for (p, was) in before {
+                        if !s.cells.contains_key(p) && !was.is_empty() {
+                            add.push(sheet::model::ChangeRec {
+                                who: who.clone(),
+                                when: when.clone(),
+                                sheet: s.name.clone(),
+                                at: *p,
+                                before: was.clone(),
+                                after: String::new(),
+                            });
+                        }
+                    }
+                }
+                let n = add.len();
+                if n > 0 {
+                    self.checkpoint();
+                    self.book.changes.extend(add);
+                    self.dirty = true;
+                }
+                self.status = if n == 0 {
+                    ui::t!("記録を止めました(変わった所はありません)").into()
+                } else {
+                    ui::tf!("記録を止めました — {} 件を刻みました(一覧は同じ釦をもう一度)", n)
+                        .into()
+                };
+                if n == 0 {
+                    self.show_changes();
+                }
+            }
+        }
+    }
+
+    /// 刻んだ変更履歴の一覧(新しい順)。記録していないときはこちらが出る
+    pub(crate) fn show_changes(&mut self) {
+        if self.book.changes.is_empty() {
+            self.status =
+                ui::t!("変更履歴はまだありません(共同編集タブの「変更履歴」で記録を始める)").into();
+            return;
+        }
+        let at = self
+            .cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let items: Vec<String> = self
+            .book
+            .changes
+            .iter()
+            .rev()
+            .take(200)
+            .map(|c| {
+                let arrow = match (c.before.is_empty(), c.after.is_empty()) {
+                    (true, _) => format!("(空) → {}", c.after),
+                    (_, true) => format!("{} → (消した)", c.before),
+                    _ => format!("{} → {}", c.before, c.after),
+                };
+                format!("{} {}!{} {} [{}]", c.when, c.sheet, c.at.a1(), arrow, c.who)
+            })
+            .collect();
+        self.pick_note = Some(
+            ui::tf!(
+                "変更履歴 {} 件(新しい順。選んでもその場所へ跳ぶだけ — 戻す機能ではありません)",
+                self.book.changes.len()
+            )
+            .into(),
+        );
+        self.pick_kind = "changes-pick";
+        self.pick = Some((items, at));
+    }
+}
+
+/// 記録開始時点の写しが無いシート用の空(borrow のため const で置く)
+static EMPTY_SNAP: std::sync::LazyLock<std::collections::BTreeMap<Pos, String>> =
+    std::sync::LazyLock::new(Default::default);

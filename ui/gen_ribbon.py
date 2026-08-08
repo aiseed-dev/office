@@ -180,7 +180,7 @@ READY = {
         "pivot-select": "pivot-select", "pivot-totals": "pivot-totals",
         "pivot-subtotals": "pivot-subtotals", "pivot-blank": "pivot-blank",
         "pivot-layout": "pivot-layout", "pivot-showas": "pivot-showas",
-        "datatable": "datatable",
+        "datatable": "datatable", "track-changes": "track-changes",
         "trace-prec": "trace-prec", "trace-dep": "trace-dep",
         "remove-arrows": "remove-arrows", "insrecommend": "insrecommend",
         "instable": "instable", "table-tpl": "table-tpl",

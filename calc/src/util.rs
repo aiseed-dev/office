@@ -1026,3 +1026,51 @@ pub(crate) fn cond_kind_name(k: &sheet::model::CondKind) -> String {
         CondKind::Icons(_) => ui::t!("アイコンセット").to_string(),
     }
 }
+
+/// いまの日時「YYYY-MM-DD HH:MM」(地方時)。**外部の date を呼ばない** —
+/// 呼ぶと Windows で動かないし、糸を塞ぐ(引き継ぎの残件でもある)。
+/// 暦は civil-from-days の素直な算法(1970-01-01 起点)
+pub(crate) fn now_stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // 地方時のずれ(TZ の秒)。取れなければ UTC のまま出す
+    let off = std::env::var("TZ_OFFSET_SECS").ok().and_then(|v| v.parse::<i64>().ok());
+    let secs = secs + off.unwrap_or_else(local_offset_secs);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}", rem / 3600, (rem % 3600) / 60)
+}
+
+/// 地方時のずれ(秒)。/etc/localtime を読む気は無いので、
+/// date が居れば1回だけ聞き、居なければ 0(UTC)— 表示だけの用途
+fn local_offset_secs() -> i64 {
+    std::process::Command::new("date")
+        .arg("+%z")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let sign = if s.starts_with('-') { -1 } else { 1 };
+            let h: i64 = s.get(1..3)?.parse().ok()?;
+            let mi: i64 = s.get(3..5)?.parse().ok()?;
+            Some(sign * (h * 3600 + mi * 60))
+        })
+        .unwrap_or(0)
+}
+
+/// 1970-01-01 からの日数 → (年, 月, 日)。Howard Hinnant の civil_from_days
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}

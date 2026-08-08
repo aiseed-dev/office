@@ -1328,6 +1328,25 @@ pub struct Book {
     /// R1C1 参照スタイル(calcPr refMode="R1C1")。式は内部では A1 のまま —
     /// 見せるとき・打つときに formula_to_r1c1 / formula_from_r1c1 で変換する
     pub r1c1: bool,
+    /// 変更履歴(校閲の記録)。**記録中の差分を刻んだもの**で、
+    /// xl/joChanges.xml で往復する独自部品 — Excel は読まない(正直な劣化)
+    pub changes: Vec<ChangeRec>,
+}
+
+/// 変更履歴の1件。「誰が・いつ・どのシートのどのセルを・何から何へ」。
+/// 値でなく**打った姿**(editable)で持つ — 式が式のまま残る
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ChangeRec {
+    /// 名乗り(USER@ホスト。ロック・チャットと同じ)
+    pub who: String,
+    /// いつ(YYYY-MM-DD HH:MM。文字のまま持つ — 暦の計算はしない)
+    pub when: String,
+    pub sheet: String,
+    pub at: Pos,
+    /// 前の姿(空 = 無かった)
+    pub before: String,
+    /// 後の姿(空 = 消した)
+    pub after: String,
 }
 
 impl Book {

@@ -129,6 +129,10 @@ struct Calc {
     shape_clip: Option<sheet::model::SheetShape>,
     /// データテーブルの板の途中(列の入力セル)。行の板の確定まで持つ
     dt_col: Option<Pos>,
+    /// 変更履歴の記録中: 開始時点の「打った姿」の写し(シート名 → セル)。
+    /// **writer と同じ型** — 操作を拾わず、止めたときに差分を数える
+    #[allow(clippy::type_complexity)]
+    track_from: Option<Vec<(String, std::collections::BTreeMap<Pos, String>)>>,
     /// 選んでいる画像(images_new の番号)。グラフもここ
     img_sel: Option<usize>,
     img_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
@@ -372,6 +376,7 @@ impl Calc {
             menu_shape: false,
             shape_clip: None,
             dt_col: None,
+            track_from: None,
             img_sel: None,
             img_drag: None,
             wheel: (0.0, 0.0),

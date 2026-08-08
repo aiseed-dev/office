@@ -360,6 +360,24 @@ impl Calc {
                     self.status = ui::tf!("線の色: {}(罫線の一覧から掛けると効きます)", v).into();
                 }
             }
+            // 変更履歴の一覧。選んだらその場所へ跳ぶ(戻す機能ではない)
+            "changes-pick" => {
+                // 「日時 シート!A1 …」の形からシート名と番地を取る
+                if let Some(tok) = v.split_whitespace().nth(2) {
+                    if let Some((sh, a1)) = tok.rsplit_once('!') {
+                        if let Some(i) = self.book.sheets.iter().position(|s| s.name == sh) {
+                            self.active = i;
+                        }
+                        if let Some(p) = Pos::parse(a1) {
+                            self.anchor = None;
+                            self.cursor = p;
+                            self.follow();
+                            self.sync_input();
+                            self.status = ui::tf!("{} へ跳びました", tok).into();
+                        }
+                    }
+                }
+            }
             "pivot-showas-pick" => {
                 if let Some(i) = self.pivot_at(self.cursor) {
                     let sa = match v {
