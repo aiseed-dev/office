@@ -2759,15 +2759,28 @@ impl Calc {
                     return;
                 }
                 self.checkpoint_book(); // 名前と式の書き換えを1手で戻せる
+                // 文字列の中(INDIRECT("古!A1") 等)は**書き換えない** —
+                // Excel も追随させないし、文字列は data であって参照ではない。
+                // ただし黙って壊さない: 残る数を数えて言う
+                let stale = stale_in_strings(&self.book, &old);
                 let n = rename_sheet_refs(&mut self.book, &old, &text);
                 self.book.sheets[t].name = text.clone();
                 recalc_book(&mut self.book, t);
                 self.dirty = true;
-                self.status = if n > 0 {
+                let head = if n > 0 {
                     ui::tf!("「{}」を「{}」にしました(式の参照 {} 箇所も追随)", old, text, n)
-                        .into()
+                        .to_string()
                 } else {
-                    ui::tf!("「{}」を「{}」にしました", old, text).into()
+                    ui::tf!("「{}」を「{}」にしました", old, text).to_string()
+                };
+                self.status = if stale > 0 {
+                    ui::tf!(
+                        "{} — ただし INDIRECT など**文字列の中**の「{}!」{} 箇所は追随しません(手で直してください)",
+                        head, old, stale
+                    )
+                    .into()
+                } else {
+                    head.into()
                 };
             }
             "name" => {

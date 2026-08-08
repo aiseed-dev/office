@@ -221,6 +221,44 @@ pub(crate) fn rename_sheet_refs(book: &mut Book, old: &str, new: &str) -> usize 
     n
 }
 
+/// 式の**文字列の中**に古いシート名の参照が残っている数を数える。
+/// 改名では文字列の中は書き換えない(INDIRECT は「動かない参照」を作る
+/// 道具で、Excel も追随させない)— だから**黙って壊さず、件数を言う**
+pub(crate) fn stale_in_strings(book: &Book, old: &str) -> usize {
+    let bare = format!("{old}!");
+    let quoted = format!("'{old}'!");
+    let hit = |f: &str| -> bool {
+        let mut in_str = false;
+        let cs: Vec<char> = f.chars().collect();
+        let mut i = 0;
+        while i < cs.len() {
+            if cs[i] == '"' {
+                in_str = !in_str;
+                i += 1;
+                continue;
+            }
+            if in_str {
+                let rest: String = cs[i..].iter().collect();
+                if rest.starts_with(&bare) || rest.starts_with(&quoted) {
+                    // 名前の頭が別の語の続きなら別物(「合計!」の中の「計!」)
+                    let prev_word =
+                        i > 0 && (cs[i - 1].is_alphanumeric() || cs[i - 1] == '_');
+                    if !prev_word {
+                        return true;
+                    }
+                }
+            }
+            i += 1;
+        }
+        false
+    };
+    book.sheets
+        .iter()
+        .flat_map(|s| s.cells.values())
+        .filter(|c| c.formula.as_deref().is_some_and(hit))
+        .count()
+}
+
 /// 選んだ範囲を TSV(タブ区切り・行は改行)にする。
 /// 式は `=` のまま持つ — 表計算どうしの受け渡しの通り相場。
 pub(crate) fn range_tsv(s: &sheet::Sheet, a: Pos, b: Pos) -> String {

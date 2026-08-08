@@ -3364,3 +3364,32 @@ mod track_changes_tests {
         assert_eq!(c.after, "=A1&\"<>\"", "記号の逃がしが壊れた");
     }
 }
+
+#[cfg(test)]
+mod stale_string_tests {
+    use crate::*;
+
+    #[test]
+    fn 文字列の中の古いシート名を数える() {
+        let mut b = sheet::Book::new();
+        b.sheets[0].name = "表紙".into();
+        let s = &mut b.sheets[0];
+        // 追随する(文字列の外)
+        s.set(Pos::parse("A1").unwrap(), sheet::Cell::input("=4月!B2"));
+        // 追随しない(文字列の中)— これを数える
+        s.set(Pos::parse("A2").unwrap(), sheet::Cell::input("=INDIRECT(\"4月!B2\")"));
+        s.set(Pos::parse("A3").unwrap(), sheet::Cell::input("=SUM(INDIRECT(\"4月!B1:B9\"))"));
+        // ただの文字(参照の形でない)は数えない
+        s.set(Pos::parse("A4").unwrap(), sheet::Cell::input("=\"4月の売上\""));
+        // 別の語の続きは別物(「決算4月!」の中の「4月!」)
+        s.set(Pos::parse("A5").unwrap(), sheet::Cell::input("=INDIRECT(\"決算4月!B2\")"));
+        assert_eq!(stale_in_strings(&b, "4月"), 2, "数え方が違う");
+        // 改名しても文字列の中は変わらない(Excel と同じ)
+        rename_sheet_refs(&mut b, "4月", "April");
+        let f = |a1: &str| {
+            b.sheets[0].get(Pos::parse(a1).unwrap()).unwrap().editable().to_string()
+        };
+        assert_eq!(f("A1"), "=April!B2", "文字列の外は追随する");
+        assert_eq!(f("A2"), "=INDIRECT(\"4月!B2\")", "文字列の中を書き換えてしまった");
+    }
+}
