@@ -1439,6 +1439,54 @@ mod pivot_tests {
     }
 
     #[gpui::test]
+    fn 回転ハンドルはポインタの向きへ回りshiftで15度刻み(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            this.book.sheets[0].shapes_new.push(sheet::model::SheetShape {
+                at: Pos::new(2, 2),
+                width_px: 100.0,
+                height_px: 60.0,
+                kind: "rect".into(),
+                line: Some("1B6E3C".into()),
+                ..Default::default()
+            });
+            this.shape_sel = Some(0);
+            this.shape_rot = Some(0);
+            // 図形の中心(格子px)
+            let sp = &this.book.sheets[0].shapes_new[0];
+            let (sx, sy) = this.cell_origin_px(sp.at).unwrap();
+            let (ccx, ccy) = (sx + 50.0, sy + 30.0);
+            // 真右へ引く = 90度
+            this.shape_rotate_at(ccx + 80.0, ccy, false);
+            assert!(
+                (this.book.sheets[0].shapes_new[0].rot - 90.0).abs() < 0.5,
+                "右で90度にならない: {}",
+                this.book.sheets[0].shapes_new[0].rot
+            );
+            // 真下 = 180度
+            this.shape_rotate_at(ccx, ccy + 80.0, false);
+            assert!((this.book.sheets[0].shapes_new[0].rot - 180.0).abs() < 0.5);
+            // Shift: 中途半端な向き(100度あたり)が15度刻みに丸まる
+            let t = 100.0f32.to_radians();
+            this.shape_rotate_at(ccx + 80.0 * t.sin(), ccy - 80.0 * t.cos(), true);
+            let r = this.book.sheets[0].shapes_new[0].rot;
+            assert!((r - 105.0).abs() < 0.5, "15度刻みに丸まらない: {r}");
+            // 取っ手は折れ線もの(スパークライン)には無い
+            this.book.sheets[0].shapes_new.push(sheet::model::SheetShape {
+                at: Pos::new(0, 0),
+                width_px: 80.0,
+                height_px: 20.0,
+                kind: "spark".into(),
+                line: Some("1B6E3C".into()),
+                points: vec![(0.0, 0.5), (1.0, 0.5)],
+                ..Default::default()
+            });
+            assert!(this.shape_rot_handle(1).is_none(), "折れ線に回転の取っ手が出た");
+            assert!(this.shape_rot_handle(0).is_some());
+        });
+    }
+
+    #[gpui::test]
     fn r1c1では見せ方が変わり中身はa1のまま(cx: &mut gpui::TestAppContext) {
         let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
         c.update(cx, |this, cx| {

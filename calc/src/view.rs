@@ -179,7 +179,10 @@ impl gpui::Element for InputSink {
             }
             let rel = e.position - bounds.origin;
             view.update(cx, |c, cx| {
-                if c.shape_drag.is_some() {
+                if c.shape_rot.is_some() {
+                    c.shape_rotate_at(f32::from(rel.x), f32::from(rel.y), e.modifiers.shift);
+                    cx.notify();
+                } else if c.shape_drag.is_some() {
                     c.shape_drag_at(f32::from(rel.x), f32::from(rel.y));
                     cx.notify();
                 } else if c.img_drag.is_some() {
@@ -1994,27 +1997,51 @@ impl Render for Calc {
             let sp = self.sheet().shapes_new.get(i)?;
             let (x, y) = self.cell_origin_px(sp.at)?;
             let (x, y) = (x + sp.dx_px, y + sp.dy_px);
-            Some(
-                div()
-                    .absolute()
-                    .left(px(x - 2.0))
-                    .top(px(y - 2.0))
-                    .w(px(sp.width_px + 4.0))
-                    .h(px(sp.height_px + 4.0))
-                    .border_2()
-                    .border_dashed()
-                    .border_color(rgb(0x1B6E3C))
+            let mut f = div()
+                .absolute()
+                .left(px(x - 2.0))
+                .top(px(y - 2.0))
+                .w(px(sp.width_px + 4.0))
+                .h(px(sp.height_px + 4.0))
+                .border_2()
+                .border_dashed()
+                .border_color(rgb(0x1B6E3C))
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(-1.0))
+                        .bottom(px(-1.0))
+                        .w(px(10.0))
+                        .h(px(10.0))
+                        .bg(rgb(0x1B6E3C))
+                        .cursor_nwse_resize(),
+                );
+            // 回転の取っ手(枠の上の丸。当たり判定は mouse_down_at 側)
+            if self.shape_rot_handle(i).is_some() {
+                let mid = (sp.width_px + 4.0) / 2.0;
+                f = f
                     .child(
                         div()
                             .absolute()
-                            .right(px(-1.0))
-                            .bottom(px(-1.0))
+                            .left(px(mid - 1.0))
+                            .top(px(-12.0))
+                            .w(px(2.0))
+                            .h(px(10.0))
+                            .bg(rgb(0x1B6E3C)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(mid - 5.0))
+                            .top(px(-21.0))
                             .w(px(10.0))
                             .h(px(10.0))
-                            .bg(rgb(0x1B6E3C))
-                            .cursor_nwse_resize(),
-                    ),
-            )
+                            .rounded_full()
+                            .bg(rgb(0x2E9E57))
+                            .cursor_grab(),
+                    );
+            }
+            Some(f)
         });
 
         // ---- 関数を挿入の小窓(本家の FormulaDialog の形) ----

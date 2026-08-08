@@ -119,6 +119,8 @@ struct Calc {
     shape_sel: Option<usize>,
     /// 図形のドラッグ(番号, 掴んだ格子px, 掴んだ時の錨の格子px, 大きさ変更か)
     shape_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
+    /// 図形の回転ドラッグ(枠の上の丸を掴んでいる間だけ Some)
+    shape_rot: Option<usize>,
     /// いま出ているメニューは図形の専用メニューか(右クリックが図形の上)
     menu_shape: bool,
     /// 図形の切り取り/コピーの控え(セルのクリップボードとは別の器)
@@ -361,6 +363,7 @@ impl Calc {
             locked_by: None,
             shape_sel: None,
             shape_drag: None,
+            shape_rot: None,
             menu_shape: false,
             shape_clip: None,
             img_sel: None,
@@ -826,6 +829,7 @@ impl Calc {
         self.drag = None;
         self.head_drag = None;
         self.shape_drag = None;
+        self.shape_rot = None;
         if std::env::var_os("JO_MOUSE_LOG").is_some() {
             eprintln!(
                 "down x={x:.1} y={y:.1} clicks={clicks} grip={:?}",
@@ -850,6 +854,18 @@ impl Calc {
                     self.ink_cur = Some(vec![(x, y)]);
                 }
                 return;
+            }
+        }
+        // 選択中の図形の回転の取っ手(枠の上の丸)。図形の体より先に見る
+        if let Some(i) = self.shape_sel {
+            if let Some((hx, hy)) = self.shape_rot_handle(i) {
+                if (x - hx).hypot(y - hy) <= 9.0 {
+                    self.commit();
+                    self.checkpoint();
+                    self.shape_rot = Some(i);
+                    self.status = ui::t!("回します(Shift で15度刻み)").into();
+                    return;
+                }
             }
         }
         // 浮いている図形が最優先(セルの上に描かれているので)
@@ -1189,6 +1205,9 @@ impl Calc {
         }
         if self.head_drag.take().is_some() {
             return; // 列・行の選択の確定。status は select_* が出している
+        }
+        if self.shape_rot.take().is_some() {
+            return; // 回転の確定。status はドラッグ中に出している
         }
         if let Some((_, _, _, moved)) = self.shape_drag.take() {
             // 動かしていない(選んだだけ)なら、積んだ控えは戻す
@@ -2937,6 +2956,41 @@ impl Calc {
         self.checkpoint();
         f(&mut self.sheet_mut().shapes_new[i]);
         self.dirty = true;
+    }
+
+    /// 選択中の図形の回転の取っ手の中心(格子px)。折れ線ものには無い
+    fn shape_rot_handle(&self, i: usize) -> Option<(f32, f32)> {
+        let sp = self.sheet().shapes_new.get(i)?;
+        if matches!(
+            sp.kind.as_str(),
+            "spark" | "spark-col" | "spark-wl" | "ink" | "marker"
+        ) {
+            return None;
+        }
+        let (sx, sy) = self.cell_origin_px(sp.at)?;
+        Some((sx + sp.dx_px + sp.width_px / 2.0, sy + sp.dy_px - 18.0))
+    }
+
+    /// 回転ドラッグ。真上が0度、ポインタの向きへ時計回り。Shift で15度刻み
+    pub(crate) fn shape_rotate_at(&mut self, x: f32, y: f32, snap: bool) {
+        let Some(i) = self.shape_rot else { return };
+        let Some(sp) = self.sheet().shapes_new.get(i) else { return };
+        let Some((sx, sy)) = self.cell_origin_px(sp.at) else { return };
+        let (ccx, ccy) = (
+            sx + sp.dx_px + sp.width_px / 2.0,
+            sy + sp.dy_px + sp.height_px / 2.0,
+        );
+        let mut deg = (x - ccx).atan2(-(y - ccy)).to_degrees();
+        if snap {
+            deg = (deg / 15.0).round() * 15.0;
+        }
+        let deg = deg.rem_euclid(360.0);
+        let sp = &mut self.sheet_mut().shapes_new[i];
+        if (sp.rot - deg).abs() > 0.01 {
+            sp.rot = deg;
+            self.dirty = true;
+            self.status = ui::tf!("回転: {}度", format!("{deg:.0}")).into();
+        }
     }
 
     /// 図形のドラッグ(移動 or 右下の掴みで大きさ変更)。
