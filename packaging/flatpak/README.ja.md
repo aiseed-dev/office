@@ -30,7 +30,9 @@
    で `Cargo.lock` から `cargo-sources.json` を作り、manifest の sources に足す
 2. 同様に Python の荷物(polars ほか .venv 相当)を flatpak-pip-generator で
    `python3-modules.json` にして modules に足す
-3. `flatpak-builder --user --install build-dir io.github.aiseed_dev.officework.yml`
+3. **cargo-sources.json の gpui の取り違えを直す**(踏んだ穴。下の「踏み跡」)
+4. `flatpak run org.flatpak.Builder --user --force-clean --disable-rofiles-fuse
+   build-dir io.github.aiseed_dev.officework.yml`
 4. `flatpak run io.github.aiseed_dev.officework`
 
 ## 実証項目(この順で。**通るまで「対応」と言わない**)
@@ -61,3 +63,35 @@
 追いかけない事にしたのではなく**順番が後**(発注者 2026-08-08 の議論)。
 App Sandbox では子プロセスが親の檻を継承するので、「内側の檻」の Mac 実装
 (entitlements 設計)と一緒にやるのが効率的。公証つき .dmg + cask が先にある。
+
+## 踏み跡(2026-08-08 に実際に組んで分かったこと)
+
+**org.flatpak.Builder は sudo 無しで入る。** ただし `flatpak install --user` は
+**ユーザー側の remote しか見ない** — システムに flathub が登録済みでも
+`flatpak remote-add --user flathub …` が別に要る(最初これで空振りした)。
+runtime は `org.gnome.Platform//47` `org.gnome.Sdk//47` と
+`org.freedesktop.Sdk.Extension.rust-stable//24.08`。
+`--no-related` を付けないと翻訳だけ入って本体が入らないことがある。
+
+**cargo-sources.json は gpui を取り違える(要 手直し)。**
+zed の単一リポジトリには **`gpui` という名前の package が2つ**ある —
+本物の `crates/gpui`(version 0.2.2)と、lint の試験材料
+`tooling/lints/test_fixture/gpui`(version 0.0.0)。
+flatpak-cargo-generator は後者を拾うので、そのままだと
+
+    error: failed to select a version for the requirement `gpui = "*"`
+    (locked to 0.2.2) candidate versions found which didn't match: 0.0.0
+
+で落ちる。`gpui_shared_string` も同じ罠。生成のたびに:
+
+    python3 - <<'EOF'
+    import json; p='packaging/flatpak/cargo-sources.json'
+    d=json.load(open(p))
+    for x in d:
+        if x.get('commands'):
+            x['commands']=[c.replace("/tooling/lints/test_fixture/","/crates/")
+                           for c in x['commands']]
+    json.dump(d, open(p,'w'), ensure_ascii=False, indent=1)
+    EOF
+
+**この直しは生成物への手当てなので、Cargo.lock を更新したら毎回やり直す。**
