@@ -57,7 +57,7 @@ xlsx を開いて、直して、保存する表計算アプリ。式も計算す
 
 | 操作 | キー |
 |---|---|
-| セル移動 | ↑ ↓ ← → / Enter(下へ)/ Tab(右へ)/ Shift+Tab(左へ) |
+| セル移動 | ↑ ↓ ← → / Enter(下へ)/ Tab(右へ) |
 | 範囲選択 | Shift+矢印 |
 | 先頭 / 末尾へ | Ctrl+Home / Ctrl+End |
 | ページ送り | PageUp / PageDown |
@@ -65,7 +65,6 @@ xlsx を開いて、直して、保存する表計算アプリ。式も計算す
 | 元に戻す / やり直し | Ctrl+Z / Ctrl+Shift+Z(Ctrl+Y も同じ) |
 | コピー / 切り取り / 貼り付け | Ctrl+C / Ctrl+X / Ctrl+V |
 | **値だけ貼り付け** | Ctrl+Shift+V(式を計算結果の値にして貼る) |
-| 検索・置換 | Ctrl+F / Ctrl+H |
 | 開く / 保存 | Ctrl+O / Ctrl+S |
 | 右クリックメニュー | Menu キー / Shift+F10 |
 | 取り消し・閉じる | Esc |
