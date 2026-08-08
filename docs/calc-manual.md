@@ -82,7 +82,12 @@ theme also live here.
 - Click a row number or column letter to select the whole row/column
 - Drag the boundary between headings to resize columns/rows
 - Ctrl+click opens hyperlinks
-- Drag shapes to move them; the bottom-right corner resizes
+- Drag shapes to move them; the bottom-right corner resizes; **drag the circle
+  above the frame to rotate** (Shift snaps to 15°). Selecting a shape opens a
+  settings panel on the right (fill/line color, line width, opacity,
+  rotate/flip, shadow). **Ctrl+click selects several shapes** → right-click →
+  Align (2+) / Distribute (3+). The right-click menu also has cut/copy/paste,
+  arrange (front/back) and save-as-SVG; Del deletes the whole selection
 
 ## Formulas and functions
 
@@ -277,13 +282,16 @@ The programmer's reference (ranges ⇄ arrays, the API, =PY arguments and return
 values) is the [Python manual](python-manual.md). This section is the
 operations side.
 
-**There are no VBA-style macros.** Instead, Python travels inside the workbook:
-the form (UI) + code (logic) + rules (validation, status columns) fit in one
-xlsx — ledger-style workflows are built this way.
+**There are no VBA-style macros.** Python fills that role — but since
+2026-08-08, **only cell functions (UDFs) may travel inside a workbook**.
+Procedures (scripts that do work) live outside, in
+`~/.config/office/plugins/` — **a received file can never become the origin
+of execution**.
 
-Two safety principles. **Opening a file never executes anything** (execution is
-always an explicit action; the "open = execute" attack path does not exist).
-And **code that traveled inside a workbook always runs in a sandbox.**
+Three safety principles. **Opening a file never executes anything** (execution
+is always an explicit action; the "open = execute" attack path does not
+exist). **Workbook-borne code always runs in a sandbox** and can only compute
+values. And **procedures only run from files you placed yourself.**
 
 ### Setup
 
@@ -308,34 +316,37 @@ s["A30"] = "Nihon Funen Co., Ltd."   # value goes in, formatting untouched
   success the result lands as **one undo step** (even across sheets)
 - Everything installed on the machine (polars, scipy, …) is available
 
-### Embedding code in the workbook (@-commands)
+### @-commands — functions in the workbook, procedures on your machine
 
 In the Data > Python input:
 
 | You type | What happens |
 |---|---|
-| `@save name` | choose a .py and embed it (saved into the xlsx; travels with the form) |
-| `@name` | run the embedded code (**always in the no-network sandbox**) |
+| `@save 関数name` | choose a .py and embed it (**only names starting with 関数** — UDF definitions; saved into the xlsx) |
+| `@name` | run **the plugin** `~/.config/office/plugins/name.py` (**always in the no-network sandbox**) |
 | `@name net` | run with network allowed (see below) |
-| `@list` (or `@`) | list embedded code |
-| `@del name` | remove from the workbook |
+| `@list` (or `@`) | list workbook functions and plugins |
+| `@del name` | remove a function from the workbook |
+| `@export name` | extract a legacy embedded procedure to a .py (**never executed** — review it, then place it in plugins yourself) |
 | `@計算` | batch-evaluate =PY(…) cells (see below) |
 
-Code is stored in the custom part `xl/joPython.xml`. If Excel opens and
+Functions are stored in the custom part `xl/joPython.xml`. If Excel opens and
 re-saves the file this part may disappear (**the values remain** — the
-degradation is on the safe side).
+degradation is on the safe side). Opening a workbook that carries a legacy
+embedded procedure is reported; it cannot run, and it disappears on save
+(`@export` retrieves it).
 
 ### The sandbox
 
-Workbook-borne code runs closed inside bubblewrap: **no network, the real
+Possibly-foreign code runs closed inside a cage (bubblewrap on plain Linux;
+the official nested sandbox in the Flatpak build): **no network, the real
 filesystem is read-only, your home directory is invisible (empty), and the only
-writable place is a scratch area for the exchange**. Opening someone else's
-file from a shared folder cannot let its embedded code touch your files or
-your network.
+writable place is a scratch area for the exchange**. There is also a time
+limit (procedures 60 s, functions 30 s) — an infinite loop cannot hang the app.
 
 - Jobs that need the network (pulling a web form's inbox into a ledger, …)
   get it **only when you type `@name net` at that moment**. The permission is
-  never saved into the workbook — a file cannot grant itself rights
+  never saved anywhere — every grant is an explicit act
 - Code you typed or picked yourself also runs sandboxed when a sandbox exists
   (defense in depth; that variant has network)
 
@@ -346,7 +357,7 @@ your network.
 ```
 
 1. Embed a .py that defines `def fname(…):` under a name starting with 関数
-   (e.g. `@save 関数`)
+   (e.g. `@save 関数sum`)
 2. Write `=PY("fname", A1:B10, 100, "甲")` in a cell
 3. **Data > Python, `@計算`** — only then are all PY cells evaluated at once,
    in the no-network sandbox

@@ -12,8 +12,8 @@ Everything was measured on a real machine.
 | Place | Bindings | Sandbox |
 |---|---|---|
 | calc: Data > Python (one-liner / .py) | `b` = workbook, `s` = current sheet | sandboxed if available (with network) |
-| calc: `@save name` → `@name` | same | **always sandboxed** (no network; `net` enables it) |
-| calc: `=PY("fn",…)` + `@計算` | arguments passed as values (below) | always sandboxed (no network) |
+| calc: `@name` (**a plugin .py** — procedures never travel in the workbook; decided 2026-08-08) | same | **always sandboxed** (no network; `net` enables it) |
+| calc: `=PY("fn",…)` + `@計算` (only functions embed, via `@save 関数name`) | arguments passed as values (below) | always sandboxed (no network) |
 | calc / writer: macros, plugins | calc: `b`/`s`; **writer: `d` = python-docx Document** | sandboxed |
 | writer: in-page Python (HTML) | `form` = dict of field name → value | always sandboxed |
 
@@ -141,7 +141,9 @@ form["total"] = qty * 150
 - The real filesystem is **read-only**, your home directory is invisible, and
   the only writable place is a scratch area for the exchange. The network is
   **closed by default** — it opens only when you type `@name net` at that
-  moment (the permission is never saved into the workbook)
+  moment (the permission is never saved anywhere)
+- Time-limited (procedures 60 s, =PY functions 30 s); overruns are killed
+  and reported
 - Libraries installed on the machine (polars, scipy, matplotlib, …) work
 - `print` output appears in the status bar (report progress and counts there)
 
@@ -207,8 +209,10 @@ network**, not **the correctness of the result**:
 Beyond that the safety net is threefold: execution on a copy (failure is
 harmless), one-step undo (didn't like it? Ctrl+Z), and the sandbox (even
 misbehaving code can't reach the machine). So the right way to try things is
-**run it, look at the result, undo if you don't like it**. Embed with
-`@save` only after you're satisfied.
+**run it, look at the result, undo if you don't like it**. Once satisfied,
+place procedures in `~/.config/office/plugins/name.py` (they run as `@name`).
+**Only =PY functions may embed in a workbook** (`@save 関数name` —
+decided 2026-08-08 for safety).
 
 ### Migrating VBA
 
