@@ -80,6 +80,12 @@ struct Calc {
     pub(crate) font_name: gpui::SharedString,
     /// 罫線のアイコンの格子パレット(開いている位置)。掛けても閉じない
     pub(crate) border_pal: Option<(f32, f32)>,
+    /// 格子の面の窓の中での位置と大きさ(x, y, 幅, 高さ px)。描くたびに書く。
+    /// リボンを押した窓の座標を、格子の面の座標に直すのに要る
+    pub(crate) pane_box: std::cell::Cell<(f32, f32, f32, f32)>,
+    /// **いま開こうとしている一覧を出す場所。** リボンのボタンを押した
+    /// ときだけ入り、run_cmd を抜けたら消える。None ならセルの下に出す
+    pub(crate) pop_at: Option<(f32, f32)>,
     /// 罫線のペン(線種と色)。罫線の一覧から掛けるときに使う
     pen_style: sheet::model::BStyle,
     pen_color: Option<u32>,
@@ -348,6 +354,8 @@ impl Calc {
             cond_pend: None,
             import_pend: None,
             border_pal: None,
+            pane_box: std::cell::Cell::new((0.0, 0.0, 0.0, 0.0)),
+            pop_at: None,
             font_name: kumihan::font::for_document(None)
                 .map(|(fam, _)| gpui::SharedString::from(fam.name.clone()))
                 .unwrap_or_else(|_| "Noto Sans JP".into()),
@@ -1359,6 +1367,32 @@ impl Calc {
         Some((x0?, y0?, x1?, y1?))
     }
 
+    /// **一覧やパレットを出す場所(格子の面の px)。**
+    ///
+    /// リボンのボタンから開いたときは押したボタンの真下、キー操作や格子の
+    /// 上からならいまのセルの下。以前はどこから開いても必ずセルの下に出て
+    /// いて、リボンで書体を選ぼうとすると一覧が画面の下の方に飛んでいた
+    /// (発注者報告 2026-08-08)。**一覧は押した場所の近くに出す。**
+    ///
+    pub(crate) fn pop_anchor(&self) -> (f32, f32) {
+        if let Some(at) = self.pop_at {
+            return at;
+        }
+        self.cell_origin_px(self.cursor)
+            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+            .unwrap_or((self.head_w() + 16.0, self.head_h() + 16.0))
+    }
+
+    /// リボンのボタンから命令を出す。**押した場所を控えてから** run_cmd に
+    /// 渡すので、開いた一覧はボタンの真下に出る([`Self::pop_anchor`])。
+    /// 格子の面はリボンより下から始まるので、縦はその一番上に置くしかない。
+    pub(crate) fn run_from_ribbon(&mut self, id: &str, at_x: f32, cx: &mut Context<Self>) {
+        let (pane_x, _, pane_w, _) = self.pane_box.get();
+        self.pop_at = Some((pop_x(at_x, pane_x, pane_w), 2.0));
+        self.run_cmd(id, cx);
+        self.pop_at = None;
+    }
+
     /// いま表示されているセルの左上(格子領域の px)。画面の外なら None。
     fn cell_origin_px(&self, p: Pos) -> Option<(f32, f32)> {
         let mut x = self.head_w();
@@ -1479,10 +1513,7 @@ impl Calc {
             left || filled(Pos::new(r, b.col + 1))
         });
         if neighbor {
-            let at = self
-                .cell_origin_px(self.cursor)
-                .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+            let at = self.pop_anchor();
             self.sort_pend = Some(asc);
             self.pick_kind = "sort-expand";
             self.pick = Some((

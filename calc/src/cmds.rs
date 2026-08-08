@@ -99,10 +99,7 @@ impl Calc {
             // 罫線 — **日本の帳票の本体**。一覧から辺とペン(線種・色)を選ぶ
             "borders" => {
                 self.commit();
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 // アイコンの格子パレット(発注者 2026-08-08)。掛けても閉じない
                 self.border_pal = Some(at);
             }
@@ -185,10 +182,7 @@ impl Calc {
                 if self.anchor.is_none() {
                     self.status = ui::t!("結合する範囲を Shift+矢印で選んでください").into();
                 } else {
-                    let at = self
-                        .cell_origin_px(self.cursor)
-                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    let at = self.pop_anchor();
                     self.pick_kind = "merge-pick";
                     self.pick = Some((
                         vec![
@@ -314,10 +308,7 @@ impl Calc {
             // 大小のトグルだけの仮実装をやめ、一覧から選ぶ
             "changecase" => {
                 self.commit();
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 self.pick_kind = "changecase";
                 self.pick = Some((
                     CASE_MODES.iter().map(|v| v.to_string()).collect(),
@@ -328,10 +319,7 @@ impl Calc {
             // 数値の書式。本家のドロップダウン相当の一覧(その他=コード直打ち)
             "format" => {
                 self.commit();
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 // 今の書式に ✓ を付け、状態行にも言う(本家はコンボが
                 // 選択セルの書式に追従する — その代わり)
                 let cur = self
@@ -378,10 +366,7 @@ impl Calc {
                 if vals.is_empty() {
                     self.status = ui::t!("日本語の書体が見つかりません").into();
                 } else {
-                    let at = self
-                        .cell_origin_px(self.cursor)
-                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    let at = self.pop_anchor();
                     // 全部出す(前は16個で黙って切り捨てていた — 一覧は
                     // スクロールできるので削る理由が無い)
                     self.pick_kind = "font";
@@ -389,10 +374,7 @@ impl Calc {
                 }
             }
             "fontsize" => {
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 self.pick_kind = "size";
                 self.pick = Some((
                     // Excel の標準の並び(6〜72)
@@ -889,10 +871,7 @@ impl Calc {
             // 文字の回転(縦書きのセル。90度ずつ回る)
             // 文字の向き: 本家のプリセット+任意の角度(第2便3段)
             "text-orient" => {
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 let cur = self
                     .sheet()
                     .get(self.cursor)
@@ -1514,10 +1493,7 @@ impl Calc {
                     }
                     Some(i) => {
                         let cur = self.book.pivots[i].show_as.clone();
-                        let at = self
-                            .cell_origin_px(self.cursor)
-                            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                        let at = self.pop_anchor();
                         let items: Vec<String> = ["そのまま", "比率", "累計", "差"]
                             .iter()
                             .map(|n| {
@@ -1546,10 +1522,7 @@ impl Calc {
                     }
                     Some(i) => {
                         let cur = self.book.pivots[i].style.clone();
-                        let at = self
-                            .cell_origin_px(self.cursor)
-                            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                        let at = self.pop_anchor();
                         let items: Vec<String> = ["青(既定)", "緑", "橙", "灰"]
                             .iter()
                             .map(|n| {
@@ -1571,10 +1544,7 @@ impl Calc {
             // 印刷のヘッダー/フッター(&P=頁 &N=総頁。紙と PDF に出る)
             "editheader" => {
                 self.commit();
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 let (hl, hc, hr) =
                     sheet::model::hf_split(self.sheet().header.as_deref().unwrap_or(""));
                 let (fl, fc, fr) =
@@ -1814,10 +1784,7 @@ impl Calc {
             }
             // 記号を挿入: 一覧から選んで**数式バーへ**差し込む(セルは置き換えない)
             "inssymbol" => {
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 self.pick_kind = "symbol";
                 self.pick = Some((
                     ["〒", "℡", "№", "㈱", "〆", "※", "→", "←", "↑", "↓",
@@ -2038,10 +2005,7 @@ impl Calc {
                         ui::t!("スパークラインにする数の範囲を選んでください(置き場所はいまのセル)").into();
                 } else {
                     // 本家と同じ3種から選ぶ(折れ線・縦棒・勝ち負け)
-                    let at = self
-                        .cell_origin_px(self.cursor)
-                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                        .unwrap_or((HEAD_W + 24.0, ROW_H + 24.0));
+                    let at = self.pop_anchor();
                     self.pick_note = Some(ui::t!("スパークラインの種類").into());
                     self.pick_kind = "spark-kind-pick";
                     self.pick = Some((
@@ -2055,10 +2019,7 @@ impl Calc {
                 }
             }
             "insshape" => {
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 self.pick_kind = "shape";
                 self.pick = Some((
                     ["四角形", "角丸四角形", "楕円", "右矢印", "ひし形", "直線"]
@@ -2094,10 +2055,7 @@ impl Calc {
             // 名前マネージャー(本家の一覧+新規/編集/削除に相当)
             "defname" => {
                 self.commit();
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 let mut items: Vec<String> = self
                     .sheet()
                     .names
@@ -2117,10 +2075,7 @@ impl Calc {
             // ウィンドウ枠の固定。本家はドロップダウンで「最上行」「最初の列」を
             // 個別に選べる — トグルだけの形をやめ、一覧から選ぶ
             "freeze" => {
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 let mut items: Vec<String> = Vec::new();
                 if self.frozen.is_some() {
                     items.push("固定の解除".into());
@@ -2140,10 +2095,7 @@ impl Calc {
             // 塗りつぶしの色。本家はパレット — 一覧から選ぶ
             // (順繰りの2色は仮実装だった。発注者指摘 2026-08-06)
             "fillparag" => {
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 self.pick_kind = "fill-color";
                 let mut items: Vec<String> =
                     FILL_COLORS.iter().map(|(n, _)| n.to_string()).collect();
@@ -2152,10 +2104,7 @@ impl Calc {
             }
             // フォントの色。同じくパレット
             "fontcolor" => {
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 self.pick_kind = "font-color";
                 let mut items: Vec<String> =
                     FONT_COLORS.iter().map(|(n, _)| n.to_string()).collect();
@@ -2432,10 +2381,7 @@ impl Calc {
                 ui::t!("変更履歴はまだありません(共同編集タブの「変更履歴」で記録を始める)").into();
             return;
         }
-        let at = self
-            .cell_origin_px(self.cursor)
-            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let at = self.pop_anchor();
         let items: Vec<String> = self
             .book
             .changes

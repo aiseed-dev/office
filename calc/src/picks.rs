@@ -210,10 +210,7 @@ impl Calc {
                     return;
                 }
                 if self.sheet().names.iter().any(|(n, _)| *n == name) {
-                    let at = self
-                        .cell_origin_px(self.cursor)
-                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    let at = self.pop_anchor();
                     self.name_pend = Some(name.clone());
                     self.pick_note = Some(ui::tf!("名前「{}」をどうしますか", name).into());
                     self.pick_kind = "name-act-pick";
@@ -302,10 +299,7 @@ impl Calc {
             "border-pick" => {
                 match v {
                     "→ 線のスタイル…" => {
-                        let at = self
-                            .cell_origin_px(self.cursor)
-                            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                        let at = self.pop_anchor();
                         let items: Vec<String> = BORDER_STYLES
                             .iter()
                             .map(|(n, b)| {
@@ -322,10 +316,7 @@ impl Calc {
                         return;
                     }
                     "→ 線の色…" => {
-                        let at = self
-                            .cell_origin_px(self.cursor)
-                            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                        let at = self.pop_anchor();
                         let mut items: Vec<String> =
                             FONT_COLORS.iter().map(|(n, _)| n.to_string()).collect();
                         items.push("その他(RRGGBB を打つ)…".into());
@@ -438,10 +429,7 @@ impl Calc {
                     return;
                 }
                 if v == "→ グループ化…" {
-                    let at = self
-                        .cell_origin_px(self.cursor)
-                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    let at = self.pop_anchor();
                     let field = self.pivot_flt.as_ref().map(|(_, f, _)| f.clone()).unwrap_or_default();
                     self.pick_note =
                         Some(ui::tf!("「{}」のグループ化 — 単位を選ぶ", field).into());
@@ -485,10 +473,7 @@ impl Calc {
                 let i = i - 1;
                 if i >= self.book.sheets[self.active].cond.len() { return }
                 self.cond_pend = Some(i);
-                let at = self
-                    .cell_origin_px(self.cursor)
-                    .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                    .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                let at = self.pop_anchor();
                 self.pick_note = Some(ui::tf!("規則 {} をどうしますか", i + 1).into());
                 self.pick_kind = "cond-act-pick";
                 self.pick = Some((
@@ -1079,10 +1064,7 @@ impl Calc {
                 if rules.is_empty() {
                     self.status = ui::t!("このシートに条件付き書式はありません").into();
                 } else {
-                    let at = self
-                        .cell_origin_px(self.cursor)
-                        .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-                        .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                    let at = self.pop_anchor();
                     let items: Vec<String> = rules
                         .iter()
                         .enumerate()
@@ -1661,10 +1643,7 @@ impl Calc {
         items.push("→ ラベルで絞る…".into());
         items.push("→ 値で絞る…".into());
         items.push("→ グループ化…".into());
-        let at = self
-            .cell_origin_px(self.cursor)
-            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let at = self.pop_anchor();
         let pname = self.book.pivots.get(pi).map(|d| d.name.clone()).unwrap_or_default();
         self.pick_note = Some(
             ui::tf!("{} の絞り込み — 「{}」(☑ 表示 / ☐ 隠す)", pname, field).into(),
@@ -1826,10 +1805,7 @@ impl Calc {
     /// 重複の削除のパネル — 比べる列の入切と「先頭行は見出し」。
     pub(crate) fn dedup_pick(&mut self) {
         let Some((list, header)) = &self.dedup_pend else { return };
-        let at = self
-            .cell_origin_px(self.cursor)
-            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let at = self.pop_anchor();
         let mut items: Vec<String> = Vec::new();
         for (_, name, on) in list {
             items.push(format!("{} {}", if *on { "☑" } else { "☐" }, name));
@@ -1847,10 +1823,7 @@ impl Calc {
 
     pub(crate) fn pivot_pick(&mut self, kind: &'static str) {
         let Some(pend) = &self.pivot_pend else { return };
-        let at = self
-            .cell_origin_px(self.cursor)
-            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let at = self.pop_anchor();
         let mut items: Vec<String> = Vec::new();
         let note: SharedString = match kind {
             "pivot-rows-pick" => {
@@ -1896,10 +1869,7 @@ impl Calc {
     /// 罫線を選択に掛ける(ペンの線種・色で)。which は一覧の項目名
     /// 線のスタイルのパネル(ペンに入る)。罫線パレットからも来る
     pub(crate) fn open_border_style_pick(&mut self) {
-        let at = self
-            .cell_origin_px(self.cursor)
-            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let at = self.pop_anchor();
         let items: Vec<String> = BORDER_STYLES
             .iter()
             .map(|(n, b)| {
@@ -1917,10 +1887,7 @@ impl Calc {
 
     /// 線の色のパネル(ペンに入る)。罫線パレットからも来る
     pub(crate) fn open_border_color_pick(&mut self) {
-        let at = self
-            .cell_origin_px(self.cursor)
-            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let at = self.pop_anchor();
         let mut items: Vec<String> =
             FONT_COLORS.iter().map(|(n, _)| n.to_string()).collect();
         items.push("その他(RRGGBB を打つ)…".into());
@@ -3579,10 +3546,7 @@ impl Calc {
             // 切ったことを黙らない
             self.status = format!("候補 {total} 件のうち先頭 16 件を出しています").into();
         }
-        let at = self
-            .cell_origin_px(self.cursor)
-            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let at = self.pop_anchor();
         self.pick = Some((vals, at));
     }
 

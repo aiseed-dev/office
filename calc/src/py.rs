@@ -1682,10 +1682,7 @@ calc の隣に置いてください)").to_string()
             "→ {}",
             ui::tf!("取り込む({} 行)", pend.grid.len())
         ));
-        let at = self
-            .cell_origin_px(self.cursor)
-            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
-            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+        let at = self.pop_anchor();
         let name = pend
             .path
             .file_name()

@@ -52,6 +52,21 @@ pub(crate) fn hex(s: &str) -> gpui::Rgba {
 pub(crate) const COL_W: f32 = 108.0;
 /// xlsx の列幅1(=「0」1個ぶん)を何画素にするか。既定幅 8.43 ≒ 108px の比
 pub(crate) const PX_PER_CHW: f32 = 108.0 / 8.43;
+/// 一覧を出す横位置を決める。**押した窓の座標を格子の面の座標に直す。**
+///
+/// リボンで書体を選ぼうとすると一覧がセルの下(画面のずっと下)に出ていた
+/// ので、押したボタンの真下に出すようにした(発注者報告 2026-08-08)。
+/// 一覧の幅は開く側でまちまちなので、はみ出しは控えめな幅(POP_W)で見て
+/// 右端から内へ寄せるだけにする。面の幅がまだ分からない(描く前)ときは
+/// 寄せない。
+pub(crate) fn pop_x(click_x: f32, pane_x: f32, pane_w: f32) -> f32 {
+    // 押した点そのままだと一覧が指の右にずれて見えるので少し左へ寄せる
+    const POP_W: f32 = 240.0;
+    let x = click_x - pane_x - 12.0;
+    let x = if pane_w > POP_W { x.min(pane_w - POP_W) } else { x };
+    x.max(0.0)
+}
+
 /// 描く行の並び。固定行は常に頭に、残りは窓から。
 pub(crate) fn grid_rows(frozen: Option<Pos>, view: Pos, n: u32) -> Vec<u32> {
     let f = frozen.map(|p| p.row).unwrap_or(0);

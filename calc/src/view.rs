@@ -145,6 +145,12 @@ impl gpui::Element for InputSink {
         _: Option<&gpui::InspectorElementId>, bounds: Bounds<gpui::Pixels>,
         _: &mut (), _: &mut (), window: &mut Window, cx: &mut App) {
         let focus = self.view.read(cx).focus.clone();
+        // 格子の面の場所を控える。リボンを押した窓の座標を、一覧を置く
+        // 格子の面の座標に直すのに要る(pop_anchor が読む)
+        self.view.read(cx).pane_box.set((
+            f32::from(bounds.origin.x), f32::from(bounds.origin.y),
+            f32::from(bounds.size.width), f32::from(bounds.size.height),
+        ));
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.view.clone()), cx);
         // マウスは窓のレベルで受けて、座標からセルを逆算する(writer と同じ方式)。
         // セルごとのホバー判定に頼ると、ドラッグ中の移動を取り逃すことがある
@@ -507,8 +513,8 @@ impl Render for Calc {
                     .tooltip(move |_, cx| cx.new(|_| Tip(label.into(), us)).into())
                     .cursor_pointer().hover(move |st| st.bg(th_btn_hover))
                     .child(val)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run_cmd(cid, cx);
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                        this.run_from_ribbon(cid, f32::from(ev.position().x), cx);
                         cx.notify()
                     }))
                     .into_any_element();
@@ -556,8 +562,8 @@ impl Render for Calc {
                 if cmd.ready {
                     let cid = cmd.id;
                     b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.run_cmd(cid, cx);
+                        .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                            this.run_from_ribbon(cid, f32::from(ev.position().x), cx);
                             cx.notify()
                         }));
                 }
@@ -605,8 +611,8 @@ impl Render for Calc {
             if cmd.ready {
                 let cid = cmd.id;
                 b = b.cursor_pointer().hover(move |st| st.bg(th_btn_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run_cmd(cid, cx);
+                    .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                        this.run_from_ribbon(cid, f32::from(ev.position().x), cx);
                         cx.notify()
                     }));
             }
