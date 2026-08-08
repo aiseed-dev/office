@@ -2226,3 +2226,67 @@ impl Calc {
         }
     }
 }
+
+impl Calc {
+    /// 行・列の非表示と再表示(見出しの右クリック)。土台は行と列の
+    /// `hidden`(xlsx と往復する = 隠したまま次の人に渡る)で、
+    /// データタブの「グループ化」と同じ器を使う。
+    /// **全部は隠さない** — 隠したものを戻す道が見えなくなるため
+    pub(crate) fn hide_lines(&mut self, id: &str) {
+        let cols = id.ends_with("cols");
+        let hide = id.starts_with("hide");
+        let (a, b) = self.sel_rect();
+        let (lo, hi) = if cols { (a.col, b.col) } else { (a.row, b.row) };
+        let what = if cols { "列" } else { "行" };
+        // 使っている分を全部隠すと、戻す道(見出しを跨いで選ぶ)が消える
+        if hide {
+            let (rows, colsn) = self.sheet().extent();
+            let total = if cols { colsn } else { rows };
+            let already =
+                if cols { &self.sheet().col_hidden } else { &self.sheet().row_hidden };
+            let left = (0..total)
+                .filter(|i| !already.contains(i) && !(lo..=hi).contains(i))
+                .count();
+            if total > 0 && left == 0 {
+                self.status =
+                    ui::tf!("使っている{}を全部は隠せません(戻す道が見えなくなるため)", what)
+                        .into();
+                return;
+            }
+        }
+        self.checkpoint();
+        let sh = self.sheet_mut();
+        let set = if cols { &mut sh.col_hidden } else { &mut sh.row_hidden };
+        let mut n = 0usize;
+        if hide {
+            for i in lo..=hi {
+                n += set.insert(i) as usize;
+            }
+        } else {
+            // 選んだ範囲の中で隠れているものを戻す(Excel の作法 —
+            // 隠れた行を挟む形で選んでから「再表示」)
+            let back: Vec<u32> = (lo..=hi).filter(|i| set.contains(i)).collect();
+            n = back.len();
+            for i in back {
+                set.remove(&i);
+            }
+        }
+        if n == 0 {
+            self.undo_stack.pop(); // 何も変わっていないので控えも戻す
+            self.status = if hide {
+                ui::tf!("その{}はもう隠れています", what).into()
+            } else {
+                ui::tf!("選んだ中に隠れた{}はありません(隠れた分を挟むように選ぶ)", what)
+                    .into()
+            };
+            return;
+        }
+        self.dirty = true;
+        self.status = if hide {
+            ui::tf!("{} {}を隠しました(見出しを跨いで選び「再表示」で戻せます)", n, what)
+                .into()
+        } else {
+            ui::tf!("{} {}を戻しました", n, what).into()
+        };
+    }
+}

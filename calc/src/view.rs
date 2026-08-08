@@ -1828,11 +1828,15 @@ impl Render for Calc {
             match self.menu_head {
                 Some(true) => {
                     entries.insert(0, ("colw", "列の幅…", "", true, false));
-                    entries.insert(1, ("", "", "", false, false));
+                    entries.insert(1, ("hide-cols", "非表示", "", true, false));
+                    entries.insert(2, ("unhide-cols", "再表示", "", true, false));
+                    entries.insert(3, ("", "", "", false, false));
                 }
                 Some(false) => {
                     entries.insert(0, ("rowh", "行の高さ…", "", true, false));
-                    entries.insert(1, ("", "", "", false, false));
+                    entries.insert(1, ("hide-rows", "非表示", "", true, false));
+                    entries.insert(2, ("unhide-rows", "再表示", "", true, false));
+                    entries.insert(3, ("", "", "", false, false));
                 }
                 None => {}
             }

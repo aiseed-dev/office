@@ -3092,3 +3092,54 @@ mod pivot_e2e_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod hide_lines_tests {
+    use crate::*;
+
+    #[gpui::test]
+    fn 行と列を隠して戻せる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            for r in 0..5u32 {
+                for col in 0..3u32 {
+                    this.book.sheets[0].set(Pos::new(r, col), sheet::Cell::input("x"));
+                }
+            }
+            // 2〜3行目(索引 1〜2)を選んで隠す
+            this.select_rows(1, 2);
+            this.hide_lines("hide-rows");
+            assert_eq!(this.book.sheets[0].row_hidden.len(), 2);
+            assert!(this.book.sheets[0].row_hidden.contains(&1));
+            // 隠れた分を挟むように選んで戻す
+            this.select_rows(0, 3);
+            this.hide_lines("unhide-rows");
+            assert!(this.book.sheets[0].row_hidden.is_empty(), "戻っていない");
+            // 列も同じ器
+            this.select_cols(1, 1);
+            this.hide_lines("hide-cols");
+            assert!(this.book.sheets[0].col_hidden.contains(&1));
+            // Ctrl+Z で1手ずつ戻る
+            this.undo_sheet();
+            assert!(this.book.sheets[0].col_hidden.is_empty(), "undo で戻らない");
+        });
+    }
+
+    #[gpui::test]
+    fn 使っている行を全部は隠せない(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            for r in 0..3u32 {
+                this.book.sheets[0].set(Pos::new(r, 0), sheet::Cell::input("x"));
+            }
+            this.select_rows(0, 2);
+            this.hide_lines("hide-rows");
+            assert!(this.book.sheets[0].row_hidden.is_empty(), "全部隠れてしまった");
+            assert!(this.status.contains("全部は隠せません"), "{}", this.status);
+            // 隠れていない所で「再表示」を押しても、黙って何もしない旨を言う
+            this.select_rows(0, 1);
+            this.hide_lines("unhide-rows");
+            assert!(this.status.contains("隠れた"), "{}", this.status);
+        });
+    }
+}

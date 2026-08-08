@@ -531,7 +531,7 @@ impl Calc {
         }
     }
 
-    fn undo_sheet(&mut self) {
+    pub(crate) fn undo_sheet(&mut self) {
         let Some(batch) = self.undo_stack.pop() else {
             self.status = ui::t!("戻すものがありません").into();
             return;

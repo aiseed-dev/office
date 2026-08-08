@@ -1116,6 +1116,8 @@ impl Calc {
                 self.dirty = true;
                 self.status = ui::tf!("{} 本の条件を消しました", n).into();
             }
+            // 見出しの右クリック: 行・列の非表示と再表示
+            "hide-rows" | "hide-cols" | "unhide-rows" | "unhide-cols" => self.hide_lines(id),
             // 見出しの右クリック: 幅・高さの数値指定(選んだ列・行ぶん)
             "colw" => {
                 let cur = self
