@@ -305,6 +305,7 @@ pub const CALC: &[Tab] = &[
         c("show-details", "Afficher les détails", "show-details"),
         c("hide-details", "Masquer le détail", "hide-details"),
         c("subtotal", "Sous-total", "subtotal"),
+        c("datatable", "Table de données", "datatable"),
         c("python", "Python", "python"),
     ]},
     Tab { name: "Tableau croisé dynamique", cmds: &[

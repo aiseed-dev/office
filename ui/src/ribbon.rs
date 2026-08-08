@@ -351,6 +351,7 @@ pub const CALC: &[Tab] = &[
         c("show-details", "詳細の表示", "show-details"),
         c("hide-details", "詳細の非表示", "hide-details"),
         c("subtotal", "小計", "subtotal"),
+        c("datatable", "データテーブル", "datatable"),
         c("python", "Python", "python"),
     ]},
     Tab { name: "ピボットテーブル", cmds: &[

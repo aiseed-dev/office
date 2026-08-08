@@ -31,7 +31,7 @@ impl Calc {
         "instable", "table-tpl", "inssymbol", "pivot-insert", "pivot-fields",
         "pivot-refresh", "pivot-refresh-all", "pivot-select",
         "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout", "pivot-style",
-        "pivot-showas",
+        "pivot-showas", "datatable",
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
@@ -1491,6 +1491,11 @@ impl Calc {
             }
             // スタイルギャラリー(帯の色の組)。一覧から選んで掛け直す
             // 計算の種類(そのまま / 総計に対する比率 / 累計 / 前との差)
+            // データテーブル(感度表)。入力セルを2段で聞く
+            "datatable" => {
+                self.commit();
+                self.prompt = Some(("dt-col", Editor::new("")));
+            }
             "pivot-showas" => {
                 self.commit();
                 match self.pivot_at(self.cursor) {

@@ -3111,6 +3111,38 @@ impl Calc {
                 self.goal = Some((p, v));
                 self.prompt = Some(("goal-var", Editor::new("")));
             }
+            // データテーブル 1/2 — 列の入力セル(空 Enter = やめる)
+            "dt-col" => {
+                let t = text.trim().to_string();
+                if t.is_empty() {
+                    self.status = ui::t!("データテーブルをやめました").into();
+                    return;
+                }
+                let Some(p) = Pos::parse(&t) else {
+                    self.status = ui::t!("入力セルが読めません(例: B2)").into();
+                    self.prompt = Some(("dt-col", Editor::new(&t)));
+                    return;
+                };
+                self.dt_col = Some(p);
+                self.prompt = Some(("dt-row", Editor::new("")));
+            }
+            // データテーブル 2/2 — 行の入力セル(空 Enter = 1変数)
+            "dt-row" => {
+                let Some(ci) = self.dt_col.take() else { return };
+                let t = text.trim().to_string();
+                if t.is_empty() {
+                    self.data_table(Some(ci), None);
+                    return;
+                }
+                match Pos::parse(&t) {
+                    Some(ri) => self.data_table(Some(ci), Some(ri)),
+                    None => {
+                        self.status = ui::t!("行の入力セルが読めません(例: B3。空 Enter = 1変数)").into();
+                        self.dt_col = Some(ci);
+                        self.prompt = Some(("dt-row", Editor::new(&t)));
+                    }
+                }
+            }
             "goal-var" => {
                 let Some((target, goal)) = self.goal.take() else { return };
                 let Some(var) = Pos::parse(&text) else {

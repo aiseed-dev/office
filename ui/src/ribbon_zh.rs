@@ -305,6 +305,7 @@ pub const CALC: &[Tab] = &[
         c("show-details", "显示详细资料", "show-details"),
         c("hide-details", "隐藏明细", "hide-details"),
         c("subtotal", "分类汇总", "subtotal"),
+        c("datatable", "模拟运算表", "datatable"),
         c("python", "Python", "python"),
     ]},
     Tab { name: "数据透视表", cmds: &[

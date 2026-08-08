@@ -305,6 +305,7 @@ pub const CALC: &[Tab] = &[
         c("show-details", "Details anzeigen", "show-details"),
         c("hide-details", "Detail ausblenden", "hide-details"),
         c("subtotal", "Teilergebnis", "subtotal"),
+        c("datatable", "Datentabelle", "datatable"),
         c("python", "Python", "python"),
     ]},
     Tab { name: "Pivot-Tabelle", cmds: &[

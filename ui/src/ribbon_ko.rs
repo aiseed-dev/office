@@ -305,6 +305,7 @@ pub const CALC: &[Tab] = &[
         c("show-details", "세부 정보 표시", "show-details"),
         c("hide-details", "하위 수준 숨기기", "hide-details"),
         c("subtotal", "부분합", "subtotal"),
+        c("datatable", "데이터 표", "datatable"),
         c("python", "Python", "python"),
     ]},
     Tab { name: "피벗 테이블", cmds: &[

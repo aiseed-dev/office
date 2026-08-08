@@ -127,6 +127,8 @@ struct Calc {
     menu_shape: bool,
     /// 図形の切り取り/コピーの控え(セルのクリップボードとは別の器)
     shape_clip: Option<sheet::model::SheetShape>,
+    /// データテーブルの板の途中(列の入力セル)。行の板の確定まで持つ
+    dt_col: Option<Pos>,
     /// 選んでいる画像(images_new の番号)。グラフもここ
     img_sel: Option<usize>,
     img_drag: Option<(usize, (f32, f32), (f32, f32), bool)>,
@@ -369,6 +371,7 @@ impl Calc {
             shape_multi: Vec::new(),
             menu_shape: false,
             shape_clip: None,
+            dt_col: None,
             img_sel: None,
             img_drag: None,
             wheel: (0.0, 0.0),

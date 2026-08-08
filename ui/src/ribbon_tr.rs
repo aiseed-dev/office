@@ -305,6 +305,7 @@ pub const CALC: &[Tab] = &[
         c("show-details", "Detayları Göster", "show-details"),
         c("hide-details", "Ayrıntıyı gizle", "hide-details"),
         c("subtotal", "Ara toplam", "subtotal"),
+        c("datatable", "Veri Tablosu", "datatable"),
         c("python", "Python", "python"),
     ]},
     Tab { name: "Pivot Tablo", cmds: &[

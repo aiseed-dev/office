@@ -305,6 +305,7 @@ pub const CALC: &[Tab] = &[
         c("show-details", "Показать детали", "show-details"),
         c("hide-details", "Скрыть детали", "hide-details"),
         c("subtotal", "Промежуточные итоги", "subtotal"),
+        c("datatable", "Таблица данных", "datatable"),
         c("python", "Python", "python"),
     ]},
     Tab { name: "Сводная таблица", cmds: &[

@@ -2192,3 +2192,100 @@ mod cage_tests {
         assert!(caged_python_with(Cage::None, py, &d, &[], false).is_none());
     }
 }
+
+impl Calc {
+    /// データテーブル(感度表)。選んだ矩形の縁に置いた入力値を差し替えながら
+    /// 式を計算し、中身を**値として**埋める。Excel の作法に合わせる:
+    /// - 1変数(列): 左の列に入力値、上の行に式、角は空
+    /// - 2変数: **角が式**、左の列と上の行に入力値
+    ///
+    /// 本家は TABLE() の配列式で後から追随するが、うちは**その時の値**
+    /// (ピボットと同じ割り切り)。入力を直したらもう一度押す。
+    /// 計算はブックの複製の上でやるので、途中の値が本物に混ざらない
+    pub(crate) fn data_table(&mut self, col_in: Option<Pos>, row_in: Option<Pos>) {
+        let (a, b) = self.sel_rect();
+        if a.row >= b.row || a.col >= b.col {
+            self.status =
+                ui::t!("入力値と式を含む四角い範囲を選んでください(2行2列より大きく)").into();
+            return;
+        }
+        let si = self.active;
+        let two = row_in.is_some() && col_in.is_some();
+        // 埋める先と、そのとき差し替える入力の組
+        let mut jobs: Vec<(Pos, Vec<(Pos, String)>, Pos)> = Vec::new();
+        if two {
+            let (ci, ri) = (col_in.unwrap(), row_in.unwrap());
+            // 角(a)が式。左の列 = 列の入力、上の行 = 行の入力
+            if self.sheet().get(a).and_then(|c| c.formula.as_ref()).is_none() {
+                self.status =
+                    ui::tf!("2変数では角の {} が式でなければなりません", a.a1()).into();
+                return;
+            }
+            for r in (a.row + 1)..=b.row {
+                for c in (a.col + 1)..=b.col {
+                    let cv = self.sheet().get(Pos::new(r, a.col)).map(|x| x.editable()).unwrap_or_default();
+                    let rv = self.sheet().get(Pos::new(a.row, c)).map(|x| x.editable()).unwrap_or_default();
+                    if cv.is_empty() || rv.is_empty() {
+                        continue;
+                    }
+                    jobs.push((Pos::new(r, c), vec![(ci, cv), (ri, rv)], a));
+                }
+            }
+        } else {
+            let Some(ci) = col_in.or(row_in) else {
+                self.status = ui::t!("入力セルを打ってください(例: B2)").into();
+                return;
+            };
+            // 1変数(列): 上の行の式ごとに、左の列の値を差し替える
+            for r in (a.row + 1)..=b.row {
+                let cv = self.sheet().get(Pos::new(r, a.col)).map(|x| x.editable()).unwrap_or_default();
+                if cv.is_empty() {
+                    continue;
+                }
+                for c in (a.col + 1)..=b.col {
+                    let f = Pos::new(a.row, c);
+                    if self.sheet().get(f).and_then(|x| x.formula.as_ref()).is_none() {
+                        continue;
+                    }
+                    jobs.push((Pos::new(r, c), vec![(ci, cv.clone())], f));
+                }
+            }
+        }
+        if jobs.is_empty() {
+            self.status = ui::t!(
+                "埋める所がありません(上の行に式・左の列に入力値。2変数は角に式)"
+            )
+            .into();
+            return;
+        }
+        // 複製の上で回す(本物は最後に1手で書き換える)
+        let mut work = self.book.clone();
+        let mut out: Vec<(Pos, sheet::Value)> = Vec::new();
+        for (dest, inputs, f) in &jobs {
+            for (p, v) in inputs {
+                let fmt = work.sheets[si].get(*p).map(|c| c.fmt.clone()).unwrap_or_default();
+                let mut cell = sheet::Cell::input(v);
+                cell.fmt = fmt;
+                work.sheets[si].set(*p, cell);
+            }
+            recalc_book(&mut work, si);
+            out.push((*dest, work.sheets[si].value(*f)));
+        }
+        self.checkpoint();
+        for (p, v) in &out {
+            let fmt = self.sheet().get(*p).map(|c| c.fmt.clone()).unwrap_or_default();
+            let mut cell = sheet::Cell::input(&v.display());
+            cell.fmt = fmt;
+            self.sheet_mut().set(*p, cell);
+        }
+        recalc_book(&mut self.book, si);
+        self.dirty = true;
+        self.sync_input();
+        self.status = ui::tf!(
+            "データテーブル: {} 個の答えを入れました({}。その時の値なので、入力を直したらもう一度)",
+            out.len(),
+            if two { "2変数" } else { "1変数" }
+        )
+        .into();
+    }
+}

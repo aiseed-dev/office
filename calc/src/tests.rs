@@ -3199,3 +3199,95 @@ mod data_edge_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod data_table_tests {
+    use crate::*;
+
+    /// B1=単価 B2=数量 / B4 = B1*B2 の式。A5:A7 に数量の候補
+    fn setup(this: &mut Calc) {
+        let s = &mut this.book.sheets[0];
+        s.set(Pos::parse("B1").unwrap(), sheet::Cell::input("100"));
+        s.set(Pos::parse("B2").unwrap(), sheet::Cell::input("1"));
+        s.set(Pos::parse("B4").unwrap(), sheet::Cell::input("=B1*B2"));
+        // 1変数の表: A4 が角(空)・B4 が式・A5:A7 が入力値
+        for (a1, v) in [("A5", "2"), ("A6", "3"), ("A7", "10")] {
+            s.set(Pos::parse(a1).unwrap(), sheet::Cell::input(v));
+        }
+        sheet::recalc_all(&mut this.book);
+    }
+
+    #[gpui::test]
+    fn 一変数の感度表が埋まる(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            setup(this);
+            // A4:B7 を選び、列の入力セル = B2(数量)
+            this.anchor = Some(Pos::parse("A4").unwrap());
+            this.cursor = Pos::parse("B7").unwrap();
+            this.data_table(Some(Pos::parse("B2").unwrap()), None);
+            let v = |a1: &str| this.book.sheets[0].value(Pos::parse(a1).unwrap()).as_number();
+            assert_eq!(v("B5"), 200.0, "数量2 の答えが違う");
+            assert_eq!(v("B6"), 300.0);
+            assert_eq!(v("B7"), 1000.0);
+            // 元の入力セルは荒らさない(複製の上で回したか)
+            assert_eq!(v("B2"), 1.0, "入力セルが書き換わっている");
+            // Ctrl+Z の1手で戻る
+            drop(v);
+            this.undo_sheet();
+            assert_eq!(
+                this.book.sheets[0].value(Pos::parse("B5").unwrap()).as_number(),
+                0.0,
+                "undo で戻らない"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn 二変数は角の式を使う(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            setup(this);
+            let s = &mut this.book.sheets[0];
+            // D4 が角の式、D5:D6 が列の入力(数量)、E4:F4 が行の入力(単価)
+            s.set(Pos::parse("D4").unwrap(), sheet::Cell::input("=B1*B2"));
+            s.set(Pos::parse("D5").unwrap(), sheet::Cell::input("2"));
+            s.set(Pos::parse("D6").unwrap(), sheet::Cell::input("5"));
+            s.set(Pos::parse("E4").unwrap(), sheet::Cell::input("10"));
+            s.set(Pos::parse("F4").unwrap(), sheet::Cell::input("20"));
+            sheet::recalc_all(&mut this.book);
+            this.anchor = Some(Pos::parse("D4").unwrap());
+            this.cursor = Pos::parse("F6").unwrap();
+            this.data_table(
+                Some(Pos::parse("B2").unwrap()), // 列 = 数量
+                Some(Pos::parse("B1").unwrap()), // 行 = 単価
+            );
+            let v = |a1: &str| this.book.sheets[0].value(Pos::parse(a1).unwrap()).as_number();
+            assert_eq!(v("E5"), 20.0, "数量2×単価10");
+            assert_eq!(v("F5"), 40.0, "数量2×単価20");
+            assert_eq!(v("E6"), 50.0, "数量5×単価10");
+            assert_eq!(v("F6"), 100.0);
+        });
+    }
+
+    #[gpui::test]
+    fn 形が合わなければ正直に断る(cx: &mut gpui::TestAppContext) {
+        let c = cx.update(|cx| cx.new(|cx| Calc::new(None, cx)));
+        c.update(cx, |this, _cx| {
+            setup(this);
+            // 1セルだけの選択
+            this.anchor = None;
+            this.cursor = Pos::parse("A4").unwrap();
+            this.data_table(Some(Pos::parse("B2").unwrap()), None);
+            assert!(this.status.contains("四角い範囲"), "{}", this.status);
+            // 2変数なのに角が式でない
+            this.anchor = Some(Pos::parse("A4").unwrap());
+            this.cursor = Pos::parse("B7").unwrap();
+            this.data_table(
+                Some(Pos::parse("B2").unwrap()),
+                Some(Pos::parse("B1").unwrap()),
+            );
+            assert!(this.status.contains("角"), "{}", this.status);
+        });
+    }
+}

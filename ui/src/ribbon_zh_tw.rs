@@ -305,6 +305,7 @@ pub const CALC: &[Tab] = &[
         c("show-details", "顯示詳細資料", "show-details"),
         c("hide-details", "隱藏詳細資料", "hide-details"),
         c("subtotal", "小計", "subtotal"),
+        c("datatable", "模擬運算表", "datatable"),
         c("python", "Python", "python"),
     ]},
     Tab { name: "樞紐分析表", cmds: &[

@@ -180,6 +180,7 @@ READY = {
         "pivot-select": "pivot-select", "pivot-totals": "pivot-totals",
         "pivot-subtotals": "pivot-subtotals", "pivot-blank": "pivot-blank",
         "pivot-layout": "pivot-layout", "pivot-showas": "pivot-showas",
+        "datatable": "datatable",
         "trace-prec": "trace-prec", "trace-dep": "trace-dep",
         "remove-arrows": "remove-arrows", "insrecommend": "insrecommend",
         "instable": "instable", "table-tpl": "table-tpl",
@@ -523,6 +524,7 @@ EXTRA_CMDS = {
         # 小計は本家のデータタブに無いが、グループ化を「畳むと合計が残る」
         # 形で使うために置く(Excel の データ > 小計 に相当。発注者指摘)
         "データ": [("subtotal", "小計", "subtotal"),
+                   ("datatable", "データテーブル", "datatable"),
                    ("python", "Python", "python")],
         # 本家は値フィールドの設定の中にある「計算の種類」。うちは指図が
         # 集計の名前ひとつなので、タブに独立した釦として置く
