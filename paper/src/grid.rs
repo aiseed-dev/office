@@ -380,6 +380,7 @@ pub fn sheet_to_pdf<W: Write>(
             if let Some((cr, cg, cb)) = sp.line.as_deref().and_then(hex_rgb) {
                 l1.set_outline_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));
             }
+            l1.set_outline_thickness(sp.line_w.max(0.1) * scale);
             let pts: Vec<(f32, f32)> = match sp.kind.as_str() {
                 "ellipse" => (0..=24)
                     .map(|i| {
@@ -437,6 +438,28 @@ pub fn sheet_to_pdf<W: Write>(
                     (x, y_top - h),
                 ],
             };
+            // 回転と反転(折れ線もの以外)。紙は y が上向きなので、
+            // いったん画面向きのずれに直してから時計回りに回す
+            let rot = sp.rot.rem_euclid(360.0);
+            let poly = matches!(sp.kind.as_str(), "spark" | "spark-col" | "spark-wl" | "ink" | "marker");
+            let mut pts = pts;
+            if (rot != 0.0 || sp.flip_h || sp.flip_v) && !poly {
+                let (ccx, ccy) = (x + w / 2.0, y_top - h / 2.0);
+                let (s, c) = (rot.to_radians().sin(), rot.to_radians().cos());
+                for p in pts.iter_mut() {
+                    let mut dx = p.0 - ccx;
+                    let mut dy = ccy - p.1; // 下向き正
+                    if sp.flip_h {
+                        dx = -dx;
+                    }
+                    if sp.flip_v {
+                        dy = -dy;
+                    }
+                    let (rx, ry) = (dx * c - dy * s, dx * s + dy * c);
+                    p.0 = ccx + rx;
+                    p.1 = ccy - ry;
+                }
+            }
             let closed = !matches!(sp.kind.as_str(), "line" | "spark" | "ink" | "marker");
             l1.add_line(Line {
                 points: pts

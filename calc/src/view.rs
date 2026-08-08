@@ -4034,6 +4034,8 @@ impl Render for Calc {
                        {
                            let Some((x, y)) = self.cell_origin_px(sp.at) else { continue };
                            let (x, y) = (x + sp.dx_px, y + sp.dy_px);
+                           // 回転・影のはみ出しぶんキャンバスが四方に広い
+                           let pad = sp.pad();
                            let svg = sp.to_svg();
                            let key = {
                                use std::hash::{Hash, Hasher};
@@ -4055,10 +4057,10 @@ impl Render for Calc {
                            layer.push(
                                gpui::img(src)
                                    .absolute()
-                                   .left(px(x))
-                                   .top(px(y))
-                                   .w(px(sp.width_px))
-                                   .h(px(sp.height_px))
+                                   .left(px(x - pad))
+                                   .top(px(y - pad))
+                                   .w(px(sp.width_px.max(4.0) + pad * 2.0))
+                                   .h(px(sp.height_px.max(4.0) + pad * 2.0))
                                    .into_any_element(),
                            );
                            if let Some(t) = &sp.text {

@@ -244,14 +244,9 @@ fn parse_rels(xml: &str) -> Vec<(String, String, String, bool)> {
 enum DrawKind {
     /// 画像(r:embed)
     Image(String),
-    /// 図形(prstGeom の名前, 塗り, 線, 中の文字, 折れ線の点)
-    Shape(
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        (Vec<(f32, f32)>, f32),
-    ),
+    /// 図形。中身(種類・色・文字・回転・線幅…)は詰めてあり、
+    /// 置き場所と大きさ(at / width / height / dx / dy)は受け手が埋める
+    Shape(Box<crate::model::SheetShape>),
 }
 
 /// drawing(xl/drawings/drawingN.xml)から、画像と図形の錨を拾う。
@@ -319,6 +314,14 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
     let mut in_from = false;
     let mut in_ln = false;
     let mut in_sp = false;
+    // 回転・反転・線幅・不透明度・影(xfrm / a:ln w / a:alpha / outerShdw)
+    let mut rot = 0.0f32;
+    let (mut flip_h, mut flip_v) = (false, false);
+    let mut line_w = 1.5f32;
+    let mut alpha: Option<f32> = None;
+    let mut shadow = false;
+    // effectLst の中の色や alpha を塗りと取り違えない
+    let mut in_effect = false;
     let mut cur: Vec<u8> = Vec::new();
     loop {
         match r.read_event_into(&mut buf) {
@@ -335,6 +338,12 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                     (path_w, path_h) = (1000.0, 1000.0);
                     in_sp = false;
                     in_ln = false;
+                    rot = 0.0;
+                    (flip_h, flip_v) = (false, false);
+                    line_w = 1.5;
+                    alpha = None;
+                    shadow = false;
+                    in_effect = false;
                 }
                 b"from" => in_from = true,
                 t @ (b"col" | b"row" | b"colOff" | b"rowOff") if in_from => {
@@ -342,7 +351,22 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                 }
                 b"sp" => in_sp = true,
                 b"cNvPr" if sp_name.is_none() => sp_name = attr(&e, "name"),
-                b"ln" => in_ln = true,
+                b"xfrm" if in_sp => {
+                    rot = attr(&e, "rot")
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .map(|v| v as f32 / 60000.0)
+                        .unwrap_or(0.0);
+                    flip_h = attr(&e, "flipH").as_deref() == Some("1");
+                    flip_v = attr(&e, "flipV").as_deref() == Some("1");
+                }
+                b"effectLst" => in_effect = true,
+                b"outerShdw" if in_sp => shadow = true,
+                b"ln" => {
+                    in_ln = true;
+                    if let Some(w) = attr(&e, "w").and_then(|v| v.parse::<f32>().ok()) {
+                        line_w = w / 12700.0;
+                    }
+                }
                 b"blip" => {
                     if embed.is_none() {
                         embed = attr(&e, "embed");
@@ -354,6 +378,17 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                     }
                 }
                 b"custGeom" => has_custom = true,
+                // alpha を子に持つ色は Start で来る(<a:srgbClr><a:alpha/></a:srgbClr>)
+                b"srgbClr" if in_sp && !in_effect => {
+                    let v = attr(&e, "val");
+                    if in_ln {
+                        if line.is_none() {
+                            line = v;
+                        }
+                    } else if fill.is_none() {
+                        fill = v;
+                    }
+                }
                 b"path" if has_custom => {
                     path_w = attr(&e, "w").and_then(|v| v.parse().ok()).unwrap_or(1000.0);
                     path_h = attr(&e, "h").and_then(|v| v.parse().ok()).unwrap_or(1000.0);
@@ -379,7 +414,7 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                     let y = attr(&e, "y").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
                     pts.push((x / path_w.max(1.0), y / path_h.max(1.0)));
                 }
-                b"srgbClr" if in_sp => {
+                b"srgbClr" if in_sp && !in_effect => {
                     let v = attr(&e, "val");
                     if in_ln {
                         if line.is_none() {
@@ -388,6 +423,25 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                     } else if fill.is_none() {
                         fill = v;
                     }
+                }
+                b"alpha" if in_sp && !in_effect && alpha.is_none() => {
+                    alpha = attr(&e, "val")
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .map(|v| v / 100_000.0);
+                }
+                b"outerShdw" if in_sp => shadow = true,
+                b"ln" if in_sp => {
+                    if let Some(w) = attr(&e, "w").and_then(|v| v.parse::<f32>().ok()) {
+                        line_w = w / 12700.0;
+                    }
+                }
+                b"xfrm" if in_sp => {
+                    rot = attr(&e, "rot")
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .map(|v| v as f32 / 60000.0)
+                        .unwrap_or(0.0);
+                    flip_h = attr(&e, "flipH").as_deref() == Some("1");
+                    flip_v = attr(&e, "flipV").as_deref() == Some("1");
                 }
                 _ => {}
             },
@@ -411,14 +465,27 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                 }
                 b"col" | b"row" | b"colOff" | b"rowOff" => cur.clear(),
                 b"ln" => in_ln = false,
+                b"effectLst" => in_effect = false,
                 b"t" => in_t = false,
                 b"oneCellAnchor" | b"twoCellAnchor" | b"absoluteAnchor" => {
-                    let tx = (!text.is_empty()).then(|| text.clone());
+                    // 図形の雛形(場所と大きさは受け手が埋める)
+                    let tpl = crate::model::SheetShape {
+                        fill: fill.take(),
+                        line: line.take(),
+                        text: (!text.is_empty()).then(|| text.clone()),
+                        rot,
+                        flip_h,
+                        flip_v,
+                        line_w,
+                        alpha: alpha.unwrap_or(1.0),
+                        shadow,
+                        ..Default::default()
+                    };
                     let kind = match (embed.take(), prst.take(), has_custom) {
                         (Some(em), _, _) => Some(DrawKind::Image(em)),
-                        (None, Some(pr), _) => {
-                            Some(DrawKind::Shape(pr, fill.take(), line.take(), tx, (Vec::new(), 0.0)))
-                        }
+                        (None, Some(pr), _) => Some(DrawKind::Shape(Box::new(
+                            crate::model::SheetShape { kind: pr, ..tpl },
+                        ))),
                         (None, None, true) if !pts.is_empty() => {
                             // 自作の札(jo:spark-col:底)があれば棒に組み直す。
                             // 棒は4点1組の閉じた小道 — 先頭2点の中点が中心、
@@ -436,21 +503,22 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
                                         .filter(|c| c.len() == 4)
                                         .map(|c| ((c[0].0 + c[1].0) / 2.0, c[0].1))
                                         .collect();
-                                    Some(DrawKind::Shape(
-                                        k.into(),
-                                        fill.take(),
-                                        line.take(),
-                                        tx,
-                                        (tops, base),
-                                    ))
+                                    Some(DrawKind::Shape(Box::new(
+                                        crate::model::SheetShape {
+                                            kind: k.into(),
+                                            points: tops,
+                                            base,
+                                            ..tpl
+                                        },
+                                    )))
                                 }
-                                _ => Some(DrawKind::Shape(
-                                    "spark".into(),
-                                    fill.take(),
-                                    line.take(),
-                                    tx,
-                                    (std::mem::take(&mut pts), 0.0),
-                                )),
+                                _ => Some(DrawKind::Shape(Box::new(
+                                    crate::model::SheetShape {
+                                        kind: "spark".into(),
+                                        points: std::mem::take(&mut pts),
+                                        ..tpl
+                                    },
+                                ))),
                             }
                         }
                         _ => None,
@@ -478,16 +546,49 @@ fn parse_drawing_anchors(xml: &str) -> Vec<(Pos, i64, i64, i64, i64, DrawKind)> 
 /// 挿した図形1枚の錨(oneCellAnchor の xdr:sp)。Excel でも図形として開ける。
 fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
     let (cx, cy) = ((sp.width_px * 9525.0) as i64, (sp.height_px * 9525.0) as i64);
+    // 不透明度は srgbClr の子 a:alpha(10万分率)。1.0 なら書かない
+    let alpha = if sp.alpha < 0.999 {
+        format!(
+            "<a:alpha val=\"{}\"/>",
+            (sp.alpha.clamp(0.0, 1.0) * 100_000.0) as i64
+        )
+    } else {
+        String::new()
+    };
     let fill = match &sp.fill {
-        Some(c) => format!("<a:solidFill><a:srgbClr val=\"{c}\"/></a:solidFill>"),
+        Some(c) => format!("<a:solidFill><a:srgbClr val=\"{c}\">{alpha}</a:srgbClr></a:solidFill>"),
         None => "<a:noFill/>".to_string(),
     };
     let line = match &sp.line {
         Some(c) => format!(
-            "<a:ln w=\"19050\"><a:solidFill><a:srgbClr val=\"{c}\"/></a:solidFill></a:ln>"
+            "<a:ln w=\"{w}\"><a:solidFill><a:srgbClr val=\"{c}\">{alpha}</a:srgbClr></a:solidFill></a:ln>",
+            w = (sp.line_w.max(0.1) * 12700.0) as i64
         ),
         None => String::new(),
     };
+    // 影(右下への落ち影)。色は固定の灰 — 画面の描き方と揃える
+    let effect = if sp.shadow {
+        concat!(
+            "<a:effectLst><a:outerShdw blurRad=\"50800\" dist=\"50800\" ",
+            "dir=\"2700000\" algn=\"tl\" rotWithShape=\"0\">",
+            "<a:srgbClr val=\"9E9E9E\"><a:alpha val=\"35000\"/></a:srgbClr>",
+            "</a:outerShdw></a:effectLst>"
+        )
+    } else {
+        ""
+    };
+    // 回転(6万分の1度)と反転は xfrm の属性
+    let mut xfrm_attrs = String::new();
+    let rot = sp.rot.rem_euclid(360.0);
+    if rot != 0.0 {
+        xfrm_attrs.push_str(&format!(" rot=\"{}\"", (rot * 60000.0) as i64));
+    }
+    if sp.flip_h {
+        xfrm_attrs.push_str(" flipH=\"1\"");
+    }
+    if sp.flip_v {
+        xfrm_attrs.push_str(" flipV=\"1\"");
+    }
     // 形: 折れ線(spark)は custGeom、他は prstGeom。
     // 縦棒・勝ち負けも custGeom(棒ごとに4点の閉じた小道 — Excel でも棒に見える)
     let bars = matches!(sp.kind.as_str(), "spark-col" | "spark-wl");
@@ -569,8 +670,8 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
             "<xdr:ext cx=\"{cx}\" cy=\"{cy}\"/>",
             "<xdr:sp macro=\"\" textlink=\"\">",
             "<xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"{name}\"/><xdr:cNvSpPr/></xdr:nvSpPr>",
-            "<xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>",
-            "{geom}{fill}{line}</xdr:spPr>{txt}",
+            "<xdr:spPr><a:xfrm{xfrm}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>",
+            "{geom}{fill}{line}{effect}</xdr:spPr>{txt}",
             "</xdr:sp><xdr:clientData/></xdr:oneCellAnchor>"
         ),
         col = sp.at.col,
@@ -589,6 +690,8 @@ fn shape_anchor_xml(sp: &crate::model::SheetShape, id: u32) -> String {
         geom = geom,
         fill = fill,
         line = line,
+        effect = effect,
+        xfrm = xfrm_attrs,
         txt = txt
     )
 }
@@ -1438,22 +1541,15 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                             data,
                         });
                     }
-                    DrawKind::Shape(prst, fill, line, text, (points, base)) => {
-                        sh.shapes.push(crate::model::SheetShape {
-                            at,
-                            width_px,
-                            height_px,
-                            kind: prst,
-                            fill,
-                            line,
-                            text,
-                            points,
-                            base,
-                            // ずらし(colOff/rowOff)も読む — SmartArt の
-                            // 図形の集まりが保存後も同じ場所に見える
-                            dx_px: ox_emu as f32 / 9525.0,
-                            dy_px: oy_emu as f32 / 9525.0,
-                        });
+                    DrawKind::Shape(mut sp) => {
+                        sp.at = at;
+                        sp.width_px = width_px;
+                        sp.height_px = height_px;
+                        // ずらし(colOff/rowOff)も読む — SmartArt の
+                        // 図形の集まりが保存後も同じ場所に見える
+                        sp.dx_px = ox_emu as f32 / 9525.0;
+                        sp.dy_px = oy_emu as f32 / 9525.0;
+                        sh.shapes.push(*sp);
                     }
                 }
             }
@@ -4293,6 +4389,58 @@ mod shape_roundtrip_tests {
         assert_eq!(sp[0].line.as_deref(), Some("1B6E3C"), "線の色が塗りと混ざった");
         assert!((sp[0].width_px - 160.0).abs() < 1.0);
         assert!(back.sheets[0].shapes_new.is_empty());
+    }
+
+    #[test]
+    fn 回転と反転と線幅と不透明度と影が往復する() {
+        let mut b = Book::new();
+        b.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b.sheets[0].shapes_new.push(SheetShape {
+            at: Pos::new(1, 1),
+            width_px: 120.0,
+            height_px: 80.0,
+            kind: "roundRect".into(),
+            fill: Some("FFF2CC".into()),
+            line: Some("1B6E3C".into()),
+            rot: 30.0,
+            flip_h: true,
+            line_w: 3.0,
+            alpha: 0.5,
+            shadow: true,
+            ..Default::default()
+        });
+        let mut buf = Cursor::new(Vec::new());
+        write(&b, &mut buf).expect("書けない");
+        buf.set_position(0);
+        let (back, _) = read(buf).expect("読めない");
+        let sp = &back.sheets[0].shapes;
+        assert_eq!(sp.len(), 1, "図形が往復しない");
+        assert!((sp[0].rot - 30.0).abs() < 0.01, "回転が往復しない: {}", sp[0].rot);
+        assert!(sp[0].flip_h && !sp[0].flip_v, "反転が往復しない");
+        assert!((sp[0].line_w - 3.0).abs() < 0.01, "線幅が往復しない: {}", sp[0].line_w);
+        assert!((sp[0].alpha - 0.5).abs() < 0.01, "不透明度が往復しない: {}", sp[0].alpha);
+        assert!(sp[0].shadow, "影が往復しない");
+        // 影の色や alpha が塗り・線に化けていない
+        assert_eq!(sp[0].fill.as_deref(), Some("FFF2CC"));
+        assert_eq!(sp[0].line.as_deref(), Some("1B6E3C"));
+        // 素の図形は既定のまま(余計な性質が付かない)
+        let mut b2 = Book::new();
+        b2.sheets[0].set(Pos::parse("A1").unwrap(), Cell::input("x"));
+        b2.sheets[0].shapes_new.push(SheetShape {
+            at: Pos::new(0, 0),
+            width_px: 100.0,
+            height_px: 50.0,
+            kind: "rect".into(),
+            line: Some("1B6E3C".into()),
+            ..Default::default()
+        });
+        let mut buf2 = Cursor::new(Vec::new());
+        write(&b2, &mut buf2).expect("書けない");
+        buf2.set_position(0);
+        let (back2, _) = read(buf2).expect("読めない");
+        let q = &back2.sheets[0].shapes[0];
+        assert!(q.rot == 0.0 && !q.flip_h && !q.flip_v && !q.shadow);
+        assert!((q.alpha - 1.0).abs() < 0.01 && (q.line_w - 1.5).abs() < 0.01);
     }
 }
 

@@ -490,7 +490,7 @@ pub struct Sheet {
 /// シートに浮かぶ図形。**中身はベクタ**(発注者案 2026-08-04: SVG で作る —
 /// 拡大縮小で崩れない)。画面へは to_svg が SVG を作り、xlsx へは DrawingML の
 /// 図形(prstGeom)として書く — Excel でも図形として開ける。
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SheetShape {
     /// 左上を留めるセル
     pub at: Pos,
@@ -517,6 +517,43 @@ pub struct SheetShape {
     /// 図形の集まりを、セルの粗さに縛られずに組むための細かい座標
     pub dx_px: f32,
     pub dy_px: f32,
+    /// 回転(度・時計回り)。xlsx の xfrm rot(6万分の1度)と往復
+    pub rot: f32,
+    /// 左右・上下の反転(xlsx の flipH / flipV)
+    pub flip_h: bool,
+    pub flip_v: bool,
+    /// 線の太さ(pt)。既定 1.5pt = 従来の 2px。xlsx の a:ln の w と往復
+    pub line_w: f32,
+    /// 不透明度(0〜1、1=不透明)。塗りと線の色に掛かる。
+    /// xlsx へは srgbClr の子 a:alpha として書く
+    pub alpha: f32,
+    /// 影(右下への落ち影)。xlsx の a:outerShdw と往復。
+    /// 紙(PDF)は輪郭だけの方針なので影は画面と xlsx だけ
+    pub shadow: bool,
+}
+
+impl Default for SheetShape {
+    fn default() -> Self {
+        SheetShape {
+            at: Pos::default(),
+            width_px: 0.0,
+            height_px: 0.0,
+            kind: String::new(),
+            fill: None,
+            line: None,
+            text: None,
+            points: Vec::new(),
+            base: 0.0,
+            dx_px: 0.0,
+            dy_px: 0.0,
+            rot: 0.0,
+            flip_h: false,
+            flip_v: false,
+            line_w: 1.5,
+            alpha: 1.0,
+            shadow: false,
+        }
+    }
 }
 
 impl Default for Pos {
@@ -526,6 +563,34 @@ impl Default for Pos {
 }
 
 impl SheetShape {
+    /// 折れ線もの(スパークライン・ペン)か。回転・反転・影は掛けない
+    fn is_poly(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "spark" | "spark-col" | "spark-wl" | "ink" | "marker"
+        )
+    }
+
+    /// 影と回転のはみ出しぶんの余白(px)。SVG のキャンバスは論理の
+    /// 大きさより四方にこれだけ広い — 貼る側は左上から差し引く
+    pub fn pad(&self) -> f32 {
+        if self.is_poly() {
+            return 0.0;
+        }
+        let (w, h) = (self.width_px.max(4.0), self.height_px.max(4.0));
+        let mut p = 0.0f32;
+        if self.rot.rem_euclid(360.0) != 0.0 {
+            let t = self.rot.to_radians();
+            let bw = w * t.cos().abs() + h * t.sin().abs();
+            let bh = w * t.sin().abs() + h * t.cos().abs();
+            p = ((bw - w).max(bh - h) / 2.0).max(0.0);
+        }
+        if self.shadow {
+            p += 6.0;
+        }
+        p.ceil()
+    }
+
     /// 画面用の SVG。**大きさを width/height に織り込む**ので、
     /// 描画側がその都度ラスタ化すれば、どの大きさでも輪郭が鮮明に出る。
     pub fn to_svg(&self) -> String {
@@ -540,10 +605,57 @@ impl SheetShape {
             .as_deref()
             .map(|c| format!("#{c}"))
             .unwrap_or_else(|| "none".into());
-        let style = format!(r#"fill="{fill}" stroke="{line}" stroke-width="2""#);
+        // 線の太さ pt → px(96/72)
+        let sw = (self.line_w * 4.0 / 3.0).max(0.5);
+        let p = self.pad();
+        let (cw, ch) = (w + p * 2.0, h + p * 2.0);
+        // 反転→回転の順(DrawingML の xfrm と同じ見た目)。中心まわり
+        let mut tf = format!("translate({:.2} {:.2})", p + w / 2.0, p + h / 2.0);
+        if self.rot.rem_euclid(360.0) != 0.0 && !self.is_poly() {
+            tf.push_str(&format!(" rotate({:.2})", self.rot));
+        }
+        if (self.flip_h || self.flip_v) && !self.is_poly() {
+            tf.push_str(&format!(
+                " scale({} {})",
+                if self.flip_h { -1 } else { 1 },
+                if self.flip_v { -1 } else { 1 }
+            ));
+        }
+        tf.push_str(&format!(" translate({:.2} {:.2})", -w / 2.0, -h / 2.0));
+        // 影: 同じ形を灰色で右下にずらして先に(=下に)描く。
+        // ずらしは回転の外(紙に落ちる向きが傾かない)
+        let shadow = if self.shadow && !self.is_poly() {
+            let sf = if self.fill.is_some() { "#9E9E9E" } else { "none" };
+            let sl = if self.line.is_some() { "#9E9E9E" } else { "none" };
+            format!(
+                r#"<g transform="translate(4 4)"><g transform="{tf}">{}</g></g>"#,
+                self.body_svg(sf, sl, sw, 0.35)
+            )
+        } else {
+            String::new()
+        };
+        let body = format!(
+            r#"<g transform="{tf}">{}</g>"#,
+            self.body_svg(&fill, &line, sw, self.alpha.clamp(0.0, 1.0))
+        );
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{cw}" height="{ch}" viewBox="0 0 {cw} {ch}">{shadow}{body}</svg>"#
+        )
+    }
+
+    /// 形の本体(色と線幅と不透明度を差し替えられる — 影が同じ形を灰色で使う)
+    fn body_svg(&self, fill: &str, line: &str, sw: f32, op: f32) -> String {
+        let (w, h) = (self.width_px.max(4.0), self.height_px.max(4.0));
+        let op_attr = if op < 0.999 {
+            format!(r#" opacity="{op:.3}""#)
+        } else {
+            String::new()
+        };
+        let style = format!(r#"fill="{fill}" stroke="{line}" stroke-width="{sw:.2}"{op_attr}"#);
         // 線の太さの半分だけ内側に(縁が切れないように)
-        let (x0, y0, x1, y1) = (1.0, 1.0, w - 1.0, h - 1.0);
-        let body = match self.kind.as_str() {
+        let inset = (sw / 2.0).max(1.0);
+        let (x0, y0, x1, y1) = (inset, inset, w - inset, h - inset);
+        match self.kind.as_str() {
             "roundRect" => format!(
                 r#"<rect x="{x0}" y="{y0}" width="{}" height="{}" rx="{r}" ry="{r}" {style}/>"#,
                 x1 - x0,
@@ -592,7 +704,7 @@ impl SheetShape {
                     let col = if self.kind == "spark-wl" && neg {
                         "#C0504D"
                     } else {
-                        &line
+                        line
                     };
                     let (ry, rh) = if neg {
                         (base_y, (top - base_y).max(1.0))
@@ -630,10 +742,7 @@ impl SheetShape {
                 x1 - x0,
                 y1 - y0
             ),
-        };
-        format!(
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">{body}</svg>"#
-        )
+        }
     }
 }
 
