@@ -316,6 +316,7 @@ pub const CALC: &[Tab] = &[
         c("pivot-totals", "Totale complessivo", "pivot-totals"),
         c("pivot-subtotals", "Subtotale", "pivot-subtotals"),
         c("pivot-blank", "Righe vuote", "pivot-blank"),
+        c("pivot-showas", "Mostra valori come", "pivot-showas"),
         c("pivot-layout", "Schema del rapporto", "pivot-layout"),
         c("pivot-style", "Stile", "pivot-style"),
     ]},

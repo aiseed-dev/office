@@ -362,6 +362,7 @@ pub const CALC: &[Tab] = &[
         c("pivot-totals", "総計", "pivot-totals"),
         c("pivot-subtotals", "小計", "pivot-subtotals"),
         c("pivot-blank", "空行", "pivot-blank"),
+        c("pivot-showas", "計算の種類", "pivot-showas"),
         c("pivot-layout", "レポートのレイアウト", "pivot-layout"),
         c("pivot-style", "スタイル", "pivot-style"),
     ]},

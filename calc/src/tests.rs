@@ -869,6 +869,7 @@ mod pivot_tests {
             name: String::new(),
             vfilter: None,
             group_by: Vec::new(),
+            show_as: String::new(),
         }
     }
 
@@ -2424,6 +2425,7 @@ mod recalc_tests {
                 name: "ピボットテーブル1".into(),
                 vfilter: None,
                 group_by: Vec::new(),
+                show_as: String::new(),
             });
             // ピボットに乗ると状態行が「タブで操作」と案内する
             this.cursor = Pos::parse("D2").unwrap();

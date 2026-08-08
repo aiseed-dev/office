@@ -1237,6 +1237,10 @@ pub struct PivotDef {
     pub vfilter: Option<(String, f64)>,
     /// グループ化: (見出し, 単位)。単位は 月/四半期/年/幅:N
     pub group_by: Vec<(String, String)>,
+    /// 計算の種類(""=そのまま / "比率"=総計に対する % / "累計" / "差"=前の行との差)。
+    /// **累計と差は小計・総計を出さない** — 積み上げの途中に総計が挟まると
+    /// 読み違えるため(効かせるときに totals/subtotals を落とす)
+    pub show_as: String,
 }
 
 /// ブックの情報(docProps/core.xml の主な欄)。読んで見せる。

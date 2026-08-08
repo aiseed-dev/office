@@ -179,7 +179,7 @@ READY = {
         "pivot-refresh": "pivot-refresh", "pivot-refresh-all": "pivot-refresh-all",
         "pivot-select": "pivot-select", "pivot-totals": "pivot-totals",
         "pivot-subtotals": "pivot-subtotals", "pivot-blank": "pivot-blank",
-        "pivot-layout": "pivot-layout",
+        "pivot-layout": "pivot-layout", "pivot-showas": "pivot-showas",
         "trace-prec": "trace-prec", "trace-dep": "trace-dep",
         "remove-arrows": "remove-arrows", "insrecommend": "insrecommend",
         "instable": "instable", "table-tpl": "table-tpl",
@@ -524,6 +524,9 @@ EXTRA_CMDS = {
         # 形で使うために置く(Excel の データ > 小計 に相当。発注者指摘)
         "データ": [("subtotal", "小計", "subtotal"),
                    ("python", "Python", "python")],
+        # 本家は値フィールドの設定の中にある「計算の種類」。うちは指図が
+        # 集計の名前ひとつなので、タブに独立した釦として置く
+        "ピボットテーブル": [("pivot-showas", "計算の種類", "pivot-showas")],
     },
 }
 

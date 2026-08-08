@@ -360,6 +360,25 @@ impl Calc {
                     self.status = ui::tf!("線の色: {}(罫線の一覧から掛けると効きます)", v).into();
                 }
             }
+            "pivot-showas-pick" => {
+                if let Some(i) = self.pivot_at(self.cursor) {
+                    let sa = match v {
+                        "比率" | "累計" | "差" => v.to_string(),
+                        _ => String::new(), // そのまま
+                    };
+                    if let Some(d) = self.book.pivots.get_mut(i) {
+                        d.show_as = sa.clone();
+                        // 累計と差は積み上げなので、小計・総計を落とす
+                        // (途中に総計が挟まると読み違えるため)
+                        if sa == "累計" || sa == "差" {
+                            d.totals = false;
+                            d.subtotals = false;
+                        }
+                        let nd = d.clone();
+                        self.spawn_pivot(nd, Some(i), cx);
+                    }
+                }
+            }
             "pivot-style-pick" => {
                 if let Some(i) = self.pivot_at(self.cursor) {
                     let style = match v {

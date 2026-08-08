@@ -686,9 +686,41 @@ if spec["totals"] and df.height:
         cells.append(df.select(agg_expr()).item())
     out.append(("t", cells))
 
+# 計算の種類(比率・累計・差)。データ行の値の欄だけを置き換える。
+# **累計と差は小計・総計を出さない**(積み上げの途中に総計が挟まると
+# 読み違えるため)ので、呼ぶ側が totals/subtotals を落として渡す
+_sa = spec.get("show_as", "")
+if _sa:
+    _n = len(idx)  # 見出しの欄数。ここから右が値
+    _cells = [c for k, c in out if k == "d"]
+    if _sa == "比率":
+        # 総計(全データの集計)を 100% とする
+        _g = df.select(agg_expr()).item() if df.height else None
+        for c in _cells:
+            for j in range(_n, len(c)):
+                v = c[j]
+                c[j] = (v / _g) if (isinstance(v, (int, float)) and _g) else None
+    elif _sa in ("累計", "差"):
+        _prev = [None] * (max((len(c) for c in _cells), default=0))
+        for c in _cells:
+            for j in range(_n, len(c)):
+                v = c[j]
+                p = _prev[j]
+                if isinstance(v, (int, float)):
+                    if _sa == "累計":
+                        c[j] = v + (p if isinstance(p, (int, float)) else 0)
+                        _prev[j] = c[j]
+                    else:
+                        c[j] = (v - p) if isinstance(p, (int, float)) else None
+                        _prev[j] = v
+                else:
+                    c[j] = None
+
 def s(v):
     if v is None:
         return ""
+    if _sa == "比率" and isinstance(v, float):
+        return "%.1f%%" % (v * 100.0)
     if isinstance(v, float):
         return "%g" % v
     return str(v)
@@ -864,6 +896,7 @@ impl Calc {
             style: keep.as_ref().map(|d| d.style.clone()).unwrap_or_default(),
             vfilter: keep.as_ref().and_then(|d| d.vfilter.clone()),
             group_by: keep.as_ref().map(|d| d.group_by.clone()).unwrap_or_default(),
+            show_as: keep.as_ref().map(|d| d.show_as.clone()).unwrap_or_default(),
             name: keep.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| {
                 // 新しい名前(ピボットテーブル1, 2, …)。空きの番号を探す
                 let mut n = 1;

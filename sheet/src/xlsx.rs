@@ -1667,6 +1667,7 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                                 name: attr_un(&e, "name").unwrap_or_default(),
                                 vfilter: None,
                                 group_by: Vec::new(),
+                                show_as: String::new(),
                             });
                         }
                     }
@@ -1695,6 +1696,13 @@ pub fn read<R: Read + Seek>(src: R) -> Result<(Book, Report), String> {
                                 attr_un(&e, "name").unwrap_or_default(),
                                 attr_un(&e, "unit").unwrap_or_default(),
                             ));
+                        }
+                    }
+                    Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                        if local(e.name().as_ref()) == b"sa" =>
+                    {
+                        if let Some(d) = cur.as_mut() {
+                            d.show_as = attr_un(&e, "v").unwrap_or_default();
                         }
                     }
                     Ok(Event::Start(e)) if local(e.name().as_ref()) == b"v" => field = 3,
@@ -2756,6 +2764,9 @@ pub fn write_with<R: Read + Seek, W: Write + Seek>(
             }
             for (f, unit) in &d.group_by {
                 px.push_str(&format!("<g name=\"{}\" unit=\"{}\"/>", esc(f), esc(unit)));
+            }
+            if !d.show_as.is_empty() {
+                px.push_str(&format!("<sa v=\"{}\"/>", esc(&d.show_as)));
             }
             px.push_str("</pivot>");
         }
@@ -4054,6 +4065,7 @@ mod validation_roundtrip_tests {
             name: String::new(),
             vfilter: Some((">=".into(), 1000.0)),
             group_by: vec![("日付".into(), "四半期".into()), ("金額".into(), "幅:100".into())],
+            show_as: "累計".into(),
         });
         let mut buf = Cursor::new(Vec::new());
         write(&b, &mut buf).expect("書けない");
@@ -4078,6 +4090,7 @@ mod validation_roundtrip_tests {
             ],
             "グループ化が往復しない"
         );
+        assert_eq!(back.pivots[0].show_as, "累計", "計算の種類が往復しない");
     }
 
     #[test]
@@ -4861,6 +4874,7 @@ mod script_roundtrip_tests {
             blank_rows: true,
             compact: false,
             dest: Pos::parse("E1").unwrap(),
+            show_as: String::new(),
             size: (4, 3),
             hide: Vec::new(),
             style: "緑".into(),

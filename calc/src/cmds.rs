@@ -31,6 +31,7 @@ impl Calc {
         "instable", "table-tpl", "inssymbol", "pivot-insert", "pivot-fields",
         "pivot-refresh", "pivot-refresh-all", "pivot-select",
         "pivot-totals", "pivot-subtotals", "pivot-blank", "pivot-layout", "pivot-style",
+        "pivot-showas",
         "td-header", "td-total", "td-band-row", "td-band-col",
         "td-first", "td-last", "td-filter",
         "group", "ungroup", "hide-details", "show-details", "subtotal", "solver",
@@ -1489,6 +1490,39 @@ impl Calc {
                 }
             }
             // スタイルギャラリー(帯の色の組)。一覧から選んで掛け直す
+            // 計算の種類(そのまま / 総計に対する比率 / 累計 / 前との差)
+            "pivot-showas" => {
+                self.commit();
+                match self.pivot_at(self.cursor) {
+                    None => {
+                        self.status = ui::t!("ピボットの上にカーソルを置いてください").into();
+                    }
+                    Some(i) => {
+                        let cur = self.book.pivots[i].show_as.clone();
+                        let at = self
+                            .cell_origin_px(self.cursor)
+                            .map(|(x, y)| (x, y + self.row_px(self.cursor.row)))
+                            .unwrap_or((HEAD_W + 16.0, ROW_H + 16.0));
+                        let items: Vec<String> = ["そのまま", "比率", "累計", "差"]
+                            .iter()
+                            .map(|n| {
+                                let key = if *n == "そのまま" { "" } else { *n };
+                                if key == cur {
+                                    format!("✓ {n}")
+                                } else {
+                                    n.to_string()
+                                }
+                            })
+                            .collect();
+                        self.pick_note = Some(
+                            ui::t!("計算の種類(比率=総計を100%とする。累計と差は小計・総計を出しません)")
+                                .into(),
+                        );
+                        self.pick_kind = "pivot-showas-pick";
+                        self.pick = Some((items, at));
+                    }
+                }
+            }
             "pivot-style" => {
                 self.commit();
                 match self.pivot_at(self.cursor) {
